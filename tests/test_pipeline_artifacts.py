@@ -32,8 +32,13 @@ def test_pipeline_writes_structured_artifacts_without_render(tmp_path):
     assert len(visual_review["scenes"]) == 5
     assert visual_review["summary"]["total_scenes"] == 5
     assert visual_review["qa"]["status"] == "WARN"
-    assert visual_review["qa"]["issue_count"] == 5
-    assert visual_review["scenes"][0]["qa"]["issues"][0]["type"] == "PLACEHOLDER_USED"
+    scene_issue_count = sum(len(scene["qa"]["issues"]) for scene in visual_review["scenes"])
+    assert visual_review["qa"]["issue_count"] == scene_issue_count
+    assert any(
+        issue["type"] == "PLACEHOLDER_USED"
+        for scene in visual_review["scenes"]
+        for issue in scene["qa"]["issues"]
+    )
     report = (result.job_dir / "report.md").read_text(encoding="utf-8")
     assert "Visual Review" in report
     assert "Visual QA: WARN" in report

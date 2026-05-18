@@ -64,6 +64,28 @@ docker compose run --rm video-agent python -m video_agent.cli run \
   --no-render
 ```
 
+## Batch Runs And Audit
+
+Run several ideas in sequence and write a visual QA audit:
+
+```bash
+docker compose run --rm video-agent python -m video_agent.cli batch \
+  --channel configs/vida-plena-45/channel.yaml \
+  --idea inputs/batch_idea_sleep_habits.json \
+  --idea inputs/batch_idea_balanced_breakfast.json \
+  --idea inputs/batch_idea_daily_walk.json \
+  --idea inputs/batch_idea_hydration.json \
+  --audit-path jobs/latest_batch_audit.md
+```
+
+Use `--no-render` for a fast artifact-only batch. To audit existing jobs:
+
+```bash
+docker compose run --rm video-agent python -m video_agent.cli audit \
+  --job jobs/<job_id_1> \
+  --job jobs/<job_id_2>
+```
+
 ## Visual Assets
 
 The default channel uses `visuals.strategy: "auto"`:

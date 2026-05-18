@@ -6,6 +6,7 @@ from pathlib import Path
 from video_agent.contracts import (
     ARTIFACT_REPORT,
     ARTIFACT_RENDER_PROPS,
+    ARTIFACT_VISUAL_CONTACT_SHEET,
     ARTIFACT_VISUAL_REVIEW,
     ARTIFACT_VIDEO,
     EVENT_LOG,
@@ -17,6 +18,7 @@ from video_agent.stages.render import render_with_remotion
 from video_agent.stages.scene import run_scene_stage
 from video_agent.stages.script import run_script_stage
 from video_agent.stages.thumbnail import create_thumbnail_and_seo
+from video_agent.stages.visual_contact_sheet import create_visual_contact_sheet
 from video_agent.utils.json_io import read_json, read_yaml, write_json
 from video_agent.utils.logging import EventLogger
 from video_agent.utils.paths import create_job_dir
@@ -139,6 +141,7 @@ def _write_visual_review(job_dir: Path, job_id: str, assets: dict, scene_doc: di
         if scene["provider"]:
             summary["by_provider"][scene["provider"]] = summary["by_provider"].get(scene["provider"], 0) + 1
     review = _add_visual_qa({"job_id": job_id, "summary": summary, "scenes": scenes})
+    review["contact_sheet"] = ARTIFACT_VISUAL_CONTACT_SHEET
     write_json(job_dir / ARTIFACT_VISUAL_REVIEW, review)
     return review
 
@@ -151,7 +154,12 @@ def _write_report(
     render_enabled: bool,
     visual_review: dict,
 ) -> Path:
-    visual_lines = ["", "## Visual Review", f"- Visual QA: {visual_review['qa']['status']}"]
+    visual_lines = [
+        "",
+        "## Visual Review",
+        f"- Visual QA: {visual_review['qa']['status']}",
+        f"- Visual contact sheet: {visual_review['contact_sheet']}",
+    ]
     for scene in visual_review["scenes"]:
         provider = scene.get("provider") or "-"
         asset_id = scene.get("provider_asset_id") or "-"
@@ -230,6 +238,7 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
     write_json(job_dir / ARTIFACT_RENDER_PROPS, render_props)
     validate_json(render_props, root / "schemas/render-props.schema.json")
     visual_review = _write_visual_review(job_dir, job_id, assets, scene_doc)
+    create_visual_contact_sheet(job_dir, visual_review)
 
     video_path = None
     if options.render:

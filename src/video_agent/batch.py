@@ -13,6 +13,7 @@ class AuditRow:
     topic: str
     video_status: str
     visual_status: str
+    contact_sheet: str
     source_mix: str
     issue_count: int
 
@@ -28,6 +29,7 @@ def build_audit_row(job_dir: Path) -> AuditRow:
         topic=render_props.get("seo", {}).get("title") or render_props.get("channel", {}).get("name", "-"),
         video_status=video_status,
         visual_status=visual_review["qa"]["status"],
+        contact_sheet=str(job_dir / visual_review.get("contact_sheet", "visual_contact_sheet.jpg")),
         source_mix=source_mix,
         issue_count=visual_review["qa"]["issue_count"],
     )
@@ -37,15 +39,15 @@ def format_audit_markdown(rows: list[AuditRow]) -> str:
     lines = [
         "# Visual Batch Audit",
         "",
-        "| Job | Topic | Video | Visual QA | Source mix |",
-        "| --- | --- | ---: | --- | --- |",
+        "| Job | Topic | Video | Visual QA | Contact sheet | Source mix |",
+        "| --- | --- | ---: | --- | --- | --- |",
     ]
     for row in rows:
         visual_status = row.visual_status
         if row.issue_count:
             visual_status = f"{visual_status} ({row.issue_count} issues)"
         lines.append(
-            f"| `{row.job_dir.name}` | {row.topic} | {row.video_status} | {visual_status} | {row.source_mix} |"
+            f"| `{row.job_dir.name}` | {row.topic} | {row.video_status} | {visual_status} | `{row.contact_sheet}` | {row.source_mix} |"
         )
     return "\n".join(lines) + "\n"
 

@@ -20,6 +20,7 @@ def test_pipeline_writes_structured_artifacts_without_render(tmp_path):
     assert (result.job_dir / "scenes.json").exists()
     assert (result.job_dir / "assets_manifest.json").exists()
     assert (result.job_dir / "visual_review.json").exists()
+    assert (result.job_dir / "visual_contact_sheet.jpg").exists()
     assert (result.job_dir / "render_props.json").exists()
     assert (result.job_dir / "seo.json").exists()
     assert (result.job_dir / "thumbnail.jpg").exists()
@@ -29,6 +30,7 @@ def test_pipeline_writes_structured_artifacts_without_render(tmp_path):
     assert len(render_props["scenes"]) == 5
     visual_review = read_json(result.job_dir / "visual_review.json")
     assert visual_review["job_id"] == result.job_id
+    assert visual_review["contact_sheet"] == "visual_contact_sheet.jpg"
     assert len(visual_review["scenes"]) == 5
     assert visual_review["summary"]["total_scenes"] == 5
     assert visual_review["qa"]["status"] == "WARN"
@@ -42,3 +44,4 @@ def test_pipeline_writes_structured_artifacts_without_render(tmp_path):
     report = (result.job_dir / "report.md").read_text(encoding="utf-8")
     assert "Visual Review" in report
     assert "Visual QA: WARN" in report
+    assert "Visual contact sheet: visual_contact_sheet.jpg" in report

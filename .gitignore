@@ -1,0 +1,6 @@
+.superpowers/
+jobs/
+node_modules/
+remotion/node_modules/
+*.pyc
+__pycache__/

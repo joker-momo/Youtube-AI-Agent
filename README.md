@@ -1,8 +1,6 @@
 # YouTube AI Agent MVP
 
-Local MVP for producing YouTube-ready video artifacts from a manual idea.
-
-Target flow:
+Docker-first MVP for producing YouTube-ready video artifacts from a manual idea.
 
 ```text
 manual_idea.json -> script -> scenes -> assets -> Remotion video -> thumbnail -> seo.json -> report.md
@@ -10,10 +8,41 @@ manual_idea.json -> script -> scenes -> assets -> Remotion video -> thumbnail ->
 
 The MVP uses deterministic mock providers. It does not use Hermes, YouTube upload, OAuth, Telegram, scheduled publishing, trend research, or real LLM/TTS/image APIs.
 
-## Demo Command
+## Requirements
+
+- Docker Desktop or a running Docker daemon
+
+No host Python or Node setup is required.
+
+## Run
 
 ```bash
-python3 -m video_agent.cli run --channel configs/vida-plena-45/channel.yaml --idea inputs/manual_idea.json
+docker compose run --rm video-agent
 ```
 
-Expected outputs are written under `jobs/<job_id>/`.
+Outputs are written under `jobs/<job_id>/` on the host:
+
+- `video.mp4`
+- `thumbnail.jpg`
+- `seo.json`
+- `report.md`
+- `script.json`
+- `scenes.json`
+- `assets_manifest.json`
+- `render_props.json`
+- `events.jsonl`
+
+## Test
+
+```bash
+docker compose run --rm video-agent pytest -v
+```
+
+## Skip Rendering
+
+```bash
+docker compose run --rm video-agent python -m video_agent.cli run \
+  --channel configs/vida-plena-45/channel.yaml \
+  --idea inputs/manual_idea.json \
+  --no-render
+```

@@ -12,6 +12,7 @@ from video_agent.contracts import (
 )
 from video_agent.providers.mock import MockProvider
 from video_agent.stages.assets import prepare_assets
+from video_agent.stages.render import render_with_remotion
 from video_agent.stages.scene import run_scene_stage
 from video_agent.stages.script import run_script_stage
 from video_agent.stages.thumbnail import create_thumbnail_and_seo
@@ -110,7 +111,8 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
     video_path = None
     if options.render:
         video_path = job_dir / ARTIFACT_VIDEO
-        logger.log("RENDER_SKIPPED_UNIMPLEMENTED", {"job_id": job_id, "cost_usd": 0})
+        render_with_remotion(job_dir / ARTIFACT_RENDER_PROPS, video_path, job_dir / "thumbnail.jpg")
+        logger.log("RENDERED", {"job_id": job_id, "video_path": str(video_path), "cost_usd": 0})
 
     report_path = _write_report(job_dir, job_id, channel_config, idea, options.render)
     logger.log("JOB_COMPLETED", {"job_id": job_id, "cost_usd": 0})

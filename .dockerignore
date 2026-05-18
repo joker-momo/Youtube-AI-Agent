@@ -1,8 +1,9 @@
+.git
 .superpowers/
 jobs/
-node_modules/
 remotion/node_modules/
-remotion/public/jobs/
-*.pyc
-__pycache__/
+node_modules/
 *.egg-info/
+.pytest_cache/
+__pycache__/
+*.pyc

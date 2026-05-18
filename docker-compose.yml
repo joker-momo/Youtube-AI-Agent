@@ -1,0 +1,15 @@
+services:
+  video-agent:
+    build: .
+    working_dir: /app
+    volumes:
+      - ./jobs:/app/jobs
+    command:
+      - python
+      - -m
+      - video_agent.cli
+      - run
+      - --channel
+      - configs/vida-plena-45/channel.yaml
+      - --idea
+      - inputs/manual_idea.json

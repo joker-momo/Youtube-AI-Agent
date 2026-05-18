@@ -99,48 +99,71 @@ class StockAssetService:
         query = scene.get("visual_prompt") or scene.get("on_screen_text") or ""
         filters = _stock_filters(self.visual_config)
         ttl_hours = int(self.visual_config.get("query_cache_ttl_hours", 24))
-        for provider in self.providers:
+        ranked_candidates = []
+        for provider_order, provider in enumerate(self.providers, start=1):
             try:
                 response = self.cache.get(provider, query, filters)
                 if response is None:
                     response = self.stock_client.search(provider, query, filters)
                     self.cache.set(provider, query, filters, response, ttl_hours=ttl_hours)
-                candidates = self._rank_candidates(query, self.stock_client.normalize(provider, response))
+                candidates = self._rank_candidates(
+                    query,
+                    self.stock_client.normalize(provider, response),
+                    provider_order=provider_order,
+                )
+                ranked_candidates.extend(candidates)
             except Exception:
                 continue
-            for rank, ranked_candidate in enumerate(candidates, start=1):
-                candidate = ranked_candidate["candidate"]
-                key = (candidate["provider"], str(candidate["provider_asset_id"]))
-                if key in self.used_provider_ids:
-                    continue
-                try:
-                    asset = self._ensure_asset(candidate, query)
-                except Exception:
-                    continue
-                self.used_provider_ids.add(key)
-                self.library.record_usage(
-                    asset["asset_id"],
-                    channel_id=channel_id,
-                    job_id=job_id,
-                    scene_id=scene["id"],
-                    scene_intent=scene.get("motion"),
-                )
-                asset["asset_selection"] = {
-                    "query": query,
-                    "candidate_rank": rank,
-                    "score": ranked_candidate["score"],
-                    "reasons": ranked_candidate["reasons"],
-                    "matched_terms": ranked_candidate["matched_terms"],
-                }
-                return asset
+        ranked_candidates = sorted(
+            ranked_candidates,
+            key=lambda item: (-item["score"], item["provider_order"], item["provider_candidate_rank"]),
+        )
+        for rank, ranked_candidate in enumerate(ranked_candidates, start=1):
+            candidate = ranked_candidate["candidate"]
+            key = (candidate["provider"], str(candidate["provider_asset_id"]))
+            if key in self.used_provider_ids:
+                continue
+            try:
+                asset = self._ensure_asset(candidate, query)
+            except Exception:
+                continue
+            self.used_provider_ids.add(key)
+            self.library.record_usage(
+                asset["asset_id"],
+                channel_id=channel_id,
+                job_id=job_id,
+                scene_id=scene["id"],
+                scene_intent=scene.get("motion"),
+            )
+            asset["asset_selection"] = {
+                "query": query,
+                "candidate_rank": rank,
+                "provider_rank": ranked_candidate["provider_order"],
+                "provider_candidate_rank": ranked_candidate["provider_candidate_rank"],
+                "searched_providers": self.providers,
+                "candidate_count": len(ranked_candidates),
+                "score": ranked_candidate["score"],
+                "reasons": ranked_candidate["reasons"],
+                "matched_terms": ranked_candidate["matched_terms"],
+            }
+            return asset
         return None
 
-    def _rank_candidates(self, query: str, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _rank_candidates(
+        self, query: str, candidates: list[dict[str, Any]], provider_order: int
+    ) -> list[dict[str, Any]]:
         ranked = []
-        for provider_index, candidate in enumerate(candidates):
+        for candidate_index, candidate in enumerate(candidates, start=1):
             scoring = _candidate_score(query, candidate)
-            ranked.append({"candidate": candidate, "provider_index": provider_index, **scoring})
-        return sorted(ranked, key=lambda item: (item["score"], -item["provider_index"]), reverse=True)
+            ranked.append(
+                {
+                    "candidate": candidate,
+                    "provider_order": provider_order,
+                    "provider_candidate_rank": candidate_index,
+                    **scoring,
+                }
+            )
+        return ranked
 
     def _ensure_asset(self, candidate: dict[str, Any], query: str) -> dict[str, Any]:
         existing = self.library.get_by_provider_id(candidate["provider"], str(candidate["provider_asset_id"]))

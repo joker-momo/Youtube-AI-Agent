@@ -15,6 +15,7 @@ class AuditRow:
     visual_status: str
     contact_sheet: str
     source_mix: str
+    provider_mix: str
     issue_count: int
 
 
@@ -24,6 +25,7 @@ def build_audit_row(job_dir: Path) -> AuditRow:
     video_path = job_dir / "video.mp4"
     video_status = f"{video_path.stat().st_size / 1024 / 1024:.1f} MB" if video_path.exists() else "skipped"
     source_mix = ", ".join(f"{count} {source}" for source, count in visual_review["summary"]["by_source"].items())
+    provider_mix = ", ".join(f"{count} {provider}" for provider, count in visual_review["summary"]["by_provider"].items())
     return AuditRow(
         job_dir=job_dir,
         topic=render_props.get("seo", {}).get("title") or render_props.get("channel", {}).get("name", "-"),
@@ -31,6 +33,7 @@ def build_audit_row(job_dir: Path) -> AuditRow:
         visual_status=visual_review["qa"]["status"],
         contact_sheet=str(job_dir / visual_review.get("contact_sheet", "visual_contact_sheet.jpg")),
         source_mix=source_mix,
+        provider_mix=provider_mix or "-",
         issue_count=visual_review["qa"]["issue_count"],
     )
 
@@ -39,15 +42,15 @@ def format_audit_markdown(rows: list[AuditRow]) -> str:
     lines = [
         "# Visual Batch Audit",
         "",
-        "| Job | Topic | Video | Visual QA | Contact sheet | Source mix |",
-        "| --- | --- | ---: | --- | --- | --- |",
+        "| Job | Topic | Video | Visual QA | Contact sheet | Source mix | Provider mix |",
+        "| --- | --- | ---: | --- | --- | --- | --- |",
     ]
     for row in rows:
         visual_status = row.visual_status
         if row.issue_count:
             visual_status = f"{visual_status} ({row.issue_count} issues)"
         lines.append(
-            f"| `{row.job_dir.name}` | {row.topic} | {row.video_status} | {visual_status} | `{row.contact_sheet}` | {row.source_mix} |"
+            f"| `{row.job_dir.name}` | {row.topic} | {row.video_status} | {visual_status} | `{row.contact_sheet}` | {row.source_mix} | {row.provider_mix} |"
         )
     return "\n".join(lines) + "\n"
 

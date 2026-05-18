@@ -49,7 +49,8 @@ def test_cli_batch_without_render_writes_audit(tmp_path, capsys):
     assert "Visual Batch Audit" in captured.out
     assert audit_path.exists()
     audit = audit_path.read_text(encoding="utf-8")
-    assert "| Job | Topic | Video | Visual QA | Contact sheet | Source mix |" in audit
+    assert "| Job | Topic | Video | Visual QA | Contact sheet | Source mix | Provider mix |" in audit
+    assert "pexels" in audit or "generated_placeholder" in audit
     assert "visual_contact_sheet.jpg" in audit
     job_lines = [line for line in audit.splitlines() if line.startswith("| `")]
     assert len(job_lines) == 2

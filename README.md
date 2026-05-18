@@ -91,7 +91,7 @@ docker compose run --rm video-agent python -m video_agent.cli audit \
 The default channel uses `visuals.strategy: "auto"`:
 
 1. Use local ChatGPT/manual images from `source_dir` when files like `scene-01.png` exist.
-2. Otherwise search Pexels/Pixabay when API keys are configured.
+2. Otherwise search all configured stock providers, rank candidates globally, then choose the best asset.
 3. Otherwise fall back to generated placeholder images.
 
 Downloaded stock photos are stored in `asset_library/`, and query responses are cached in `caches/`.

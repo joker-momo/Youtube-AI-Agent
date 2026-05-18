@@ -3,33 +3,24 @@ from __future__ import annotations
 from typing import Any
 
 
+def _short_label(text: str, max_words: int = 4) -> str:
+    words = text.replace(",", "").split()
+    label = " ".join(words[:max_words])
+    return label.capitalize()
+
+
 class MockProvider:
     def generate_script(self, channel_config: dict[str, Any], idea: dict[str, Any], job_id: str) -> dict[str, Any]:
         channel_id = channel_config["channel"]["id"]
         key_points = idea["key_points"]
-        hook = "Te cuesta dormir bien despues de los 45? Empieza con una noche mas tranquila."
-        sections = [
-            {
-                "title": "Prepara el descanso",
-                "text": f"Una hora antes de dormir, baja el ritmo. {key_points[0].capitalize()} ayuda a tu cuerpo a reconocer que el dia termino.",
-            },
-            {
-                "title": "Cuida los estimulos",
-                "text": f"Evita pantallas brillantes y cenas muy pesadas. {key_points[1].capitalize()} permite que el sueno llegue con menos resistencia.",
-            },
-            {
-                "title": "Respira con suavidad",
-                "text": f"Prueba una respiracion lenta por dos minutos. {key_points[2].capitalize()} invita al cuerpo a calmarse.",
-            },
-            {
-                "title": "Manten constancia",
-                "text": f"Intenta acostarte a una hora parecida cada noche. {key_points[3].capitalize()} crea una senal simple y repetible.",
-            },
-            {
-                "title": "Busca apoyo si persiste",
-                "text": f"Si el insomnio continua, habla con un profesional. {key_points[4].capitalize()} es parte de cuidarte con responsabilidad.",
-            },
-        ]
+        hook = f"Hoy vemos {_short_label(idea['topic'], 5).lower()} con calma."
+        sections = []
+        for index, point in enumerate(key_points, start=1):
+            if index == len(key_points):
+                text = f"{point.capitalize()}. Busca apoyo profesional si hace falta."
+            else:
+                text = f"{point.capitalize()}. Hazlo simple y con calma."
+            sections.append({"title": _short_label(point), "text": text})
         narration_parts = [hook] + [section["text"] for section in sections]
         narration_parts.append("Este contenido es educativo y no reemplaza el consejo de un profesional de salud.")
         narration = " ".join(narration_parts)
@@ -51,13 +42,15 @@ class MockProvider:
         job_id: str,
     ) -> dict[str, Any]:
         target = int(idea["target_duration_sec"])
+        topic = idea["topic"]
+        key_points = idea["key_points"]
         durations = [10, 11, 11, 11, max(9, target - 43)]
         scene_texts = [
-            ("Una noche mas tranquila", script["hook"], "slow_push"),
-            ("Baja el ritmo", script["sections"][0]["text"], "pan_left"),
-            ("Menos pantallas", script["sections"][1]["text"], "pan_right"),
-            ("Respira suave", script["sections"][2]["text"], "slow_zoom"),
-            ("Constancia y apoyo", script["sections"][4]["text"], "fade_up"),
+            (script["sections"][0]["title"], f"{script['hook']} {script['sections'][0]['text']}", "slow_push"),
+            (script["sections"][1]["title"], script["sections"][1]["text"], "pan_left"),
+            (script["sections"][2]["title"], script["sections"][2]["text"], "pan_right"),
+            (script["sections"][3]["title"], script["sections"][3]["text"], "slow_zoom"),
+            (script["sections"][4]["title"], script["sections"][4]["text"], "fade_up"),
         ]
         scenes = []
         for index, (text, narration, motion) in enumerate(scene_texts, start=1):
@@ -67,7 +60,10 @@ class MockProvider:
                     "duration_sec": durations[index - 1],
                     "narration": narration,
                     "visual_type": "generated_placeholder",
-                    "visual_prompt": f"Warm editorial wellness scene for adults 45+, {text.lower()}, calm home environment",
+                    "visual_prompt": (
+                        f"Warm realistic wellness photo for adults 45+, {topic}, "
+                        f"{key_points[index - 1]}, {text.lower()}, calm lifestyle environment"
+                    ),
                     "on_screen_text": text,
                     "caption": narration[:130],
                     "motion": motion,

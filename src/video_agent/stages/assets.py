@@ -8,8 +8,11 @@ from typing import Any
 
 from PIL import Image, ImageDraw
 
+from video_agent.assets.service import StockAssetService
 from video_agent.contracts import ARTIFACT_ASSETS, repo_root
 from video_agent.utils.json_io import write_json
+
+SUPPORTED_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp")
 
 
 def _hex_to_rgb(value: str) -> tuple[int, int, int]:
@@ -29,26 +32,98 @@ def _write_silent_wav(path: Path, duration_sec: int, sample_rate: int = 44100) -
             handle.writeframes(chunk)
 
 
-def prepare_assets(job_dir: Path, style_dna: dict[str, Any], scene_doc: dict[str, Any]) -> dict[str, Any]:
+def _resolve_source_dir(source_dir: str | None) -> Path | None:
+    if not source_dir:
+        return None
+    path = Path(source_dir)
+    if not path.is_absolute():
+        path = repo_root() / path
+    return path
+
+
+def _find_local_scene_image(scene_id: str, source_dir: Path | None) -> Path | None:
+    if not source_dir or not source_dir.exists():
+        return None
+    for suffix in SUPPORTED_IMAGE_SUFFIXES:
+        candidate = source_dir / f"{scene_id}{suffix}"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _write_placeholder_image(path: Path, scene: dict[str, Any], color: tuple[int, int, int], palette: dict[str, str]) -> None:
+    image = Image.new("RGB", (1920, 1080), color)
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((0, 760, 1920, 1080), fill=_hex_to_rgb(palette["text"]))
+    draw.text((96, 820), scene["on_screen_text"], fill=_hex_to_rgb(palette["accent"]))
+    image.save(path, quality=92)
+
+
+def prepare_assets(
+    job_dir: Path,
+    style_dna: dict[str, Any],
+    scene_doc: dict[str, Any],
+    visual_config: dict[str, Any] | None = None,
+    channel_id: str = "unknown-channel",
+    stock_client: Any | None = None,
+    download_client: Any | None = None,
+) -> dict[str, Any]:
     assets_dir = job_dir / "assets"
     assets_dir.mkdir(parents=True, exist_ok=True)
     public_assets_dir = repo_root() / "remotion/public/jobs" / job_dir.name / "assets"
     public_assets_dir.mkdir(parents=True, exist_ok=True)
     palette = style_dna["palette"]
     colors = [_hex_to_rgb(palette["background"]), _hex_to_rgb(palette["primary"]), _hex_to_rgb(palette["secondary"])]
+    visual_config = visual_config or {}
+    source_dir = _resolve_source_dir(visual_config.get("source_dir"))
+    stock_service = (
+        StockAssetService(visual_config, stock_client=stock_client, download_client=download_client)
+        if visual_config.get("strategy") in {"auto", "stock_photo_api"}
+        else None
+    )
     scene_assets = []
     for index, scene in enumerate(scene_doc["scenes"]):
-        image_path = assets_dir / f"{scene['id']}.jpg"
-        image = Image.new("RGB", (1920, 1080), colors[index % len(colors)])
-        draw = ImageDraw.Draw(image)
-        draw.rectangle((0, 760, 1920, 1080), fill=_hex_to_rgb(palette["text"]))
-        draw.text((96, 820), scene["on_screen_text"], fill=_hex_to_rgb(palette["accent"]))
-        image.save(image_path, quality=92)
+        local_image = _find_local_scene_image(scene["id"], source_dir)
+        stock_asset = None
+        if not local_image and stock_service:
+            stock_asset = stock_service.get_scene_asset(scene, channel_id, job_dir.name)
+        image_suffix = local_image.suffix if local_image else ".jpg"
+        image_path = assets_dir / f"{scene['id']}{image_suffix}"
+        if local_image:
+            shutil.copy2(local_image, image_path)
+            source = "local_directory"
+            source_path = str(local_image.resolve())
+            extra_manifest = {}
+        elif stock_asset:
+            library_path = stock_service.library.root / stock_asset["file_path"]
+            shutil.copy2(library_path, image_path)
+            source = "asset_library"
+            source_path = str(library_path.resolve())
+            extra_manifest = {
+                "asset_id": stock_asset["asset_id"],
+                "provider": stock_asset["provider"],
+                "provider_asset_id": stock_asset["provider_asset_id"],
+                "source_url": stock_asset["original_url"],
+                "attribution": stock_asset["attribution"],
+            }
+        else:
+            _write_placeholder_image(image_path, scene, colors[index % len(colors)], palette)
+            source = "generated_placeholder"
+            source_path = None
+            extra_manifest = {}
         public_image_path = public_assets_dir / image_path.name
         shutil.copy2(image_path, public_image_path)
         public_ref = f"jobs/{job_dir.name}/assets/{image_path.name}"
         scene["asset_refs"]["background"] = public_ref
-        scene_assets.append({"scene_id": scene["id"], "background": str(image_path.resolve()), "public_background": public_ref})
+        scene_asset = {
+            "scene_id": scene["id"],
+            "background": str(image_path.resolve()),
+            "public_background": public_ref,
+            "source": source,
+            "source_path": source_path,
+        }
+        scene_asset.update(extra_manifest)
+        scene_assets.append(scene_asset)
     narration_path = assets_dir / "narration.wav"
     _write_silent_wav(narration_path, int(scene_doc["total_duration_sec"]))
     public_narration_path = public_assets_dir / "narration.wav"

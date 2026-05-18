@@ -1,0 +1,59 @@
+from __future__ import annotations
+
+from video_agent.assets.providers import normalize_pexels_response, normalize_pixabay_response
+
+
+def test_normalize_pexels_response_preserves_credit_and_download_url():
+    response = {
+        "photos": [
+            {
+                "id": 6793199,
+                "url": "https://www.pexels.com/photo/a-woman-sitting-on-bed-6793199/",
+                "photographer": "Yaroslav Shuraev",
+                "photographer_url": "https://www.pexels.com/@yaroslav-shuraev",
+                "width": 6550,
+                "height": 4367,
+                "alt": "Woman reclining on bed wearing a sleep mask.",
+                "src": {"large2x": "https://images.pexels.com/photos/6793199/large2x.jpg"},
+            }
+        ]
+    }
+
+    result = normalize_pexels_response(response)
+
+    assert result[0]["provider"] == "pexels"
+    assert result[0]["provider_asset_id"] == "6793199"
+    assert result[0]["download_url"] == "https://images.pexels.com/photos/6793199/large2x.jpg"
+    assert result[0]["photographer"] == "Yaroslav Shuraev"
+    assert result[0]["photographer_url"] == "https://www.pexels.com/@yaroslav-shuraev"
+    assert result[0]["attribution"] == "Photo by Yaroslav Shuraev on Pexels"
+    assert result[0]["tags"] == ["Woman reclining on bed wearing a sleep mask."]
+
+
+def test_normalize_pixabay_response_preserves_credit_and_download_url():
+    response = {
+        "hits": [
+            {
+                "id": 7009836,
+                "pageURL": "https://pixabay.com/photos/cat-sleep-nap-7009836/",
+                "fullHDURL": "https://pixabay.com/get/fullhd.jpg",
+                "largeImageURL": "https://pixabay.com/get/large.jpg",
+                "user": "planet_fox",
+                "user_id": 4691618,
+                "tags": "sleep, wellness, rest",
+                "imageWidth": 6960,
+                "imageHeight": 4640,
+            }
+        ]
+    }
+
+    result = normalize_pixabay_response(response)
+
+    assert result[0]["provider"] == "pixabay"
+    assert result[0]["provider_asset_id"] == "7009836"
+    assert result[0]["download_url"] == "https://pixabay.com/get/fullhd.jpg"
+    assert result[0]["source_url"] == "https://pixabay.com/photos/cat-sleep-nap-7009836/"
+    assert result[0]["photographer"] == "planet_fox"
+    assert result[0]["photographer_url"] == "https://pixabay.com/users/planet_fox-4691618/"
+    assert result[0]["attribution"] == "Image by planet_fox from Pixabay"
+    assert result[0]["tags"] == ["sleep", "wellness", "rest"]

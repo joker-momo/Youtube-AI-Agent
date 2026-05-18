@@ -92,7 +92,13 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
     validate_json(scene_doc, root / "schemas/scenes.schema.json")
     logger.log("SCENED", {"job_id": job_id, "cost_usd": 0})
 
-    assets = prepare_assets(job_dir, style, scene_doc)
+    assets = prepare_assets(
+        job_dir,
+        style,
+        scene_doc,
+        visual_config=channel_config.get("visuals"),
+        channel_id=channel_config["channel"]["id"],
+    )
     seo = create_thumbnail_and_seo(provider, channel_config, style, idea, job_dir)
     validate_json(seo, root / "schemas/seo.schema.json")
     logger.log("ASSETS_READY", {"job_id": job_id, "cost_usd": 0})

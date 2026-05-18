@@ -38,6 +38,23 @@ Outputs are written under `jobs/<job_id>/` on the host:
 docker compose run --rm video-agent pytest -v
 ```
 
+## Environment
+
+Copy `.env.example` to `.env` when using stock photo APIs:
+
+```bash
+cp .env.example .env
+```
+
+Set:
+
+```text
+PEXELS_API_KEY=...
+PIXABAY_API_KEY=...
+```
+
+Docker Compose passes those variables into the container. Do not commit `.env`.
+
 ## Skip Rendering
 
 ```bash
@@ -46,3 +63,28 @@ docker compose run --rm video-agent python -m video_agent.cli run \
   --idea inputs/manual_idea.json \
   --no-render
 ```
+
+## Visual Assets
+
+The default channel uses `visuals.strategy: "auto"`:
+
+1. Use local ChatGPT/manual images from `source_dir` when files like `scene-01.png` exist.
+2. Otherwise search Pexels/Pixabay when API keys are configured.
+3. Otherwise fall back to generated placeholder images.
+
+Downloaded stock photos are stored in `asset_library/`, and query responses are cached in `caches/`.
+
+## Local Scene Images
+
+The asset stage can use local image files before falling back to generated placeholders.
+Set this in a channel config:
+
+```yaml
+visuals:
+  strategy: "local_directory"
+  source_dir: "inputs/image-library"
+  scene_count_target: 5
+```
+
+Name files by scene id, for example `scene-01.jpg`, `scene-02.png`, or `scene-03.webp`.
+The pipeline copies them into the job assets folder and Remotion renders those copied images.

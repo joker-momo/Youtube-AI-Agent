@@ -1,0 +1,4 @@
+interface:
+  display_name: "ChatGPT Image Browser"
+  short_description: "Generate and download ChatGPT images"
+  default_prompt: "Use $chatgpt-image-browser to create a scene image in the logged-in Chrome ChatGPT session and save it into the project image library."

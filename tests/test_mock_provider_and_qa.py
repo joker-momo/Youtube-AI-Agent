@@ -37,6 +37,17 @@ def test_mock_scenes_pass_scene_qa():
     assert qa["verdict"] == "PASS"
     assert 45 <= scenes["total_duration_sec"] <= 60
     assert len(scenes["scenes"]) == 5
+    assert scenes["scenes"][0]["on_screen_text"] == "Calma"
+
+
+def test_mock_scene_visual_prompts_include_topic_and_key_points():
+    provider = MockProvider()
+    script = provider.generate_script(CHANNEL, IDEA, "job-1")
+    scenes = provider.generate_scenes(CHANNEL, IDEA, script, "job-1")
+
+    first_prompt = scenes["scenes"][0]["visual_prompt"]
+    assert IDEA["topic"] in first_prompt
+    assert IDEA["key_points"][0] in first_prompt
 
 
 def test_mock_seo_passes_thumbnail_title_qa():

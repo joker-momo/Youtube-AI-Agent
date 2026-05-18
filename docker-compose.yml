@@ -2,8 +2,13 @@ services:
   video-agent:
     build: .
     working_dir: /app
+    environment:
+      PEXELS_API_KEY: ${PEXELS_API_KEY:-}
+      PIXABAY_API_KEY: ${PIXABAY_API_KEY:-}
     volumes:
       - ./jobs:/app/jobs
+      - ./caches:/app/caches
+      - ./asset_library:/app/asset_library
     command:
       - python
       - -m

@@ -139,6 +139,73 @@ def test_prepare_assets_uses_stock_photo_api_and_records_attribution(tmp_path):
     assert scene["attribution"] == "Photo by Example Photographer on Pexels"
 
 
+class RankedFakeStockClient:
+    def search(self, provider, query, filters):
+        return {"photos": [{"id": "low"}, {"id": "high"}]}
+
+    def normalize(self, provider, response):
+        return [
+            {
+                "provider": "pexels",
+                "provider_asset_id": "low",
+                "media_type": "photo",
+                "download_url": "https://example.test/low.jpg",
+                "source_url": "https://www.pexels.com/photo/low/",
+                "width": 640,
+                "height": 360,
+                "tags": ["generic"],
+                "photographer": "Low Photographer",
+                "photographer_url": "https://www.pexels.com/@low",
+                "attribution": "Photo by Low Photographer on Pexels",
+                "quality": "large",
+                "license": "Pexels License",
+            },
+            {
+                "provider": "pexels",
+                "provider_asset_id": "high",
+                "media_type": "photo",
+                "download_url": "https://example.test/high.jpg",
+                "source_url": "https://www.pexels.com/photo/high/",
+                "width": 3840,
+                "height": 2160,
+                "tags": ["calm sleep wellness bedroom"],
+                "photographer": "High Photographer",
+                "photographer_url": "https://www.pexels.com/@high",
+                "attribution": "Photo by High Photographer on Pexels",
+                "quality": "large2x",
+                "license": "Pexels License",
+            },
+        ]
+
+
+def test_prepare_assets_ranks_stock_candidates_and_records_selection_reason(tmp_path):
+    doc = scene_doc()
+    doc["scenes"][0]["visual_prompt"] = "calm sleep wellness bedroom"
+    job_dir = tmp_path / "jobs" / "job-ranked"
+
+    manifest = prepare_assets(
+        job_dir,
+        STYLE_DNA,
+        doc,
+        visual_config={
+            "strategy": "stock_photo_api",
+            "providers": ["pexels"],
+            "query_cache_path": str(tmp_path / "caches" / "query_cache.db"),
+            "asset_library_path": str(tmp_path / "asset_library"),
+        },
+        channel_id="vida-plena-45",
+        stock_client=RankedFakeStockClient(),
+        download_client=FakeDownloadClient(),
+    )
+
+    scene = manifest["scenes"][0]
+    assert scene["provider_asset_id"] == "high"
+    assert scene["asset_selection"]["candidate_rank"] == 1
+    assert scene["asset_selection"]["score"] > 0
+    assert "high_resolution" in scene["asset_selection"]["reasons"]
+    assert "tag_match" in scene["asset_selection"]["reasons"]
+
+
 def test_prepare_assets_auto_uses_stock_photo_api_when_local_image_is_missing(tmp_path):
     doc = scene_doc()
     doc["scenes"][0]["visual_prompt"] = "calm sleep wellness bedroom"

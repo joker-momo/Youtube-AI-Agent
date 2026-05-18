@@ -105,6 +105,7 @@ def prepare_assets(
                 "provider_asset_id": stock_asset["provider_asset_id"],
                 "source_url": stock_asset["original_url"],
                 "attribution": stock_asset["attribution"],
+                "asset_selection": stock_asset.get("asset_selection"),
             }
         else:
             _write_placeholder_image(image_path, scene, colors[index % len(colors)], palette)

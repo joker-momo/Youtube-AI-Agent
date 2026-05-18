@@ -19,6 +19,7 @@ def test_pipeline_writes_structured_artifacts_without_render(tmp_path):
     assert (result.job_dir / "script.json").exists()
     assert (result.job_dir / "scenes.json").exists()
     assert (result.job_dir / "assets_manifest.json").exists()
+    assert (result.job_dir / "visual_review.json").exists()
     assert (result.job_dir / "render_props.json").exists()
     assert (result.job_dir / "seo.json").exists()
     assert (result.job_dir / "thumbnail.jpg").exists()
@@ -26,3 +27,9 @@ def test_pipeline_writes_structured_artifacts_without_render(tmp_path):
     render_props = read_json(result.job_dir / "render_props.json")
     assert render_props["channel"]["id"] == "vida-plena-45"
     assert len(render_props["scenes"]) == 5
+    visual_review = read_json(result.job_dir / "visual_review.json")
+    assert visual_review["job_id"] == result.job_id
+    assert len(visual_review["scenes"]) == 5
+    assert visual_review["summary"]["total_scenes"] == 5
+    report = (result.job_dir / "report.md").read_text(encoding="utf-8")
+    assert "Visual Review" in report

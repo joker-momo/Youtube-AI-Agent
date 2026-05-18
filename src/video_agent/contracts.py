@@ -5,6 +5,7 @@ from pathlib import Path
 ARTIFACT_SCRIPT = "script.json"
 ARTIFACT_SCENES = "scenes.json"
 ARTIFACT_ASSETS = "assets_manifest.json"
+ARTIFACT_VISUAL_REVIEW = "visual_review.json"
 ARTIFACT_RENDER_PROPS = "render_props.json"
 ARTIFACT_SEO = "seo.json"
 ARTIFACT_REPORT = "report.md"

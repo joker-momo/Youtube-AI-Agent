@@ -6,6 +6,7 @@ from pathlib import Path
 from video_agent.contracts import (
     ARTIFACT_REPORT,
     ARTIFACT_RENDER_PROPS,
+    ARTIFACT_VISUAL_REVIEW,
     ARTIFACT_VIDEO,
     EVENT_LOG,
     repo_root,
@@ -44,7 +45,50 @@ def _load_style(channel_config: dict) -> dict:
     return read_json(repo_root() / channel_config["style_dna"]["path"])
 
 
-def _write_report(job_dir: Path, job_id: str, channel_config: dict, idea: dict, render_enabled: bool) -> Path:
+def _write_visual_review(job_dir: Path, job_id: str, assets: dict, scene_doc: dict) -> dict:
+    scenes = []
+    for scene_asset, scene in zip(assets["scenes"], scene_doc["scenes"]):
+        scenes.append(
+            {
+                "scene_id": scene_asset["scene_id"],
+                "on_screen_text": scene.get("on_screen_text"),
+                "source": scene_asset.get("source"),
+                "provider": scene_asset.get("provider"),
+                "provider_asset_id": scene_asset.get("provider_asset_id"),
+                "source_url": scene_asset.get("source_url"),
+                "query": (scene_asset.get("asset_selection") or {}).get("query"),
+                "selection": scene_asset.get("asset_selection"),
+                "background": scene_asset.get("background"),
+            }
+        )
+    summary = {
+        "total_scenes": len(scenes),
+        "by_source": {},
+        "by_provider": {},
+    }
+    for scene in scenes:
+        summary["by_source"][scene["source"]] = summary["by_source"].get(scene["source"], 0) + 1
+        if scene["provider"]:
+            summary["by_provider"][scene["provider"]] = summary["by_provider"].get(scene["provider"], 0) + 1
+    review = {"job_id": job_id, "summary": summary, "scenes": scenes}
+    write_json(job_dir / ARTIFACT_VISUAL_REVIEW, review)
+    return review
+
+
+def _write_report(
+    job_dir: Path,
+    job_id: str,
+    channel_config: dict,
+    idea: dict,
+    render_enabled: bool,
+    visual_review: dict,
+) -> Path:
+    visual_lines = ["", "## Visual Review"]
+    for scene in visual_review["scenes"]:
+        provider = scene.get("provider") or "-"
+        asset_id = scene.get("provider_asset_id") or "-"
+        source = scene.get("source") or "-"
+        visual_lines.append(f"- {scene['scene_id']}: {source} {provider}/{asset_id}")
     report_path = job_dir / ARTIFACT_REPORT
     report_path.write_text(
         "\n".join(
@@ -59,9 +103,11 @@ def _write_report(job_dir: Path, job_id: str, channel_config: dict, idea: dict, 
                 "  - scenes.json",
                 "  - assets_manifest.json",
                 "  - render_props.json",
+                "  - visual_review.json",
                 "  - seo.json",
                 "  - thumbnail.jpg",
                 "  - video.mp4" if render_enabled else "  - video.mp4 skipped",
+                *visual_lines,
             ]
         )
         + "\n",
@@ -113,6 +159,7 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
     }
     write_json(job_dir / ARTIFACT_RENDER_PROPS, render_props)
     validate_json(render_props, root / "schemas/render-props.schema.json")
+    visual_review = _write_visual_review(job_dir, job_id, assets, scene_doc)
 
     video_path = None
     if options.render:
@@ -120,7 +167,7 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
         render_with_remotion(job_dir / ARTIFACT_RENDER_PROPS, video_path, job_dir / "thumbnail.jpg")
         logger.log("RENDERED", {"job_id": job_id, "video_path": str(video_path), "cost_usd": 0})
 
-    report_path = _write_report(job_dir, job_id, channel_config, idea, options.render)
+    report_path = _write_report(job_dir, job_id, channel_config, idea, options.render, visual_review)
     logger.log("JOB_COMPLETED", {"job_id": job_id, "cost_usd": 0})
     return PipelineResult(
         job_id=job_id,

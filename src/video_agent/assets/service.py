@@ -41,6 +41,41 @@ def _stock_filters(visual_config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _query_terms(query: str) -> set[str]:
+    return {term.lower() for term in query.replace(",", " ").split() if len(term) > 2}
+
+
+def _candidate_score(query: str, candidate: dict[str, Any]) -> dict[str, Any]:
+    score = 0
+    reasons = []
+    width = int(candidate.get("width") or 0)
+    height = int(candidate.get("height") or 0)
+    if width >= 1920 and height >= 1080:
+        score += 40
+        reasons.append("high_resolution")
+    elif width >= 1280 and height >= 720:
+        score += 20
+        reasons.append("usable_resolution")
+
+    if width and height:
+        ratio = width / height
+        if abs(ratio - 16 / 9) < 0.12:
+            score += 15
+            reasons.append("landscape_16_9")
+
+    tags_text = " ".join(str(tag).lower() for tag in candidate.get("tags") or [])
+    overlap = sorted(term for term in _query_terms(query) if term in tags_text)
+    if overlap:
+        score += min(30, len(overlap) * 8)
+        reasons.append("tag_match")
+
+    if candidate.get("quality") in {"large2x", "fullhd", "original"}:
+        score += 10
+        reasons.append("preferred_quality")
+
+    return {"score": score, "reasons": reasons or ["provider_order"], "matched_terms": overlap}
+
+
 class StockAssetService:
     def __init__(
         self,
@@ -70,10 +105,11 @@ class StockAssetService:
                 if response is None:
                     response = self.stock_client.search(provider, query, filters)
                     self.cache.set(provider, query, filters, response, ttl_hours=ttl_hours)
-                candidates = self.stock_client.normalize(provider, response)
+                candidates = self._rank_candidates(query, self.stock_client.normalize(provider, response))
             except Exception:
                 continue
-            for candidate in candidates:
+            for rank, ranked_candidate in enumerate(candidates, start=1):
+                candidate = ranked_candidate["candidate"]
                 key = (candidate["provider"], str(candidate["provider_asset_id"]))
                 if key in self.used_provider_ids:
                     continue
@@ -89,8 +125,22 @@ class StockAssetService:
                     scene_id=scene["id"],
                     scene_intent=scene.get("motion"),
                 )
+                asset["asset_selection"] = {
+                    "query": query,
+                    "candidate_rank": rank,
+                    "score": ranked_candidate["score"],
+                    "reasons": ranked_candidate["reasons"],
+                    "matched_terms": ranked_candidate["matched_terms"],
+                }
                 return asset
         return None
+
+    def _rank_candidates(self, query: str, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        ranked = []
+        for provider_index, candidate in enumerate(candidates):
+            scoring = _candidate_score(query, candidate)
+            ranked.append({"candidate": candidate, "provider_index": provider_index, **scoring})
+        return sorted(ranked, key=lambda item: (item["score"], -item["provider_index"]), reverse=True)
 
     def _ensure_asset(self, candidate: dict[str, Any], query: str) -> dict[str, Any]:
         existing = self.library.get_by_provider_id(candidate["provider"], str(candidate["provider_asset_id"]))

@@ -14,7 +14,15 @@ def test_required_outputs_exist_without_render(tmp_path):
             render=False,
         )
     )
-    required = ["thumbnail.jpg", "seo.json", "report.md", "render_props.json", "script.json", "scenes.json"]
+    required = [
+        "thumbnail.jpg",
+        "seo.json",
+        "report.md",
+        "render_props.json",
+        "script.json",
+        "scenes.json",
+        "visual_review.json",
+    ]
     for filename in required:
         path = result.job_dir / filename
         assert path.exists(), filename

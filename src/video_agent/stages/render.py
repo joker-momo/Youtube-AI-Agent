@@ -21,11 +21,18 @@ def _input_props_arg(render_props_path: Path) -> str:
     return json.dumps(props, ensure_ascii=False)
 
 
+def _render_concurrency(render_props_path: Path) -> int:
+    props = read_json(render_props_path)
+    concurrency = props.get("render", {}).get("concurrency", 1)
+    return max(1, int(concurrency))
+
+
 def build_remotion_commands(render_props_path: Path, video_path: Path, thumbnail_path: Path) -> RemotionCommands:
     remotion_root = repo_root() / "remotion"
     entry = remotion_root / "src/index.ts"
     public_dir = remotion_root / "public"
     input_props = _input_props_arg(render_props_path)
+    concurrency = str(_render_concurrency(render_props_path))
     base = ["npx", "--prefix", str(remotion_root), "remotion"]
     return RemotionCommands(
         video=[
@@ -40,6 +47,8 @@ def build_remotion_commands(render_props_path: Path, video_path: Path, thumbnail
             "h264",
             "--public-dir",
             str(public_dir),
+            "--concurrency",
+            concurrency,
         ],
         thumbnail=[
             *base,

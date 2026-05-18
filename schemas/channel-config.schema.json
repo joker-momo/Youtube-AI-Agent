@@ -42,7 +42,8 @@
         "resolution": { "type": "string" },
         "fps": { "type": "integer" },
         "codec": { "type": "string" },
-        "crf": { "type": "integer" }
+        "crf": { "type": "integer" },
+        "concurrency": { "type": "integer", "minimum": 1 }
       }
     },
     "upload": {

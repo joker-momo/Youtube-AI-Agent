@@ -21,6 +21,23 @@ def test_build_remotion_commands_include_props_and_outputs(tmp_path):
     assert str(render_props) in video_command
 
 
+def test_video_render_defaults_to_single_concurrency(tmp_path):
+    render_props = tmp_path / "render_props.json"
+    render_props.write_text("{}", encoding="utf-8")
+    commands = build_remotion_commands(render_props, tmp_path / "video.mp4", tmp_path / "thumbnail.jpg")
+
+    assert "--concurrency" in commands.video
+    assert commands.video[commands.video.index("--concurrency") + 1] == "1"
+
+
+def test_video_render_uses_configured_concurrency(tmp_path):
+    render_props = tmp_path / "render_props.json"
+    render_props.write_text('{"render": {"concurrency": 2}}', encoding="utf-8")
+    commands = build_remotion_commands(render_props, tmp_path / "video.mp4", tmp_path / "thumbnail.jpg")
+
+    assert commands.video[commands.video.index("--concurrency") + 1] == "2"
+
+
 def test_thumbnail_uses_render_props_content_instead_of_demo_copy():
     thumbnail_source = (ROOT / "remotion/src/Thumbnail.tsx").read_text(encoding="utf-8")
 

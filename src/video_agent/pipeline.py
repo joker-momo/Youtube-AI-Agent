@@ -45,6 +45,74 @@ def _load_style(channel_config: dict) -> dict:
     return read_json(repo_root() / channel_config["style_dna"]["path"])
 
 
+def _scene_visual_issues(scene: dict) -> list[dict]:
+    issues = []
+    source = scene.get("source")
+    provider = scene.get("provider")
+    selection = scene.get("selection") or {}
+    score = selection.get("score")
+    asset_key = f"{provider}:{scene.get('provider_asset_id')}" if provider and scene.get("provider_asset_id") else None
+
+    if source == "generated_placeholder":
+        issues.append(
+            {
+                "type": "PLACEHOLDER_USED",
+                "severity": "warning",
+                "message": "Scene fell back to a generated placeholder image.",
+            }
+        )
+    if source == "asset_library" and not provider:
+        issues.append(
+            {
+                "type": "MISSING_PROVIDER",
+                "severity": "warning",
+                "message": "Asset library scene is missing provider metadata.",
+            }
+        )
+    if score is not None and score < 40:
+        issues.append(
+            {
+                "type": "LOW_SELECTION_SCORE",
+                "severity": "warning",
+                "message": f"Selected asset score is low: {score}.",
+            }
+        )
+    if source == "asset_library" and not selection:
+        issues.append(
+            {
+                "type": "MISSING_SELECTION_METADATA",
+                "severity": "warning",
+                "message": "Stock asset has no selection metadata.",
+            }
+        )
+    if asset_key:
+        scene["asset_key"] = asset_key
+    return issues
+
+
+def _add_visual_qa(review: dict) -> dict:
+    seen_assets = {}
+    issue_count = 0
+    for scene in review["scenes"]:
+        issues = _scene_visual_issues(scene)
+        asset_key = scene.pop("asset_key", None)
+        if asset_key:
+            if asset_key in seen_assets:
+                issues.append(
+                    {
+                        "type": "DUPLICATE_ASSET_IN_JOB",
+                        "severity": "warning",
+                        "message": f"Asset already used in {seen_assets[asset_key]}.",
+                    }
+                )
+            else:
+                seen_assets[asset_key] = scene["scene_id"]
+        scene["qa"] = {"status": "WARN" if issues else "PASS", "issues": issues}
+        issue_count += len(issues)
+    review["qa"] = {"status": "WARN" if issue_count else "PASS", "issue_count": issue_count}
+    return review
+
+
 def _write_visual_review(job_dir: Path, job_id: str, assets: dict, scene_doc: dict) -> dict:
     scenes = []
     for scene_asset, scene in zip(assets["scenes"], scene_doc["scenes"]):
@@ -70,7 +138,7 @@ def _write_visual_review(job_dir: Path, job_id: str, assets: dict, scene_doc: di
         summary["by_source"][scene["source"]] = summary["by_source"].get(scene["source"], 0) + 1
         if scene["provider"]:
             summary["by_provider"][scene["provider"]] = summary["by_provider"].get(scene["provider"], 0) + 1
-    review = {"job_id": job_id, "summary": summary, "scenes": scenes}
+    review = _add_visual_qa({"job_id": job_id, "summary": summary, "scenes": scenes})
     write_json(job_dir / ARTIFACT_VISUAL_REVIEW, review)
     return review
 
@@ -83,12 +151,14 @@ def _write_report(
     render_enabled: bool,
     visual_review: dict,
 ) -> Path:
-    visual_lines = ["", "## Visual Review"]
+    visual_lines = ["", "## Visual Review", f"- Visual QA: {visual_review['qa']['status']}"]
     for scene in visual_review["scenes"]:
         provider = scene.get("provider") or "-"
         asset_id = scene.get("provider_asset_id") or "-"
         source = scene.get("source") or "-"
-        visual_lines.append(f"- {scene['scene_id']}: {source} {provider}/{asset_id}")
+        issue_count = len(scene.get("qa", {}).get("issues", []))
+        suffix = f" ({issue_count} issue)" if issue_count == 1 else f" ({issue_count} issues)" if issue_count else ""
+        visual_lines.append(f"- {scene['scene_id']}: {source} {provider}/{asset_id}{suffix}")
     report_path = job_dir / ARTIFACT_REPORT
     report_path.write_text(
         "\n".join(

@@ -1,0 +1,6 @@
+thumbnail_max_words: 6
+required_outputs:
+  - video.mp4
+  - thumbnail.jpg
+  - seo.json
+  - report.md

@@ -1,0 +1,69 @@
+schema_version: "3.0-mvp"
+channel:
+  id: "vida-plena-45"
+  name: "Vida Plena 45+"
+  youtube_channel_id: null
+  description: "Salud y bienestar practico para personas de mas de 45 anos."
+audience:
+  language: "es-LA"
+  age_range: [45, 75]
+  primary_markets: ["MX", "CO", "ES"]
+  secondary_markets: ["AR", "CL", "PE"]
+niche:
+  category: "health_wellness"
+  sub_niches:
+    - "nutrition_45plus"
+    - "exercise_low_impact"
+    - "sleep_quality"
+  avoid_topics:
+    - "specific_medical_diagnoses"
+    - "supplement_promotion"
+    - "miracle_cures"
+brand_voice_path: "configs/vida-plena-45/brand-voice.md"
+style_dna:
+  path: "configs/vida-plena-45/style-dna.json"
+  current_version: "mvp-v1"
+personas:
+  - id: "maria"
+    profile_path: "configs/vida-plena-45/personas/maria.md"
+    weight: 1.0
+  - id: "carlos"
+    profile_path: "configs/vida-plena-45/personas/carlos.md"
+    weight: 1.0
+  - id: "rosa"
+    profile_path: "configs/vida-plena-45/personas/rosa.md"
+    weight: 1.0
+qa_rules:
+  script_path: "configs/vida-plena-45/qa-rules/script.yaml"
+  scene_path: "configs/vida-plena-45/qa-rules/scene.yaml"
+  asset_path: "configs/vida-plena-45/qa-rules/asset.yaml"
+  thresholds:
+    max_retry_per_qa: 3
+    max_average_sentence_words: 15
+    max_thumbnail_words: 6
+domain_plugins:
+  - name: "medical_safety_checker"
+    enabled: true
+models:
+  default: "mock-local"
+tts:
+  provider: "mock-local"
+  voice_id: "vida-plena-calm"
+  pace_wpm: 145
+visuals:
+  strategy: "mock_local"
+  scene_count_target: 5
+music:
+  source: "mock-local"
+  level_db: -22
+render:
+  composition: "ChannelVideoStandard"
+  resolution: "1920x1080"
+  fps: 30
+  codec: "h264"
+  crf: 18
+upload:
+  ai_disclosure: true
+  default_privacy: "manual_upload_only"
+budget:
+  max_cost_per_video_usd: 0

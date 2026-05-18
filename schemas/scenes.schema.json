@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["channel_id", "job_id", "scenes", "total_duration_sec", "qa"],
+  "properties": {
+    "channel_id": { "type": "string" },
+    "job_id": { "type": "string" },
+    "total_duration_sec": { "type": "integer" },
+    "scenes": { "type": "array", "minItems": 1, "items": { "type": "object" } },
+    "qa": { "type": "object" }
+  }
+}

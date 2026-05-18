@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["title", "description", "tags", "language", "ai_disclosure", "thumbnail_path"],
+  "properties": {
+    "title": { "type": "string" },
+    "description": { "type": "string" },
+    "tags": { "type": "array", "items": { "type": "string" } },
+    "language": { "type": "string" },
+    "ai_disclosure": { "type": "boolean" },
+    "thumbnail_path": { "type": "string" }
+  }
+}

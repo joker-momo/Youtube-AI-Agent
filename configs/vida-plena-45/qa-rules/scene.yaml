@@ -1,0 +1,10 @@
+min_scene_duration_sec: 7
+max_scene_duration_sec: 14
+required_fields:
+  - id
+  - duration_sec
+  - narration
+  - visual_prompt
+  - on_screen_text
+  - caption
+  - motion

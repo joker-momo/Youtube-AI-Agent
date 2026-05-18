@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "youtube-ai-agent"
+version = "0.1.0"
+description = "Local MVP video agent that renders YouTube-ready artifacts with Remotion."
+requires-python = ">=3.11"
+dependencies = [
+  "jsonschema>=4.22",
+  "PyYAML>=6.0.1",
+  "Pillow>=10.4",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2",
+]
+
+[project.scripts]
+video-agent = "video_agent.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

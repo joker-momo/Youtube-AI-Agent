@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["channel_id", "job_id", "hook", "sections", "narration", "cta", "qa"],
+  "properties": {
+    "channel_id": { "type": "string" },
+    "job_id": { "type": "string" },
+    "hook": { "type": "string" },
+    "sections": { "type": "array", "items": { "type": "object" } },
+    "narration": { "type": "string" },
+    "cta": { "type": "string" },
+    "qa": { "type": "object" }
+  }
+}

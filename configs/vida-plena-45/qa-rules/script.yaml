@@ -1,0 +1,7 @@
+max_hook_words: 28
+max_average_sentence_words: 15
+blocked_terms:
+  - cura milagrosa
+  - diagnosticar
+  - dosis exacta
+required_disclaimer: "Este contenido es educativo y no reemplaza el consejo de un profesional de salud."

@@ -1,0 +1,23 @@
+{
+  "version": "mvp-v1",
+  "palette": {
+    "background": "#F6F1E8",
+    "primary": "#2F6B57",
+    "secondary": "#D98C5F",
+    "accent": "#F2C94C",
+    "text": "#26332F"
+  },
+  "typography": {
+    "headline": "Inter",
+    "body": "Inter"
+  },
+  "visual_mood": ["calm", "warm", "trustworthy", "practical"],
+  "motion": {
+    "default": "slow_push",
+    "caption_style": "bottom_bar"
+  },
+  "thumbnail": {
+    "max_words": 6,
+    "style": "warm_high_contrast"
+  }
+}

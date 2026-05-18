@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schema_version", "channel", "audience", "niche", "style_dna", "qa_rules", "render", "upload"],
+  "properties": {
+    "schema_version": { "type": "string" },
+    "channel": {
+      "type": "object",
+      "required": ["id", "name", "description"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "youtube_channel_id": { "type": ["string", "null"] },
+        "description": { "type": "string" }
+      }
+    },
+    "audience": {
+      "type": "object",
+      "required": ["language", "age_range", "primary_markets"],
+      "properties": {
+        "language": { "type": "string" },
+        "age_range": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 },
+        "primary_markets": { "type": "array", "items": { "type": "string" } },
+        "secondary_markets": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "niche": { "type": "object" },
+    "style_dna": {
+      "type": "object",
+      "required": ["path", "current_version"],
+      "properties": {
+        "path": { "type": "string" },
+        "current_version": { "type": "string" }
+      }
+    },
+    "qa_rules": { "type": "object" },
+    "render": {
+      "type": "object",
+      "required": ["composition", "resolution", "fps"],
+      "properties": {
+        "composition": { "type": "string" },
+        "resolution": { "type": "string" },
+        "fps": { "type": "integer" },
+        "codec": { "type": "string" },
+        "crf": { "type": "integer" }
+      }
+    },
+    "upload": {
+      "type": "object",
+      "required": ["ai_disclosure"],
+      "properties": {
+        "ai_disclosure": { "type": "boolean" },
+        "default_privacy": { "type": "string" }
+      }
+    }
+  }
+}

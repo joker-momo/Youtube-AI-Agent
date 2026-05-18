@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["channel", "style", "render", "scenes", "audio", "seo"],
+  "properties": {
+    "channel": { "type": "object" },
+    "style": { "type": "object" },
+    "render": { "type": "object" },
+    "scenes": { "type": "array", "items": { "type": "object" } },
+    "audio": { "type": "object" },
+    "seo": { "type": "object" }
+  }
+}

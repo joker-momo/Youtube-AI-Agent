@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["topic", "angle", "target_duration_sec", "key_points"],
+  "properties": {
+    "topic": { "type": "string", "minLength": 5 },
+    "angle": { "type": "string", "minLength": 10 },
+    "target_duration_sec": { "type": "integer", "minimum": 30, "maximum": 90 },
+    "key_points": { "type": "array", "items": { "type": "string" }, "minItems": 3 },
+    "title_seed": { "type": "string" }
+  }
+}

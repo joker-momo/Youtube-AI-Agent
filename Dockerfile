@@ -40,7 +40,8 @@ RUN pip install --no-cache-dir -r requirements.txt \
   && pip install --no-cache-dir -e .
 
 COPY remotion/package.json remotion/package.json
-RUN npm --prefix remotion install
+RUN npm --prefix remotion install \
+  && npx --prefix remotion remotion browser ensure
 
 COPY . .
 

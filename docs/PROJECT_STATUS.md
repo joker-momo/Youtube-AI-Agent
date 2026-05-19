@@ -85,6 +85,47 @@ docker compose run --rm video-agent pytest -q
 61 passed in 13.84s
 ```
 
+## Fresh Operator Run
+
+Fresh job from an empty folder:
+
+```text
+jobs/fresh-operator-flow-20260519-195952
+```
+
+Status:
+
+- `operator-next` reached `review-video`.
+- `operator-status` returned `Overall: READY`.
+- `script`, `scenes`, and `seo` artifacts are present.
+- Gemini QA is `PASS` for `script`, `scenes`, and `seo`.
+- Rendered artifacts are present:
+  - `video.mp4`
+  - `thumbnail.jpg`
+  - `operator_review.html`
+  - `report.md`
+  - `seo.json`
+
+Important findings from this fresh run:
+
+- ChatGPT project tabs can reuse stale conversation state, so each job/artifact should use a clearly isolated chat or enforce artifact/job ID matching before promotion.
+- ChatGPT project prompt paste can appear as an attached prompt tile; the operator must click `Send prompt` before waiting for output.
+- Existing ChatGPT tabs can have clipboard/paste issues; a fresh project tab fixed the prompt input.
+- Gemini QA is more reliable in a fresh chat per artifact. Reusing a Gemini tab can mix old and new responses.
+- Gemini sometimes shows `Submit` instead of a send icon; the browser flow must handle both.
+- Scene output needs stricter validation:
+  - `job_id` must match the current job folder.
+  - scene IDs should use the expected `scene-01` format.
+  - `asset_refs` must be an object, not a list.
+  - `visual_prompt` should be English for stock/image generation.
+  - Spanish user-facing text must preserve accents.
+  - ChatGPT must not prefill internal QA as `PASS`.
+- SEO output needs stricter validation:
+  - language should be `es-419` for Latin American Spanish.
+  - Spanish accents must be preserved.
+  - tags should stay focused, around 5-8 high-relevance tags.
+  - avoid positioning Vida Plena 45+ as `adultos mayores`.
+
 ## How To Continue One Video
 
 Run this repeatedly to see the next step:
@@ -106,6 +147,7 @@ The command will either:
 
 ## Recent Commits
 
+- `e9b5ab8 Add operator next-step guide`
 - `1f0161f Add operator job status command`
 - `a7f188f Refresh operator review after render`
 - `0d17b53 Add operator job review page`
@@ -124,8 +166,14 @@ The command will either:
 
 ## Next Recommended Work
 
-1. Finish and commit `operator-next`.
-2. Run one fresh job from empty folder using only `operator-next` guidance.
-3. Tighten the manual browser handoff points based on the fresh run.
-4. Add a video-level QA checklist in `operator_review.html`.
+1. Tighten prompts and validators based on the fresh run:
+   - enforce current `job_id`,
+   - enforce scene ID format,
+   - require object-shaped `asset_refs`,
+   - enforce `es-419`,
+   - preserve Spanish accents,
+   - limit SEO tags.
+2. Add artifact mismatch detection before `operator-promote` and `operator-promote-qa`.
+3. Add a video-level QA checklist in `operator_review.html`.
+4. Package the browser handoff rules for ChatGPT/Gemini into the operator guide.
 5. Integrate ChatGPT image folder selection into the operator flow when the one-video content flow is stable.

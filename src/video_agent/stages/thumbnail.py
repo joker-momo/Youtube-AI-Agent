@@ -26,7 +26,8 @@ def create_thumbnail_and_seo(
     draw.text((70, 580), "DESPUES DE LOS 45", fill=palette["secondary"])
     image.save(thumbnail_path, quality=92)
 
-    seo = provider.generate_seo(channel_config, idea, str(thumbnail_path))
+    seo = provider.generate_seo(channel_config, idea, str(thumbnail_path), job_id=job_dir.name)
+    seo.setdefault("job_id", job_dir.name)
     qa = check_thumbnail_title(seo, channel_config)
     seo["qa"] = {"iterations": [{"iteration": 1, **qa}], "verdict": qa["verdict"]}
     if qa["verdict"] != "PASS":

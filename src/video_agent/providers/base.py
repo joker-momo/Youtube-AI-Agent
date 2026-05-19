@@ -16,5 +16,11 @@ class ContentProvider(Protocol):
     ) -> dict[str, Any]:
         ...
 
-    def generate_seo(self, channel_config: dict[str, Any], idea: dict[str, Any], thumbnail_path: str) -> dict[str, Any]:
+    def generate_seo(
+        self,
+        channel_config: dict[str, Any],
+        idea: dict[str, Any],
+        thumbnail_path: str,
+        job_id: str | None = None,
+    ) -> dict[str, Any]:
         ...

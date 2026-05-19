@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 
@@ -78,16 +79,23 @@ class MockProvider:
             "qa": {"verdict": "PENDING", "iterations": []},
         }
 
-    def generate_seo(self, channel_config: dict[str, Any], idea: dict[str, Any], thumbnail_path: str) -> dict[str, Any]:
+    def generate_seo(
+        self,
+        channel_config: dict[str, Any],
+        idea: dict[str, Any],
+        thumbnail_path: str,
+        job_id: str | None = None,
+    ) -> dict[str, Any]:
         title = idea.get("title_seed") or "5 habitos nocturnos para dormir mejor"
         return {
+            "job_id": job_id or Path(thumbnail_path).parent.name,
             "title": title,
             "description": (
                 "Una rutina educativa y simple para preparar mejor la noche despues de los 45. "
                 "Este contenido no reemplaza el consejo de un profesional de salud."
             ),
-            "tags": ["sueno", "bienestar", "vida plena 45", "habitos saludables"],
-            "language": channel_config["audience"]["language"],
+            "tags": ["sueño saludable", "bienestar 45+", "rutina nocturna", "descanso saludable", "hábitos nocturnos"],
+            "language": channel_config.get("seo", {}).get("language", channel_config["audience"]["language"]),
             "ai_disclosure": bool(channel_config["upload"]["ai_disclosure"]),
             "thumbnail_path": thumbnail_path,
         }

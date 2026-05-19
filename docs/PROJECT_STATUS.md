@@ -1,6 +1,6 @@
 # Youtube AI Agent Project Status
 
-Last updated: 2026-05-19
+Last updated: 2026-05-20
 
 This file is the living project tracker. Update it whenever a meaningful system capability is added, changed, verified, or deferred so a new reader can quickly understand what the system does, what is being built now, and what remains.
 
@@ -13,6 +13,13 @@ idea -> ChatGPT script/scenes/SEO -> Gemini QA -> assets/TTS -> Remotion render 
 ```
 
 The current focus is one high-quality end-to-end video flow before expanding to queues, multiple channels, or upload automation.
+
+Current product priority:
+
+- Only prioritize tasks that directly complete the full end-to-end video creation flow.
+- The target flow is: trend/data intake -> idea selection -> script -> scenes -> SEO -> assets/images -> TTS -> render -> QA/review -> final video.
+- Defer optimization work until the complete final-video flow is reliable.
+- Cache, semantic reuse, analytics, dashboards, multi-channel scaling, and other compounding improvements are valuable, but they are not priority unless they unblock the full final-video flow.
 
 ## Operating Rules
 
@@ -47,13 +54,21 @@ The current focus is one high-quality end-to-end video flow before expanding to 
 ### Semi-Automated Operator Flow
 
 - `operator-prompts` writes ChatGPT and Gemini prompt files for `script`, `scenes`, and `seo`.
-- `operator-promote` validates raw ChatGPT JSON into promoted artifacts.
+- `operator-promote` validates raw ChatGPT JSON into promoted artifacts and blocks stale or malformed artifacts before they enter the render flow.
 - `operator-promote-qa` normalizes raw Gemini QA and requires `PASS`.
 - `operator-render` requires promoted Gemini QA by default.
 - `operator-review` writes `operator_review.html` for a single job.
 - `operator-render` refreshes `operator_review.html` automatically.
 - `operator-status` summarizes artifact/QA state for one job.
 - `operator-next` creates the next prompt when needed and prints the next command for one job.
+
+### Operator Validators
+
+- `operator-promote` blocks `job_id` mismatch for script, scenes, and SEO artifacts.
+- SEO artifacts now include `job_id`.
+- Scene promotion blocks invalid `scene-NN` IDs, list-shaped `asset_refs`, missing `visual_prompt`, and ChatGPT-prefilled `qa.verdict=PASS`.
+- SEO promotion blocks non-`es-419` language, tag count outside the channel rule, duplicate/empty tags, and forbidden channel positioning such as `adultos mayores`.
+- Vida Plena 45+ channel config now declares SEO language/tag limits and positioning rules.
 
 ## Verified Demo Job
 
@@ -82,7 +97,7 @@ Latest full verification:
 
 ```text
 docker compose run --rm video-agent pytest -q
-61 passed in 13.84s
+64 passed in 14.48s
 ```
 
 ## Fresh Operator Run
@@ -147,6 +162,7 @@ The command will either:
 
 ## Recent Commits
 
+- `818c08b Update project status after fresh operator run`
 - `e9b5ab8 Add operator next-step guide`
 - `1f0161f Add operator job status command`
 - `a7f188f Refresh operator review after render`
@@ -166,14 +182,8 @@ The command will either:
 
 ## Next Recommended Work
 
-1. Tighten prompts and validators based on the fresh run:
-   - enforce current `job_id`,
-   - enforce scene ID format,
-   - require object-shaped `asset_refs`,
-   - enforce `es-419`,
-   - preserve Spanish accents,
-   - limit SEO tags.
-2. Add artifact mismatch detection before `operator-promote` and `operator-promote-qa`.
-3. Add a video-level QA checklist in `operator_review.html`.
-4. Package the browser handoff rules for ChatGPT/Gemini into the operator guide.
-5. Integrate ChatGPT image folder selection into the operator flow when the one-video content flow is stable.
+1. Add a video-level QA checklist in `operator_review.html`.
+2. Package the browser handoff rules for ChatGPT/Gemini into the operator guide.
+3. Integrate ChatGPT image folder selection into the operator flow when the one-video content flow is stable.
+4. Add the missing front-of-pipeline step for trend/data intake and idea selection.
+5. Add Spanish accent checks as a follow-up validator pass if missing accents continue to appear in real runs.

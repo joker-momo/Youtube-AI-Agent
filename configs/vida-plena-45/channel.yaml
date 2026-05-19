@@ -5,7 +5,7 @@ channel:
   youtube_channel_id: null
   description: "Salud y bienestar practico para personas de mas de 45 anos."
 audience:
-  language: "es-LA"
+  language: "es-419"
   age_range: [45, 75]
   primary_markets: ["MX", "CO", "ES"]
   secondary_markets: ["AR", "CL", "PE"]
@@ -41,6 +41,22 @@ qa_rules:
     max_retry_per_qa: 3
     max_average_sentence_words: 15
     max_thumbnail_words: 6
+positioning:
+  forbidden_phrases:
+    - "adultos mayores"
+    - "tercera edad"
+    - "ancianos"
+    - "personas mayores"
+    - "abuelos"
+    - "abuelitos"
+  preferred_phrases:
+    - "adultos 45+"
+    - "mediana edad"
+    - "segunda juventud"
+seo:
+  language: "es-419"
+  min_tags: 5
+  max_tags: 8
 domain_plugins:
   - name: "medical_safety_checker"
     enabled: true

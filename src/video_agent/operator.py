@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from video_agent.contracts import repo_root
+from video_agent.operator_validators import load_operator_channel_config, validate_operator_artifact
 from video_agent.utils.json_io import read_json, read_yaml, write_json
 from video_agent.utils.validation import validate_json
 
@@ -125,7 +126,10 @@ def _chatgpt_scenes_prompt(channel_config: dict[str, Any], script: dict[str, Any
             "- channel_id, job_id, scenes, total_duration_sec, qa",
             "- scenes must include id, duration_sec, narration, on_screen_text, caption, visual_prompt, motion, asset_refs",
             "- use 4-6 scenes and make total_duration_sec match the sum of scene durations",
-            "- visual_prompt should be stock-search friendly and specific",
+            "- scene ids must be sequential scene-01, scene-02, etc.",
+            "- asset_refs must be an object, not an array; use {} when no assets are selected yet",
+            "- visual_prompt must be English, stock-search friendly, and specific",
+            "- qa.verdict must remain PENDING_GEMINI_QA; do not mark your own output as PASS",
             "",
             "Channel config:",
             _json_block(channel_config),
@@ -143,9 +147,10 @@ def _chatgpt_seo_prompt(channel_config: dict[str, Any], script: dict[str, Any], 
             "Return exactly one valid JSON object. No markdown. No commentary.",
             "",
             "Required schema summary:",
-            "- title, description, tags, language, ai_disclosure, thumbnail_path",
+            "- job_id, title, description, tags, language, ai_disclosure, thumbnail_path",
             "- title should be clear Spanish, searchable, and not clickbait",
-            "- tags should be concise Spanish/LatAm wellness search terms",
+            "- language must be es-419",
+            "- tags should be 5-8 concise Spanish/LatAm wellness search terms",
             "- ai_disclosure must be true",
             "",
             "Channel config:",
@@ -229,13 +234,22 @@ def write_operator_prompts(
     return PromptWriteResult(paths=written)
 
 
-def promote_operator_artifact(job_dir: Path, artifact: str, raw_path: Path) -> PromoteResult:
+def promote_operator_artifact(
+    job_dir: Path,
+    artifact: str,
+    raw_path: Path,
+    channel_path: Path | None = None,
+) -> PromoteResult:
     if artifact not in ARTIFACT_SCHEMAS:
         raise ValueError(f"Unsupported operator artifact: {artifact}")
 
     parsed = extract_json_object(raw_path.read_text(encoding="utf-8"))
     root = repo_root()
     validate_json(parsed, root / ARTIFACT_SCHEMAS[artifact])
+    channel_config = load_operator_channel_config(channel_path, parsed)
+    validation = validate_operator_artifact(artifact, parsed, job_dir.name, channel_config)
+    if not validation.is_valid:
+        raise ValueError(f"{artifact} validation failed:\n{validation.format_report()}")
     output_path = job_dir / f"{artifact}.json"
     write_json(output_path, parsed)
     return PromoteResult(artifact=artifact, raw_path=raw_path, output_path=output_path)
@@ -357,6 +371,8 @@ def build_operator_next(channel_path: Path, idea_path: Path, job_dir: Path) -> O
                             artifact,
                             "--raw-file",
                             raw_artifact_path,
+                            "--channel",
+                            channel_path,
                         )
                     ],
                 )
@@ -375,6 +391,8 @@ def build_operator_next(channel_path: Path, idea_path: Path, job_dir: Path) -> O
                         artifact,
                         "--raw-file",
                         raw_artifact_path,
+                        "--channel",
+                        channel_path,
                     )
                 ],
             )

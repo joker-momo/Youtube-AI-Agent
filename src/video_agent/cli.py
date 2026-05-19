@@ -56,6 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
     operator_promote_parser.add_argument("--job-dir", required=True, type=Path)
     operator_promote_parser.add_argument("--artifact", choices=["script", "scenes", "seo"], required=True)
     operator_promote_parser.add_argument("--raw-file", required=True, type=Path)
+    operator_promote_parser.add_argument("--channel", type=Path)
 
     operator_promote_qa_parser = subparsers.add_parser(
         "operator-promote-qa",
@@ -187,7 +188,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(path)
         return 0
     if args.command == "operator-promote":
-        result = promote_operator_artifact(args.job_dir, args.artifact, args.raw_file)
+        result = promote_operator_artifact(args.job_dir, args.artifact, args.raw_file, channel_path=args.channel)
         print(f"Promoted {result.artifact}: {result.output_path}")
         return 0
     if args.command == "operator-promote-qa":

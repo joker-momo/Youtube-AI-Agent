@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 VALID_SCRIPT = {
     "channel_id": "vida-plena-45",
-    "job_id": "operator-test",
+    "job_id": "operator-job",
     "hook": "Dormir mejor puede empezar con una decision simple.",
     "sections": [{"title": "Calma", "text": "Baja el ritmo una hora antes de acostarte."}],
     "narration": "Dormir mejor puede empezar con una decision simple. Baja el ritmo una hora antes de acostarte.",
@@ -59,6 +59,95 @@ def test_promote_operator_artifact_extracts_and_validates_raw_json(tmp_path):
 
     assert result.output_path == tmp_path / "operator-job/script.json"
     assert json.loads(result.output_path.read_text(encoding="utf-8"))["qa"]["verdict"] == "PASS"
+
+
+def test_promote_operator_artifact_rejects_stale_job_id(tmp_path):
+    raw_path = tmp_path / "script.raw.txt"
+    stale_script = {**VALID_SCRIPT, "job_id": "old-chatgpt-job"}
+    raw_path.write_text(json.dumps(stale_script), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="job_id mismatch"):
+        promote_operator_artifact(tmp_path / "operator-job", "script", raw_path)
+
+    assert not (tmp_path / "operator-job/script.json").exists()
+
+
+def test_promote_operator_artifact_rejects_invalid_scenes_contract(tmp_path):
+    raw_path = tmp_path / "scenes.raw.txt"
+    raw_path.write_text(
+        json.dumps(
+            {
+                "channel_id": "vida-plena-45",
+                "job_id": "operator-job",
+                "total_duration_sec": 10,
+                "scenes": [
+                    {
+                        "id": "scene_01",
+                        "duration_sec": 10,
+                        "narration": "Respira con calma durante la noche.",
+                        "on_screen_text": "Respira con calma",
+                        "caption": "Respira con calma",
+                        "visual_prompt": "Persona relajada en una habitación tranquila",
+                        "motion": "slow_zoom",
+                        "asset_refs": [],
+                    }
+                ],
+                "qa": {"verdict": "PASS"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        promote_operator_artifact(tmp_path / "operator-job", "scenes", raw_path)
+
+    message = str(excinfo.value)
+    assert "scene-NN" in message
+    assert "asset_refs" in message
+    assert "ChatGPT prefilled" in message
+    assert not (tmp_path / "operator-job/scenes.json").exists()
+
+
+def test_promote_operator_artifact_rejects_invalid_seo_contract(tmp_path):
+    raw_path = tmp_path / "seo.raw.txt"
+    raw_path.write_text(
+        json.dumps(
+            {
+                "job_id": "operator-job",
+                "title": "Dormir mejor para adultos mayores",
+                "description": "Consejos para adultos mayores que quieren descansar mejor despues de los 45.",
+                "tags": [
+                    "sueño",
+                    "bienestar",
+                    "adultos mayores",
+                    "rutina nocturna",
+                    "descanso",
+                    "salud",
+                    "vida plena",
+                    "hábitos",
+                    "extra tag",
+                ],
+                "language": "es-LA",
+                "ai_disclosure": True,
+                "thumbnail_path": "thumbnail.jpg",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        promote_operator_artifact(
+            tmp_path / "operator-job",
+            "seo",
+            raw_path,
+            channel_path=ROOT / "configs/vida-plena-45/channel.yaml",
+        )
+
+    message = str(excinfo.value)
+    assert "language must be 'es-419'" in message
+    assert "Too many tags" in message
+    assert "Forbidden positioning" in message
+    assert not (tmp_path / "operator-job/seo.json").exists()
 
 
 def test_promote_operator_qa_normalizes_gemini_response(tmp_path):
@@ -192,5 +281,5 @@ def test_build_operator_next_promotes_existing_raw_before_prompting(tmp_path):
     assert result.prompt_paths == []
     assert "Raw ChatGPT response exists" in result.message
     assert result.commands == [
-        f"docker compose run --rm video-agent python -m video_agent.cli operator-promote --job-dir {job_dir} --artifact script --raw-file {raw_path}"
+        f"docker compose run --rm video-agent python -m video_agent.cli operator-promote --job-dir {job_dir} --artifact script --raw-file {raw_path} --channel {ROOT / 'configs/vida-plena-45/channel.yaml'}"
     ]

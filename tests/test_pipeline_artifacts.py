@@ -114,6 +114,7 @@ def test_operator_render_writes_review_page_without_render(tmp_path, monkeypatch
     (job_dir / "seo.json").write_text(
         json.dumps(
             {
+                "job_id": "operator-job",
                 "title": "Dormir mejor despues de los 45",
                 "description": "Una rutina simple para descansar mejor.",
                 "tags": ["sueño", "bienestar"],

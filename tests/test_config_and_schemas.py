@@ -16,7 +16,8 @@ def test_sample_channel_config_matches_schema():
     data = yaml.safe_load((ROOT / "configs/vida-plena-45/channel.yaml").read_text(encoding="utf-8"))
     Draft202012Validator(schema).validate(data)
     assert data["channel"]["id"] == "vida-plena-45"
-    assert data["audience"]["language"] == "es-LA"
+    assert data["audience"]["language"] == "es-419"
+    assert data["seo"]["language"] == "es-419"
     assert data["render"]["composition"] == "ChannelVideoStandard"
 
 

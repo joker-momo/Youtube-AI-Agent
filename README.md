@@ -1,12 +1,60 @@
-# YouTube AI Agent MVP
+# YouTube AI Agent
 
-Docker-first MVP for producing YouTube-ready video artifacts from a manual idea.
+Docker-first YouTube video production system.
+
+Current state:
+
+- v2 CLI pipeline is working and remains supported during transition.
+- v3 direction is approved: standalone local FastAPI web app with WebSocket progress and a separate browser-worker service.
+- Hermes is dropped.
+- Phase 1 still ends with manual YouTube upload.
+
+Primary docs:
+
+- `docs/HANDOFF.md`
+- `docs/PROJECT_STATUS.md`
+- `docs/VIDEO_AGENT_V3_STANDALONE_HANDOFF.md`
+
+## Target V3 Flow
+
+```text
+trend/data intake
+-> idea selection
+-> ChatGPT script/scenes/SEO
+-> Gemini QA
+-> images/assets
+-> TTS
+-> Remotion render
+-> review page
+-> final video
+```
+
+The project should only prioritize tasks that directly complete this full video flow. Optimization, analytics, semantic reuse, persona eval, scheduling, and upload automation come later.
+
+## Current v2 CLI Flow
 
 ```text
 manual_idea.json -> script -> scenes -> assets -> Remotion video -> thumbnail -> seo.json -> report.md
 ```
 
-The MVP uses deterministic mock providers for script and scene planning. It does not use Hermes, YouTube upload, OAuth, Telegram, scheduled publishing, trend research, or real LLM APIs.
+The current deterministic CLI flow uses mock/local providers for fast verification, plus optional stock assets and Kokoro TTS. It does not yet provide the v3 web app or browser-worker.
+
+## V3 Architecture Direction
+
+```text
+User browser
+  -> app container
+      -> FastAPI UI
+      -> WebSocket progress
+      -> orchestrator/state machine
+      -> stage modules
+      -> existing render/assets/TTS code
+  -> browser-worker container
+      -> Playwright CDP attach
+      -> host Chrome dedicated profile on port 9222
+```
+
+Browser access uses the user's logged-in ChatGPT Plus, Gemini, and vidIQ sessions through a dedicated Chrome profile. The system must not auto-login or inspect browser secrets.
 
 ## Requirements
 
@@ -66,7 +114,7 @@ docker compose run --rm video-agent python -m video_agent.cli run \
 
 ## Operator-Approved Content
 
-For the semi-automated browser flow, place the ChatGPT/Gemini-approved artifacts in a job directory:
+During the v3 transition, the existing semi-automated browser flow still works through `operator-*` commands. Place the ChatGPT/Gemini-approved artifacts in a job directory:
 
 ```text
 jobs/<job_id>/script.json
@@ -99,7 +147,8 @@ After ChatGPT returns a raw response, promote it into a validated artifact:
 docker compose run --rm video-agent python -m video_agent.cli operator-promote \
   --job-dir jobs/<job_id> \
   --artifact script \
-  --raw-file jobs/<job_id>/operator/chatgpt/script.raw.txt
+  --raw-file jobs/<job_id>/operator/chatgpt/script.raw.txt \
+  --channel configs/vida-plena-45/channel.yaml
 ```
 
 After Gemini reviews that artifact, promote the raw QA response:
@@ -195,3 +244,13 @@ visuals:
 
 Name files by scene id, for example `scene-01.jpg`, `scene-02.png`, or `scene-03.webp`.
 The pipeline copies them into the job assets folder and Remotion renders those copied images.
+
+## Next Development Step
+
+The next code work should be v3 Phase 1 Step 1:
+
+1. Add minimal FastAPI `app` service.
+2. Add minimal `browser-worker` service.
+3. Extend Docker Compose.
+4. Add Chrome dedicated profile setup script for CDP port `9222`.
+5. Keep the existing v2 CLI and tests green.

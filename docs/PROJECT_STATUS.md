@@ -6,13 +6,13 @@ This file is the living project tracker. Update it whenever a meaningful system 
 
 ## Goal
 
-Build a Docker-first semi-automated YouTube production system that can take one video idea through:
+Build a Docker-first standalone YouTube production app that can take a channel and idea through:
 
 ```text
-idea -> ChatGPT script/scenes/SEO -> Gemini QA -> assets/TTS -> Remotion render -> human review -> final video
+trend/data intake -> idea selection -> ChatGPT script/scenes/SEO -> Gemini QA -> assets/images -> TTS -> Remotion render -> review -> final video
 ```
 
-The current focus is one high-quality end-to-end video flow before expanding to queues, multiple channels, or upload automation.
+The current v2 `operator-*` CLI flow remains functional during the transition. The approved v3 target is a standalone local FastAPI web app with WebSocket progress and a separate browser-worker service attached to a dedicated host Chrome profile.
 
 Current product priority:
 
@@ -20,6 +20,24 @@ Current product priority:
 - The target flow is: trend/data intake -> idea selection -> script -> scenes -> SEO -> assets/images -> TTS -> render -> QA/review -> final video.
 - Defer optimization work until the complete final-video flow is reliable.
 - Cache, semantic reuse, analytics, dashboards, multi-channel scaling, and other compounding improvements are valuable, but they are not priority unless they unblock the full final-video flow.
+
+## Approved V3 Direction
+
+Reference:
+
+- [VIDEO_AGENT_V3_STANDALONE_HANDOFF.md](/Users/joker/Documents/Youtube-AI-Agent/docs/VIDEO_AGENT_V3_STANDALONE_HANDOFF.md)
+
+Decisions already chosen:
+
+- Standalone Python web app; Hermes is dropped.
+- Local FastAPI UI with WebSocket realtime progress.
+- Browser web UI access for ChatGPT Plus, Gemini, vidIQ, and ChatGPT image generation; no LLM API client in Phase 1.
+- Separate `browser-worker` container using Playwright CDP attach to host Chrome on port `9222`.
+- Dedicated host Chrome profile; user logs in manually. The system must not auto-login.
+- Sequential per-step flow with file-based state detection.
+- Fail-soft browser handling: save trace, expose prompt path, allow user retry.
+- Manual YouTube upload in Phase 1.
+- Persona evaluation, Telegram, upload automation, semantic asset reuse, analytics, and scaling are deferred.
 
 ## Operating Rules
 
@@ -69,6 +87,43 @@ Current product priority:
 - Scene promotion blocks invalid `scene-NN` IDs, list-shaped `asset_refs`, missing `visual_prompt`, and ChatGPT-prefilled `qa.verdict=PASS`.
 - SEO promotion blocks non-`es-419` language, tag count outside the channel rule, duplicate/empty tags, and forbidden channel positioning such as `adultos mayores`.
 - Vida Plena 45+ channel config now declares SEO language/tag limits and positioning rules.
+
+## Target V3 Architecture
+
+```text
+User browser
+  -> app container
+      -> FastAPI routes
+      -> WebSocket progress
+      -> orchestrator/state machine
+      -> stage modules
+      -> validators
+      -> existing assets/TTS/render code
+  -> browser-worker container
+      -> Playwright drivers
+      -> ChatGPT/Gemini/vidIQ/image generation browser operations
+      -> host Chrome dedicated profile via CDP
+```
+
+State must remain file-based under `jobs/<job_id>/`, including:
+
+- `job.json`
+- `events.jsonl`
+- `idea.json`
+- `operator/chatgpt/*_prompt.txt`
+- `operator/chatgpt/*_raw.json`
+- `operator/gemini/*_qa_prompt.txt`
+- `operator/gemini/*_qa_raw.json`
+- `script.json`
+- `scenes.json`
+- `seo.json`
+- `assets/`
+- `browser_trace/`
+- `render_props.json`
+- `thumbnail.jpg`
+- `video.mp4`
+- `operator_review.html`
+- `report.md`
 
 ## Verified Demo Job
 
@@ -162,6 +217,7 @@ The command will either:
 
 ## Recent Commits
 
+- `6dcbea8 Add operator artifact validators`
 - `818c08b Update project status after fresh operator run`
 - `e9b5ab8 Add operator next-step guide`
 - `1f0161f Add operator job status command`
@@ -172,18 +228,21 @@ The command will either:
 
 ## Not Yet Done
 
-- Browser automation is not fully packaged into the one-video flow; ChatGPT/Gemini browser steps are still semi-manual.
-- ChatGPT image generation skill exists as a separate browser skill, but is not yet integrated as a first-class pipeline asset source.
-- Gemini QA is artifact-level only; video-level QA is still human review through `operator_review.html`.
-- No YouTube upload, scheduling, or channel publishing automation yet.
-- No multi-job queue/index yet; intentionally deferred until one-video flow is solid.
-- No trend research loop yet.
-- No semantic asset reuse layer yet.
+- V3 standalone FastAPI app does not exist yet.
+- `browser-worker` service does not exist yet.
+- Chrome dedicated profile setup script for CDP port `9222` does not exist yet.
+- ChatGPT/Gemini/vidIQ browser automation is not yet packaged into a service.
+- WebSocket progress UI and `events.jsonl` replay are not implemented yet.
+- Trend/data intake and idea selection are not implemented yet.
+- ChatGPT image generation is not integrated as a first-class pipeline asset source.
+- Video-level QA checklist is still human review through `operator_review.html`.
+- YouTube upload, scheduling, persona eval, semantic reuse, analytics, and multi-job scaling are deferred.
 
 ## Next Recommended Work
 
-1. Add a video-level QA checklist in `operator_review.html`.
-2. Package the browser handoff rules for ChatGPT/Gemini into the operator guide.
-3. Integrate ChatGPT image folder selection into the operator flow when the one-video content flow is stable.
-4. Add the missing front-of-pipeline step for trend/data intake and idea selection.
-5. Add Spanish accent checks as a follow-up validator pass if missing accents continue to appear in real runs.
+1. Start v3 Phase 1 Step 1: skeleton and Docker.
+2. Add minimal FastAPI `app` service and health route.
+3. Add minimal `browser-worker` service and health route.
+4. Add host Chrome dedicated profile setup script for CDP port `9222`.
+5. Keep all current v2 `operator-*` commands working during the transition.
+6. Run the Docker test suite after each step.

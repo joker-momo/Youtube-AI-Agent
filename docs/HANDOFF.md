@@ -1,117 +1,154 @@
-# Youtube AI Agent MVP Handoff
+# Youtube AI Agent Handoff
 
-Date: 2026-05-18
+Date: 2026-05-20
 Workspace: `/Users/joker/Documents/Youtube-AI-Agent`
 
-## Current State
+## Current Direction
 
-The MVP is implemented and Docker-first.
+The project direction is now **Video Agent v3: standalone local web app**.
 
-It proves this flow:
+The old v2 `operator-*` CLI flow remains functional during the transition, but it is no longer the final product shape. Do not continue Hermes work. Do not build Telegram, YouTube upload, persona eval, semantic cache, analytics, or other optimization/scaling features until the full final-video flow is reliable.
+
+Primary architecture reference:
+
+- [VIDEO_AGENT_V3_STANDALONE_HANDOFF.md](/Users/joker/Documents/Youtube-AI-Agent/docs/VIDEO_AGENT_V3_STANDALONE_HANDOFF.md)
+- [PROJECT_STATUS.md](/Users/joker/Documents/Youtube-AI-Agent/docs/PROJECT_STATUS.md)
+
+## Product Goal
+
+Build a Docker-first standalone app that can produce one complete YouTube video from a channel and idea:
 
 ```text
-manual_idea.json -> script -> scenes -> assets -> Remotion video -> thumbnail -> seo.json -> report.md
+trend/data intake
+-> idea selection
+-> ChatGPT script/scenes/SEO
+-> Gemini QA
+-> images/assets
+-> TTS
+-> Remotion render
+-> review page
+-> final video
 ```
 
-The current demo channel is `vida-plena-45`, matching the framework docs. Providers are mock/local and deterministic. Hermes, YouTube upload, OAuth, Telegram approval, scheduling, trend research, and real LLM/TTS/image APIs are intentionally out of scope.
+Phase 1 output:
 
-## How To Run
-
-Build and run through Docker only:
-
-```bash
-docker compose build
-docker compose run --rm video-agent
+```text
+jobs/<job_id>/video.mp4
+jobs/<job_id>/seo.json
+jobs/<job_id>/operator_review.html
 ```
+
+YouTube upload remains manual in Phase 1.
+
+## Decisions Already Chosen
+
+| Area | Decision |
+|---|---|
+| App | Standalone Python web app |
+| UI | Local FastAPI web UI with WebSocket progress |
+| LLM access | Browser web UI, not API |
+| Browser control | Playwright CDP attach to host Chrome |
+| Chrome | Dedicated host Chrome profile on port `9222` |
+| Browser service | Separate `browser-worker` container |
+| Flow | Sequential, file-based state detection |
+| Failure mode | Fail-soft, retry, then manual prompt fallback |
+| YouTube upload | Manual in Phase 1 |
+| Hermes | Dropped |
+
+## Current Implemented v2 Capabilities
+
+- Docker-first deterministic MVP pipeline.
+- Remotion render through `render_props.json`.
+- Thumbnail, SEO JSON, report, visual review, and contact sheet artifacts.
+- Local image folder support.
+- Pexels and Pixabay stock image API support.
+- Query cache and asset library foundation.
+- Mock TTS and Kokoro TTS option.
+- Semi-automated `operator-*` CLI workflow:
+  - `operator-next`
+  - `operator-prompts`
+  - `operator-promote`
+  - `operator-promote-qa`
+  - `operator-render`
+  - `operator-review`
+  - `operator-status`
+- Operator validators:
+  - `job_id` mismatch blocking
+  - scene ID and `asset_refs` validation
+  - SEO `es-419`, tag count, duplicate/empty tag, and forbidden positioning checks
+
+Latest verification:
+
+```text
+docker compose run --rm video-agent pytest -q
+64 passed in 14.48s
+```
+
+## How To Run Current v2 Flow
 
 Run tests:
 
 ```bash
-docker compose run --rm video-agent pytest -v
+docker compose run --rm video-agent pytest -q
 ```
 
-Shortcut scripts:
+Run deterministic MVP:
 
 ```bash
-scripts/run_mvp.sh
-scripts/test_mvp.sh
+docker compose run --rm video-agent python -m video_agent.cli run \
+  --channel configs/vida-plena-45/channel.yaml \
+  --idea inputs/manual_idea.json
 ```
 
-## Verified Output
+Continue a semi-manual operator job:
 
-Successful rendered job:
-
-```text
-jobs/20260518-095238-vida-plena-45-habitos-nocturnos-para-dormir-mejor-despues-de-l/
+```bash
+docker compose run --rm video-agent python -m video_agent.cli operator-next \
+  --channel configs/vida-plena-45/channel.yaml \
+  --idea inputs/manual_idea.json \
+  --job-dir jobs/<job_id>
 ```
 
-Key files:
+Render approved operator artifacts:
 
-- `video.mp4`
-- `thumbnail.jpg`
-- `seo.json`
-- `report.md`
-- `script.json`
-- `scenes.json`
-- `assets_manifest.json`
-- `render_props.json`
-- `events.jsonl`
+```bash
+docker compose run --rm video-agent python -m video_agent.cli operator-render \
+  --channel configs/vida-plena-45/channel.yaml \
+  --job-dir jobs/<job_id>
+```
 
-Verification already performed:
+## Important Files
 
-- Docker image builds.
-- Docker test suite passes: 14 tests.
-- Remotion compositions are available: `ChannelVideoStandard`, `ThumbnailStandard`.
-- Full Docker run produced `video.mp4` and `thumbnail.jpg`.
-- `ffprobe` confirmed video is `1920x1080`, `54.0s`.
-
-## Important Commits
-
-- `f449383` Add Remotion MVP video agent design
-- `8b45485` Add Remotion MVP implementation plan
-- `e2948b7` feat: add MVP config and schemas
-- `4fe8aeb` feat: add MVP IO and validation utilities
-- `7c4d869` feat: add mock providers and deterministic QA
-- `1977283` feat: generate structured MVP job artifacts
-- `706868a` feat: add MVP pipeline CLI
-- `2c8186b` feat: add Dockerized Remotion MVP renderer
-
-## Main Files
-
-- `Dockerfile`
-- `docker-compose.yml`
 - `README.md`
-- `inputs/manual_idea.json`
+- `docs/PROJECT_STATUS.md`
+- `docs/VIDEO_AGENT_V3_STANDALONE_HANDOFF.md`
 - `configs/vida-plena-45/channel.yaml`
-- `configs/vida-plena-45/style-dna.json`
-- `src/video_agent/pipeline.py`
 - `src/video_agent/cli.py`
-- `src/video_agent/providers/mock.py`
-- `src/video_agent/stages/render.py`
-- `remotion/src/Root.tsx`
-- `remotion/src/ChannelVideo.tsx`
-- `remotion/src/Thumbnail.tsx`
+- `src/video_agent/operator.py`
+- `src/video_agent/operator_validators.py`
+- `src/video_agent/pipeline.py`
+- `src/video_agent/assets/`
+- `src/video_agent/tts/`
+- `src/video_agent/stages/`
+- `remotion/`
 
-## Notes
+## Next Work
 
-- The host editable Python install was removed. Host `jobs/`, failed temporary jobs, `.pytest_cache`, and `src/youtube_ai_agent.egg-info` were cleaned up.
-- Host Python packages like `pytest`, `jsonschema`, and `PyYAML` were not removed to avoid breaking other projects.
-- `jobs/` is gitignored, so rendered outputs stay local.
-- `remotion/public/jobs/` is gitignored; the pipeline copies renderable assets there inside the container so Remotion can serve them through its public directory.
+Start v3 Phase 1 Step 1:
 
-## Recommended Next Work
+1. Add a minimal FastAPI app skeleton.
+2. Add a separate `browser-worker` skeleton.
+3. Extend Docker Compose with `app` and `browser-worker` services.
+4. Add a host Chrome profile setup script for CDP port `9222`.
+5. Add health checks.
+6. Keep existing v2 commands and tests working.
 
-1. Add a real provider interface implementation behind the existing mock provider shape.
-2. Improve visual richness of Remotion scenes while keeping `render_props.json` as the only render input.
-3. Add real TTS provider and replace silent narration audio.
-4. Expand QA checks for health/wellness safety.
-5. Add optional persona evaluation after render.
-6. Only later: Hermes skill migration and YouTube upload automation.
+Do not implement browser automation details until the skeleton/health checks are in place.
 
-## Prompt For A New Thread
+## New Thread Prompt
 
-Use this if continuing in a new context:
+Use this when continuing from a fresh context:
 
 ```text
-Read /Users/joker/Documents/Youtube-AI-Agent/docs/HANDOFF.md and continue from the Docker-first Remotion MVP state. Do not reintroduce host Python/Node setup; keep the project Docker-first.
+Read /Users/joker/Documents/Youtube-AI-Agent/docs/HANDOFF.md, /Users/joker/Documents/Youtube-AI-Agent/docs/PROJECT_STATUS.md, and /Users/joker/Documents/Youtube-AI-Agent/docs/VIDEO_AGENT_V3_STANDALONE_HANDOFF.md. Continue with Video Agent v3 Phase 1 Step 1. Do not work on Hermes, Telegram, YouTube upload, persona eval, semantic reuse, analytics, or optimization tasks until the standalone full video flow is reliable. Keep the existing v2 CLI and tests working.
 ```

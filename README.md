@@ -77,6 +77,15 @@ jobs/<job_id>/seo.json
 Generate copy/paste prompts for each stage:
 
 ```bash
+docker compose run --rm video-agent python -m video_agent.cli operator-next \
+  --channel configs/vida-plena-45/channel.yaml \
+  --idea inputs/manual_idea.json \
+  --job-dir jobs/<job_id>
+```
+
+`operator-next` looks at the current job folder, creates the next prompt file when needed, and prints the exact command to run after saving the ChatGPT or Gemini raw response.
+
+```bash
 docker compose run --rm video-agent python -m video_agent.cli operator-prompts \
   --channel configs/vida-plena-45/channel.yaml \
   --idea inputs/manual_idea.json \

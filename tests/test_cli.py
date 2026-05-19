@@ -213,6 +213,36 @@ def test_cli_operator_status_prints_next_step(tmp_path, monkeypatch, capsys):
     assert "Next: Generate scenes." in captured.out
 
 
+def test_cli_operator_next_prints_prompt_and_command(tmp_path, monkeypatch, capsys):
+    def fake_build_operator_next(channel_path, idea_path, job_dir):
+        return SimpleNamespace(
+            step="chatgpt-script",
+            message="Copy prompt.",
+            prompt_paths=[job_dir / "operator/chatgpt/script_prompt.md"],
+            commands=["docker compose run --rm video-agent python -m video_agent.cli operator-promote ..."],
+        )
+
+    monkeypatch.setattr("video_agent.cli.build_operator_next", fake_build_operator_next)
+
+    exit_code = main(
+        [
+            "operator-next",
+            "--channel",
+            str(ROOT / "configs/vida-plena-45/channel.yaml"),
+            "--idea",
+            str(ROOT / "inputs/manual_idea.json"),
+            "--job-dir",
+            str(tmp_path / "operator-job"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "Step: chatgpt-script" in captured.out
+    assert "Prompt:" in captured.out
+    assert "Command: docker compose" in captured.out
+
+
 def test_cli_batch_without_render_writes_audit(tmp_path, capsys):
     audit_path = tmp_path / "batch_audit.md"
     exit_code = main(

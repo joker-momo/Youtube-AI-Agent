@@ -6,6 +6,7 @@ from typing import Sequence
 
 from video_agent.batch import format_audit_markdown, build_audit_row, write_batch_audit
 from video_agent.operator import (
+    build_operator_next,
     build_operator_status,
     promote_operator_artifact,
     promote_operator_qa,
@@ -76,6 +77,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print the current artifact and QA state for an operator job.",
     )
     operator_status_parser.add_argument("--job-dir", required=True, type=Path)
+
+    operator_next_parser = subparsers.add_parser(
+        "operator-next",
+        help="Create any needed prompt and print the next command for a single operator job.",
+    )
+    operator_next_parser.add_argument("--channel", required=True, type=Path)
+    operator_next_parser.add_argument("--idea", required=True, type=Path)
+    operator_next_parser.add_argument("--job-dir", required=True, type=Path)
 
     batch_parser = subparsers.add_parser("batch", help="Run multiple ideas and write a visual QA audit.")
     batch_parser.add_argument("--channel", required=True, type=Path)
@@ -196,6 +205,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         for artifact, artifact_status in status["artifacts"].items():
             print(f"{artifact}: artifact={artifact_status['artifact']} qa={artifact_status['qa']}")
         print(f"Next: {status['next_step']}")
+        return 0
+    if args.command == "operator-next":
+        result = build_operator_next(args.channel, args.idea, args.job_dir)
+        print(f"Step: {result.step}")
+        print(result.message)
+        for path in result.prompt_paths:
+            print(f"Prompt: {path}")
+        for command in result.commands:
+            print(f"Command: {command}")
         return 0
     if args.command == "audit":
         rows = [build_audit_row(job_dir) for job_dir in args.job]

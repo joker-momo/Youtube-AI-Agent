@@ -5,6 +5,7 @@ import pytest
 
 from video_agent.operator import (
     assert_operator_qa_passed,
+    build_operator_next,
     build_operator_status,
     extract_json_object,
     write_operator_review,
@@ -156,3 +157,40 @@ def test_build_operator_status_reports_next_missing_step(tmp_path):
     assert status["artifacts"]["script"]["qa"] == "PASS"
     assert status["artifacts"]["scenes"]["artifact"] == "missing"
     assert status["next_step"] == "Generate and promote scenes.json, then run Gemini QA for scenes."
+
+
+def test_build_operator_next_writes_script_prompt_for_empty_job(tmp_path):
+    job_dir = tmp_path / "operator-job"
+
+    result = build_operator_next(
+        channel_path=ROOT / "configs/vida-plena-45/channel.yaml",
+        idea_path=ROOT / "inputs/manual_idea.json",
+        job_dir=job_dir,
+    )
+
+    assert result.step == "chatgpt-script"
+    assert result.prompt_paths == [job_dir / "operator/chatgpt/script_prompt.md"]
+    assert result.prompt_paths[0].exists()
+    assert "save the response" in result.message
+    assert "operator-promote" in result.commands[0]
+    assert "script.raw.txt" in result.commands[0]
+
+
+def test_build_operator_next_promotes_existing_raw_before_prompting(tmp_path):
+    job_dir = tmp_path / "operator-job"
+    raw_path = job_dir / "operator/chatgpt/script.raw.txt"
+    raw_path.parent.mkdir(parents=True)
+    raw_path.write_text("{}", encoding="utf-8")
+
+    result = build_operator_next(
+        channel_path=ROOT / "configs/vida-plena-45/channel.yaml",
+        idea_path=ROOT / "inputs/manual_idea.json",
+        job_dir=job_dir,
+    )
+
+    assert result.step == "promote-script"
+    assert result.prompt_paths == []
+    assert "Raw ChatGPT response exists" in result.message
+    assert result.commands == [
+        f"docker compose run --rm video-agent python -m video_agent.cli operator-promote --job-dir {job_dir} --artifact script --raw-file {raw_path}"
+    ]

@@ -30,6 +30,14 @@ class PromoteResult:
     output_path: Path
 
 
+@dataclass
+class OperatorNextResult:
+    step: str
+    message: str
+    prompt_paths: list[Path]
+    commands: list[str]
+
+
 def extract_json_object(text: str) -> dict[str, Any]:
     start = text.find("{")
     if start == -1:
@@ -79,6 +87,11 @@ def _status_badge(status: str) -> str:
     normalized = status.upper() if status else "MISSING"
     class_name = "pass" if normalized == "PASS" else "warn"
     return f'<span class="badge {class_name}">{escape(normalized)}</span>'
+
+
+def _docker_cli_command(*parts: str | Path) -> str:
+    rendered = " ".join(str(part) for part in parts)
+    return f"docker compose run --rm video-agent python -m video_agent.cli {rendered}"
 
 
 def _chatgpt_script_prompt(channel_config: dict[str, Any], idea: dict[str, Any]) -> str:
@@ -319,6 +332,115 @@ def build_operator_status(job_dir: Path) -> dict[str, Any]:
         "artifacts": artifacts,
         "next_step": next_step,
     }
+
+
+def build_operator_next(channel_path: Path, idea_path: Path, job_dir: Path) -> OperatorNextResult:
+    status = build_operator_status(job_dir)
+
+    for artifact in OPERATOR_ARTIFACTS:
+        artifact_status = status["artifacts"][artifact]
+        raw_artifact_path = job_dir / "operator" / "chatgpt" / f"{artifact}.raw.txt"
+        raw_qa_path = job_dir / "operator" / "gemini" / f"{artifact}_qa.raw.txt"
+
+        if artifact_status["artifact"] == "missing":
+            if raw_artifact_path.exists():
+                return OperatorNextResult(
+                    step=f"promote-{artifact}",
+                    message=f"Raw ChatGPT response exists for {artifact}; promote it into {artifact}.json.",
+                    prompt_paths=[],
+                    commands=[
+                        _docker_cli_command(
+                            "operator-promote",
+                            "--job-dir",
+                            job_dir,
+                            "--artifact",
+                            artifact,
+                            "--raw-file",
+                            raw_artifact_path,
+                        )
+                    ],
+                )
+            write_operator_prompts(channel_path, idea_path, job_dir, stage=artifact)
+            prompt_path = job_dir / "operator" / "chatgpt" / f"{artifact}_prompt.md"
+            return OperatorNextResult(
+                step=f"chatgpt-{artifact}",
+                message=f"Copy the {artifact} prompt into ChatGPT, then save the response as {raw_artifact_path}.",
+                prompt_paths=[prompt_path],
+                commands=[
+                    _docker_cli_command(
+                        "operator-promote",
+                        "--job-dir",
+                        job_dir,
+                        "--artifact",
+                        artifact,
+                        "--raw-file",
+                        raw_artifact_path,
+                    )
+                ],
+            )
+
+        if artifact_status["qa"] != "PASS":
+            if raw_qa_path.exists():
+                return OperatorNextResult(
+                    step=f"promote-{artifact}-qa",
+                    message=f"Raw Gemini QA exists for {artifact}; promote it into {artifact}_qa.json.",
+                    prompt_paths=[],
+                    commands=[
+                        _docker_cli_command(
+                            "operator-promote-qa",
+                            "--job-dir",
+                            job_dir,
+                            "--artifact",
+                            artifact,
+                            "--raw-file",
+                            raw_qa_path,
+                        )
+                    ],
+                )
+            write_operator_prompts(channel_path, idea_path, job_dir, stage=artifact)
+            prompt_path = job_dir / "operator" / "gemini" / f"{artifact}_qa_prompt.md"
+            return OperatorNextResult(
+                step=f"gemini-{artifact}-qa",
+                message=f"Copy the {artifact} QA prompt into Gemini, then save the response as {raw_qa_path}.",
+                prompt_paths=[prompt_path],
+                commands=[
+                    _docker_cli_command(
+                        "operator-promote-qa",
+                        "--job-dir",
+                        job_dir,
+                        "--artifact",
+                        artifact,
+                        "--raw-file",
+                        raw_qa_path,
+                    )
+                ],
+            )
+
+    if not (job_dir / "video.mp4").exists():
+        return OperatorNextResult(
+            step="render-video",
+            message="All operator artifacts and Gemini QA are ready; render the video.",
+            prompt_paths=[],
+            commands=[
+                _docker_cli_command(
+                    "operator-render",
+                    "--channel",
+                    channel_path,
+                    "--job-dir",
+                    job_dir,
+                )
+            ],
+        )
+
+    return OperatorNextResult(
+        step="review-video",
+        message="Video exists; open the review page and do the final human QA pass.",
+        prompt_paths=[],
+        commands=[
+            _docker_cli_command("operator-status", "--job-dir", job_dir),
+            _docker_cli_command("operator-review", "--job-dir", job_dir),
+        ],
+    )
 
 
 def write_operator_review(job_dir: Path, output_path: Path | None = None) -> Path:

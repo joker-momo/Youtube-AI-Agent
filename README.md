@@ -64,6 +64,47 @@ docker compose run --rm video-agent python -m video_agent.cli run \
   --no-render
 ```
 
+## Operator-Approved Content
+
+For the semi-automated browser flow, place the ChatGPT/Gemini-approved artifacts in a job directory:
+
+```text
+jobs/<job_id>/script.json
+jobs/<job_id>/scenes.json
+jobs/<job_id>/seo.json
+```
+
+Generate copy/paste prompts for each stage:
+
+```bash
+docker compose run --rm video-agent python -m video_agent.cli operator-prompts \
+  --channel configs/vida-plena-45/channel.yaml \
+  --idea inputs/manual_idea.json \
+  --job-dir jobs/<job_id> \
+  --stage script
+```
+
+After ChatGPT returns a raw response, promote it into a validated artifact:
+
+```bash
+docker compose run --rm video-agent python -m video_agent.cli operator-promote \
+  --job-dir jobs/<job_id> \
+  --artifact script \
+  --raw-file jobs/<job_id>/operator/chatgpt/script.raw.txt
+```
+
+Repeat with `--stage scenes` / `--artifact scenes`, then `--stage seo` / `--artifact seo`.
+
+Then render that approved content through the same Docker pipeline:
+
+```bash
+docker compose run --rm video-agent python -m video_agent.cli operator-render \
+  --channel configs/vida-plena-45/channel.yaml \
+  --job-dir jobs/<job_id>
+```
+
+Use `--no-render` to validate JSON, prepare assets, create `render_props.json`, and write the visual review without rendering the MP4.
+
 ## Kokoro TTS
 
 The default channel keeps `tts.provider: "mock-local"` for fast tests and silent placeholder audio. To generate real local narration with Kokoro:

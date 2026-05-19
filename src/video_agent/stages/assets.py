@@ -114,7 +114,7 @@ def prepare_assets(
             _write_placeholder_image(image_path, scene, colors[index % len(colors)], palette)
             source = "generated_placeholder"
             source_path = None
-            extra_manifest = {}
+            extra_manifest = {"stock_errors": stock_service.last_errors} if stock_service else {}
         public_image_path = public_assets_dir / image_path.name
         shutil.copy2(image_path, public_image_path)
         public_ref = f"jobs/{job_dir.name}/assets/{image_path.name}"

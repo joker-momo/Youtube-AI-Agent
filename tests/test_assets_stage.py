@@ -82,6 +82,34 @@ def test_prepare_assets_auto_prefers_local_directory_before_stock_api(tmp_path):
     assert manifest["scenes"][0]["background"].endswith("scene-01.png")
 
 
+def test_prepare_assets_records_stock_errors_when_falling_back_to_placeholder(tmp_path):
+    class MissingKeyStockClient:
+        def search(self, provider, query, filters):
+            raise RuntimeError(f"{provider.upper()}_API_KEY is required for provider={provider}")
+
+        def normalize(self, provider, response):
+            return []
+
+    job_dir = tmp_path / "jobs" / "job-missing-stock-key"
+    manifest = prepare_assets(
+        job_dir,
+        STYLE_DNA,
+        scene_doc(),
+        visual_config={
+            "strategy": "auto",
+            "query_cache_path": str(tmp_path / "caches" / "query_cache.db"),
+            "asset_library_path": str(tmp_path / "asset_library"),
+            "providers": ["pexels", "pixabay"],
+        },
+        stock_client=MissingKeyStockClient(),
+    )
+
+    scene = manifest["scenes"][0]
+    assert scene["source"] == "generated_placeholder"
+    assert [error["provider"] for error in scene["stock_errors"]] == ["pexels", "pixabay"]
+    assert "PEXELS_API_KEY is required" in scene["stock_errors"][0]["message"]
+
+
 def test_candidate_score_ignores_stopword_matches():
     score = _candidate_score(
         "caminar con los adultos for wellness",

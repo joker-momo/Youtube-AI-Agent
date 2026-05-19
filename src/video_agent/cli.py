@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Sequence
 
 from video_agent.batch import format_audit_markdown, build_audit_row, write_batch_audit
-from video_agent.pipeline import PipelineOptions, run_pipeline
+from video_agent.operator import promote_operator_artifact, write_operator_prompts
+from video_agent.pipeline import OperatorRenderOptions, PipelineOptions, render_operator_job, run_pipeline
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -17,6 +18,32 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--jobs-dir", default=Path("jobs"), type=Path)
     run_parser.add_argument("--no-render", action="store_true", help="Generate artifacts but skip Remotion render.")
     _add_tts_override_args(run_parser)
+
+    operator_render_parser = subparsers.add_parser(
+        "operator-render",
+        help="Render a job directory that already contains operator-approved script.json, scenes.json, and seo.json.",
+    )
+    operator_render_parser.add_argument("--channel", required=True, type=Path)
+    operator_render_parser.add_argument("--job-dir", required=True, type=Path)
+    operator_render_parser.add_argument("--no-render", action="store_true", help="Prepare assets but skip Remotion render.")
+    _add_tts_override_args(operator_render_parser)
+
+    operator_prompts_parser = subparsers.add_parser(
+        "operator-prompts",
+        help="Write ChatGPT/Gemini prompt files for the semi-automated content workflow.",
+    )
+    operator_prompts_parser.add_argument("--channel", required=True, type=Path)
+    operator_prompts_parser.add_argument("--idea", required=True, type=Path)
+    operator_prompts_parser.add_argument("--job-dir", required=True, type=Path)
+    operator_prompts_parser.add_argument("--stage", choices=["all", "script", "scenes", "seo"], default="all")
+
+    operator_promote_parser = subparsers.add_parser(
+        "operator-promote",
+        help="Extract, validate, and promote a raw ChatGPT JSON response into a job artifact.",
+    )
+    operator_promote_parser.add_argument("--job-dir", required=True, type=Path)
+    operator_promote_parser.add_argument("--artifact", choices=["script", "scenes", "seo"], required=True)
+    operator_promote_parser.add_argument("--raw-file", required=True, type=Path)
 
     batch_parser = subparsers.add_parser("batch", help="Run multiple ideas and write a visual QA audit.")
     batch_parser.add_argument("--channel", required=True, type=Path)
@@ -94,6 +121,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Batch completed: {len(results)} jobs")
         print(f"audit.md: {audit_path}")
         print(markdown, end="")
+        return 0
+    if args.command == "operator-render":
+        result = render_operator_job(
+            OperatorRenderOptions(
+                channel_path=args.channel,
+                job_dir=args.job_dir,
+                render=not args.no_render,
+                tts_override=_tts_override_from_args(args),
+            )
+        )
+        _print_run_result(result)
+        return 0
+    if args.command == "operator-prompts":
+        result = write_operator_prompts(
+            channel_path=args.channel,
+            idea_path=args.idea,
+            job_dir=args.job_dir,
+            stage=args.stage,
+        )
+        print(f"Operator prompts written: {len(result.paths)}")
+        for path in result.paths:
+            print(path)
+        return 0
+    if args.command == "operator-promote":
+        result = promote_operator_artifact(args.job_dir, args.artifact, args.raw_file)
+        print(f"Promoted {result.artifact}: {result.output_path}")
         return 0
     if args.command == "audit":
         rows = [build_audit_row(job_dir) for job_dir in args.job]

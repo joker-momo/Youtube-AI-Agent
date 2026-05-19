@@ -163,12 +163,14 @@ class StockAssetService:
         self.stock_client = stock_client or StockPhotoClient()
         self.download_client = download_client or UrlDownloadClient()
         self.used_provider_ids: set[tuple[str, str]] = set()
+        self.last_errors: list[dict[str, str]] = []
 
     def get_scene_asset(self, scene: dict[str, Any], channel_id: str, job_id: str) -> dict[str, Any] | None:
         query = scene.get("visual_prompt") or scene.get("on_screen_text") or ""
         filters = _stock_filters(self.visual_config)
         ttl_hours = int(self.visual_config.get("query_cache_ttl_hours", 24))
         ranked_candidates = []
+        self.last_errors = []
         for provider_order, provider in enumerate(self.providers, start=1):
             try:
                 response = self.cache.get(provider, query, filters)
@@ -181,7 +183,14 @@ class StockAssetService:
                     provider_order=provider_order,
                 )
                 ranked_candidates.extend(candidates)
-            except Exception:
+            except Exception as exc:
+                self.last_errors.append(
+                    {
+                        "provider": provider,
+                        "error_type": exc.__class__.__name__,
+                        "message": str(exc),
+                    }
+                )
                 continue
         ranked_candidates = sorted(
             ranked_candidates,

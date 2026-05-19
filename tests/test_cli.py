@@ -70,6 +70,42 @@ def test_cli_run_accepts_tts_overrides(tmp_path, monkeypatch):
     }
 
 
+def test_cli_operator_render_accepts_existing_job_artifacts(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_render_operator_job(options):
+        calls.append(options)
+        return SimpleNamespace(
+            job_dir=tmp_path / "job",
+            thumbnail_path=tmp_path / "job/thumbnail.jpg",
+            seo_path=tmp_path / "job/seo.json",
+            report_path=tmp_path / "job/report.md",
+            video_path=None,
+        )
+
+    monkeypatch.setattr("video_agent.cli.render_operator_job", fake_render_operator_job)
+
+    exit_code = main(
+        [
+            "operator-render",
+            "--channel",
+            str(ROOT / "configs/vida-plena-45/channel.yaml"),
+            "--job-dir",
+            str(tmp_path / "operator-job"),
+            "--no-render",
+            "--tts-provider",
+            "kokoro",
+            "--tts-voice-id",
+            "ef_dora",
+        ]
+    )
+
+    assert exit_code == 0
+    assert calls[0].job_dir == tmp_path / "operator-job"
+    assert calls[0].render is False
+    assert calls[0].tts_override == {"provider": "kokoro", "voice_id": "ef_dora"}
+
+
 def test_cli_batch_without_render_writes_audit(tmp_path, capsys):
     audit_path = tmp_path / "batch_audit.md"
     exit_code = main(

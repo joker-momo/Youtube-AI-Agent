@@ -44,6 +44,14 @@ class PipelineResult:
     report_path: Path
 
 
+@dataclass
+class OperatorRenderOptions:
+    channel_path: Path
+    job_dir: Path
+    render: bool = True
+    tts_override: dict | None = None
+
+
 def _load_style(channel_config: dict) -> dict:
     return read_json(repo_root() / channel_config["style_dna"]["path"])
 
@@ -64,6 +72,17 @@ def _scene_visual_issues(scene: dict) -> list[dict]:
                 "message": "Scene fell back to a generated placeholder image.",
             }
         )
+        for error in scene.get("stock_errors") or []:
+            issue_type = "STOCK_PROVIDER_ERROR"
+            if "API_KEY is required" in error.get("message", ""):
+                issue_type = "MISSING_STOCK_API_KEY"
+            issues.append(
+                {
+                    "type": issue_type,
+                    "severity": "warning",
+                    "message": f"{error.get('provider')}: {error.get('message')}",
+                }
+            )
     if source == "asset_library" and not provider:
         issues.append(
             {
@@ -129,6 +148,7 @@ def _write_visual_review(job_dir: Path, job_id: str, assets: dict, scene_doc: di
                 "source_url": scene_asset.get("source_url"),
                 "query": (scene_asset.get("asset_selection") or {}).get("query"),
                 "selection": scene_asset.get("asset_selection"),
+                "stock_errors": scene_asset.get("stock_errors") or [],
                 "background": scene_asset.get("background"),
             }
         )
@@ -266,6 +286,67 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
 
     report_path = _write_report(job_dir, job_id, channel_config, idea, options.render, visual_review)
     logger.log("JOB_COMPLETED", {"job_id": job_id, "cost_usd": 0})
+    return PipelineResult(
+        job_id=job_id,
+        job_dir=job_dir,
+        video_path=video_path if video_path and video_path.exists() else None,
+        thumbnail_path=job_dir / "thumbnail.jpg",
+        seo_path=job_dir / "seo.json",
+        report_path=report_path,
+    )
+
+
+def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
+    root = repo_root()
+    channel_config = read_yaml(options.channel_path)
+    if options.tts_override:
+        channel_config["tts"] = (channel_config.get("tts") or {}) | options.tts_override
+    validate_json(channel_config, root / "schemas/channel-config.schema.json")
+
+    job_dir = options.job_dir
+    job_dir.mkdir(parents=True, exist_ok=True)
+    job_id = job_dir.name
+    logger = EventLogger(job_dir / EVENT_LOG)
+    style = _load_style(channel_config)
+
+    script = read_json(job_dir / "script.json")
+    scene_doc = read_json(job_dir / "scenes.json")
+    seo = read_json(job_dir / "seo.json")
+    validate_json(script, root / "schemas/script.schema.json")
+    validate_json(scene_doc, root / "schemas/scenes.schema.json")
+    validate_json(seo, root / "schemas/seo.schema.json")
+
+    logger.log("OPERATOR_RENDER_STARTED", {"job_id": job_id, "channel_id": channel_config["channel"]["id"]})
+    assets = prepare_assets(
+        job_dir,
+        style,
+        scene_doc,
+        visual_config=channel_config.get("visuals"),
+        tts_config=channel_config.get("tts"),
+        channel_id=channel_config["channel"]["id"],
+    )
+    render_props = {
+        "channel": channel_config["channel"],
+        "style": style,
+        "render": channel_config["render"] | {"duration_sec": scene_doc["total_duration_sec"]},
+        "scenes": scene_doc["scenes"],
+        "audio": assets["audio"],
+        "seo": seo,
+    }
+    write_json(job_dir / ARTIFACT_RENDER_PROPS, render_props)
+    validate_json(render_props, root / "schemas/render-props.schema.json")
+    visual_review = _write_visual_review(job_dir, job_id, assets, scene_doc)
+    create_visual_contact_sheet(job_dir, visual_review)
+
+    video_path = None
+    if options.render:
+        video_path = job_dir / ARTIFACT_VIDEO
+        render_with_remotion(job_dir / ARTIFACT_RENDER_PROPS, video_path, job_dir / "thumbnail.jpg")
+        logger.log("RENDERED", {"job_id": job_id, "video_path": str(video_path), "cost_usd": 0})
+
+    idea = {"topic": seo.get("title") or job_id}
+    report_path = _write_report(job_dir, job_id, channel_config, idea, options.render, visual_review)
+    logger.log("OPERATOR_RENDER_COMPLETED", {"job_id": job_id, "cost_usd": 0})
     return PipelineResult(
         job_id=job_id,
         job_dir=job_dir,

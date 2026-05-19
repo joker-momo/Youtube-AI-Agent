@@ -20,6 +20,7 @@ from video_agent.orchestrator.orchestrator import StageError
 from video_agent.orchestrator.stages import (
     IDEA_FILE,
     StageInputMissingError,
+    promote_script_stage,
     run_script_stage,
 )
 
@@ -30,6 +31,10 @@ class CreateJobRequest(BaseModel):
     job_id: str
     channel_id: str
     idea_path: str
+
+
+class RawScriptRequest(BaseModel):
+    raw_response: str
 
 
 def get_jobs_root() -> Path:
@@ -141,6 +146,24 @@ def post_run_script(
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     try:
         output = run_script_stage(job_dir, channel_path)
+    except StageInputMissingError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    state = load_job(job_dir)
+    return {"output": str(output.relative_to(job_dir)), "state": state.to_dict()}
+
+
+@app.post("/jobs/{job_id}/stages/script/promote")
+def post_promote_script(
+    job_id: str,
+    payload: RawScriptRequest,
+    jobs_root: Path = Depends(get_jobs_root),
+    channel_path: Path = Depends(get_channel_path),
+) -> dict:
+    job_dir = jobs_root / job_id
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    try:
+        output = promote_script_stage(job_dir, channel_path, payload.raw_response)
     except StageInputMissingError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     state = load_job(job_dir)

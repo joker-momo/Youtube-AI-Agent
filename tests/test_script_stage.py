@@ -10,7 +10,9 @@ from video_agent.contracts import repo_root
 from video_agent.orchestrator import create_job
 from video_agent.orchestrator.stages import (
     SCRIPT_PROMPT_PATH,
+    SCRIPT_RAW_PATH,
     StageInputMissingError,
+    promote_script_stage,
     run_script_stage,
 )
 from video_agent.web.app import app, get_channel_path, get_jobs_root
@@ -26,6 +28,24 @@ def idea_payload() -> dict:
     return json.loads(
         (repo_root() / "inputs/manual_idea.json").read_text(encoding="utf-8")
     )
+
+
+@pytest.fixture
+def valid_script_payload() -> dict:
+    return {
+        "channel_id": "vida-plena-45",
+        "job_id": "job-s1",
+        "hook": "Dormir mejor empieza con una decisión simple.",
+        "sections": [
+            {
+                "title": "Calma",
+                "text": "Baja el ritmo una hora antes de acostarte.",
+            }
+        ],
+        "narration": "Dormir mejor empieza con una decisión simple. Baja el ritmo una hora antes de acostarte.",
+        "cta": "Prueba este hábito esta noche.",
+        "qa": {"verdict": "PENDING_GEMINI_QA"},
+    }
 
 
 def test_run_script_stage_writes_prompt(tmp_path: Path, channel_path: Path, idea_payload: dict):
@@ -49,6 +69,8 @@ def test_run_script_stage_writes_prompt(tmp_path: Path, channel_path: Path, idea
     ]
     completed = [e for e in events if e["event"] == "STAGE_COMPLETED"]
     assert any(e["data"]["stage"] == "script" for e in completed)
+    state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    assert state["current_stage"] == "script_promote"
 
 
 def test_run_script_stage_missing_idea_raises(tmp_path: Path, channel_path: Path):
@@ -56,6 +78,64 @@ def test_run_script_stage_missing_idea_raises(tmp_path: Path, channel_path: Path
     create_job(job_dir, job_id="job-s2", channel_id="vida-plena-45", idea_path="idea.json")
     with pytest.raises(StageInputMissingError):
         run_script_stage(job_dir, channel_path)
+
+
+def test_promote_script_stage_writes_raw_and_promoted_script(
+    tmp_path: Path,
+    channel_path: Path,
+    idea_payload: dict,
+    valid_script_payload: dict,
+):
+    job_dir = tmp_path / "job-s1"
+    create_job(job_dir, job_id="job-s1", channel_id="vida-plena-45", idea_path="idea.json")
+    (job_dir / "idea.json").write_text(
+        json.dumps(idea_payload, ensure_ascii=False), encoding="utf-8"
+    )
+    run_script_stage(job_dir, channel_path)
+
+    output = promote_script_stage(
+        job_dir,
+        channel_path,
+        raw_response=f"```json\n{json.dumps(valid_script_payload, ensure_ascii=False)}\n```",
+    )
+
+    assert output == job_dir / "script.json"
+    assert output.exists()
+    assert (job_dir / SCRIPT_RAW_PATH).exists()
+    promoted = json.loads(output.read_text(encoding="utf-8"))
+    assert promoted["job_id"] == "job-s1"
+    state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    assert state["current_stage"] == "scenes"
+    script_promote = next(s for s in state["stages"] if s["name"] == "script_promote")
+    assert script_promote["status"] == "completed"
+
+    events = [
+        json.loads(line)
+        for line in (job_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    completed = [e for e in events if e["event"] == "STAGE_COMPLETED"]
+    assert any(e["data"]["stage"] == "script_promote" for e in completed)
+
+
+def test_promote_script_stage_rejects_stale_raw_response(
+    tmp_path: Path,
+    channel_path: Path,
+    idea_payload: dict,
+    valid_script_payload: dict,
+):
+    job_dir = tmp_path / "job-s1"
+    create_job(job_dir, job_id="job-s1", channel_id="vida-plena-45", idea_path="idea.json")
+    (job_dir / "idea.json").write_text(
+        json.dumps(idea_payload, ensure_ascii=False), encoding="utf-8"
+    )
+    run_script_stage(job_dir, channel_path)
+    stale_payload = {**valid_script_payload, "job_id": "old-job"}
+
+    with pytest.raises(StageInputMissingError, match="job_id mismatch"):
+        promote_script_stage(job_dir, channel_path, raw_response=json.dumps(stale_payload))
+
+    assert not (job_dir / "script.json").exists()
 
 
 @pytest.fixture
@@ -92,7 +172,46 @@ def test_post_idea_then_run_script_via_http(client: TestClient, idea_payload: di
     state = body["state"]
     script_stage = next(s for s in state["stages"] if s["name"] == "script")
     assert script_stage["status"] == "completed"
-    assert state["current_stage"] == "scenes"
+    assert state["current_stage"] == "script_promote"
+
+
+def test_post_promote_script_via_http(client: TestClient, idea_payload: dict, valid_script_payload: dict):
+    _create_job(client, "job-s1")
+    response = client.post("/jobs/job-s1/idea", json=idea_payload)
+    assert response.status_code == 201
+    response = client.post("/jobs/job-s1/stages/script/run")
+    assert response.status_code == 200
+
+    response = client.post(
+        "/jobs/job-s1/stages/script/promote",
+        json={"raw_response": json.dumps(valid_script_payload, ensure_ascii=False)},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["output"] == "script.json"
+    script_promote = next(s for s in body["state"]["stages"] if s["name"] == "script_promote")
+    assert script_promote["status"] == "completed"
+    assert body["state"]["current_stage"] == "scenes"
+
+
+def test_post_promote_script_invalid_raw_returns_409(
+    client: TestClient,
+    idea_payload: dict,
+    valid_script_payload: dict,
+):
+    _create_job(client, "job-s1")
+    client.post("/jobs/job-s1/idea", json=idea_payload)
+    client.post("/jobs/job-s1/stages/script/run")
+    stale_payload = {**valid_script_payload, "job_id": "old-job"}
+
+    response = client.post(
+        "/jobs/job-s1/stages/script/promote",
+        json={"raw_response": json.dumps(stale_payload, ensure_ascii=False)},
+    )
+
+    assert response.status_code == 409
+    assert "job_id mismatch" in response.json()["detail"]
 
 
 def test_run_script_without_idea_returns_409(client: TestClient):

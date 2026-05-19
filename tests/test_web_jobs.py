@@ -70,7 +70,7 @@ def test_advance_progresses_and_emits_events(client: TestClient):
     response = client.post("/jobs/job-b/advance")
     state = response.json()
     assert state["stages"][0]["status"] == "completed"
-    assert state["current_stage"] == "scenes"
+    assert state["current_stage"] == "script_promote"
 
     response = client.get("/jobs/job-b/events")
     assert response.status_code == 200

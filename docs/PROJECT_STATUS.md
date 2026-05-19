@@ -1,6 +1,6 @@
 # Youtube AI Agent Project Status
 
-Last updated: 2026-05-20 (V3 Phase 1 Step 5 landed: first real stage ported)
+Last updated: 2026-05-20 (V3 Phase 1 Step 6 implemented and Docker-verified)
 
 This file is the living project tracker. Update it whenever a meaningful system capability is added, changed, verified, or deferred so a new reader can quickly understand what the system does, what is being built now, and what remains.
 
@@ -136,6 +136,16 @@ Decisions already chosen:
 - v2 `operator-prompts` CLI remains unchanged and shares the prompt helper.
 - Tests: `tests/test_script_stage.py` covers the runner happy path, missing-idea guard, HTTP idea upload, HTTP run, missing-idea HTTP 409, and unknown-job 404.
 
+### V3 Phase 1 Step 6 Script Promote Stage
+
+- Default V3 stage order now includes `script_promote` after `script`.
+- `run_script_stage` now completes `script` and advances `current_stage` to `script_promote`, not directly to `scenes`.
+- `src/video_agent/orchestrator/stages.py` exposes `promote_script_stage(job_dir, channel_path, raw_response)`.
+- `promote_script_stage` writes raw ChatGPT output to `operator/chatgpt/script.raw.txt`, reuses v2 `promote_operator_artifact(..., artifact="script")`, writes `script.json`, emits `STAGE_COMPLETED`, and advances `current_stage` to `scenes`.
+- FastAPI exposes `POST /jobs/{job_id}/stages/script/promote` with body `{ "raw_response": "..." }`.
+- Tests were added for direct stage promotion, stale `job_id` rejection, HTTP promotion, and HTTP 409 on invalid raw output.
+- Docker verification passed: `docker compose run --rm video-agent pytest -q` -> `83 passed in 16.89s`.
+
 ## Target V3 Architecture
 
 ```text
@@ -200,7 +210,7 @@ Latest full verification:
 
 ```text
 docker compose run --rm video-agent pytest -q
-83 passed in 12.76s
+83 passed in 16.89s
 ```
 
 ## Fresh Operator Run
@@ -277,8 +287,7 @@ The command will either:
 ## Not Yet Done
 
 - V3 FastAPI app runs the `script` stage end-to-end; `scenes`, `seo`, `render`, `review` stages still advance through stubs.
-- Browser-worker has CDP diagnostic but no Playwright drivers for ChatGPT/Gemini/vidIQ/image generation yet.
-- `browser-worker` exists only as a health-route skeleton; no Playwright CDP attach, no ChatGPT/Gemini/vidIQ/image-generation drivers yet.
+- Browser-worker has health and CDP diagnostic routes, but no ChatGPT/Gemini/vidIQ/image-generation drivers yet.
 - ChatGPT/Gemini/vidIQ browser automation is not yet packaged into a service.
 - WebSocket progress UI and `events.jsonl` replay are not implemented yet.
 - Trend/data intake and idea selection are not implemented yet.
@@ -288,12 +297,11 @@ The command will either:
 
 ## Next Recommended Work
 
-V3 Phase 1 Steps 1-5 complete (health + orchestrator + job HTTP/WS + CDP diagnostic + first real stage; 83/83 tests green). Next:
+V3 Phase 1 Steps 1-6 complete (health + orchestrator + job HTTP/WS + CDP diagnostic + first real stage + script promote; 83/83 tests green). Next:
 
-1. V3 Phase 1 Step 6 — add the `script_promote` stage: accept a raw ChatGPT JSON response, run the v2 promotion validator, write `script.json`, append `STAGE_COMPLETED` for `script_promote`. May require splitting the `script` stage into `script_prompt` + `script_promote` to mirror the v2 operator state machine.
+1. Commit Step 6.
 2. V3 Phase 1 Step 7 — port `scenes` stage (prompt + promote) reusing v2 helpers.
 3. V3 Phase 1 Step 8 — port `seo` stage similarly.
 4. V3 Phase 1 Step 9 — wire `render` and `review` into the orchestrator; reuse existing render pipeline.
 5. Browser-worker driver work (ChatGPT/Gemini/vidIQ Playwright flows) tracked separately under Step 10.
 6. Smoke-test the host Chrome path with `scripts/launch-chrome-cdp.sh` + `GET /chrome` before depending on the browser-worker.
-7. Run `docker compose run --rm video-agent pytest -q` after each step.

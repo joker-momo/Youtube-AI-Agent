@@ -113,7 +113,7 @@ docker compose run --rm video-agent python -m video_agent.cli operator-render \
   --job-dir jobs/<job_id>
 ```
 
-Use `--no-render` to validate JSON, prepare assets, create `render_props.json`, and write the visual review without rendering the MP4.
+Use `--no-render` to validate JSON, prepare assets, create `render_props.json`, write the visual review, and refresh `operator_review.html` without rendering the MP4.
 
 Write a local review page for a completed or in-progress operator job:
 
@@ -122,7 +122,7 @@ docker compose run --rm video-agent python -m video_agent.cli operator-review \
   --job-dir jobs/<job_id>
 ```
 
-This creates `jobs/<job_id>/operator_review.html` with artifact status, Gemini QA verdicts, video, thumbnail, contact sheet, and scene notes.
+This creates `jobs/<job_id>/operator_review.html` with artifact status, Gemini QA verdicts, video, thumbnail, contact sheet, and scene notes. `operator-render` also refreshes this page automatically.
 
 ## Kokoro TTS
 

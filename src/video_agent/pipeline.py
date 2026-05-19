@@ -12,7 +12,7 @@ from video_agent.contracts import (
     EVENT_LOG,
     repo_root,
 )
-from video_agent.operator import assert_operator_qa_passed
+from video_agent.operator import assert_operator_qa_passed, write_operator_review
 from video_agent.providers.mock import MockProvider
 from video_agent.stages.assets import prepare_assets
 from video_agent.stages.render import render_with_remotion
@@ -350,6 +350,7 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
 
     idea = {"topic": seo.get("title") or job_id}
     report_path = _write_report(job_dir, job_id, channel_config, idea, options.render, visual_review)
+    write_operator_review(job_dir)
     logger.log("OPERATOR_RENDER_COMPLETED", {"job_id": job_id, "cost_usd": 0})
     return PipelineResult(
         job_id=job_id,

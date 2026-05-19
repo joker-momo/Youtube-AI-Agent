@@ -1,6 +1,6 @@
 # Youtube AI Agent Project Status
 
-Last updated: 2026-05-20 (V3 Phase 1 Step 1 landed)
+Last updated: 2026-05-20 (V3 Phase 1 Step 2 landed)
 
 This file is the living project tracker. Update it whenever a meaningful system capability is added, changed, verified, or deferred so a new reader can quickly understand what the system does, what is being built now, and what remains.
 
@@ -98,6 +98,15 @@ Decisions already chosen:
 - Tests `tests/test_web_health.py` and `tests/test_browser_worker_health.py` cover both health routes.
 - Existing v2 `operator-*` CLI flow is unchanged.
 
+### V3 Phase 1 Step 2 Orchestrator Skeleton
+
+- `src/video_agent/orchestrator/job_state.py` defines `JobState` and `StageStatus` dataclasses with JSON round-trip through `jobs/<job_id>/job.json`.
+- Default stage list: `script -> scenes -> seo -> render -> review`.
+- `src/video_agent/orchestrator/orchestrator.py` exposes `create_job`, `advance`, plus `JobAlreadyExistsError` / `JobNotFoundError` / `StageError`.
+- Stage transitions: `pending -> in_progress -> completed`. Each transition appends to `events.jsonl` (`JOB_CREATED`, `STAGE_STARTED`, `STAGE_COMPLETED`, `JOB_COMPLETED`) through the shared `EventLogger`.
+- Tests: `tests/test_orchestrator.py` covers create + duplicate guard, full stage walk, and missing-job error.
+- Not yet wired into FastAPI routes or v2 CLI; pure module for now.
+
 ## Target V3 Architecture
 
 ```text
@@ -162,7 +171,7 @@ Latest full verification:
 
 ```text
 docker compose run --rm video-agent pytest -q
-66 passed in 15.40s
+70 passed in 20.09s
 ```
 
 ## Fresh Operator Run
@@ -238,7 +247,7 @@ The command will either:
 
 ## Not Yet Done
 
-- V3 FastAPI app exists only as a health-route skeleton; no routes, orchestrator, state machine, or stage modules yet.
+- V3 FastAPI app exists only as a health-route skeleton; orchestrator module exists but is not wired into HTTP routes yet, and no stage modules are connected.
 - `browser-worker` exists only as a health-route skeleton; no Playwright CDP attach, no ChatGPT/Gemini/vidIQ/image-generation drivers yet.
 - ChatGPT/Gemini/vidIQ browser automation is not yet packaged into a service.
 - WebSocket progress UI and `events.jsonl` replay are not implemented yet.
@@ -249,12 +258,13 @@ The command will either:
 
 ## Next Recommended Work
 
-V3 Phase 1 Step 1 is complete (FastAPI + browser-worker health skeletons, compose wiring, Chrome CDP launch script, green test suite). Next:
+V3 Phase 1 Steps 1-2 complete (health skeletons + orchestrator module with job.json/events.jsonl + 70/70 tests green). Next:
 
-1. V3 Phase 1 Step 2 — file-based job state and orchestrator skeleton.
-   - Define `jobs/<job_id>/job.json` + `events.jsonl` schemas.
-   - Add a minimal orchestrator that can create a job folder, write events, and advance through stub stages.
-2. Wire FastAPI routes to create/list/inspect jobs and stream events over WebSocket.
-3. Implement browser-worker Playwright CDP attach against host Chrome on `9222`; add a `GET /chrome` diagnostic that confirms the connection.
-4. Port the first stage (script prompt creation) into the orchestrator while keeping v2 `operator-*` working.
-5. Run `docker compose run --rm video-agent pytest -q` after each step.
+1. V3 Phase 1 Step 3 — wire orchestrator into FastAPI.
+   - `POST /jobs` creates a job folder and `job.json`.
+   - `GET /jobs/{job_id}` returns current state.
+   - `POST /jobs/{job_id}/advance` runs one stage transition.
+   - `GET /jobs/{job_id}/events` streams `events.jsonl` over WebSocket.
+2. V3 Phase 1 Step 4 — browser-worker Playwright CDP attach against host Chrome on `9222`; add `GET /chrome` diagnostic.
+3. V3 Phase 1 Step 5 — port the first real stage (script prompt creation) into the orchestrator while keeping v2 `operator-*` working.
+4. Run `docker compose run --rm video-agent pytest -q` after each step.

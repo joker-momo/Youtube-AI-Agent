@@ -18,3 +18,41 @@ services:
       - configs/vida-plena-45/channel.yaml
       - --idea
       - inputs/manual_idea.json
+
+  app:
+    build: .
+    working_dir: /app
+    environment:
+      PEXELS_API_KEY: ${PEXELS_API_KEY:-}
+      PIXABAY_API_KEY: ${PIXABAY_API_KEY:-}
+      BROWSER_WORKER_URL: http://browser-worker:8001
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./jobs:/app/jobs
+      - ./caches:/app/caches
+      - ./asset_library:/app/asset_library
+    command:
+      - uvicorn
+      - video_agent.web.app:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+
+  browser-worker:
+    build: .
+    working_dir: /app
+    environment:
+      CHROME_CDP_URL: ${CHROME_CDP_URL:-http://host.docker.internal:9222}
+    ports:
+      - "8001:8001"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command:
+      - uvicorn
+      - video_agent.browser_worker.app:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8001"

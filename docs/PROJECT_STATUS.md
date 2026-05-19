@@ -1,6 +1,6 @@
 # Youtube AI Agent Project Status
 
-Last updated: 2026-05-20
+Last updated: 2026-05-20 (V3 Phase 1 Step 1 landed)
 
 This file is the living project tracker. Update it whenever a meaningful system capability is added, changed, verified, or deferred so a new reader can quickly understand what the system does, what is being built now, and what remains.
 
@@ -88,6 +88,16 @@ Decisions already chosen:
 - SEO promotion blocks non-`es-419` language, tag count outside the channel rule, duplicate/empty tags, and forbidden channel positioning such as `adultos mayores`.
 - Vida Plena 45+ channel config now declares SEO language/tag limits and positioning rules.
 
+### V3 Phase 1 Step 1 Skeleton
+
+- `app` FastAPI service at `src/video_agent/web/app.py` with `GET /health`.
+- `browser-worker` FastAPI service at `src/video_agent/browser_worker/app.py` with `GET /health`.
+- `docker-compose.yml` declares both services on host ports `8000` and `8001`; `host.docker.internal:host-gateway` exposes host Chrome to the browser-worker container.
+- `scripts/launch-chrome-cdp.sh` launches host Chrome on port `9222` with a dedicated profile under `$HOME/.video-agent/chrome-cdp-profile`. The user logs in manually; the system never auto-logs-in.
+- `requirements.txt` adds `fastapi`, `uvicorn`, `httpx`.
+- Tests `tests/test_web_health.py` and `tests/test_browser_worker_health.py` cover both health routes.
+- Existing v2 `operator-*` CLI flow is unchanged.
+
 ## Target V3 Architecture
 
 ```text
@@ -152,7 +162,7 @@ Latest full verification:
 
 ```text
 docker compose run --rm video-agent pytest -q
-64 passed in 14.48s
+66 passed in 15.40s
 ```
 
 ## Fresh Operator Run
@@ -228,9 +238,8 @@ The command will either:
 
 ## Not Yet Done
 
-- V3 standalone FastAPI app does not exist yet.
-- `browser-worker` service does not exist yet.
-- Chrome dedicated profile setup script for CDP port `9222` does not exist yet.
+- V3 FastAPI app exists only as a health-route skeleton; no routes, orchestrator, state machine, or stage modules yet.
+- `browser-worker` exists only as a health-route skeleton; no Playwright CDP attach, no ChatGPT/Gemini/vidIQ/image-generation drivers yet.
 - ChatGPT/Gemini/vidIQ browser automation is not yet packaged into a service.
 - WebSocket progress UI and `events.jsonl` replay are not implemented yet.
 - Trend/data intake and idea selection are not implemented yet.
@@ -240,9 +249,12 @@ The command will either:
 
 ## Next Recommended Work
 
-1. Start v3 Phase 1 Step 1: skeleton and Docker.
-2. Add minimal FastAPI `app` service and health route.
-3. Add minimal `browser-worker` service and health route.
-4. Add host Chrome dedicated profile setup script for CDP port `9222`.
-5. Keep all current v2 `operator-*` commands working during the transition.
-6. Run the Docker test suite after each step.
+V3 Phase 1 Step 1 is complete (FastAPI + browser-worker health skeletons, compose wiring, Chrome CDP launch script, green test suite). Next:
+
+1. V3 Phase 1 Step 2 — file-based job state and orchestrator skeleton.
+   - Define `jobs/<job_id>/job.json` + `events.jsonl` schemas.
+   - Add a minimal orchestrator that can create a job folder, write events, and advance through stub stages.
+2. Wire FastAPI routes to create/list/inspect jobs and stream events over WebSocket.
+3. Implement browser-worker Playwright CDP attach against host Chrome on `9222`; add a `GET /chrome` diagnostic that confirms the connection.
+4. Port the first stage (script prompt creation) into the orchestrator while keeping v2 `operator-*` working.
+5. Run `docker compose run --rm video-agent pytest -q` after each step.

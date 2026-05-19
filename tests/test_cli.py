@@ -160,6 +160,35 @@ def test_cli_operator_promote_qa_writes_promoted_qa(tmp_path, capsys):
     assert (tmp_path / "operator-job/operator/gemini/script_qa.json").exists()
 
 
+def test_cli_operator_review_writes_html(tmp_path, monkeypatch, capsys):
+    calls = []
+
+    def fake_write_operator_review(job_dir, output_path=None):
+        calls.append((job_dir, output_path))
+        path = output_path or job_dir / "operator_review.html"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("<html>review</html>", encoding="utf-8")
+        return path
+
+    monkeypatch.setattr("video_agent.cli.write_operator_review", fake_write_operator_review)
+
+    output_path = tmp_path / "review.html"
+    exit_code = main(
+        [
+            "operator-review",
+            "--job-dir",
+            str(tmp_path / "operator-job"),
+            "--output",
+            str(output_path),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert calls == [(tmp_path / "operator-job", output_path)]
+    assert "operator_review.html:" in captured.out
+
+
 def test_cli_batch_without_render_writes_audit(tmp_path, capsys):
     audit_path = tmp_path / "batch_audit.md"
     exit_code = main(

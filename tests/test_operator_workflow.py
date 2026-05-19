@@ -6,6 +6,7 @@ import pytest
 from video_agent.operator import (
     assert_operator_qa_passed,
     extract_json_object,
+    write_operator_review,
     promote_operator_artifact,
     promote_operator_qa,
     write_operator_prompts,
@@ -104,3 +105,35 @@ def test_assert_operator_qa_passed_requires_all_artifact_qas(tmp_path):
 
     with pytest.raises(FileNotFoundError, match="seo_qa.json"):
         assert_operator_qa_passed(job_dir)
+
+
+def test_write_operator_review_summarizes_artifacts_and_qa(tmp_path):
+    job_dir = tmp_path / "operator-job"
+    qa_dir = job_dir / "operator/gemini"
+    qa_dir.mkdir(parents=True)
+    (job_dir / "script.json").write_text(json.dumps(VALID_SCRIPT), encoding="utf-8")
+    (job_dir / "scenes.json").write_text(
+        json.dumps({"scenes": [{"id": "scene-01"}, {"id": "scene-02"}], "total_duration_sec": 42}),
+        encoding="utf-8",
+    )
+    (job_dir / "seo.json").write_text(
+        json.dumps({"title": "Dormir mejor despues de los 45", "description": "Desc.", "tags": ["sueño"]}),
+        encoding="utf-8",
+    )
+    (job_dir / "video.mp4").write_bytes(b"video")
+    (job_dir / "thumbnail.jpg").write_bytes(b"image")
+    for artifact in ["script", "scenes", "seo"]:
+        (qa_dir / f"{artifact}_qa.json").write_text(
+            json.dumps({"artifact": artifact, "verdict": "PASS", "issues": [], "required_changes": [], "scores": {}}),
+            encoding="utf-8",
+        )
+
+    output_path = write_operator_review(job_dir)
+    html = output_path.read_text(encoding="utf-8")
+
+    assert output_path == job_dir / "operator_review.html"
+    assert "Operator Review" in html
+    assert "Dormir mejor despues de los 45" in html
+    assert "video.mp4" in html
+    assert html.count("PASS") >= 3
+    assert "2 scenes" in html

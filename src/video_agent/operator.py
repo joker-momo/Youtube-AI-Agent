@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from html import escape
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -66,6 +67,18 @@ def _json_block(value: Any) -> str:
 
 def _read_optional_json(path: Path) -> dict[str, Any] | None:
     return read_json(path) if path.exists() else None
+
+
+def _relative_href(path: Path, base_dir: Path) -> str:
+    if not path.exists():
+        return ""
+    return escape(path.relative_to(base_dir).as_posix(), quote=True)
+
+
+def _status_badge(status: str) -> str:
+    normalized = status.upper() if status else "MISSING"
+    class_name = "pass" if normalized == "PASS" else "warn"
+    return f'<span class="badge {class_name}">{escape(normalized)}</span>'
 
 
 def _chatgpt_script_prompt(channel_config: dict[str, Any], idea: dict[str, Any]) -> str:
@@ -264,3 +277,127 @@ def assert_operator_qa_passed(job_dir: Path, artifacts: list[str] | tuple[str, .
         verdict = str(qa.get("verdict", "")).upper()
         if verdict != "PASS":
             raise ValueError(f"{qa_path} must have verdict PASS before operator render. Got: {verdict or '<missing>'}")
+
+
+def write_operator_review(job_dir: Path, output_path: Path | None = None) -> Path:
+    output_path = output_path or job_dir / "operator_review.html"
+    script = _read_optional_json(job_dir / "script.json") or {}
+    scenes = _read_optional_json(job_dir / "scenes.json") or {}
+    seo = _read_optional_json(job_dir / "seo.json") or {}
+    visual_review = _read_optional_json(job_dir / "visual_review.json") or {}
+
+    title = str(seo.get("title") or script.get("hook") or job_dir.name)
+    scene_items = scenes.get("scenes") if isinstance(scenes.get("scenes"), list) else []
+    qa_rows = []
+    for artifact in OPERATOR_ARTIFACTS:
+        qa_path = job_dir / "operator" / "gemini" / f"{artifact}_qa.json"
+        qa = _read_optional_json(qa_path) or {}
+        issues = qa.get("issues") if isinstance(qa.get("issues"), list) else []
+        changes = qa.get("required_changes") if isinstance(qa.get("required_changes"), list) else []
+        qa_rows.append(
+            "<tr>"
+            f"<td>{escape(artifact)}</td>"
+            f"<td>{_status_badge(str(qa.get('verdict', 'MISSING')))}</td>"
+            f"<td>{len(issues)}</td>"
+            f"<td>{len(changes)}</td>"
+            f"<td>{escape(qa_path.relative_to(job_dir).as_posix()) if qa_path.exists() else 'missing'}</td>"
+            "</tr>"
+        )
+
+    artifact_rows = []
+    for filename in ["script.json", "scenes.json", "seo.json", "render_props.json", "visual_review.json", "report.md"]:
+        path = job_dir / filename
+        artifact_rows.append(
+            "<tr>"
+            f"<td>{escape(filename)}</td>"
+            f"<td>{_status_badge('PASS' if path.exists() else 'MISSING')}</td>"
+            f"<td>{f'<a href={_relative_href(path, job_dir)!r}>{escape(filename)}</a>' if path.exists() else ''}</td>"
+            "</tr>"
+        )
+
+    video_href = _relative_href(job_dir / "video.mp4", job_dir)
+    thumbnail_href = _relative_href(job_dir / "thumbnail.jpg", job_dir)
+    contact_sheet = visual_review.get("contact_sheet", "visual_contact_sheet.jpg")
+    contact_href = _relative_href(job_dir / str(contact_sheet), job_dir)
+    visual_status = str((visual_review.get("qa") or {}).get("status", "MISSING")) if visual_review else "MISSING"
+    provider_summary = visual_review.get("summary", {}).get("by_provider", {}) if visual_review else {}
+    provider_text = ", ".join(f"{count} {provider}" for provider, count in sorted(provider_summary.items())) or "n/a"
+
+    html = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Operator Review - {escape(title)}</title>
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; color: #171717; background: #f6f7f9; }}
+    main {{ max-width: 1120px; margin: 0 auto; padding: 28px; }}
+    section {{ margin-top: 18px; padding: 18px; background: #fff; border: 1px solid #dfe3ea; border-radius: 8px; }}
+    h1, h2 {{ margin: 0 0 10px; }}
+    h1 {{ font-size: 28px; }}
+    h2 {{ font-size: 18px; }}
+    .meta {{ color: #5f6673; margin: 0; }}
+    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }}
+    img, video {{ width: 100%; max-height: 420px; object-fit: contain; background: #111; border-radius: 6px; }}
+    table {{ width: 100%; border-collapse: collapse; }}
+    th, td {{ padding: 10px; border-bottom: 1px solid #e5e7eb; text-align: left; vertical-align: top; }}
+    .badge {{ display: inline-block; padding: 3px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; }}
+    .pass {{ color: #14532d; background: #dcfce7; }}
+    .warn {{ color: #7c2d12; background: #ffedd5; }}
+    .scene {{ padding: 10px 0; border-bottom: 1px solid #e5e7eb; }}
+    a {{ color: #0f5fb8; }}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Operator Review</h1>
+    <p class="meta">{escape(job_dir.name)} · {len(scene_items)} scenes · Visual QA {_status_badge(visual_status)}</p>
+
+    <section>
+      <h2>{escape(title)}</h2>
+      <p>{escape(str(seo.get("description", "")))}</p>
+      <p class="meta">Providers: {escape(provider_text)}</p>
+    </section>
+
+    <section class="grid">
+      <div>
+        <h2>Video</h2>
+        {f'<video src="{video_href}" controls></video>' if video_href else '<p class="meta">video.mp4 missing</p>'}
+      </div>
+      <div>
+        <h2>Thumbnail</h2>
+        {f'<img src="{thumbnail_href}" alt="thumbnail">' if thumbnail_href else '<p class="meta">thumbnail.jpg missing</p>'}
+      </div>
+      <div>
+        <h2>Contact Sheet</h2>
+        {f'<img src="{contact_href}" alt="visual contact sheet">' if contact_href else '<p class="meta">visual_contact_sheet.jpg missing</p>'}
+      </div>
+    </section>
+
+    <section>
+      <h2>Gemini QA</h2>
+      <table>
+        <thead><tr><th>Artifact</th><th>Verdict</th><th>Issues</th><th>Required Changes</th><th>File</th></tr></thead>
+        <tbody>{''.join(qa_rows)}</tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Artifacts</h2>
+      <table>
+        <thead><tr><th>File</th><th>Status</th><th>Open</th></tr></thead>
+        <tbody>{''.join(artifact_rows)}</tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Scenes</h2>
+      {''.join(f'<div class="scene"><strong>{escape(str(scene.get("id", "")))}</strong><p>{escape(str(scene.get("narration", "")))}</p><p class="meta">{escape(str(scene.get("visual_prompt", "")))}</p></div>' for scene in scene_items)}
+    </section>
+  </main>
+</body>
+</html>
+"""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(html, encoding="utf-8")
+    return output_path

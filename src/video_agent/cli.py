@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Sequence
 
 from video_agent.batch import format_audit_markdown, build_audit_row, write_batch_audit
-from video_agent.operator import promote_operator_artifact, promote_operator_qa, write_operator_prompts
+from video_agent.operator import promote_operator_artifact, promote_operator_qa, write_operator_prompts, write_operator_review
 from video_agent.pipeline import OperatorRenderOptions, PipelineOptions, render_operator_job, run_pipeline
 
 
@@ -57,6 +57,13 @@ def build_parser() -> argparse.ArgumentParser:
     operator_promote_qa_parser.add_argument("--job-dir", required=True, type=Path)
     operator_promote_qa_parser.add_argument("--artifact", choices=["script", "scenes", "seo"], required=True)
     operator_promote_qa_parser.add_argument("--raw-file", required=True, type=Path)
+
+    operator_review_parser = subparsers.add_parser(
+        "operator-review",
+        help="Write a static HTML review page for an operator job.",
+    )
+    operator_review_parser.add_argument("--job-dir", required=True, type=Path)
+    operator_review_parser.add_argument("--output", type=Path)
 
     batch_parser = subparsers.add_parser("batch", help="Run multiple ideas and write a visual QA audit.")
     batch_parser.add_argument("--channel", required=True, type=Path)
@@ -165,6 +172,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "operator-promote-qa":
         result = promote_operator_qa(args.job_dir, args.artifact, args.raw_file)
         print(f"Promoted {result.artifact} QA: {result.output_path}")
+        return 0
+    if args.command == "operator-review":
+        output_path = write_operator_review(args.job_dir, args.output)
+        print(f"operator_review.html: {output_path}")
         return 0
     if args.command == "audit":
         rows = [build_audit_row(job_dir) for job_dir in args.job]

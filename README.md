@@ -115,6 +115,15 @@ docker compose run --rm video-agent python -m video_agent.cli operator-render \
 
 Use `--no-render` to validate JSON, prepare assets, create `render_props.json`, and write the visual review without rendering the MP4.
 
+Write a local review page for a completed or in-progress operator job:
+
+```bash
+docker compose run --rm video-agent python -m video_agent.cli operator-review \
+  --job-dir jobs/<job_id>
+```
+
+This creates `jobs/<job_id>/operator_review.html` with artifact status, Gemini QA verdicts, video, thumbnail, contact sheet, and scene notes.
+
 ## Kokoro TTS
 
 The default channel keeps `tts.provider: "mock-local"` for fast tests and silent placeholder audio. To generate real local narration with Kokoro:

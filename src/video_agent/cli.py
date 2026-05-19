@@ -5,7 +5,13 @@ from pathlib import Path
 from typing import Sequence
 
 from video_agent.batch import format_audit_markdown, build_audit_row, write_batch_audit
-from video_agent.operator import promote_operator_artifact, promote_operator_qa, write_operator_prompts, write_operator_review
+from video_agent.operator import (
+    build_operator_status,
+    promote_operator_artifact,
+    promote_operator_qa,
+    write_operator_prompts,
+    write_operator_review,
+)
 from video_agent.pipeline import OperatorRenderOptions, PipelineOptions, render_operator_job, run_pipeline
 
 
@@ -64,6 +70,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     operator_review_parser.add_argument("--job-dir", required=True, type=Path)
     operator_review_parser.add_argument("--output", type=Path)
+
+    operator_status_parser = subparsers.add_parser(
+        "operator-status",
+        help="Print the current artifact and QA state for an operator job.",
+    )
+    operator_status_parser.add_argument("--job-dir", required=True, type=Path)
 
     batch_parser = subparsers.add_parser("batch", help="Run multiple ideas and write a visual QA audit.")
     batch_parser.add_argument("--channel", required=True, type=Path)
@@ -176,6 +188,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "operator-review":
         output_path = write_operator_review(args.job_dir, args.output)
         print(f"operator_review.html: {output_path}")
+        return 0
+    if args.command == "operator-status":
+        status = build_operator_status(args.job_dir)
+        print(f"Job: {status['job_dir']}")
+        print(f"Overall: {status['overall']}")
+        for artifact, artifact_status in status["artifacts"].items():
+            print(f"{artifact}: artifact={artifact_status['artifact']} qa={artifact_status['qa']}")
+        print(f"Next: {status['next_step']}")
         return 0
     if args.command == "audit":
         rows = [build_audit_row(job_dir) for job_dir in args.job]

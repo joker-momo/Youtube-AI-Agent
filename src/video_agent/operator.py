@@ -279,6 +279,48 @@ def assert_operator_qa_passed(job_dir: Path, artifacts: list[str] | tuple[str, .
             raise ValueError(f"{qa_path} must have verdict PASS before operator render. Got: {verdict or '<missing>'}")
 
 
+def build_operator_status(job_dir: Path) -> dict[str, Any]:
+    artifacts: dict[str, dict[str, str]] = {}
+    for artifact in OPERATOR_ARTIFACTS:
+        artifact_path = job_dir / f"{artifact}.json"
+        qa_path = job_dir / "operator" / "gemini" / f"{artifact}_qa.json"
+        qa_status = "missing"
+        if qa_path.exists():
+            qa = _read_optional_json(qa_path) or {}
+            qa_status = str(qa.get("verdict", "INVALID")).upper()
+        artifacts[artifact] = {
+            "artifact": "present" if artifact_path.exists() else "missing",
+            "qa": qa_status,
+        }
+
+    if artifacts["script"]["artifact"] == "missing":
+        next_step = "Generate and promote script.json, then run Gemini QA for script."
+    elif artifacts["script"]["qa"] != "PASS":
+        next_step = "Promote a PASS Gemini QA response for script."
+    elif artifacts["scenes"]["artifact"] == "missing":
+        next_step = "Generate and promote scenes.json, then run Gemini QA for scenes."
+    elif artifacts["scenes"]["qa"] != "PASS":
+        next_step = "Promote a PASS Gemini QA response for scenes."
+    elif artifacts["seo"]["artifact"] == "missing":
+        next_step = "Generate and promote seo.json, then run Gemini QA for seo."
+    elif artifacts["seo"]["qa"] != "PASS":
+        next_step = "Promote a PASS Gemini QA response for seo."
+    elif not (job_dir / "render_props.json").exists():
+        next_step = "Run operator-render to prepare assets and render props."
+    elif not (job_dir / "operator_review.html").exists():
+        next_step = "Run operator-review or operator-render to refresh operator_review.html."
+    else:
+        next_step = "Ready for human review or final render."
+
+    overall = "READY" if next_step == "Ready for human review or final render." else "IN_PROGRESS"
+    return {
+        "job_dir": str(job_dir),
+        "overall": overall,
+        "artifacts": artifacts,
+        "next_step": next_step,
+    }
+
+
 def write_operator_review(job_dir: Path, output_path: Path | None = None) -> Path:
     output_path = output_path or job_dir / "operator_review.html"
     script = _read_optional_json(job_dir / "script.json") or {}

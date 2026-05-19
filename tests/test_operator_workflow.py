@@ -5,6 +5,7 @@ import pytest
 
 from video_agent.operator import (
     assert_operator_qa_passed,
+    build_operator_status,
     extract_json_object,
     write_operator_review,
     promote_operator_artifact,
@@ -137,3 +138,21 @@ def test_write_operator_review_summarizes_artifacts_and_qa(tmp_path):
     assert "video.mp4" in html
     assert html.count("PASS") >= 3
     assert "2 scenes" in html
+
+
+def test_build_operator_status_reports_next_missing_step(tmp_path):
+    job_dir = tmp_path / "operator-job"
+    (job_dir / "operator" / "gemini").mkdir(parents=True)
+    (job_dir / "script.json").write_text(json.dumps(VALID_SCRIPT), encoding="utf-8")
+    (job_dir / "operator" / "gemini" / "script_qa.json").write_text(
+        json.dumps({"artifact": "script", "verdict": "PASS", "issues": [], "required_changes": [], "scores": {}}),
+        encoding="utf-8",
+    )
+
+    status = build_operator_status(job_dir)
+
+    assert status["overall"] == "IN_PROGRESS"
+    assert status["artifacts"]["script"]["artifact"] == "present"
+    assert status["artifacts"]["script"]["qa"] == "PASS"
+    assert status["artifacts"]["scenes"]["artifact"] == "missing"
+    assert status["next_step"] == "Generate and promote scenes.json, then run Gemini QA for scenes."

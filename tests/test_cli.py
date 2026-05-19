@@ -189,6 +189,30 @@ def test_cli_operator_review_writes_html(tmp_path, monkeypatch, capsys):
     assert "operator_review.html:" in captured.out
 
 
+def test_cli_operator_status_prints_next_step(tmp_path, monkeypatch, capsys):
+    def fake_build_operator_status(job_dir):
+        return {
+            "job_dir": str(job_dir),
+            "overall": "IN_PROGRESS",
+            "next_step": "Generate scenes.",
+            "artifacts": {
+                "script": {"artifact": "present", "qa": "PASS"},
+                "scenes": {"artifact": "missing", "qa": "missing"},
+                "seo": {"artifact": "missing", "qa": "missing"},
+            },
+        }
+
+    monkeypatch.setattr("video_agent.cli.build_operator_status", fake_build_operator_status)
+
+    exit_code = main(["operator-status", "--job-dir", str(tmp_path / "operator-job")])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "Overall: IN_PROGRESS" in captured.out
+    assert "script: artifact=present qa=PASS" in captured.out
+    assert "Next: Generate scenes." in captured.out
+
+
 def test_cli_batch_without_render_writes_audit(tmp_path, capsys):
     audit_path = tmp_path / "batch_audit.md"
     exit_code = main(

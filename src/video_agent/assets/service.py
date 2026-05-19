@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+import re
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.request import Request, urlopen
@@ -41,8 +42,58 @@ def _stock_filters(visual_config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+STOPWORDS = {
+    "45",
+    "adult",
+    "adults",
+    "after",
+    "antes",
+    "con",
+    "del",
+    "despues",
+    "dia",
+    "for",
+    "from",
+    "las",
+    "los",
+    "para",
+    "por",
+    "the",
+    "una",
+    "with",
+}
+
+NEGATIVE_CONTEXT_TERMS = {"massage", "masaje", "spa", "therapy", "terapia"}
+NEGATIVE_ALLOW_TERMS = {"massage", "masaje", "spa", "therapy", "terapia", "therapist", "fisioterapia"}
+TERM_SYNONYMS = {
+    "agua": {"water"},
+    "avena": {"oat", "oats", "oatmeal"},
+    "botella": {"bottle"},
+    "caminar": {"walk", "walking"},
+    "cama": {"bed", "bedroom"},
+    "cena": {"dinner"},
+    "desayuno": {"breakfast"},
+    "dormir": {"sleep", "sleeping"},
+    "fruta": {"fruit"},
+    "luz": {"light"},
+    "parque": {"park"},
+    "sombra": {"shade"},
+    "zapatos": {"shoe", "shoes"},
+}
+
+
+def _tokens(text: str) -> set[str]:
+    return {token for token in re.findall(r"[a-zA-ZáéíóúñÁÉÍÓÚÑ0-9]+", text.lower()) if len(token) > 2}
+
+
 def _query_terms(query: str) -> set[str]:
-    return {term.lower() for term in query.replace(",", " ").split() if len(term) > 2}
+    return {term for term in _tokens(query) if term not in STOPWORDS}
+
+
+def _term_matches_tags(term: str, tag_terms: set[str]) -> bool:
+    if term in tag_terms:
+        return True
+    return bool(TERM_SYNONYMS.get(term, set()) & tag_terms)
 
 
 def _candidate_score(query: str, candidate: dict[str, Any]) -> dict[str, Any]:
@@ -64,16 +115,34 @@ def _candidate_score(query: str, candidate: dict[str, Any]) -> dict[str, Any]:
             reasons.append("landscape_16_9")
 
     tags_text = " ".join(str(tag).lower() for tag in candidate.get("tags") or [])
-    overlap = sorted(term for term in _query_terms(query) if term in tags_text)
+    tag_terms = _tokens(tags_text)
+    raw_overlap = sorted(term for term in _tokens(query) if term in tag_terms)
+    overlap = sorted(term for term in _query_terms(query) if _term_matches_tags(term, tag_terms))
     if overlap:
         score += min(30, len(overlap) * 8)
         reasons.append("tag_match")
+        if len(overlap) >= 2:
+            score += min(20, len(overlap) * 5)
+            reasons.append("strong_scene_term_match")
+    elif raw_overlap:
+        reasons.append("generic_match_ignored")
+
+    query_terms = _query_terms(query)
+    penalized_terms = sorted(NEGATIVE_CONTEXT_TERMS & tag_terms)
+    if penalized_terms and not query_terms.intersection(NEGATIVE_ALLOW_TERMS):
+        score -= 25
+        reasons.append("negative_keyword_penalty")
 
     if candidate.get("quality") in {"large2x", "fullhd", "original"}:
         score += 10
         reasons.append("preferred_quality")
 
-    return {"score": score, "reasons": reasons or ["provider_order"], "matched_terms": overlap}
+    return {
+        "score": score,
+        "reasons": reasons or ["provider_order"],
+        "matched_terms": overlap,
+        "penalized_terms": penalized_terms,
+    }
 
 
 class StockAssetService:

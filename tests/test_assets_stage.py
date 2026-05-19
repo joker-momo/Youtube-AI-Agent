@@ -2,6 +2,7 @@ from pathlib import Path
 
 from PIL import Image
 
+from video_agent.assets.service import _candidate_score
 from video_agent.stages.assets import prepare_assets
 
 
@@ -79,6 +80,52 @@ def test_prepare_assets_auto_prefers_local_directory_before_stock_api(tmp_path):
 
     assert manifest["scenes"][0]["source"] == "local_directory"
     assert manifest["scenes"][0]["background"].endswith("scene-01.png")
+
+
+def test_candidate_score_ignores_stopword_matches():
+    score = _candidate_score(
+        "caminar con los adultos for wellness",
+        {
+            "width": 640,
+            "height": 360,
+            "tags": ["with los con for"],
+            "quality": "large",
+        },
+    )
+
+    assert score["matched_terms"] == []
+    assert "generic_match_ignored" in score["reasons"]
+
+
+def test_candidate_score_rewards_scene_term_matches():
+    score = _candidate_score(
+        "caminar parque sombra zapatos estables",
+        {
+            "width": 1920,
+            "height": 1080,
+            "tags": ["older adults walking in park shade with comfortable shoes"],
+            "quality": "fullhd",
+        },
+    )
+
+    assert score["score"] >= 75
+    assert "strong_scene_term_match" in score["reasons"]
+    assert {"caminar", "parque", "sombra", "zapatos"} & set(score["matched_terms"])
+
+
+def test_candidate_score_penalizes_unrelated_spa_terms():
+    score = _candidate_score(
+        "caminar parque sombra zapatos estables",
+        {
+            "width": 3840,
+            "height": 2160,
+            "tags": ["spa massage therapy relax"],
+            "quality": "fullhd",
+        },
+    )
+
+    assert "negative_keyword_penalty" in score["reasons"]
+    assert "massage" in score["penalized_terms"]
 
 
 class FakeStockClient:

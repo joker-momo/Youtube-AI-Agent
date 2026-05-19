@@ -1,6 +1,6 @@
 # Youtube AI Agent Project Status
 
-Last updated: 2026-05-20 (V3 Phase 1 Step 3 landed)
+Last updated: 2026-05-20 (V3 Phase 1 Steps 3b + 4 landed)
 
 This file is the living project tracker. Update it whenever a meaningful system capability is added, changed, verified, or deferred so a new reader can quickly understand what the system does, what is being built now, and what remains.
 
@@ -115,7 +115,15 @@ Decisions already chosen:
 - `GET /jobs/{job_id}/events` returns all entries from `events.jsonl` as a list.
 - Errors map to HTTP: missing job -> `404`, duplicate create or stage misuse -> `409`.
 - `JOBS_DIR` env var overrides the jobs root; tests override the FastAPI dependency to use `tmp_path`.
-- WebSocket streaming for `events.jsonl` is not implemented yet; planned in a follow-up sub-step.
+- `WS /jobs/{job_id}/events` replays existing `events.jsonl` lines and tails new entries; closes with code `4404` when the job is unknown. Polling interval is configurable via `EVENTS_POLL_SECONDS` (default `0.2s`).
+
+### V3 Phase 1 Step 4 Browser-Worker CDP Diagnostic
+
+- `requirements.txt` adds `playwright>=1.40` (driver-only; no bundled browser needed for CDP attach).
+- `GET /chrome` on the browser-worker calls `playwright.async_api.chromium.connect_over_cdp(CHROME_CDP_URL)` and returns `{ok, cdp_url, contexts, pages}` when the host Chrome is reachable.
+- Unreachable CDP endpoint returns HTTP `503` with `{cdp_url, error}` so the caller can prompt the user to run `scripts/launch-chrome-cdp.sh`.
+- `CHROME_CDP_URL` defaults to `http://host.docker.internal:9222`; `extra_hosts` in `docker-compose.yml` already wires the gateway entry.
+- Test `tests/test_browser_worker_chrome.py` verifies the 503 path against an unreachable port.
 
 ## Target V3 Architecture
 
@@ -181,7 +189,7 @@ Latest full verification:
 
 ```text
 docker compose run --rm video-agent pytest -q
-75 passed in 14.49s
+78 passed in 17.60s
 ```
 
 ## Fresh Operator Run
@@ -257,7 +265,8 @@ The command will either:
 
 ## Not Yet Done
 
-- V3 FastAPI app exposes job CRUD + advance + events list but no stage modules are connected yet and there is no WebSocket stream.
+- V3 FastAPI app exposes job CRUD + advance + events HTTP/WS but no real stage modules are connected yet (stages still advance through stubs).
+- Browser-worker has CDP diagnostic but no Playwright drivers for ChatGPT/Gemini/vidIQ/image generation yet.
 - `browser-worker` exists only as a health-route skeleton; no Playwright CDP attach, no ChatGPT/Gemini/vidIQ/image-generation drivers yet.
 - ChatGPT/Gemini/vidIQ browser automation is not yet packaged into a service.
 - WebSocket progress UI and `events.jsonl` replay are not implemented yet.
@@ -268,9 +277,10 @@ The command will either:
 
 ## Next Recommended Work
 
-V3 Phase 1 Steps 1-3 complete (health skeletons + orchestrator + FastAPI job routes + 75/75 tests green). Next:
+V3 Phase 1 Steps 1-4 complete (health + orchestrator + job HTTP/WS + browser-worker CDP diagnostic; 78/78 tests green). Next:
 
-1. V3 Phase 1 Step 3b — add WebSocket stream at `WS /jobs/{job_id}/events` that replays existing `events.jsonl` and pushes new entries.
-2. V3 Phase 1 Step 4 — browser-worker Playwright CDP attach against host Chrome on `9222`; add `GET /chrome` diagnostic that confirms the connection.
-3. V3 Phase 1 Step 5 — port the first real stage (script prompt creation) into the orchestrator while keeping v2 `operator-*` working.
-4. Run `docker compose run --rm video-agent pytest -q` after each step.
+1. V3 Phase 1 Step 5 — port the first real stage into the orchestrator: `script` stage writes `operator/chatgpt/script_prompt.txt` from `idea.json` + channel config, reusing v2 `operator-prompts` logic.
+2. Add `POST /jobs/{id}/idea` to upload `idea.json` into the job folder so Step 5 has its input.
+3. Verify the manual flow against a real host Chrome via `scripts/launch-chrome-cdp.sh` + `GET /chrome` (smoke check, not automated).
+4. Keep v2 `operator-*` CLI working throughout the transition.
+5. Run `docker compose run --rm video-agent pytest -q` after each step.

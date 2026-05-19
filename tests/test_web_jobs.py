@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -82,3 +83,28 @@ def test_advance_progresses_and_emits_events(client: TestClient):
 def test_advance_unknown_job_returns_404(client: TestClient):
     response = client.post("/jobs/missing/advance")
     assert response.status_code == 404
+
+
+def test_ws_events_replays_existing_entries(client: TestClient, monkeypatch):
+    monkeypatch.setenv("EVENTS_POLL_SECONDS", "0.05")
+    _create(client, "job-ws")
+    client.post("/jobs/job-ws/advance")
+    client.post("/jobs/job-ws/advance")
+
+    received: list[dict] = []
+    with client.websocket_connect("/jobs/job-ws/events") as ws:
+        for _ in range(3):
+            received.append(json.loads(ws.receive_text()))
+
+    events = [e["event"] for e in received]
+    assert events[0] == "JOB_CREATED"
+    assert "STAGE_STARTED" in events
+    assert "STAGE_COMPLETED" in events
+
+
+def test_ws_events_unknown_job_closes(client: TestClient):
+    from starlette.websockets import WebSocketDisconnect
+
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect("/jobs/missing/events") as ws:
+            ws.receive_text()

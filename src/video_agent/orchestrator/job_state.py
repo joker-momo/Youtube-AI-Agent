@@ -10,6 +10,7 @@ DEFAULT_STAGES: tuple[str, ...] = (
     "script",
     "script_promote",
     "scenes",
+    "scenes_promote",
     "seo",
     "render",
     "review",

@@ -3,7 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from video_agent.contracts import EVENT_LOG
-from video_agent.operator import _chatgpt_script_prompt, promote_operator_artifact
+from video_agent.operator import (
+    _chatgpt_scenes_prompt,
+    _chatgpt_script_prompt,
+    promote_operator_artifact,
+)
 from video_agent.orchestrator.job_state import load_job, save_job
 from video_agent.orchestrator.orchestrator import _now
 from video_agent.utils.json_io import read_json, read_yaml
@@ -12,6 +16,8 @@ from video_agent.utils.logging import EventLogger
 IDEA_FILE = "idea.json"
 SCRIPT_PROMPT_PATH = Path("operator/chatgpt/script_prompt.md")
 SCRIPT_RAW_PATH = Path("operator/chatgpt/script.raw.txt")
+SCENES_PROMPT_PATH = Path("operator/chatgpt/scenes_prompt.md")
+SCENES_RAW_PATH = Path("operator/chatgpt/scenes.raw.txt")
 
 
 class StageInputMissingError(Exception):
@@ -104,4 +110,58 @@ def promote_script_stage(job_dir: Path, channel_path: Path, raw_response: str) -
         raise StageInputMissingError(str(exc)) from exc
 
     _complete_stage(job_dir, "script_promote", result.output_path)
+    return result.output_path
+
+
+def run_scenes_stage(job_dir: Path, channel_path: Path) -> Path:
+    script_path = job_dir / "script.json"
+    if not script_path.exists():
+        raise StageInputMissingError(f"Missing {script_path}")
+    if not channel_path.exists():
+        raise StageInputMissingError(f"Missing channel config {channel_path}")
+
+    state = load_job(job_dir)
+    if state.current_stage != "scenes":
+        raise StageInputMissingError(
+            f"Cannot run scenes stage from current_stage={state.current_stage!r}"
+        )
+
+    script = read_json(script_path)
+    channel_config = read_yaml(channel_path)
+    prompt_text = _chatgpt_scenes_prompt(channel_config, script)
+
+    output_path = job_dir / SCENES_PROMPT_PATH
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(prompt_text, encoding="utf-8")
+
+    _complete_stage(job_dir, "scenes", output_path)
+    return output_path
+
+
+def promote_scenes_stage(job_dir: Path, channel_path: Path, raw_response: str) -> Path:
+    state = load_job(job_dir)
+    if state.current_stage != "scenes_promote":
+        raise StageInputMissingError(
+            f"Cannot run scenes_promote stage from current_stage={state.current_stage!r}"
+        )
+    if not raw_response.strip():
+        raise StageInputMissingError("Missing raw ChatGPT scenes response.")
+    if not channel_path.exists():
+        raise StageInputMissingError(f"Missing channel config {channel_path}")
+
+    raw_path = job_dir / SCENES_RAW_PATH
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    raw_path.write_text(raw_response, encoding="utf-8")
+
+    try:
+        result = promote_operator_artifact(
+            job_dir,
+            "scenes",
+            raw_path,
+            channel_path=channel_path,
+        )
+    except ValueError as exc:
+        raise StageInputMissingError(str(exc)) from exc
+
+    _complete_stage(job_dir, "scenes_promote", result.output_path)
     return result.output_path

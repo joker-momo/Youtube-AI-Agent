@@ -31,6 +31,7 @@ class PipelineOptions:
     idea_path: Path
     jobs_dir: Path = Path("jobs")
     render: bool = True
+    tts_override: dict | None = None
 
 
 @dataclass
@@ -211,6 +212,8 @@ def _write_report(
 def run_pipeline(options: PipelineOptions) -> PipelineResult:
     root = repo_root()
     channel_config = read_yaml(options.channel_path)
+    if options.tts_override:
+        channel_config["tts"] = (channel_config.get("tts") or {}) | options.tts_override
     idea = read_json(options.idea_path)
     validate_json(channel_config, root / "schemas/channel-config.schema.json")
     validate_json(idea, root / "schemas/manual-idea.schema.json")
@@ -235,6 +238,7 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
         style,
         scene_doc,
         visual_config=channel_config.get("visuals"),
+        tts_config=channel_config.get("tts"),
         channel_id=channel_config["channel"]["id"],
     )
     seo = create_thumbnail_and_seo(provider, channel_config, style, idea, job_dir)

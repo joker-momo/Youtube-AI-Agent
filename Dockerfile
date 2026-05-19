@@ -10,6 +10,7 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
+    espeak-ng \
     ffmpeg \
     fonts-dejavu-core \
     git \
@@ -35,9 +36,9 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt pyproject.toml README.md ./
+RUN pip install --no-cache-dir -r requirements.txt
 COPY src ./src
-RUN pip install --no-cache-dir -r requirements.txt \
-  && pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir -e .
 
 COPY remotion/package.json remotion/package.json
 RUN npm --prefix remotion install \

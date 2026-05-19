@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 from video_agent.cli import main
 
@@ -22,6 +23,51 @@ def test_cli_run_without_render(tmp_path, capsys):
     assert exit_code == 0
     assert "Job completed:" in captured.out
     assert "video.mp4: skipped" in captured.out
+
+
+def test_cli_run_accepts_tts_overrides(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_run_pipeline(options):
+        calls.append(options)
+        return SimpleNamespace(
+            job_dir=tmp_path / "job",
+            thumbnail_path=tmp_path / "job/thumbnail.jpg",
+            seo_path=tmp_path / "job/seo.json",
+            report_path=tmp_path / "job/report.md",
+            video_path=None,
+        )
+
+    monkeypatch.setattr("video_agent.cli.run_pipeline", fake_run_pipeline)
+
+    exit_code = main(
+        [
+            "run",
+            "--channel",
+            str(ROOT / "configs/vida-plena-45/channel.yaml"),
+            "--idea",
+            str(ROOT / "inputs/manual_idea.json"),
+            "--jobs-dir",
+            str(tmp_path),
+            "--no-render",
+            "--tts-provider",
+            "kokoro",
+            "--tts-voice-id",
+            "ef_dora",
+            "--tts-lang-code",
+            "e",
+            "--tts-speed",
+            "0.92",
+        ]
+    )
+
+    assert exit_code == 0
+    assert calls[0].tts_override == {
+        "provider": "kokoro",
+        "voice_id": "ef_dora",
+        "lang_code": "e",
+        "speed": 0.92,
+    }
 
 
 def test_cli_batch_without_render_writes_audit(tmp_path, capsys):

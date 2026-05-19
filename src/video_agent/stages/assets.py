@@ -10,6 +10,7 @@ from PIL import Image, ImageDraw
 
 from video_agent.assets.service import StockAssetService
 from video_agent.contracts import ARTIFACT_ASSETS, repo_root
+from video_agent.tts import build_tts_client, synthesize_scene_track
 from video_agent.utils.json_io import write_json
 
 SUPPORTED_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp")
@@ -64,9 +65,11 @@ def prepare_assets(
     style_dna: dict[str, Any],
     scene_doc: dict[str, Any],
     visual_config: dict[str, Any] | None = None,
+    tts_config: dict[str, Any] | None = None,
     channel_id: str = "unknown-channel",
     stock_client: Any | None = None,
     download_client: Any | None = None,
+    tts_client: Any | None = None,
 ) -> dict[str, Any]:
     assets_dir = job_dir / "assets"
     assets_dir.mkdir(parents=True, exist_ok=True)
@@ -125,13 +128,20 @@ def prepare_assets(
         }
         scene_asset.update(extra_manifest)
         scene_assets.append(scene_asset)
+    tts_config = tts_config or {"provider": "mock-local"}
+    tts_provider = tts_config.get("provider", "mock-local")
     narration_path = assets_dir / "narration.wav"
-    _write_silent_wav(narration_path, int(scene_doc["total_duration_sec"]))
+    audio_metadata = {"provider": "mock-local", "source": "silent_placeholder", "sample_rate": 44100}
+    if tts_provider == "mock-local":
+        _write_silent_wav(narration_path, int(scene_doc["total_duration_sec"]))
+    else:
+        client = tts_client or build_tts_client(tts_config)
+        audio_metadata = synthesize_scene_track(scene_doc, narration_path, tts_config, client) | {"source": "tts"}
     public_narration_path = public_assets_dir / "narration.wav"
     shutil.copy2(narration_path, public_narration_path)
     public_narration_ref = f"jobs/{job_dir.name}/assets/narration.wav"
     manifest = {
-        "audio": {"narration": public_narration_ref, "music": None},
+        "audio": {"narration": public_narration_ref, "music": None, **audio_metadata},
         "scenes": scene_assets,
         "thumbnail_source": scene_assets[0]["background"],
     }

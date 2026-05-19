@@ -16,6 +16,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--idea", required=True, type=Path)
     run_parser.add_argument("--jobs-dir", default=Path("jobs"), type=Path)
     run_parser.add_argument("--no-render", action="store_true", help="Generate artifacts but skip Remotion render.")
+    _add_tts_override_args(run_parser)
 
     batch_parser = subparsers.add_parser("batch", help="Run multiple ideas and write a visual QA audit.")
     batch_parser.add_argument("--channel", required=True, type=Path)
@@ -23,11 +24,32 @@ def build_parser() -> argparse.ArgumentParser:
     batch_parser.add_argument("--jobs-dir", default=Path("jobs"), type=Path)
     batch_parser.add_argument("--audit-path", type=Path)
     batch_parser.add_argument("--no-render", action="store_true", help="Generate artifacts but skip Remotion render.")
+    _add_tts_override_args(batch_parser)
 
     audit_parser = subparsers.add_parser("audit", help="Write a visual QA audit for existing job directories.")
     audit_parser.add_argument("--job", action="append", required=True, type=Path)
     audit_parser.add_argument("--audit-path", type=Path)
     return parser
+
+
+def _add_tts_override_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--tts-provider", choices=["mock-local", "kokoro"])
+    parser.add_argument("--tts-voice-id")
+    parser.add_argument("--tts-lang-code")
+    parser.add_argument("--tts-speed", type=float)
+
+
+def _tts_override_from_args(args) -> dict | None:
+    override = {}
+    if args.tts_provider:
+        override["provider"] = args.tts_provider
+    if args.tts_voice_id:
+        override["voice_id"] = args.tts_voice_id
+    if args.tts_lang_code:
+        override["lang_code"] = args.tts_lang_code
+    if args.tts_speed is not None:
+        override["speed"] = args.tts_speed
+    return override or None
 
 
 def _print_run_result(result) -> None:
@@ -48,6 +70,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 idea_path=args.idea,
                 jobs_dir=args.jobs_dir,
                 render=not args.no_render,
+                tts_override=_tts_override_from_args(args),
             )
         )
         _print_run_result(result)
@@ -61,6 +84,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     idea_path=idea_path,
                     jobs_dir=args.jobs_dir,
                     render=not args.no_render,
+                    tts_override=_tts_override_from_args(args),
                 )
             )
             results.append(result)

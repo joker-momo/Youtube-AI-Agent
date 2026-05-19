@@ -17,6 +17,11 @@ from video_agent.orchestrator import (
     load_job,
 )
 from video_agent.orchestrator.orchestrator import StageError
+from video_agent.orchestrator.stages import (
+    IDEA_FILE,
+    StageInputMissingError,
+    run_script_stage,
+)
 
 app = FastAPI(title="video-agent-web", version="0.1.0")
 
@@ -97,6 +102,49 @@ def get_events(
         if line.strip()
     ]
     return {"job_id": job_id, "events": events}
+
+
+def get_channel_path() -> Path:
+    return Path(
+        os.environ.get(
+            "CHANNEL_CONFIG",
+            "/app/configs/vida-plena-45/channel.yaml",
+        )
+    )
+
+
+@app.post("/jobs/{job_id}/idea", status_code=201)
+def post_idea(
+    job_id: str,
+    idea: dict,
+    jobs_root: Path = Depends(get_jobs_root),
+) -> dict:
+    job_dir = jobs_root / job_id
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    idea_path = job_dir / IDEA_FILE
+    idea_path.write_text(
+        json.dumps(idea, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return {"job_id": job_id, "idea_path": str(idea_path)}
+
+
+@app.post("/jobs/{job_id}/stages/script/run")
+def post_run_script(
+    job_id: str,
+    jobs_root: Path = Depends(get_jobs_root),
+    channel_path: Path = Depends(get_channel_path),
+) -> dict:
+    job_dir = jobs_root / job_id
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    try:
+        output = run_script_stage(job_dir, channel_path)
+    except StageInputMissingError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    state = load_job(job_dir)
+    return {"output": str(output.relative_to(job_dir)), "state": state.to_dict()}
 
 
 EVENTS_POLL_SECONDS = float(os.environ.get("EVENTS_POLL_SECONDS", "0.2"))

@@ -1,6 +1,6 @@
 # Youtube AI Agent Project Status
 
-Last updated: 2026-05-20 (V3 Phase 1 Steps 3b + 4 landed)
+Last updated: 2026-05-20 (V3 Phase 1 Step 5 landed: first real stage ported)
 
 This file is the living project tracker. Update it whenever a meaningful system capability is added, changed, verified, or deferred so a new reader can quickly understand what the system does, what is being built now, and what remains.
 
@@ -125,6 +125,17 @@ Decisions already chosen:
 - `CHROME_CDP_URL` defaults to `http://host.docker.internal:9222`; `extra_hosts` in `docker-compose.yml` already wires the gateway entry.
 - Test `tests/test_browser_worker_chrome.py` verifies the 503 path against an unreachable port.
 
+### V3 Phase 1 Step 5 First Real Stage (Script Prompt)
+
+- `src/video_agent/orchestrator/stages.py` provides `run_script_stage(job_dir, channel_path)` which reads `job_dir/idea.json` + channel YAML, renders the prompt through the existing v2 helper `operator._chatgpt_script_prompt`, and writes `operator/chatgpt/script_prompt.md`.
+- Stage runner marks the `script` stage `completed`, advances `current_stage` to the next pending stage (`scenes`), and appends a `STAGE_COMPLETED` event (plus `JOB_COMPLETED` when all stages are done) to `events.jsonl`.
+- FastAPI now exposes:
+  - `POST /jobs/{job_id}/idea` — write `idea.json` into the job folder.
+  - `POST /jobs/{job_id}/stages/script/run` — execute the script stage; returns the relative output path and updated state.
+- `CHANNEL_CONFIG` env var configures the channel YAML path inside the container (default `/app/configs/vida-plena-45/channel.yaml`); tests override the FastAPI dependency.
+- v2 `operator-prompts` CLI remains unchanged and shares the prompt helper.
+- Tests: `tests/test_script_stage.py` covers the runner happy path, missing-idea guard, HTTP idea upload, HTTP run, missing-idea HTTP 409, and unknown-job 404.
+
 ## Target V3 Architecture
 
 ```text
@@ -189,7 +200,7 @@ Latest full verification:
 
 ```text
 docker compose run --rm video-agent pytest -q
-78 passed in 17.60s
+83 passed in 12.76s
 ```
 
 ## Fresh Operator Run
@@ -265,7 +276,7 @@ The command will either:
 
 ## Not Yet Done
 
-- V3 FastAPI app exposes job CRUD + advance + events HTTP/WS but no real stage modules are connected yet (stages still advance through stubs).
+- V3 FastAPI app runs the `script` stage end-to-end; `scenes`, `seo`, `render`, `review` stages still advance through stubs.
 - Browser-worker has CDP diagnostic but no Playwright drivers for ChatGPT/Gemini/vidIQ/image generation yet.
 - `browser-worker` exists only as a health-route skeleton; no Playwright CDP attach, no ChatGPT/Gemini/vidIQ/image-generation drivers yet.
 - ChatGPT/Gemini/vidIQ browser automation is not yet packaged into a service.
@@ -277,10 +288,12 @@ The command will either:
 
 ## Next Recommended Work
 
-V3 Phase 1 Steps 1-4 complete (health + orchestrator + job HTTP/WS + browser-worker CDP diagnostic; 78/78 tests green). Next:
+V3 Phase 1 Steps 1-5 complete (health + orchestrator + job HTTP/WS + CDP diagnostic + first real stage; 83/83 tests green). Next:
 
-1. V3 Phase 1 Step 5 — port the first real stage into the orchestrator: `script` stage writes `operator/chatgpt/script_prompt.txt` from `idea.json` + channel config, reusing v2 `operator-prompts` logic.
-2. Add `POST /jobs/{id}/idea` to upload `idea.json` into the job folder so Step 5 has its input.
-3. Verify the manual flow against a real host Chrome via `scripts/launch-chrome-cdp.sh` + `GET /chrome` (smoke check, not automated).
-4. Keep v2 `operator-*` CLI working throughout the transition.
-5. Run `docker compose run --rm video-agent pytest -q` after each step.
+1. V3 Phase 1 Step 6 — add the `script_promote` stage: accept a raw ChatGPT JSON response, run the v2 promotion validator, write `script.json`, append `STAGE_COMPLETED` for `script_promote`. May require splitting the `script` stage into `script_prompt` + `script_promote` to mirror the v2 operator state machine.
+2. V3 Phase 1 Step 7 — port `scenes` stage (prompt + promote) reusing v2 helpers.
+3. V3 Phase 1 Step 8 — port `seo` stage similarly.
+4. V3 Phase 1 Step 9 — wire `render` and `review` into the orchestrator; reuse existing render pipeline.
+5. Browser-worker driver work (ChatGPT/Gemini/vidIQ Playwright flows) tracked separately under Step 10.
+6. Smoke-test the host Chrome path with `scripts/launch-chrome-cdp.sh` + `GET /chrome` before depending on the browser-worker.
+7. Run `docker compose run --rm video-agent pytest -q` after each step.

@@ -12,6 +12,7 @@ from video_agent.contracts import (
     EVENT_LOG,
     repo_root,
 )
+from video_agent.operator import assert_operator_qa_passed
 from video_agent.providers.mock import MockProvider
 from video_agent.stages.assets import prepare_assets
 from video_agent.stages.render import render_with_remotion
@@ -49,6 +50,7 @@ class OperatorRenderOptions:
     channel_path: Path
     job_dir: Path
     render: bool = True
+    require_operator_qa: bool = True
     tts_override: dict | None = None
 
 
@@ -315,6 +317,8 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
     validate_json(script, root / "schemas/script.schema.json")
     validate_json(scene_doc, root / "schemas/scenes.schema.json")
     validate_json(seo, root / "schemas/seo.schema.json")
+    if options.require_operator_qa:
+        assert_operator_qa_passed(job_dir)
 
     logger.log("OPERATOR_RENDER_STARTED", {"job_id": job_id, "channel_id": channel_config["channel"]["id"]})
     assets = prepare_assets(

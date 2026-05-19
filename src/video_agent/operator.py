@@ -14,6 +14,7 @@ ARTIFACT_SCHEMAS = {
     "scenes": "schemas/scenes.schema.json",
     "seo": "schemas/seo.schema.json",
 }
+OPERATOR_ARTIFACTS = tuple(ARTIFACT_SCHEMAS.keys())
 
 
 @dataclass
@@ -212,3 +213,54 @@ def promote_operator_artifact(job_dir: Path, artifact: str, raw_path: Path) -> P
     output_path = job_dir / f"{artifact}.json"
     write_json(output_path, parsed)
     return PromoteResult(artifact=artifact, raw_path=raw_path, output_path=output_path)
+
+
+def _normalize_operator_qa(artifact: str, parsed: dict[str, Any]) -> dict[str, Any]:
+    verdict = str(parsed.get("verdict", "")).upper()
+    if verdict != "PASS":
+        raise ValueError(f"QA verdict must be PASS before promotion. Got: {verdict or '<missing>'}")
+
+    issues = parsed.get("issues") or []
+    required_changes = parsed.get("required_changes")
+    if required_changes is None:
+        required_changes = parsed.get("suggested_fixes") or []
+    scores = parsed.get("scores") or {}
+
+    if not isinstance(issues, list):
+        raise ValueError("QA issues must be a list.")
+    if not isinstance(required_changes, list):
+        raise ValueError("QA required_changes must be a list.")
+    if not isinstance(scores, dict):
+        raise ValueError("QA scores must be an object.")
+
+    return {
+        "artifact": artifact,
+        "verdict": verdict,
+        "issues": issues,
+        "required_changes": required_changes,
+        "scores": scores,
+    }
+
+
+def promote_operator_qa(job_dir: Path, artifact: str, raw_path: Path) -> PromoteResult:
+    if artifact not in ARTIFACT_SCHEMAS:
+        raise ValueError(f"Unsupported operator artifact QA: {artifact}")
+
+    parsed = extract_json_object(raw_path.read_text(encoding="utf-8"))
+    qa = _normalize_operator_qa(artifact, parsed)
+    output_path = job_dir / "operator" / "gemini" / f"{artifact}_qa.json"
+    write_json(output_path, qa)
+    return PromoteResult(artifact=artifact, raw_path=raw_path, output_path=output_path)
+
+
+def assert_operator_qa_passed(job_dir: Path, artifacts: list[str] | tuple[str, ...] = OPERATOR_ARTIFACTS) -> None:
+    for artifact in artifacts:
+        if artifact not in ARTIFACT_SCHEMAS:
+            raise ValueError(f"Unsupported operator artifact QA: {artifact}")
+        qa_path = job_dir / "operator" / "gemini" / f"{artifact}_qa.json"
+        if not qa_path.exists():
+            raise FileNotFoundError(f"{qa_path} is required before operator render.")
+        qa = read_json(qa_path)
+        verdict = str(qa.get("verdict", "")).upper()
+        if verdict != "PASS":
+            raise ValueError(f"{qa_path} must have verdict PASS before operator render. Got: {verdict or '<missing>'}")

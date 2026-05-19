@@ -93,7 +93,17 @@ docker compose run --rm video-agent python -m video_agent.cli operator-promote \
   --raw-file jobs/<job_id>/operator/chatgpt/script.raw.txt
 ```
 
+After Gemini reviews that artifact, promote the raw QA response:
+
+```bash
+docker compose run --rm video-agent python -m video_agent.cli operator-promote-qa \
+  --job-dir jobs/<job_id> \
+  --artifact script \
+  --raw-file jobs/<job_id>/operator/gemini/script_qa.raw.txt
+```
+
 Repeat with `--stage scenes` / `--artifact scenes`, then `--stage seo` / `--artifact seo`.
+`operator-render` requires promoted `script_qa.json`, `scenes_qa.json`, and `seo_qa.json` with `verdict: "PASS"` by default. Use `--skip-operator-qa` only for legacy jobs or debugging.
 
 Then render that approved content through the same Docker pipeline:
 

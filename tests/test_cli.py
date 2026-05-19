@@ -103,7 +103,61 @@ def test_cli_operator_render_accepts_existing_job_artifacts(tmp_path, monkeypatc
     assert exit_code == 0
     assert calls[0].job_dir == tmp_path / "operator-job"
     assert calls[0].render is False
+    assert calls[0].require_operator_qa is True
     assert calls[0].tts_override == {"provider": "kokoro", "voice_id": "ef_dora"}
+
+
+def test_cli_operator_render_can_skip_operator_qa_gate(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_render_operator_job(options):
+        calls.append(options)
+        return SimpleNamespace(
+            job_dir=tmp_path / "job",
+            thumbnail_path=tmp_path / "job/thumbnail.jpg",
+            seo_path=tmp_path / "job/seo.json",
+            report_path=tmp_path / "job/report.md",
+            video_path=None,
+        )
+
+    monkeypatch.setattr("video_agent.cli.render_operator_job", fake_render_operator_job)
+
+    exit_code = main(
+        [
+            "operator-render",
+            "--channel",
+            str(ROOT / "configs/vida-plena-45/channel.yaml"),
+            "--job-dir",
+            str(tmp_path / "operator-job"),
+            "--no-render",
+            "--skip-operator-qa",
+        ]
+    )
+
+    assert exit_code == 0
+    assert calls[0].require_operator_qa is False
+
+
+def test_cli_operator_promote_qa_writes_promoted_qa(tmp_path, capsys):
+    raw_path = tmp_path / "script_qa.raw.txt"
+    raw_path.write_text('{"verdict": "PASS", "issues": [], "required_changes": [], "scores": {"safety": 10}}', encoding="utf-8")
+
+    exit_code = main(
+        [
+            "operator-promote-qa",
+            "--job-dir",
+            str(tmp_path / "operator-job"),
+            "--artifact",
+            "script",
+            "--raw-file",
+            str(raw_path),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "Promoted script QA:" in captured.out
+    assert (tmp_path / "operator-job/operator/gemini/script_qa.json").exists()
 
 
 def test_cli_batch_without_render_writes_audit(tmp_path, capsys):

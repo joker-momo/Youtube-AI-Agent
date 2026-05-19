@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Sequence
 
 from video_agent.batch import format_audit_markdown, build_audit_row, write_batch_audit
-from video_agent.operator import promote_operator_artifact, write_operator_prompts
+from video_agent.operator import promote_operator_artifact, promote_operator_qa, write_operator_prompts
 from video_agent.pipeline import OperatorRenderOptions, PipelineOptions, render_operator_job, run_pipeline
 
 
@@ -26,6 +26,11 @@ def build_parser() -> argparse.ArgumentParser:
     operator_render_parser.add_argument("--channel", required=True, type=Path)
     operator_render_parser.add_argument("--job-dir", required=True, type=Path)
     operator_render_parser.add_argument("--no-render", action="store_true", help="Prepare assets but skip Remotion render.")
+    operator_render_parser.add_argument(
+        "--skip-operator-qa",
+        action="store_true",
+        help="Render without requiring promoted Gemini QA JSON files for script, scenes, and SEO.",
+    )
     _add_tts_override_args(operator_render_parser)
 
     operator_prompts_parser = subparsers.add_parser(
@@ -44,6 +49,14 @@ def build_parser() -> argparse.ArgumentParser:
     operator_promote_parser.add_argument("--job-dir", required=True, type=Path)
     operator_promote_parser.add_argument("--artifact", choices=["script", "scenes", "seo"], required=True)
     operator_promote_parser.add_argument("--raw-file", required=True, type=Path)
+
+    operator_promote_qa_parser = subparsers.add_parser(
+        "operator-promote-qa",
+        help="Extract, normalize, and promote a raw Gemini QA response for an operator artifact.",
+    )
+    operator_promote_qa_parser.add_argument("--job-dir", required=True, type=Path)
+    operator_promote_qa_parser.add_argument("--artifact", choices=["script", "scenes", "seo"], required=True)
+    operator_promote_qa_parser.add_argument("--raw-file", required=True, type=Path)
 
     batch_parser = subparsers.add_parser("batch", help="Run multiple ideas and write a visual QA audit.")
     batch_parser.add_argument("--channel", required=True, type=Path)
@@ -128,6 +141,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 channel_path=args.channel,
                 job_dir=args.job_dir,
                 render=not args.no_render,
+                require_operator_qa=not args.skip_operator_qa,
                 tts_override=_tts_override_from_args(args),
             )
         )
@@ -147,6 +161,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "operator-promote":
         result = promote_operator_artifact(args.job_dir, args.artifact, args.raw_file)
         print(f"Promoted {result.artifact}: {result.output_path}")
+        return 0
+    if args.command == "operator-promote-qa":
+        result = promote_operator_qa(args.job_dir, args.artifact, args.raw_file)
+        print(f"Promoted {result.artifact} QA: {result.output_path}")
         return 0
     if args.command == "audit":
         rows = [build_audit_row(job_dir) for job_dir in args.job]

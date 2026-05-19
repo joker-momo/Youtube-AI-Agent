@@ -1,15 +1,26 @@
 from pathlib import Path
 
 from video_agent.pipeline import PipelineOptions, run_pipeline
-from video_agent.utils.json_io import read_json
+from video_agent.utils.json_io import read_json, read_yaml
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_pipeline_writes_structured_artifacts_without_render(tmp_path):
+def test_pipeline_writes_structured_artifacts_without_render(tmp_path, monkeypatch):
+    monkeypatch.delenv("PEXELS_API_KEY", raising=False)
+    monkeypatch.delenv("PIXABAY_API_KEY", raising=False)
+    channel_config = read_yaml(ROOT / "configs/vida-plena-45/channel.yaml")
+    channel_config["visuals"] = {
+        "strategy": "local_directory",
+        "source_dir": str(tmp_path / "missing-image-library"),
+        "scene_count_target": 5,
+    }
+    channel_path = tmp_path / "channel.yaml"
+    channel_path.write_text(yaml.safe_dump(channel_config), encoding="utf-8")
     result = run_pipeline(
         PipelineOptions(
-            channel_path=ROOT / "configs/vida-plena-45/channel.yaml",
+            channel_path=channel_path,
             idea_path=ROOT / "inputs/manual_idea.json",
             jobs_dir=tmp_path,
             render=False,

@@ -436,7 +436,9 @@ def test_prepare_assets_auto_uses_stock_photo_api_when_local_image_is_missing(tm
     assert manifest["scenes"][0]["provider"] == "pexels"
 
 
-def test_prepare_assets_falls_back_to_placeholder_when_stock_provider_fails(tmp_path):
+def test_prepare_assets_falls_back_to_placeholder_when_stock_provider_fails(tmp_path, monkeypatch):
+    monkeypatch.delenv("PEXELS_API_KEY", raising=False)
+    monkeypatch.delenv("PIXABAY_API_KEY", raising=False)
     doc = scene_doc()
     doc["scenes"][0]["visual_prompt"] = "calm sleep wellness bedroom"
     job_dir = tmp_path / "jobs" / "job-fallback"

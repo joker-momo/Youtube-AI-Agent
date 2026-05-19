@@ -49,7 +49,7 @@ def test_cli_batch_without_render_writes_audit(tmp_path, capsys):
     assert "Visual Batch Audit" in captured.out
     assert audit_path.exists()
     audit = audit_path.read_text(encoding="utf-8")
-    assert "| Job | Topic | Video | Visual QA | Contact sheet | Source mix | Provider mix |" in audit
+    assert "| Job | Topic | Video | Visual QA | Score range | Contact sheet | Source mix | Provider mix | Searched providers |" in audit
     assert "pexels" in audit or "generated_placeholder" in audit
     assert "visual_contact_sheet.jpg" in audit
     job_lines = [line for line in audit.splitlines() if line.startswith("| `")]
@@ -79,3 +79,37 @@ def test_cli_audit_existing_jobs(tmp_path, capsys):
     assert exit_code == 0
     assert "Visual Batch Audit" in captured.out
     assert job_dir.name in captured.out
+
+
+def test_cli_audit_reports_score_range_and_searched_providers(tmp_path, capsys):
+    job_dir = tmp_path / "jobs" / "job-with-stock"
+    job_dir.mkdir(parents=True)
+    (job_dir / "render_props.json").write_text(
+        '{"seo": {"title": "Stock test"}}',
+        encoding="utf-8",
+    )
+    (job_dir / "visual_review.json").write_text(
+        """
+{
+  "job_id": "job-with-stock",
+  "contact_sheet": "visual_contact_sheet.jpg",
+  "summary": {
+    "total_scenes": 2,
+    "by_source": {"asset_library": 2},
+    "by_provider": {"pexels": 1, "pixabay": 1},
+    "selection_scores": {"min": 60, "avg": 71.0, "max": 82},
+    "searched_providers": {"pexels": 2, "pixabay": 2}
+  },
+  "qa": {"status": "PASS", "issue_count": 0},
+  "scenes": []
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    exit_code = main(["audit", "--job", str(job_dir)])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "| `job-with-stock` | Stock test | skipped | PASS | 60-82 (avg 71.0) |" in captured.out
+    assert "| 2 asset_library | 1 pexels, 1 pixabay | 2 pexels, 2 pixabay |" in captured.out

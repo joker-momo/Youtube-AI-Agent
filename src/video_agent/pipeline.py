@@ -135,11 +135,25 @@ def _write_visual_review(job_dir: Path, job_id: str, assets: dict, scene_doc: di
         "total_scenes": len(scenes),
         "by_source": {},
         "by_provider": {},
+        "selection_scores": None,
+        "searched_providers": {},
     }
+    selection_scores = []
     for scene in scenes:
         summary["by_source"][scene["source"]] = summary["by_source"].get(scene["source"], 0) + 1
         if scene["provider"]:
             summary["by_provider"][scene["provider"]] = summary["by_provider"].get(scene["provider"], 0) + 1
+        selection = scene.get("selection") or {}
+        if isinstance(selection.get("score"), (int, float)):
+            selection_scores.append(selection["score"])
+        for provider in selection.get("searched_providers") or []:
+            summary["searched_providers"][provider] = summary["searched_providers"].get(provider, 0) + 1
+    if selection_scores:
+        summary["selection_scores"] = {
+            "min": min(selection_scores),
+            "avg": round(sum(selection_scores) / len(selection_scores), 1),
+            "max": max(selection_scores),
+        }
     review = _add_visual_qa({"job_id": job_id, "summary": summary, "scenes": scenes})
     review["contact_sheet"] = ARTIFACT_VISUAL_CONTACT_SHEET
     write_json(job_dir / ARTIFACT_VISUAL_REVIEW, review)

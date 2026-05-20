@@ -33,6 +33,7 @@ from video_agent.orchestrator.stages import (
     auto_script_stage,
     auto_seo_qa_stage,
     auto_seo_stage,
+    generate_scene_asset,
     promote_qa_stage,
     promote_scenes_stage,
     promote_seo_stage,
@@ -1585,6 +1586,39 @@ async def post_auto_seo_qa(
         raise _handle_browser_client_error(exc) from exc
     state = load_job(job_dir)
     return {"output": str(output.relative_to(job_dir)), "state": state.to_dict()}
+
+
+@app.post("/jobs/{job_id}/scenes/{scene_id}/generate_asset")
+async def post_generate_scene_asset(
+    job_id: str,
+    scene_id: str,
+    jobs_root: Path = Depends(get_jobs_root),
+    channel_path: Path = Depends(get_channel_path),
+    client: BrowserClient = Depends(get_browser_client),
+) -> dict:
+    """Generate one ChatGPT image for a single scene.
+
+    Uses ``scenes.json[scene_id].visual_prompt`` to build the image
+    prompt, saves the PNG under ``jobs/<id>/assets/<scene_id>.png``,
+    and patches ``scenes.json`` so ``asset_refs.primary`` points at
+    the new file. The next render run picks it up via the
+    ``_find_asset_refs_primary`` priority path.
+    """
+    job_dir = jobs_root / job_id
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    try:
+        result = await generate_scene_asset(
+            job_dir,
+            channel_path,
+            scene_id,
+            client.generate_image,
+        )
+    except StageInputMissingError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except BrowserClientError as exc:
+        raise _handle_browser_client_error(exc) from exc
+    return result
 
 
 @app.post("/jobs/{job_id}/run-all")

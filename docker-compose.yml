@@ -78,6 +78,9 @@ services:
       BROWSER_TRACE_DIR: /data/trace
     volumes:
       - ./browser_trace:/data/trace
+      # jobs/ is shared with app so ChatGPT-generated assets can be
+      # written directly to /app/jobs/<id>/assets/ from the worker.
+      - ./jobs:/app/jobs
     ports:
       - "127.0.0.1:8001:8001"
     networks:

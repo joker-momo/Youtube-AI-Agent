@@ -52,6 +52,24 @@ def _find_local_scene_image(scene_id: str, source_dir: Path | None) -> Path | No
     return None
 
 
+def _find_asset_refs_primary(scene: dict[str, Any], job_dir: Path) -> Path | None:
+    """Return the scene's ``asset_refs.primary`` image if it exists.
+
+    Lets the orchestrator (or external image generator) inject a
+    job-local image — e.g. ChatGPT-generated artwork at
+    ``jobs/<id>/assets/scene-NN.png`` — and have it win over the
+    channel's stock-image directory.
+    """
+    refs = scene.get("asset_refs") or {}
+    primary = refs.get("primary")
+    if not isinstance(primary, str) or not primary:
+        return None
+    candidate = Path(primary)
+    if not candidate.is_absolute():
+        candidate = job_dir / primary
+    return candidate if candidate.exists() else None
+
+
 def _write_placeholder_image(path: Path, scene: dict[str, Any], color: tuple[int, int, int], palette: dict[str, str]) -> None:
     image = Image.new("RGB", (1920, 1080), color)
     draw = ImageDraw.Draw(image)
@@ -86,7 +104,8 @@ def prepare_assets(
     )
     scene_assets = []
     for index, scene in enumerate(scene_doc["scenes"]):
-        local_image = _find_local_scene_image(scene["id"], source_dir)
+        primary_asset = _find_asset_refs_primary(scene, job_dir)
+        local_image = primary_asset or _find_local_scene_image(scene["id"], source_dir)
         stock_asset = None
         if not local_image and stock_service:
             stock_asset = stock_service.get_scene_asset(scene, channel_id, job_dir.name)
@@ -94,7 +113,9 @@ def prepare_assets(
         image_path = assets_dir / f"{scene['id']}{image_suffix}"
         if local_image:
             shutil.copy2(local_image, image_path)
-            source = "local_directory"
+            source = (
+                "asset_refs_primary" if primary_asset is not None else "local_directory"
+            )
             source_path = str(local_image.resolve())
             extra_manifest = {}
         elif stock_asset:

@@ -59,6 +59,50 @@ class BrowserClient:
     ) -> str:
         return await self._send("gemini", prompt, response_timeout_ms)
 
+    async def generate_image(
+        self,
+        prompt: str,
+        *,
+        project_name: str,
+        out_path: str,
+        response_timeout_ms: int = 360_000,
+    ) -> dict:
+        """Drive ChatGPT image generation via /chatgpt/image.
+
+        Returns the worker's payload: ``{src, local_path, project_name, bytes}``.
+        Raises LoginRequiredFromWorker on signed-out profile or
+        BrowserClientError on driver/HTTP failure.
+        """
+        body = {
+            "prompt": prompt,
+            "project_name": project_name,
+            "out_path": out_path,
+            "response_timeout_ms": response_timeout_ms,
+        }
+        async with httpx.AsyncClient(
+            timeout=self._timeout_for_response(response_timeout_ms)
+        ) as http:
+            response = await http.post(f"{self.base_url}/chatgpt/image", json=body)
+        if response.status_code in (200, 201):
+            return response.json()
+        try:
+            detail = response.json().get("detail", response.text)
+        except Exception:
+            detail = response.text
+        if response.status_code == 409 and isinstance(detail, dict) and detail.get(
+            "login_required"
+        ):
+            raise LoginRequiredFromWorker(
+                detail.get("error", "Login required"),
+                status_code=response.status_code,
+                detail=detail,
+            )
+        raise BrowserClientError(
+            f"browser-worker /chatgpt/image returned HTTP {response.status_code}",
+            status_code=response.status_code,
+            detail=detail,
+        )
+
     async def _send(self, site: str, prompt: str, ms: int) -> str:
         async with httpx.AsyncClient(timeout=self._timeout_for_response(ms)) as http:
             response = await http.post(

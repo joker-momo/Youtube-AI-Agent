@@ -564,6 +564,95 @@ async def auto_seo_qa_stage(
 
 
 # ---------------------------------------------------------------------------
+# Per-scene image generation via ChatGPT projects.
+# ---------------------------------------------------------------------------
+
+
+_ASSET_GEN_PROMPT_PREFIX = (
+    "Photorealistic, 16:9 cinematic, soft natural light, no text overlay, "
+    "no watermark, no logos. Audience: adultos 45+. Scene visual: "
+)
+
+
+def _scene_project_name(job_id: str, scene_id: str) -> str:
+    return f"{job_id}-{scene_id}"[:60]
+
+
+async def generate_scene_asset(
+    job_dir: Path,
+    channel_path: Path,
+    scene_id: str,
+    image_fn,
+) -> dict:
+    """Generate a ChatGPT image for ``scene_id`` and update scenes.json.
+
+    Looks up the scene in ``scenes.json`` by id, builds an image prompt
+    from its ``visual_prompt`` (plus a brand-consistent style prefix),
+    calls ``image_fn(prompt, project_name, out_path)`` (typically
+    ``BrowserClient.generate_image``), saves the bytes under
+    ``jobs/<id>/assets/<scene_id>.png``, and patches the scene's
+    ``asset_refs.primary`` to the relative path so the v2 render
+    stage picks it up.
+
+    Returns the image_fn payload plus the scene id.
+    """
+    scenes_path = job_dir / "scenes.json"
+    if not scenes_path.exists():
+        raise StageInputMissingError(f"Missing {scenes_path}")
+    scenes_doc = json.loads(scenes_path.read_text(encoding="utf-8"))
+    target = None
+    for s in scenes_doc.get("scenes", []):
+        if s.get("id") == scene_id:
+            target = s
+            break
+    if target is None:
+        raise StageInputMissingError(
+            f"Scene {scene_id!r} not found in {scenes_path}"
+        )
+    visual_prompt = target.get("visual_prompt") or target.get("caption") or ""
+    if not visual_prompt:
+        raise StageInputMissingError(
+            f"Scene {scene_id} has no visual_prompt to feed image gen."
+        )
+
+    state = load_job(job_dir)
+    assets_dir = job_dir / "assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    out_path = assets_dir / f"{scene_id}.png"
+    project_name = _scene_project_name(state.job_id, scene_id)
+    prompt = _ASSET_GEN_PROMPT_PREFIX + visual_prompt
+
+    result = await image_fn(
+        prompt=prompt,
+        project_name=project_name,
+        out_path=str(out_path),
+    )
+
+    # Update scenes.json -> asset_refs.primary with the job-relative path.
+    rel = str(out_path.relative_to(job_dir))
+    refs = target.get("asset_refs")
+    if not isinstance(refs, dict):
+        refs = {}
+    refs["primary"] = rel
+    refs["primary_source"] = "chatgpt_image"
+    refs["primary_url"] = result.get("src", "")
+    refs["primary_project"] = project_name
+    target["asset_refs"] = refs
+    _write_json(scenes_path, scenes_doc)
+
+    EventLogger(job_dir / EVENT_LOG).log(
+        "SCENE_ASSET_GENERATED",
+        {
+            "job_id": state.job_id,
+            "scene_id": scene_id,
+            "local_path": rel,
+            "bytes": result.get("bytes"),
+        },
+    )
+    return {"scene_id": scene_id, **result, "asset_refs_primary": rel}
+
+
+# ---------------------------------------------------------------------------
 # Rework loop: QA NEEDS_REWORK -> feed issues back to ChatGPT -> re-promote.
 # ---------------------------------------------------------------------------
 

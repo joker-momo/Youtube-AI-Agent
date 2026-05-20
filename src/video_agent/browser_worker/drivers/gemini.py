@@ -7,6 +7,7 @@ from video_agent.browser_worker.drivers.base import (
     LoginRequiredError,
     save_trace_screenshot,
 )
+from video_agent.browser_worker.drivers.humanize import human_pause, human_type
 
 if TYPE_CHECKING:
     from playwright.async_api import Page
@@ -109,7 +110,7 @@ class GeminiDriver:
             raise BrowserDriverError("Empty prompt")
 
         await self.page.goto(GEMINI_URL, wait_until="domcontentloaded", timeout=30_000)
-        await self.page.wait_for_timeout(1500)
+        await human_pause(self.page, min_ms=1200, max_ms=2200)
 
         if _is_login_url(self.page.url):
             shot = await save_trace_screenshot(self.page, prefix="gemini-login")
@@ -120,6 +121,7 @@ class GeminiDriver:
             )
 
         await _enter_temporary_chat(self.page)
+        await human_pause(self.page)
 
         composer = await _first_matching(self.page, COMPOSER_SELECTORS, 10_000)
         if composer is None:
@@ -130,7 +132,9 @@ class GeminiDriver:
 
         await composer.click()
         await composer.focus()
-        await self.page.keyboard.insert_text(prompt)
+        await human_pause(self.page, min_ms=200, max_ms=600)
+        await human_type(self.page, prompt)
+        await human_pause(self.page, min_ms=300, max_ms=900)
 
         send_button = await _first_matching(self.page, SEND_BUTTON_SELECTORS, 5_000)
         if send_button is None:

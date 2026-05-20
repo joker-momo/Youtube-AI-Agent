@@ -8,6 +8,7 @@ from video_agent.browser_worker.drivers.base import (
     LoginRequiredError,
     save_trace_screenshot,
 )
+from video_agent.browser_worker.drivers.humanize import human_pause, human_type
 
 if TYPE_CHECKING:
     from playwright.async_api import Page
@@ -117,7 +118,7 @@ class ChatGPTDriver:
             raise BrowserDriverError("Empty prompt")
 
         await self.page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=30_000)
-        await self.page.wait_for_timeout(1500)
+        await human_pause(self.page, min_ms=1200, max_ms=2200)
 
         if _is_login_url(self.page.url):
             shot = await save_trace_screenshot(self.page, prefix="chatgpt-login")
@@ -128,6 +129,7 @@ class ChatGPTDriver:
             )
 
         await _dismiss_modals(self.page)
+        await human_pause(self.page)
 
         composer = await _first_matching(self.page, COMPOSER_SELECTORS, 10_000)
         if composer is None:
@@ -138,9 +140,12 @@ class ChatGPTDriver:
 
         await composer.click()
         await composer.focus()
-        # Type via keyboard so contenteditable div accepts the input
-        # the same way the user would.
-        await self.page.keyboard.insert_text(prompt)
+        await human_pause(self.page, min_ms=200, max_ms=600)
+        # Type via keyboard with randomised per-key delays so the
+        # contenteditable div sees a realistic cadence instead of an
+        # instant insert_text dump.
+        await human_type(self.page, prompt)
+        await human_pause(self.page, min_ms=300, max_ms=900)
 
         send_button = await _first_matching(self.page, SEND_BUTTON_SELECTORS, 5_000)
         if send_button is None:

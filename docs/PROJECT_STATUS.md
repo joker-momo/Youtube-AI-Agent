@@ -1,6 +1,6 @@
 # Youtube AI Agent Project Status
 
-Last updated: 2026-05-20 (Auto pipeline live: script + scenes + seo zero-touch)
+Last updated: 2026-05-20 (Driver humanization layer: randomised pauses + typing)
 
 This file is the living project tracker. Update it whenever a meaningful system capability is added, changed, verified, or deferred so a new reader can quickly understand what the system does, what is being built now, and what remains.
 
@@ -357,6 +357,35 @@ Decisions already chosen:
   - Zero copy-paste between ChatGPT/Gemini and the orchestrator.
 - Docker verification: `docker compose run --rm video-agent pytest -q`
   -> `128 passed in 21.89s`.
+
+### V3 Phase 1 Step 12b Driver humanization
+
+- New `src/video_agent/browser_worker/drivers/humanize.py` with
+  `human_pause(page, min_ms, max_ms)` and `human_type(page, text)`.
+- ChatGPT and Gemini drivers now insert randomised pauses between
+  navigation, modal dismiss, composer focus, typing, and send-click —
+  no more burst-style instant-typing that screams "bot".
+- `human_type` is hybrid:
+  - Short text (< `BROWSER_HUMAN_PASTE_THRESHOLD` chars, default 200):
+    per-character `keyboard.type(ch, delay=random(35..110ms))` with
+    occasional 200-900 ms "thinking" pauses (~1 per 25 chars). This
+    matches the cadence of a short manually-typed reply.
+  - Long text: instant `keyboard.insert_text(text)` followed by a
+    1500-3500 ms "reading what I just pasted" pause. Pasting is what
+    a human does for multi-KB prompts too, and per-char typing of a
+    2 KB prompt would block for minutes.
+- All thresholds tunable via env without rebuild: `BROWSER_HUMAN_*`
+  variables documented inline (`TYPING_MIN_MS`, `TYPING_MAX_MS`,
+  `PAUSE_MIN_MS`, `PAUSE_MAX_MS`, `THINK_*`, `PASTE_THRESHOLD`,
+  `PASTE_PAUSE_*`).
+- Live verified:
+  - Short prompt (`Reply with exactly: PONG`) round trip: ~11.7 s
+    instead of instant — cadence visible in noVNC.
+  - Full `script` auto stage with the real ~1.5 KB v2 prompt:
+    ~15 s total (paste + review pause + ChatGPT generate).
+- 2 new tests in `tests/test_browser_drivers.py` for env override and
+  default sanity.
+- Docker verification: `130 passed in 15.63s`.
 
 ## Target V3 Architecture
 

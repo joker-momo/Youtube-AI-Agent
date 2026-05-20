@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 from video_agent.contracts import EVENT_LOG
@@ -106,6 +106,227 @@ def list_jobs(jobs_root: Path = Depends(get_jobs_root)) -> dict:
     return {"count": len(items), "jobs": items}
 
 
+# ---------------------------------------------------------------------------
+# Dashboard timeline / artifact endpoints.
+# ---------------------------------------------------------------------------
+
+# Per-stage input + output file plumbing for the dashboard. Each stage
+# entry lists the artifact relative paths (input + output) the operator
+# wants to see, so the UI can show "what went into" and "what came out
+# of" each step without per-stage hardcoding in JS.
+_STAGE_ARTIFACTS = {
+    "script": {
+        "input": ["idea.json"],
+        "output": ["operator/chatgpt/script_prompt.md"],
+    },
+    "script_promote": {
+        "input": ["operator/chatgpt/script.raw.txt"],
+        "output": ["script.json"],
+    },
+    "script_qa": {
+        "input": ["script.json"],
+        "output": ["operator/gemini/script_qa.json"],
+    },
+    "scenes": {
+        "input": ["script.json"],
+        "output": ["operator/chatgpt/scenes_prompt.md"],
+    },
+    "scenes_promote": {
+        "input": ["operator/chatgpt/scenes.raw.txt"],
+        "output": ["scenes.json"],
+    },
+    "scenes_qa": {
+        "input": ["scenes.json"],
+        "output": ["operator/gemini/scenes_qa.json"],
+    },
+    "seo": {
+        "input": ["scenes.json"],
+        "output": ["operator/chatgpt/seo_prompt.md"],
+    },
+    "seo_promote": {
+        "input": ["operator/chatgpt/seo.raw.txt"],
+        "output": ["seo.json"],
+    },
+    "seo_qa": {
+        "input": ["seo.json"],
+        "output": ["operator/gemini/seo_qa.json"],
+    },
+    "render": {
+        "input": ["script.json", "scenes.json", "seo.json"],
+        "output": [
+            "render_props.json",
+            "video.mp4",
+            "thumbnail.jpg",
+            "visual_review.json",
+            "report.md",
+        ],
+    },
+    "review": {
+        "input": ["video.mp4"],
+        "output": ["operator_review.html"],
+    },
+}
+
+# Empirical seconds per stage when long-form 20-30 min config is in
+# play. Used for an ETA when the stage hasn't run yet. Render scales
+# with the target_duration_sec of the idea so we compute it from
+# scenes.json or idea.json instead of a constant.
+_STAGE_ETA_SECONDS = {
+    "script": 60,
+    "script_promote": 60,
+    "script_qa": 90,
+    "scenes": 90,
+    "scenes_promote": 60,
+    "scenes_qa": 120,
+    "seo": 60,
+    "seo_promote": 30,
+    "seo_qa": 90,
+    "render": 600,     # overridden when target_duration_sec known
+    "review": 5,
+}
+
+
+def _resolve_inside(job_dir: Path, rel: str) -> Path | None:
+    """Return ``job_dir / rel`` if it stays inside ``job_dir``, else None.
+
+    Defends the artifact endpoint against ``..`` path traversal.
+    """
+    try:
+        candidate = (job_dir / rel).resolve()
+        if str(candidate).startswith(str(job_dir.resolve())):
+            return candidate
+    except Exception:
+        pass
+    return None
+
+
+def _isoformat_to_epoch(ts: str | None) -> float | None:
+    if not ts:
+        return None
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
+
+
+def _stage_duration_seconds(stage: dict) -> float | None:
+    start = _isoformat_to_epoch(stage.get("started_at"))
+    end = _isoformat_to_epoch(stage.get("completed_at"))
+    if start is None or end is None:
+        return None
+    return max(0.0, end - start)
+
+
+@app.get("/jobs/{job_id}/timeline")
+def job_timeline(
+    job_id: str,
+    jobs_root: Path = Depends(get_jobs_root),
+) -> dict:
+    """Return per-stage view for the dashboard.
+
+    Each entry combines the stage's status from job.json, the artifact
+    relative paths for input + output (so the UI can request them via
+    /jobs/{id}/artifact?path=...), the actual elapsed seconds if the
+    stage has run, and an ETA in seconds for stages still pending.
+    """
+    job_dir = jobs_root / job_id
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+
+    state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+
+    # Render ETA scales with target_duration_sec when known.
+    render_eta = _STAGE_ETA_SECONDS["render"]
+    try:
+        scenes_path = job_dir / "scenes.json"
+        if scenes_path.exists():
+            sc = json.loads(scenes_path.read_text(encoding="utf-8"))
+            total = int(sc.get("total_duration_sec") or 0)
+            if total > 0:
+                render_eta = total * 1.2  # ~1.2x realtime on typical machine
+        else:
+            idea_path = job_dir / IDEA_FILE
+            if idea_path.exists():
+                idea = json.loads(idea_path.read_text(encoding="utf-8"))
+                total = int(idea.get("target_duration_sec") or 0)
+                if total > 0:
+                    render_eta = total * 1.2
+    except Exception:
+        pass
+
+    items = []
+    remaining_eta = 0.0
+    completed_so_far = 0
+    total_stages = len(state.get("stages", []))
+    for stage in state.get("stages", []):
+        name = stage.get("name")
+        cfg = _STAGE_ARTIFACTS.get(name, {})
+        inputs = []
+        for rel in cfg.get("input", []):
+            p = _resolve_inside(job_dir, rel)
+            inputs.append(
+                {"path": rel, "exists": bool(p and p.exists()), "size": (p.stat().st_size if p and p.exists() else 0)}
+            )
+        outputs = []
+        for rel in cfg.get("output", []):
+            p = _resolve_inside(job_dir, rel)
+            outputs.append(
+                {"path": rel, "exists": bool(p and p.exists()), "size": (p.stat().st_size if p and p.exists() else 0)}
+            )
+        actual = _stage_duration_seconds(stage)
+        eta = render_eta if name == "render" else _STAGE_ETA_SECONDS.get(name, 30)
+        if stage.get("status") == "completed":
+            completed_so_far += 1
+        elif stage.get("status") != "completed":
+            remaining_eta += eta
+        items.append(
+            {
+                **stage,
+                "inputs": inputs,
+                "outputs": outputs,
+                "actual_seconds": actual,
+                "eta_seconds": eta if stage.get("status") != "completed" else 0,
+            }
+        )
+
+    pct = (100.0 * completed_so_far / total_stages) if total_stages else 0
+    return {
+        "job_id": job_id,
+        "channel_id": state.get("channel_id"),
+        "current_stage": state.get("current_stage"),
+        "created_at": state.get("created_at"),
+        "updated_at": state.get("updated_at"),
+        "stages_done": completed_so_far,
+        "stages_total": total_stages,
+        "percent": round(pct, 1),
+        "remaining_eta_seconds": int(remaining_eta),
+        "stages": items,
+    }
+
+
+@app.get("/jobs/{job_id}/artifact")
+def job_artifact(
+    job_id: str,
+    path: str,
+    jobs_root: Path = Depends(get_jobs_root),
+):
+    """Stream a single file from inside the job directory.
+
+    ``path`` is interpreted as relative to ``<jobs_root>/<job_id>/`` and
+    is rejected (404) if it escapes that directory.
+    """
+    job_dir = jobs_root / job_id
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    target = _resolve_inside(job_dir, path)
+    if target is None or not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail=f"Artifact not found: {path}")
+    # FastAPI guesses media type from the path; this is enough for our
+    # mix of .json / .md / .txt / .mp4 / .jpg.
+    return FileResponse(target)
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard() -> str:
     return _DASHBOARD_HTML
@@ -122,10 +343,10 @@ _DASHBOARD_HTML = """<!doctype html>
   header { padding: 12px 20px; background: #14141a; border-bottom: 1px solid #23232a; display: flex; justify-content: space-between; align-items: center; }
   header h1 { font-size: 16px; margin: 0; font-weight: 600; }
   header .meta { font-size: 12px; color: #888; }
-  main { display: grid; grid-template-columns: 380px 1fr; height: calc(100vh - 49px); }
+  main { display: grid; grid-template-columns: 320px 1fr; height: calc(100vh - 49px); }
   #jobs-panel { border-right: 1px solid #23232a; overflow-y: auto; padding: 10px; }
   #detail-panel { padding: 16px 22px; overflow-y: auto; }
-  .job-card { padding: 10px 12px; margin-bottom: 8px; background: #15151b; border: 1px solid #23232a; border-radius: 6px; cursor: pointer; transition: background 120ms; }
+  .job-card { padding: 10px 12px; margin-bottom: 8px; background: #15151b; border: 1px solid #23232a; border-radius: 6px; cursor: pointer; }
   .job-card:hover { background: #1c1c24; }
   .job-card.active { border-color: #4a78d6; background: #1a2030; }
   .job-id { font-size: 12px; font-weight: 600; word-break: break-all; }
@@ -134,27 +355,59 @@ _DASHBOARD_HTML = """<!doctype html>
   .progress-fill { height: 100%; background: #4a78d6; transition: width 200ms; }
   .progress-fill.completed { background: #4ad67a; }
   .progress-fill.failed { background: #d65d4a; }
-  h2 { font-size: 14px; color: #aaa; margin: 0 0 10px; }
-  .stage-row { display: flex; align-items: center; padding: 6px 8px; margin-bottom: 4px; background: #15151b; border-radius: 4px; font-size: 12px; }
-  .stage-status { width: 90px; font-weight: 600; }
-  .stage-status.pending { color: #666; }
-  .stage-status.in_progress { color: #4a78d6; }
-  .stage-status.completed { color: #4ad67a; }
-  .stage-status.failed { color: #d65d4a; }
-  .stage-name { flex: 1; }
-  .stage-times { color: #555; font-size: 11px; }
-  .events { background: #0a0a0d; padding: 10px; border-radius: 4px; max-height: 360px; overflow-y: auto; font-size: 11px; }
+  h2 { font-size: 14px; color: #aaa; margin: 18px 0 10px; }
+  h2:first-child { margin-top: 0; }
+  .summary { background: #15151b; padding: 14px 16px; border-radius: 6px; margin-bottom: 16px; }
+  .summary .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .summary .pct { font-size: 26px; font-weight: 600; color: #4a78d6; }
+  .summary .eta { font-size: 12px; color: #888; }
+  .big-bar { height: 8px; background: #23232a; border-radius: 4px; overflow: hidden; }
+  .big-fill { height: 100%; background: linear-gradient(90deg, #4a78d6, #4ad67a); transition: width 300ms; }
+  .timeline { display: flex; flex-direction: column; gap: 6px; }
+  .step { background: #15151b; border: 1px solid #23232a; border-radius: 6px; overflow: hidden; }
+  .step .head { padding: 10px 14px; display: flex; align-items: center; cursor: pointer; gap: 12px; }
+  .step .head:hover { background: #1a1a22; }
+  .step .num { width: 22px; height: 22px; border-radius: 50%; background: #23232a; color: #aaa; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; }
+  .step.completed .num { background: #4ad67a; color: #0c0c0e; }
+  .step.in_progress .num { background: #4a78d6; color: #0c0c0e; animation: pulse 1.4s infinite; }
+  .step.failed .num { background: #d65d4a; color: #fff; }
+  @keyframes pulse { 0%,100% { transform: scale(1); opacity:1; } 50% { transform: scale(1.15); opacity:0.7;} }
+  .step .name { flex: 1; font-size: 13px; font-weight: 500; }
+  .step .badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #23232a; color: #aaa; }
+  .step.completed .badge { background: #1f3522; color: #4ad67a; }
+  .step.in_progress .badge { background: #1a2030; color: #4a78d6; }
+  .step.failed .badge { background: #36211e; color: #d65d4a; }
+  .step .dur { font-size: 11px; color: #555; min-width: 50px; text-align: right; }
+  .step .body { display: none; padding: 0 14px 14px; border-top: 1px solid #23232a; }
+  .step.open .body { display: block; }
+  .artgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 10px; }
+  .artbox { background: #0a0a0d; border: 1px solid #23232a; border-radius: 4px; padding: 8px 10px; min-height: 60px; }
+  .artbox .lbl { font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+  .artbox .file { font-size: 11px; color: #4a78d6; cursor: pointer; padding: 2px 0; }
+  .artbox .file:hover { text-decoration: underline; }
+  .artbox .file.missing { color: #555; cursor: default; }
+  .artbox .file.missing:hover { text-decoration: none; }
+  pre.dump { background: #0a0a0d; padding: 10px; border-radius: 4px; max-height: 300px; overflow: auto; font-size: 11px; color: #c9c9c9; white-space: pre-wrap; word-break: break-word; margin-top: 6px; }
+  .events { background: #0a0a0d; padding: 10px; border-radius: 4px; max-height: 240px; overflow-y: auto; font-size: 11px; }
   .events .ev { padding: 3px 0; border-bottom: 1px dotted #1a1a22; }
-  .events .ev:last-child { border-bottom: none; }
   .ev-ts { color: #555; margin-right: 8px; }
   .ev-kind { color: #4a78d6; margin-right: 6px; font-weight: 600; }
   .ev-stage { color: #4ad67a; }
   .ev-kind.JOB_COMPLETED { color: #4ad67a; }
-  .ev-kind.STAGE_FAILED { color: #d65d4a; }
+  .ev-kind.STAGE_FAILED, .ev-kind.STAGE_NEEDS_REWORK { color: #d65d4a; }
   .empty { color: #555; padding: 30px; text-align: center; }
   .ws-indicator { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; vertical-align: middle; }
   .ws-indicator.live { background: #4ad67a; box-shadow: 0 0 4px #4ad67a; }
   .ws-indicator.off { background: #555; }
+  .final-block { background: linear-gradient(180deg, #14141a, #15151b); border: 1px solid #2a4a2e; border-radius: 8px; padding: 18px; margin-top: 16px; }
+  .final-block video { width: 100%; max-height: 480px; background: #000; border-radius: 4px; }
+  .final-block .thumb { display: inline-block; vertical-align: top; margin-right: 14px; }
+  .final-block .thumb img { width: 240px; height: auto; border-radius: 4px; }
+  .final-block .meta-line { font-size: 12px; color: #aaa; margin-bottom: 6px; }
+  .final-block .copybox { background: #0a0a0d; padding: 10px; border-radius: 4px; font-size: 12px; margin: 6px 0; position: relative; }
+  .final-block .copybtn { position: absolute; top: 6px; right: 6px; font-size: 10px; padding: 2px 8px; background: #23232a; color: #aaa; border: none; border-radius: 3px; cursor: pointer; }
+  .final-block .copybtn:hover { background: #2c2c34; }
+  .final-block .tag { display: inline-block; background: #1a2030; color: #4a78d6; padding: 2px 8px; border-radius: 10px; font-size: 11px; margin: 2px 4px 2px 0; }
 </style>
 </head>
 <body>
@@ -167,22 +420,43 @@ _DASHBOARD_HTML = """<!doctype html>
     <div id="jobs-list"></div>
   </div>
   <div id="detail-panel">
-    <div class="empty">Select a job on the left to see live progress.</div>
+    <div class="empty">Chọn 1 job bên trái để xem chi tiết từng bước.</div>
   </div>
 </main>
 <script>
-let SELECTED = null;
+let SELECTED_ID = null;
 let WS = null;
+let OPEN_STAGES = new Set();
+
+const STAGE_LABEL = {
+  script: '1. Script — sinh prompt cho ChatGPT',
+  script_promote: '2. Script promote — nhận + validate JSON',
+  script_qa: '3. Script QA — Gemini review',
+  scenes: '4. Scenes — sinh prompt scenes',
+  scenes_promote: '5. Scenes promote — nhận + validate JSON',
+  scenes_qa: '6. Scenes QA — Gemini review',
+  seo: '7. SEO — sinh prompt SEO',
+  seo_promote: '8. SEO promote — nhận + validate JSON',
+  seo_qa: '9. SEO QA — Gemini review',
+  render: '10. Render — assets + TTS + Remotion → video.mp4',
+  review: '11. Review — operator_review.html',
+};
+
+function fmtSec(s) {
+  if (s === null || s === undefined) return '';
+  s = Math.max(0, Math.round(s));
+  if (s < 60) return s + 's';
+  return Math.floor(s/60) + 'm ' + (s%60) + 's';
+}
 
 async function fetchJobs() {
-  const r = await fetch('/jobs');
-  const d = await r.json();
-  document.getElementById('job-count').textContent = d.count;
-  renderJobsList(d.jobs);
-  if (SELECTED) {
-    const updated = d.jobs.find(j => j.job_id === SELECTED.job_id);
-    if (updated) renderDetail(updated);
-  }
+  try {
+    const r = await fetch('/jobs');
+    const d = await r.json();
+    document.getElementById('job-count').textContent = d.count;
+    renderJobsList(d.jobs);
+    if (SELECTED_ID) fetchTimeline(SELECTED_ID);
+  } catch (e) { console.error(e); }
 }
 
 function renderJobsList(jobs) {
@@ -190,11 +464,11 @@ function renderJobsList(jobs) {
   root.innerHTML = '';
   for (const j of jobs) {
     const pct = j.stages_total ? (100 * j.stages_done / j.stages_total) : 0;
-    const card = document.createElement('div');
-    card.className = 'job-card' + (SELECTED && SELECTED.job_id === j.job_id ? ' active' : '');
-    const failed = j.stages.some(s => s.status === 'failed');
+    const failed = (j.stages || []).some(s => s.status === 'failed');
     const allDone = j.stages_total > 0 && j.stages_done === j.stages_total;
     const fillCls = allDone ? 'completed' : (failed ? 'failed' : '');
+    const card = document.createElement('div');
+    card.className = 'job-card' + (SELECTED_ID === j.job_id ? ' active' : '');
     card.innerHTML = `
       <div class="job-id">${j.job_id}</div>
       <div class="job-meta">
@@ -203,45 +477,185 @@ function renderJobsList(jobs) {
       </div>
       <div class="progress-bar"><div class="progress-fill ${fillCls}" style="width:${pct}%"></div></div>
     `;
-    card.onclick = () => selectJob(j);
+    card.onclick = () => selectJob(j.job_id);
     root.appendChild(card);
   }
 }
 
-function selectJob(j) {
-  SELECTED = j;
+function selectJob(jobId) {
+  SELECTED_ID = jobId;
+  OPEN_STAGES = new Set();
   document.querySelectorAll('.job-card').forEach(c => c.classList.remove('active'));
-  event && event.currentTarget && event.currentTarget.classList.add('active');
-  renderDetail(j);
-  reopenWs(j.job_id);
+  fetchTimeline(jobId);
+  reopenWs(jobId);
 }
 
-function renderDetail(j) {
+async function fetchTimeline(jobId) {
+  try {
+    const r = await fetch('/jobs/' + encodeURIComponent(jobId) + '/timeline');
+    if (!r.ok) return;
+    const t = await r.json();
+    renderTimeline(t);
+  } catch (e) { console.error(e); }
+}
+
+function renderTimeline(t) {
   const root = document.getElementById('detail-panel');
+  const allDone = t.stages_total > 0 && t.stages_done === t.stages_total;
+  const renderStage = t.stages.find(s => s.name === 'render');
+  const videoReady = renderStage && (renderStage.outputs || []).some(o => o.path === 'video.mp4' && o.exists);
   root.innerHTML = `
-    <h2>${j.job_id} · ${j.channel_id}</h2>
-    <div style="font-size:12px;color:#666;margin-bottom:14px">
-      created ${j.created_at || ''} · updated ${j.updated_at || ''}
+    <div class="summary">
+      <div class="top">
+        <div>
+          <div style="font-size:14px;font-weight:600;color:#fff">${t.job_id}</div>
+          <div style="font-size:11px;color:#666">${t.channel_id} · cập nhật ${(t.updated_at||'').slice(11,19)}</div>
+        </div>
+        <div style="text-align:right">
+          <div class="pct">${t.percent}%</div>
+          <div class="eta">${allDone ? 'Hoàn thành' : 'ETA còn ~' + fmtSec(t.remaining_eta_seconds)}</div>
+        </div>
+      </div>
+      <div class="big-bar"><div class="big-fill" style="width:${t.percent}%"></div></div>
     </div>
-    <h2>Stages</h2>
-    <div id="stages"></div>
-    <h2 style="margin-top:18px">Events <span style="color:#555;font-weight:normal">(live)</span></h2>
+    <h2>Các bước</h2>
+    <div class="timeline" id="timeline"></div>
+    ${videoReady ? '<div id="final-mount"></div>' : ''}
+    <h2>Events</h2>
     <div class="events" id="events"></div>
   `;
-  const stagesEl = document.getElementById('stages');
-  for (const s of (j.stages || [])) {
-    const row = document.createElement('div');
-    row.className = 'stage-row';
-    const times = [];
-    if (s.started_at) times.push('start ' + s.started_at.slice(11, 19));
-    if (s.completed_at) times.push('end ' + s.completed_at.slice(11, 19));
-    row.innerHTML = `
-      <span class="stage-status ${s.status}">${s.status}</span>
-      <span class="stage-name">${s.name}</span>
-      <span class="stage-times">${times.join(' · ')}</span>
-    `;
-    stagesEl.appendChild(row);
+  const tl = document.getElementById('timeline');
+  t.stages.forEach((s, idx) => tl.appendChild(renderStep(t.job_id, s, idx)));
+  if (videoReady) renderFinal(t);
+}
+
+function renderStep(jobId, s, idx) {
+  const el = document.createElement('div');
+  el.className = 'step ' + s.status + (OPEN_STAGES.has(s.name) ? ' open' : '');
+  const label = STAGE_LABEL[s.name] || s.name;
+  const durTxt = s.actual_seconds !== null && s.actual_seconds !== undefined
+    ? fmtSec(s.actual_seconds)
+    : (s.status === 'completed' ? '' : '~' + fmtSec(s.eta_seconds));
+  el.innerHTML = `
+    <div class="head">
+      <span class="num">${idx+1}</span>
+      <span class="name">${label}</span>
+      <span class="badge">${s.status}</span>
+      <span class="dur">${durTxt}</span>
+    </div>
+    <div class="body">
+      <div class="artgrid">
+        <div class="artbox">
+          <div class="lbl">INPUT</div>
+          ${(s.inputs||[]).map(i => renderFile(jobId, i)).join('') || '<div style="color:#555;font-size:11px">(không có)</div>'}
+        </div>
+        <div class="artbox">
+          <div class="lbl">OUTPUT</div>
+          ${(s.outputs||[]).map(o => renderFile(jobId, o)).join('') || '<div style="color:#555;font-size:11px">(chưa có)</div>'}
+        </div>
+      </div>
+      <div class="preview-mount" id="preview-${s.name}"></div>
+    </div>
+  `;
+  el.querySelector('.head').onclick = () => {
+    el.classList.toggle('open');
+    if (el.classList.contains('open')) OPEN_STAGES.add(s.name);
+    else OPEN_STAGES.delete(s.name);
+  };
+  return el;
+}
+
+function renderFile(jobId, f) {
+  const cls = f.exists ? 'file' : 'file missing';
+  const sz = f.exists ? ' (' + (f.size < 1024 ? f.size + 'B' : Math.round(f.size/1024) + 'KB') + ')' : ' (chưa có)';
+  const onclick = f.exists ? `onclick="previewArtifact('${jobId}','${f.path.replace(/'/g,"\'")}')"` : '';
+  return `<div class="${cls}" ${onclick}>📄 ${f.path}${sz}</div>`;
+}
+
+async function previewArtifact(jobId, path) {
+  // Find the step that owns this artifact to mount the preview under.
+  let mount = null;
+  document.querySelectorAll('.preview-mount').forEach(m => {
+    if (m.parentElement.parentElement.innerHTML.includes(path)) mount = m;
+  });
+  if (!mount) return;
+  const url = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(path);
+  if (/\.(png|jpe?g|gif|webp)$/i.test(path)) {
+    mount.innerHTML = `<img src="${url}" style="max-width:100%;border-radius:4px;margin-top:8px">`;
+    return;
   }
+  if (/\.mp4$/i.test(path)) {
+    mount.innerHTML = `<video src="${url}" controls style="width:100%;margin-top:8px;border-radius:4px"></video>`;
+    return;
+  }
+  try {
+    const r = await fetch(url);
+    const txt = await r.text();
+    let formatted = txt;
+    if (/\.json$/i.test(path)) {
+      try { formatted = JSON.stringify(JSON.parse(txt), null, 2); } catch (e) {}
+    }
+    mount.innerHTML = `<pre class="dump">${escapeHtml(formatted.slice(0, 8000))}${txt.length > 8000 ? '\n…(truncated)' : ''}</pre>`;
+  } catch (e) {
+    mount.innerHTML = `<div style="color:#d65d4a;font-size:11px;margin-top:6px">${e.message}</div>`;
+  }
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+async function renderFinal(t) {
+  const mount = document.getElementById('final-mount');
+  if (!mount) return;
+  const jobId = t.job_id;
+  const videoUrl = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=video.mp4';
+  const thumbUrl = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=thumbnail.jpg';
+  let seo = {};
+  try {
+    const sr = await fetch('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=seo.json');
+    if (sr.ok) seo = await sr.json();
+  } catch (e) {}
+  const tags = (seo.tags || []).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join('');
+  mount.innerHTML = `
+    <div class="final-block">
+      <h2 style="margin-top:0;color:#4ad67a">🎬 Video sẵn sàng đăng YouTube</h2>
+      <video src="${videoUrl}" controls></video>
+      <div style="margin-top:14px">
+        <div class="thumb">
+          <div class="meta-line">Thumbnail:</div>
+          <img src="${thumbUrl}" alt="thumbnail">
+        </div>
+        <div style="display:inline-block;width:calc(100% - 270px);vertical-align:top">
+          <div class="meta-line">Title (${(seo.title||'').length} chars):</div>
+          <div class="copybox">
+            <button class="copybtn" onclick="copyText(this,'${(seo.title||'').replace(/'/g,"\\'").replace(/\n/g,' ')}')">copy</button>
+            ${escapeHtml(seo.title || '(missing)')}
+          </div>
+          <div class="meta-line">Description (${(seo.description||'').length} chars):</div>
+          <div class="copybox" style="max-height:200px;overflow:auto">
+            <button class="copybtn" onclick="copyText(this, document.getElementById('seo-desc').innerText)">copy</button>
+            <span id="seo-desc">${escapeHtml(seo.description || '(missing)')}</span>
+          </div>
+          <div class="meta-line">Tags (${(seo.tags||[]).length}):</div>
+          <div class="copybox">
+            <button class="copybtn" onclick="copyText(this, '${(seo.tags||[]).join(', ').replace(/'/g,"\\'")}')">copy</button>
+            ${tags || '(missing)'}
+          </div>
+          <div class="meta-line">Language: ${seo.language || '?'} · AI disclosure: ${seo.ai_disclosure ? 'yes' : 'no'}</div>
+          <a href="${videoUrl}" download style="display:inline-block;margin-top:8px;color:#4a78d6;font-size:12px">⬇️ tải video.mp4</a>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function copyText(btn, text) {
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = 'copied!';
+    setTimeout(() => btn.textContent = orig, 1200);
+  });
 }
 
 function reopenWs(jobId) {
@@ -257,8 +671,7 @@ function reopenWs(jobId) {
     try {
       const ev = JSON.parse(msg.data);
       appendEvent(ev);
-      // Refresh detail soon to reflect new stage status.
-      setTimeout(fetchJobs, 200);
+      setTimeout(() => fetchTimeline(jobId), 250);
     } catch (e) {}
   };
 }

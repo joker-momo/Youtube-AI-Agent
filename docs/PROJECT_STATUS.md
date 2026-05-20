@@ -1,6 +1,6 @@
 # Youtube AI Agent Project Status
 
-Last updated: 2026-05-20 (Prompt quality batch: schema, length, brand voice, decomp, self-check)
+Last updated: 2026-05-20 (Auto QA + rework loop + DNA consistency verified across 2 videos)
 
 This file is the living project tracker. Update it whenever a meaningful system capability is added, changed, verified, or deferred so a new reader can quickly understand what the system does, what is being built now, and what remains.
 
@@ -604,6 +604,73 @@ catch and force a rewrite.
 
 Docker verification: `133 passed in 23.64s`.
 
+### V3 Phase 1 Step 16 Auto QA + rework loop + DNA consistency
+
+Closes the auto pipeline end-to-end with real Gemini QA, including
+self-healing rework, and verifies the channel DNA holds across two
+different ideas without manual intervention.
+
+QA rework loop:
+
+- `auto_rework_artifact(artifact, ..., chatgpt_fn)` reads
+  `operator/gemini/<artifact>_qa.json`, builds a Spanish rework
+  message with the QA `issues` and `required_changes`, sends it into
+  the persistent ChatGPT tab, resets `<artifact>_promote` and
+  `<artifact>_qa` back to pending, and re-promotes the artifact.
+- `auto_qa_with_rework(artifact, ...)` wraps the corresponding
+  `auto_*_qa_stage`, catches `StageInputMissingError` from a
+  NEEDS_REWORK verdict, and retries up to
+  `channel.yaml -> qa_rules.thresholds.max_retry_per_qa` (default 3)
+  before giving up.
+- `/run-all` swaps the three `auto_*_qa_stage` calls for
+  `auto_qa_with_rework`, so a failed QA self-heals via ChatGPT
+  instead of halting the pipeline.
+
+Gemini scrape composite:
+
+- The text-diff stability wait failed in a persistent Gemini tab
+  when two consecutive QA responses were byte-identical (e.g. two
+  PASS verdicts with identical scores and empty issues). Driver
+  kept scraping the prior response and timed out.
+- Gemini scrape now returns a composite ``"[count=N]\n<text>"``
+  where ``N`` is the number of balanced JSON objects in the body
+  (filtered to exclude our own user-prompt-shaped objects). Any new
+  response — a new JSON or a plain "OK" briefing reply — bumps
+  either count or text, so the stability wait reacts. The driver
+  strips the prefix before returning.
+- `_wait_for_stable_response` emits one log line per poll iteration
+  (with `log_tag` = ``chatgpt`` or ``gemini``) so scrape failures
+  are diagnosable from `docker compose logs browser-worker` without
+  rebuilding.
+
+Live DNA consistency check against the real Browser Appliance:
+
+- Video 1 ``composite-1779270300`` (sleep habits idea):
+  - 8/8 stages PASS in 7m06s.
+  - All three Gemini QA verdicts: PASS, scores 5/5/5/5.
+  - ``video.mp4`` 54.06 s (target_duration_sec=54).
+- Video 2 ``dna2-1779270810`` (morning energy idea):
+  - 8/8 stages PASS in 5m45s.
+  - All three QA verdicts: PASS, scores 5/5/5/5.
+  - ``video.mp4`` 54.06 s.
+- Cross-video DNA contracts (both honored without manual fixup):
+  - narration: V1=128 words, V2=124 (range 110-150).
+  - scenes: V1=5, V2=5 (range 4-6).
+  - ``sum(duration_sec) == total_duration_sec`` true for both.
+  - SEO title: V1=55 chars, V2=54 (range 50-70).
+  - SEO description: V1=414 chars, V2=327 (range 300-600).
+  - tags: V1=7, V2=7 (range 5-8), language ``es-419`` both.
+  - Brand voice (calm/respectful/practical) consistent across both.
+  - Preferred positioning phrases used in both (``adultos 45+``,
+    ``bienestar 45+``, ``Vida Plena 45+``, ``bienestar después de
+    los 45``); no forbidden phrases in either.
+- The channel DNA reproduces across different topics; we are ready
+  to start filling a real channel without diversification (persona
+  injection, A/B variants) until we have 10-20 published videos to
+  learn from.
+
+Docker verification: ``140 passed in 24.63s``.
+
 ## Target V3 Architecture
 
 ```text
@@ -668,7 +735,7 @@ Latest full verification:
 
 ```text
 docker compose run --rm video-agent pytest -q
-116 passed in 14.19s
+140 passed in 24.63s
 ```
 
 ## Fresh Operator Run

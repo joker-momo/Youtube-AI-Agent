@@ -414,3 +414,102 @@ def test_browser_client_env_override(monkeypatch):
     monkeypatch.setenv("BROWSER_WORKER_URL", "http://other:9999/")
     client = BrowserClient()
     assert client.base_url == "http://other:9999"
+
+
+# ---------- /run-all -------------------------------------------------------
+
+
+def test_http_run_all_success(
+    http_client: TestClient,
+    monkeypatch,
+    idea_payload: dict,
+    valid_script_payload: dict,
+    valid_scenes_payload: dict,
+    valid_seo_payload: dict,
+):
+    _create_job(http_client)
+    http_client.post("/jobs/job-auto/idea", json=idea_payload)
+
+    fake = FakeBrowserClient(
+        queue=[
+            json.dumps(valid_script_payload, ensure_ascii=False),
+            json.dumps(valid_scenes_payload, ensure_ascii=False),
+            json.dumps(valid_seo_payload, ensure_ascii=False),
+        ]
+    )
+    app.dependency_overrides[get_browser_client] = lambda: fake
+
+    # Render and review are expensive; stub them so the route exercise
+    # only verifies orchestration, not Remotion.
+    def fake_render(job_dir, channel_path):
+        out = job_dir / "video.mp4"
+        out.write_bytes(b"fake")
+        # Mirror what the real stage does so /run-all sees the state advance.
+        from video_agent.orchestrator.stages import _complete_stage
+
+        _complete_stage(job_dir, "render", out)
+        return out
+
+    def fake_review(job_dir):
+        out = job_dir / "operator_review.html"
+        out.write_text("<html/>", encoding="utf-8")
+        from video_agent.orchestrator.stages import _complete_stage
+
+        _complete_stage(job_dir, "review", out)
+        return out
+
+    monkeypatch.setattr(
+        "video_agent.web.app.run_render_stage", fake_render
+    )
+    monkeypatch.setattr(
+        "video_agent.web.app.run_review_stage", fake_review
+    )
+
+    try:
+        r = http_client.post("/jobs/job-auto/run-all")
+    finally:
+        app.dependency_overrides.pop(get_browser_client, None)
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    stages = [c["stage"] for c in body["completed"]]
+    assert stages == [
+        "script_promote",
+        "scenes_promote",
+        "seo_promote",
+        "render",
+        "review",
+    ]
+    # All 8 underlying stages should be completed now.
+    assert all(s["status"] == "completed" for s in body["state"]["stages"])
+    assert len(fake.calls) == 3  # one ChatGPT call per auto stage
+
+
+def test_http_run_all_stops_on_worker_error(
+    http_client: TestClient,
+    idea_payload: dict,
+):
+    _create_job(http_client)
+    http_client.post("/jobs/job-auto/idea", json=idea_payload)
+
+    fake = FakeBrowserClient()
+    fake.error = BrowserClientError(
+        "selector failed", status_code=502, detail={"error": "boom"}
+    )
+    app.dependency_overrides[get_browser_client] = lambda: fake
+
+    try:
+        r = http_client.post("/jobs/job-auto/run-all")
+    finally:
+        app.dependency_overrides.pop(get_browser_client, None)
+
+    assert r.status_code == 502
+    detail = r.json()["detail"]
+    assert detail["completed"] == []  # nothing finished before the failure
+    assert detail["stopped_at"] == "script_promote"
+    assert "state" in detail
+
+
+def test_http_run_all_unknown_job_returns_404(http_client: TestClient):
+    r = http_client.post("/jobs/missing/run-all")
+    assert r.status_code == 404

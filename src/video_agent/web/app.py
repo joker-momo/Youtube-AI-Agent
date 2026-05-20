@@ -376,6 +376,74 @@ async def post_auto_seo(
     return {"output": str(output.relative_to(job_dir)), "state": state.to_dict()}
 
 
+@app.post("/jobs/{job_id}/run-all")
+async def post_run_all(
+    job_id: str,
+    jobs_root: Path = Depends(get_jobs_root),
+    channel_path: Path = Depends(get_channel_path),
+    client: BrowserClient = Depends(get_browser_client),
+) -> dict:
+    """End-to-end pipeline: script -> scenes -> seo -> render -> review.
+
+    Runs the three auto stages (which hit browser-worker) followed by
+    the render and review stages (pure local). Returns the list of
+    completed stages on success. On partial failure returns HTTP 502
+    (browser worker) or 409 (stage misuse) with the completed-so-far
+    list in ``detail`` so the caller can resume from the same job.
+    """
+    job_dir = jobs_root / job_id
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+
+    completed: list[dict] = []
+
+    async def _record(stage_label: str, output_path: Path) -> None:
+        completed.append(
+            {"stage": stage_label, "output": str(output_path.relative_to(job_dir))}
+        )
+
+    try:
+        await _record(
+            "script_promote",
+            await auto_script_stage(job_dir, channel_path, client.chatgpt_send),
+        )
+        await _record(
+            "scenes_promote",
+            await auto_scenes_stage(job_dir, channel_path, client.chatgpt_send),
+        )
+        await _record(
+            "seo_promote",
+            await auto_seo_stage(job_dir, channel_path, client.chatgpt_send),
+        )
+        await _record("render", run_render_stage(job_dir, channel_path))
+        await _record("review", run_review_stage(job_dir))
+    except StageInputMissingError as exc:
+        state = load_job(job_dir)
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": str(exc),
+                "completed": completed,
+                "stopped_at": state.current_stage,
+                "state": state.to_dict(),
+            },
+        ) from exc
+    except BrowserClientError as exc:
+        state = load_job(job_dir)
+        http_exc = _handle_browser_client_error(exc)
+        # Re-pack the detail to include progress.
+        detail = (
+            http_exc.detail if isinstance(http_exc.detail, dict) else {"error": http_exc.detail}
+        )
+        detail["completed"] = completed
+        detail["stopped_at"] = state.current_stage
+        detail["state"] = state.to_dict()
+        raise HTTPException(status_code=http_exc.status_code, detail=detail) from exc
+
+    state = load_job(job_dir)
+    return {"completed": completed, "state": state.to_dict()}
+
+
 EVENTS_POLL_SECONDS = float(os.environ.get("EVENTS_POLL_SECONDS", "0.2"))
 
 

@@ -1,6 +1,6 @@
 # Youtube AI Agent Project Status
 
-Last updated: 2026-05-20 (Full V3 pipeline end-to-end verified: video.mp4 produced)
+Last updated: 2026-05-20 (One-shot /run-all: idea.json -> video.mp4 in a single POST)
 
 This file is the living project tracker. Update it whenever a meaningful system capability is added, changed, verified, or deferred so a new reader can quickly understand what the system does, what is being built now, and what remains.
 
@@ -437,6 +437,34 @@ Decisions already chosen:
   + auto promote needed the BrowserClient. They are not in the
   `/stages/.../auto` set yet because rendering does not call the
   browser-worker.
+
+### V3 Phase 1 Step 13 One-shot /run-all endpoint
+
+- New route `POST /jobs/{job_id}/run-all` chains the full pipeline:
+  `auto_script_stage -> auto_scenes_stage -> auto_seo_stage ->
+  run_render_stage -> run_review_stage`. Returns
+  `{"completed": [...], "state": JobState}` on success.
+- On partial failure the route returns HTTP 409 (stage misuse / empty
+  worker response) or 502 (browser-worker error) with the
+  completed-so-far list, `stopped_at: current_stage`, and the full
+  `state` in `detail` so the caller can resume by hitting the
+  per-stage route that failed.
+- 3 new tests in `tests/test_auto_stages.py`:
+  - happy-path with all 5 stages (render/review stubbed),
+  - worker error mid-flight (HTTP 502, `completed: []`,
+    `stopped_at: script_promote`),
+  - unknown job (HTTP 404).
+- Live verified end-to-end against the real Browser Appliance with
+  the user signed into ChatGPT:
+  - `POST /jobs/runall-1779251655/run-all` -> 200,
+    `completed: [script_promote, scenes_promote, seo_promote, render,
+    review]`, `current_stage: review`.
+  - Wall clock: **3m43s** for the entire pipeline from `idea.json`
+    to `video.mp4` in a single HTTP call, zero copy-paste.
+  - Output: `video.mp4` (19 MB, 54.06 s, matches the idea's
+    `target_duration_sec`), `thumbnail.jpg` (51 KB), `report.md`,
+    `operator_review.html`, `visual_review.json`.
+- Docker verification: `133 passed in 22.09s`.
 
 ## Target V3 Architecture
 

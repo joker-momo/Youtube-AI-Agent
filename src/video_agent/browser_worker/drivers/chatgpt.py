@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from playwright.async_api import Page
 
 CHATGPT_URL = "https://chatgpt.com/?model=gpt-4o&temporary-chat=true"
+CHATGPT_FALLBACK_URL = "https://chatgpt.com/"
 
 # Composer textarea is a contenteditable div in the current UI; the
 # textarea fallback covers legacy renders.
@@ -201,7 +202,33 @@ class ChatGPTDriver:
         """
         if self._opened:
             return
-        await self.page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=30_000)
+
+        # ChatGPT temporary-chat URL can intermittently return HTTP
+        # failure pages (cloud edge / anti-bot / transient network).
+        # Fall back to the root URL so we can still continue in the
+        # same signed-in profile.
+        nav_errors: list[str] = []
+        navigated = False
+        for url in (CHATGPT_URL, CHATGPT_FALLBACK_URL):
+            for _ in range(2):
+                try:
+                    await self.page.goto(
+                        url, wait_until="domcontentloaded", timeout=30_000
+                    )
+                    navigated = True
+                    break
+                except Exception as exc:
+                    nav_errors.append(f"{url}: {exc}")
+                    await self.page.wait_for_timeout(800)
+            if navigated:
+                break
+        if not navigated:
+            shot = await save_trace_screenshot(self.page, prefix="chatgpt-goto-failed")
+            raise BrowserDriverError(
+                "ChatGPT navigation failed: " + " | ".join(nav_errors[-3:]),
+                screenshot_path=shot,
+            )
+
         await human_pause(self.page, min_ms=1200, max_ms=2200)
 
         if _is_login_url(self.page.url):

@@ -126,9 +126,8 @@ def test_promote_operator_artifact_rejects_invalid_scenes_contract(tmp_path):
     message = str(excinfo.value)
     assert "scene-NN" in message
     # asset_refs as a list is now silently coerced to {} by
-    # _normalize_scenes_candidate; only the scene-id and qa.verdict
-    # violations are still surfaced.
-    assert "ChatGPT prefilled" in message
+    # _normalize_scenes_candidate, and prefilled qa verdict is rewritten
+    # to pending so validation focuses on structural shape.
     assert not (tmp_path / "operator-job/scenes.json").exists()
 
 
@@ -160,6 +159,37 @@ def test_promote_operator_artifact_normalizes_compact_scenes_shape(tmp_path):
     assert promoted["scenes"][0]["id"] == "scene-01"
     assert promoted["scenes"][0]["visual_prompt"] == "Warm bedroom at night"
     assert promoted["scenes"][0]["on_screen_text"] == "Baja la luz"
+    assert promoted["qa"]["verdict"] == "PENDING_GEMINI_QA"
+
+
+def test_promote_operator_artifact_rewrites_scenes_prefilled_qa(tmp_path):
+    raw_path = tmp_path / "scenes.raw.txt"
+    raw_path.write_text(
+        json.dumps(
+            {
+                "channel_id": "vida-plena-45",
+                "job_id": "operator-job",
+                "total_duration_sec": 12,
+                "scenes": [
+                    {
+                        "id": "scene-01",
+                        "duration_sec": 12,
+                        "narration": "Respira con calma.",
+                        "on_screen_text": "Respira",
+                        "caption": "Respira",
+                        "visual_prompt": "Calm bedroom",
+                        "motion": "slow push-in",
+                        "asset_refs": {},
+                    }
+                ],
+                "qa": {"verdict": "PASS"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = promote_operator_artifact(tmp_path / "operator-job", "scenes", raw_path)
+    promoted = json.loads(result.output_path.read_text(encoding="utf-8"))
     assert promoted["qa"]["verdict"] == "PENDING_GEMINI_QA"
 
 

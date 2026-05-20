@@ -804,6 +804,9 @@ let WS = null;
 let OPEN_STAGES = new Set();
 let EVENTS_OPEN = false;
 let LAST_TIMELINE = null;
+let TIMELINE_POLL_TIMER = null;
+let WS_RETRY_TIMER = null;
+let WS_RETRY_MS = 1000;
 
 const STAGE_LABEL = {
   script: 'Script prompt',
@@ -920,6 +923,7 @@ function renderJobsList(jobs) {
 }
 
 function selectJob(jobId) {
+  if (!jobId) return;
   SELECTED_ID = jobId;
   OPEN_STAGES = new Set();
   document.querySelectorAll('.job-card').forEach(c => c.classList.remove('active'));
@@ -1152,13 +1156,26 @@ function copyText(btn, text) {
 }
 
 function reopenWs(jobId) {
+  if (WS_RETRY_TIMER) {
+    clearTimeout(WS_RETRY_TIMER);
+    WS_RETRY_TIMER = null;
+  }
   if (WS) { try { WS.close(); } catch (e) {} WS = null; }
+  if (!jobId) return;
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   WS = new WebSocket(`${proto}//${location.host}/jobs/${jobId}/events`);
   const dot = document.getElementById('ws-dot');
   const label = document.getElementById('ws-label');
-  WS.onopen = () => { dot.className = 'ws-dot live'; label.textContent = 'live'; };
-  WS.onclose = () => { dot.className = 'ws-dot off'; label.textContent = 'disconnected'; };
+  WS.onopen = () => {
+    WS_RETRY_MS = 1000;
+    dot.className = 'ws-dot live';
+    label.textContent = 'live';
+  };
+  WS.onclose = () => {
+    dot.className = 'ws-dot off';
+    label.textContent = 'disconnected';
+    scheduleWsReconnect(jobId);
+  };
   WS.onerror = () => { dot.className = 'ws-dot off'; label.textContent = 'error'; };
   WS.onmessage = (msg) => {
     try {
@@ -1167,6 +1184,24 @@ function reopenWs(jobId) {
       setTimeout(() => fetchTimeline(jobId), 250);
     } catch (e) {}
   };
+}
+
+function scheduleWsReconnect(jobId) {
+  if (!jobId || SELECTED_ID !== jobId) return;
+  if (WS_RETRY_TIMER) return;
+  const wait = WS_RETRY_MS;
+  WS_RETRY_TIMER = setTimeout(() => {
+    WS_RETRY_TIMER = null;
+    if (SELECTED_ID === jobId) reopenWs(jobId);
+  }, wait);
+  WS_RETRY_MS = Math.min(15000, Math.round(WS_RETRY_MS * 1.7));
+}
+
+function startTimelinePolling() {
+  if (TIMELINE_POLL_TIMER) return;
+  TIMELINE_POLL_TIMER = setInterval(() => {
+    if (SELECTED_ID) fetchTimeline(SELECTED_ID);
+  }, 2000);
 }
 
 function toggleEvents() {
@@ -1200,6 +1235,7 @@ function showToast(msg) {
 document.getElementById('refresh-btn').onclick = fetchJobs;
 fetchJobs();
 setInterval(fetchJobs, 4000);
+startTimelinePolling();
 </script>
 </body>
 </html>

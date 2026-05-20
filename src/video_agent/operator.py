@@ -228,8 +228,15 @@ def _normalize_scenes_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
         parsed["total_duration_sec"] = sum(
             int(item.get("duration_sec", 0)) for item in normalized_scenes
         )
-    if not isinstance(parsed.get("qa"), dict):
+    qa = parsed.get("qa")
+    if not isinstance(qa, dict):
         parsed["qa"] = {"verdict": "PENDING_GEMINI_QA"}
+    else:
+        # Scenes QA must be produced by the dedicated QA reviewer,
+        # never prefilled by the writing model.
+        qa_obj = dict(qa)
+        qa_obj["verdict"] = "PENDING_GEMINI_QA"
+        parsed["qa"] = qa_obj
     return parsed
 
 

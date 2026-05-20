@@ -7,6 +7,7 @@ services:
     build: .
     working_dir: /app
     environment:
+      TZ: ${TZ:-Asia/Ho_Chi_Minh}
       PEXELS_API_KEY: ${PEXELS_API_KEY:-}
       PIXABAY_API_KEY: ${PIXABAY_API_KEY:-}
     volumes:
@@ -27,6 +28,7 @@ services:
     build: .
     working_dir: /app
     environment:
+      TZ: ${TZ:-Asia/Ho_Chi_Minh}
       PEXELS_API_KEY: ${PEXELS_API_KEY:-}
       PIXABAY_API_KEY: ${PIXABAY_API_KEY:-}
       BROWSER_WORKER_URL: http://browser-worker:8001
@@ -52,6 +54,7 @@ services:
       dockerfile: docker/browser-runtime/Dockerfile
     shm_size: "2gb"
     environment:
+      TZ: ${TZ:-Asia/Ho_Chi_Minh}
       CHROME_PROFILE_DIR: /data/profile
       CHROME_CDP_PORT: "9222"
     volumes:
@@ -68,6 +71,7 @@ services:
     build: .
     working_dir: /app
     environment:
+      TZ: ${TZ:-Asia/Ho_Chi_Minh}
       # browser-worker talks to the runtime container over the internal
       # Docker network. No host Chrome, no host.docker.internal hop.
       CHROME_CDP_URL: ${CHROME_CDP_URL:-http://browser-runtime:9222}

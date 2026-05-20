@@ -13,6 +13,7 @@ from video_agent.browser_worker.drivers import (
     ChatGPTDriver,
     GeminiDriver,
     LoginRequiredError,
+    VidIQDriver,
     human_pause,
     save_trace_screenshot,
 )
@@ -165,7 +166,7 @@ async def _connect_runtime():
 
 async def _open_session(site: str) -> str:
     """Create a new session: connect runtime, open page, run driver.open()."""
-    if site not in {"chatgpt", "gemini"}:
+    if site not in {"chatgpt", "gemini", "vidiq"}:
         raise HTTPException(status_code=404, detail=f"Unsupported site: {site}")
     try:
         pw_ctx, browser = await _connect_runtime()
@@ -183,7 +184,12 @@ async def _open_session(site: str) -> str:
         )
         page = await context.new_page()
         await human_pause(page, min_ms=300, max_ms=900)
-        driver = ChatGPTDriver(page) if site == "chatgpt" else GeminiDriver(page)
+        if site == "chatgpt":
+            driver = ChatGPTDriver(page)
+        elif site == "gemini":
+            driver = GeminiDriver(page)
+        else:
+            driver = VidIQDriver(page)
         try:
             await driver.open()
         except LoginRequiredError as exc:
@@ -405,6 +411,68 @@ async def gemini_session_send(session_id: str, payload: SendPromptRequest) -> di
 
 @app.delete("/gemini/sessions/{session_id}", status_code=204)
 async def gemini_close_session(session_id: str):
+    closed = await _close_session(session_id)
+    if not closed:
+        raise HTTPException(status_code=404, detail=f"Unknown session: {session_id}")
+    return None
+
+
+class KeywordRequest(BaseModel):
+    keyword: str
+    response_timeout_ms: int = 30_000
+
+
+class KeywordsRequest(BaseModel):
+    keywords: list[str]
+    response_timeout_ms: int = 30_000
+
+
+@app.post("/vidiq/sessions", response_model=OpenSessionResponse)
+async def vidiq_open_session() -> dict:
+    sid = await _open_session("vidiq")
+    return {"session_id": sid, "site": "vidiq"}
+
+
+@app.post("/vidiq/sessions/{session_id}/score")
+async def vidiq_session_score(session_id: str, payload: KeywordRequest) -> dict:
+    entry = _SESSIONS.get(session_id)
+    if entry is None or entry["site"] != "vidiq":
+        raise HTTPException(status_code=404, detail=f"Unknown vidiq session: {session_id}")
+    driver: VidIQDriver = entry["driver"]
+    try:
+        return await driver.score_keyword(
+            payload.keyword, response_timeout_ms=payload.response_timeout_ms
+        )
+    except LoginRequiredError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": str(exc),
+                "screenshot": exc.screenshot_path or "",
+                "login_required": True,
+            },
+        ) from exc
+    except BrowserDriverError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"error": str(exc), "screenshot": exc.screenshot_path or ""},
+        ) from exc
+
+
+@app.post("/vidiq/sessions/{session_id}/score_batch")
+async def vidiq_session_score_batch(
+    session_id: str, payload: KeywordsRequest
+) -> dict:
+    entry = _SESSIONS.get(session_id)
+    if entry is None or entry["site"] != "vidiq":
+        raise HTTPException(status_code=404, detail=f"Unknown vidiq session: {session_id}")
+    driver: VidIQDriver = entry["driver"]
+    results = await driver.score_keywords(payload.keywords)
+    return {"session_id": session_id, "results": results}
+
+
+@app.delete("/vidiq/sessions/{session_id}", status_code=204)
+async def vidiq_close_session(session_id: str):
     closed = await _close_session(session_id)
     if not closed:
         raise HTTPException(status_code=404, detail=f"Unknown session: {session_id}")

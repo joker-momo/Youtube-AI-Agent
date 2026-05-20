@@ -10,10 +10,12 @@ from video_agent.operator import (
     _chatgpt_seo_prompt,
     _chatgpt_script_prompt,
     _gemini_qa_prompt,
+    extract_json_object,
     promote_operator_artifact,
     promote_operator_qa,
     write_operator_review,
 )
+from video_agent.utils.json_io import write_json as _write_json
 from video_agent.orchestrator.job_state import load_job, save_job
 from video_agent.orchestrator.orchestrator import _now
 from video_agent.pipeline import OperatorRenderOptions, render_operator_job
@@ -300,9 +302,10 @@ def promote_qa_stage(job_dir: Path, artifact: str, raw_response: str) -> Path:
 
     ``artifact`` is one of ``script``, ``scenes``, ``seo``. The stage
     name written to the job state is ``<artifact>_qa``. Verdict must
-    be PASS; anything else raises ``StageInputMissingError`` with the
-    issues so the caller can decide whether to retry the upstream
-    promote stage.
+    be PASS to advance; on NEEDS_REWORK (or any other non-PASS value)
+    the parsed QA JSON is still saved so the operator can inspect the
+    issues, and ``StageInputMissingError`` is raised with the issue
+    list so /run-all halts cleanly at this stage.
     """
     if artifact not in _QA_ARTIFACT_FILE:
         raise StageInputMissingError(f"Unsupported QA artifact: {artifact}")
@@ -319,10 +322,36 @@ def promote_qa_stage(job_dir: Path, artifact: str, raw_response: str) -> Path:
     raw_path.parent.mkdir(parents=True, exist_ok=True)
     raw_path.write_text(raw_response, encoding="utf-8")
 
+    qa_output = job_dir / "operator" / "gemini" / f"{artifact}_qa.json"
+
     try:
         result = promote_operator_qa(job_dir, artifact, raw_path)
     except ValueError as exc:
-        raise StageInputMissingError(str(exc)) from exc
+        # Verdict != PASS or shape invalid. We still want a parsed QA
+        # file on disk so the operator can read the issues/required
+        # changes without grepping raw text. Parse defensively; if the
+        # raw response is not JSON at all, surface the original error.
+        try:
+            parsed = extract_json_object(raw_response)
+        except Exception:
+            raise StageInputMissingError(str(exc)) from exc
+        qa_payload = {
+            "artifact": artifact,
+            "verdict": str(parsed.get("verdict", "")).upper() or "MISSING",
+            "issues": parsed.get("issues") or [],
+            "required_changes": (
+                parsed.get("required_changes")
+                or parsed.get("suggested_fixes")
+                or []
+            ),
+            "scores": parsed.get("scores") or {},
+        }
+        qa_output.parent.mkdir(parents=True, exist_ok=True)
+        _write_json(qa_output, qa_payload)
+        raise StageInputMissingError(
+            f"Gemini QA verdict for {artifact} is "
+            f"{qa_payload['verdict']}: {qa_payload['issues']}"
+        ) from exc
 
     qa_payload = json.loads(result.output_path.read_text(encoding="utf-8"))
     verdict = str(qa_payload.get("verdict", "")).upper()

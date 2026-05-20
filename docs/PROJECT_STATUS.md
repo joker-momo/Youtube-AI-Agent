@@ -1,6 +1,6 @@
 # Youtube AI Agent Project Status
 
-Last updated: 2026-05-20 (Auto QA + rework loop + DNA consistency verified across 2 videos)
+Last updated: 2026-05-20 (Long-form 20-30 min pipeline + Claude QA + YouTube-style dashboard + vidIQ driver)
 
 This file is the living project tracker. Update it whenever a meaningful system capability is added, changed, verified, or deferred so a new reader can quickly understand what the system does, what is being built now, and what remains.
 
@@ -669,7 +669,113 @@ Live DNA consistency check against the real Browser Appliance:
   injection, A/B variants) until we have 10-20 published videos to
   learn from.
 
-Docker verification: ``140 passed in 24.63s``.
+Docker verification: ``143 passed in 18.48s``.
+
+### V3 Phase 1 Step 17 vidIQ driver (free tier via YouTube extension overlay)
+
+- New `src/video_agent/browser_worker/drivers/vidiq.py` scrapes the
+  Search Companion sidebar the vidIQ Chrome extension injects into
+  YouTube search results pages. Free tier covers keyword score,
+  volume, competition, related keywords — no paid API needed.
+- HTTP routes: `POST /vidiq/sessions`, `POST /vidiq/sessions/{sid}/score`,
+  `POST /vidiq/sessions/{sid}/score_batch`, `DELETE /vidiq/sessions/{sid}`.
+- Robust scrape: wait for digit + ``SEARCH TERM:`` match to defend
+  against stale panel between queries; ``about:blank`` detour forces
+  the SPA to remount the panel each query; soft-fail
+  ``Not enough search data`` instead of raising.
+- Live verified end-to-end with the user signed into vidIQ free tier:
+  - ``dormir mejor 50`` -> score 25, related = [dormir, musica para
+    relajarse, dormirse rapido].
+  - ``rutina matutina 45`` -> score 25, distinct related set.
+  - ``habitos saludables despues de los 50`` -> soft-fail
+    ``not_enough_search_data``.
+- Driver not yet wired into the orchestrator; `seo_vidiq` stage to
+  follow.
+
+### V3 Phase 1 Step 18 Long-form 20-30 min pipeline
+
+- `channel.yaml` declares a ``content_format`` block:
+  ``target_duration_sec: 1500`` (25 min), window 1200-1800 s,
+  24-40 scenes, publish schedule 3/week Mon/Wed/Fri 19:00
+  America/Mexico_City for the 45+ wellness audience.
+- `briefing.py` per-stage contracts rewritten for the new format:
+  - script: hook 80-180 chars, 10-15 sections, narration 2900-4350
+    palabras (~20-30 min at 145 wpm), cta 20-250 chars.
+  - scenes: total 1200-1800 s, 24-40 scenes of 30-60 s each.
+  - seo: description 700-1500 chars in 3-5 paragraphs, tags 6-10
+    mixing broad + long-tail.
+- `manual-idea.schema.json` `target_duration_sec` max bumped to 1800.
+- `inputs/long_form_idea_sleep.json` provides a 12-point 25-min idea
+  for smoke testing without breaking the 54 s mock-pipeline tests.
+
+### V3 Phase 1 Step 19 YouTube-style operations dashboard
+
+- `GET /` serves a single-page dashboard. Backend endpoints added:
+  - `GET /jobs` lists every job folder under JOBS_DIR with a
+    summary view (stages_done / stages_total, current_stage,
+    timestamps).
+  - `GET /jobs/{id}/timeline` returns per-stage status + actual
+    seconds + ETA + input/output artifact paths. Render ETA scales
+    with `target_duration_sec` (~1.2x realtime).
+  - `GET /jobs/{id}/artifact?path=...` streams any file inside the
+    job directory (path-traversal-protected via `_resolve_inside`).
+- Dashboard UI:
+  - Left rail lists jobs sorted newest first with per-job progress
+    bar and current_stage label.
+  - Right pane shows overall percent + ETA, then a step-by-step
+    timeline (numbered cards: pulsing blue for `in_progress`, green
+    for `completed`, red for `failed`).
+  - Each card expands to INPUT / OUTPUT artifact lists; clicking a
+    file fetches and previews inline (JSON/text dump, image, or
+    embedded video player).
+  - Final block appears when `video.mp4` exists: full-width video
+    player, thumbnail preview, title / description / tags / language
+    from `seo.json` in copy-to-clipboard boxes + download link.
+  - WS `/jobs/{id}/events` streamed into a live events log; each
+    event also nudges a timeline refetch.
+
+### V3 Phase 1 Step 20 QA browser flow switched to Claude
+
+- Gemini's free tier turned out to be too rate-limited for the 3 QA
+  stages of a long-form video; switched the QA driver to Claude
+  (claude.ai), still through the Browser Appliance noVNC profile.
+- New `src/video_agent/browser_worker/drivers/claude.py` mirrors the
+  ChatGPT driver shape (open / send_message / close, persistent
+  session, humanized cadence, login URL detection at
+  `claude.ai/login` and `/sign-in`).
+- Worker dispatch + auth status routes know about a "claude" site;
+  `_open_session("claude")` works alongside chatgpt/gemini/vidiq.
+- Orchestrator `/run-all` opens a persistent Claude tab for the QA
+  trio instead of Gemini.
+- ``operator.py`` gained `extract_json_objects` which extracts every
+  parseable JSON block from Claude responses and tries each one
+  against the artifact schema (Claude tends to wrap JSON in
+  commentary). ``promote_operator_artifact`` uses this so a noisy
+  response no longer aborts the stage.
+- Tests updated to cover Claude login-URL detection.
+
+### V3 Phase 1 Step 21 Resume `/run-all` + Claude artifact normalisation
+
+- `/run-all` now reads `job.json` and skips stages already
+  `completed`, so the operator can interrupt and resume long-form
+  runs without manual stage juggling.
+- Claude QA responses occasionally include extra `scores`-shaped
+  JSON objects; the normaliser in `operator.py` picks the schema-
+  valid candidate and rejects the noise.
+- `tests/test_operator_workflow.py` adds coverage for multi-JSON
+  Claude output.
+
+### Current operational state
+
+- 143 tests pass (`docker compose run --rm video-agent pytest -q`).
+- Pipeline produces 20-30 min long-form videos end-to-end with
+  ChatGPT writing + Claude QA + Remotion render, all through the
+  Browser Appliance (host noVNC for manual login once).
+- Dashboard at `http://127.0.0.1:8000/` gives step-by-step progress
+  + ETA + final video / metadata / thumbnail ready to copy into
+  YouTube Studio.
+- Channel target: Vida Plena 45+ (Spanish wellness 45+), 3 videos
+  per week Mon/Wed/Fri 19:00 Mexico time.
 
 ## Target V3 Architecture
 
@@ -735,7 +841,7 @@ Latest full verification:
 
 ```text
 docker compose run --rm video-agent pytest -q
-140 passed in 24.63s
+143 passed in 18.48s
 ```
 
 ## Fresh Operator Run
@@ -800,31 +906,52 @@ The command will either:
 
 ## Recent Commits
 
-- `6dcbea8 Add operator artifact validators`
-- `818c08b Update project status after fresh operator run`
-- `e9b5ab8 Add operator next-step guide`
-- `1f0161f Add operator job status command`
-- `a7f188f Refresh operator review after render`
-- `0d17b53 Add operator job review page`
-- `6c75dfc Add operator QA gate`
-- `545effa feat: add operator content workflow`
+- `fef352e fix: resume run-all and normalize Claude artifact shapes`
+- `9a5d5a9 feat: switch QA browser flow from Gemini to Claude`
+- `5846627 feat: redesign dashboard to youtube-style operations UI`
+- `a9dca52 Make dashboard step-by-step with artifacts, ETA, video, metadata`
+- `ba026ce Add minimal web dashboard for live job progress`
+- `0c21556 Switch pipeline to 20-30 min long-form format`
+- `3fe40c2 Add vidIQ driver (free tier via YouTube Chrome extension overlay)`
+- `0a181e8 Document auto QA rework loop and 2-video DNA consistency`
+- `5e3f590 Add QA rework loop and fix Gemini scrape for byte-identical responses`
+- `374f668 Persist Gemini QA result even on NEEDS_REWORK verdict`
+- `509df24 fix: let browser worker return timeout errors`
+- `71ece9c feat: add persistent auto QA pipeline`
+- `e49c7b1 Enrich per-stage briefing + task prompt for DNA consistency`
+- `b42c13c One temp chat per stage with role/context briefing message`
+- `f1ec0ed Add POST /jobs/{id}/run-all one-shot pipeline endpoint`
 
 ## Not Yet Done
 
-- V3 FastAPI app runs the `script`, `scenes`, `seo`, `render`, and `review` stages end-to-end from promoted artifacts.
-- Browser-worker has health and CDP diagnostic routes, but no ChatGPT/Gemini/vidIQ/image-generation drivers yet.
-- ChatGPT/Gemini/vidIQ browser automation is not yet packaged into a service.
-- WebSocket progress UI and `events.jsonl` replay are not implemented yet.
-- Trend/data intake and idea selection are not implemented yet.
-- ChatGPT image generation is not integrated as a first-class pipeline asset source.
-- Video-level QA checklist is still human review through `operator_review.html`.
-- YouTube upload, scheduling, persona eval, semantic reuse, analytics, and multi-job scaling are deferred.
+- `idea_research` stage with vidIQ topic gate (score keyword + scrape top-10 competitors) is not wired into the pipeline yet — driver exists but no stage / route.
+- `seo_vidiq` stage that scores final tags + title via vidIQ and swaps weak tags is not built.
+- Idea generation is still manual (user writes `idea.json`); no auto idea-batch generator from channel niche + trends.
+- ChatGPT image generation per scene is not integrated; pipeline still uses Pexels/Pixabay stock for visuals.
+- Long-form pipeline has been smoke-tested manually but no automated test asserts the 20-30 min config end-to-end (would require ~30-40 min wall to run).
+- YouTube upload is still manual (operator copies title/desc/tags from dashboard, drags video.mp4 into Studio); no Playwright auto-upload driver.
+- Analytics ingestion (retention curve / CTR feedback into next prompt) is deferred.
+- Persona injection, A/B variants, multi-channel scaling are deferred until 10-20 published videos give a baseline.
 
 ## Next Recommended Work
 
-V3 Phase 1 Steps 1-9 complete (health + orchestrator + job HTTP/WS + CDP diagnostic + script/scenes/SEO prompt+promote stages + render/review stages; 105/105 tests green). Next:
-
-1. Commit Step 9.
-2. Browser-worker driver work (ChatGPT/Gemini/vidIQ Playwright flows) tracked separately under Step 10.
-3. Smoke-test the host Chrome path with `scripts/launch-chrome-cdp.sh` + `GET /chrome` before depending on the browser-worker.
-4. Add Gemini QA stages once the render path is usable through the web app.
+1. **`idea_research` stage** — wire the vidIQ driver into a new
+   pre-`script` stage. Score the topic + 3-5 keyword variations,
+   scrape top-10 YouTube search results, store the report under
+   `jobs/<id>/research.json`, halt the pipeline (HTTP 409) when
+   score < 40 or competition > 60 so the operator picks a better
+   idea.
+2. **`seo_vidiq` stage** — after `seo_qa`, score each tag via vidIQ
+   and swap any with score < 30 for related-keyword suggestions
+   (already returned by the driver). Re-write `seo.json`.
+3. **Idea generator** — small ChatGPT-driven batch that turns the
+   channel niche + a few seed topics into 10-20 idea JSON files
+   queued under `inputs/ideas/<channel>/`.
+4. **First production run** — kick off 3 videos for the Vida Plena
+   45+ channel (`Mon/Wed/Fri` cadence) through `/run-all`, capture
+   retention + CTR after upload, feed observations back into the
+   briefing.
+5. **`run-batch` endpoint** — queue multiple `/run-all` runs back
+   to back so a single overnight session produces a week of videos.
+6. **ChatGPT image generation** as an asset source for higher
+   visual consistency across scenes.

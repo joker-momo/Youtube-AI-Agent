@@ -76,14 +76,14 @@ _SCHEMA_ES = {
         "{\n"
         '  "channel_id": str (= channel_id dado),\n'
         '  "job_id": str (= job_id dado),\n'
-        '  "hook": str (60-140 caracteres, una frase),\n'
-        '  "sections": array de 4-6 objetos,\n'
+        '  "hook": str (80-180 caracteres, una o dos frases),\n'
+        '  "sections": array de 10-15 objetos,\n'
         "    cada objeto: {\n"
-        '      "title": str (3-30 caracteres),\n'
-        '      "focus": str (10-80 caracteres)\n'
+        '      "title": str (3-50 caracteres),\n'
+        '      "focus": str (15-150 caracteres)\n'
         "    },\n"
-        '  "narration": str (110-150 palabras = 50-60 s a 145 wpm),\n'
-        '  "cta": str (10-100 caracteres),\n'
+        '  "narration": str (2900-4350 palabras = ~20-30 min a 145 wpm),\n'
+        '  "cta": str (20-250 caracteres),\n'
         '  "qa": { "verdict": "PENDING_GEMINI_QA" }\n'
         "}"
     ),
@@ -91,11 +91,11 @@ _SCHEMA_ES = {
         "{\n"
         '  "channel_id": str (= channel_id dado),\n'
         '  "job_id": str (= job_id dado),\n'
-        '  "total_duration_sec": int (50-65),\n'
-        '  "scenes": array de exactamente 4-6 objetos,\n'
+        '  "total_duration_sec": int (1200-1800, formato long-form 20-30 min),\n'
+        '  "scenes": array de 24-40 objetos,\n'
         "    cada objeto: {\n"
         '      "id": str (formato \\"scene-NN\\" secuencial),\n'
-        '      "duration_sec": int (8-15),\n'
+        '      "duration_sec": int (30-60),\n'
         '      "narration": str (en español, sub-bloque del narration aprobado),\n'
         '      "on_screen_text": str (3-6 palabras en español),\n'
         '      "caption": str (una frase corta en español),\n'
@@ -113,8 +113,10 @@ _SCHEMA_ES = {
         '  "job_id": str (= job_id dado),\n'
         '  "channel_id": str (= channel_id dado),\n'
         '  "title": str (50-70 caracteres, en es-419, sin clickbait),\n'
-        '  "description": str (300-600 caracteres, 2-3 párrafos),\n'
-        '  "tags": array de 5-8 strings (es-419, sin duplicados),\n'
+        '  "description": str (700-1500 caracteres, 3-5 párrafos, '
+        'palabra clave principal en los primeros 25 caracteres),\n'
+        '  "tags": array de 6-10 strings (es-419, mezcla 1-2 broad + '
+        '4-8 long-tail, sin duplicados),\n'
         '  "language": "es-419",\n'
         '  "ai_disclosure": true,\n'
         '  "thumbnail_path": str (ruta relativa, por ej. "thumbnail.jpg")\n'
@@ -128,43 +130,59 @@ _SCHEMA_ES = {
 # Length contracts: short, declarative, easy to verify mentally.
 _LENGTH_ES = {
     "script": (
-        "- hook: 60-140 caracteres, una sola frase, sin clickbait.\n"
-        "- sections: 4-6 secciones, cada title 3-30 chars, focus 10-80 chars.\n"
-        "- narration: 110-150 palabras (~50-60 s a 145 palabras/min).\n"
-        "- cta: 10-100 caracteres, llamado claro y no agresivo."
+        "- hook: 80-180 caracteres, una o dos frases, sin clickbait.\n"
+        "- sections: 10-15 secciones, cada title 3-50 chars, focus 15-150 chars.\n"
+        "- narration: 2900-4350 palabras (~20-30 min a 145 palabras/min).\n"
+        "- Estructura long-form 20-30 min: hook (15-25 s) -> intro promesa "
+        "(30-45 s) -> 10-15 secciones, cada una con: explicación + ejemplo o "
+        "micro-historia + transición fluida -> resumen (45-60 s) -> "
+        "cta (30-45 s). Mantén ritmo y evita relleno; cada sección aporta "
+        "un punto único.\n"
+        "- cta: 20-250 caracteres, llamado claro y no agresivo, incluye "
+        "sugerencia de suscribirse + comentar + ver otro video."
     ),
     "scenes": (
-        "- total_duration_sec: 50-65 segundos.\n"
-        "- 4-6 escenas, duración 8-15 s cada una.\n"
+        "- total_duration_sec: 1200-1800 segundos (formato long-form 20-30 min).\n"
+        "- 24-40 escenas, duración 30-60 s cada una.\n"
         "- La suma de duration_sec debe igualar total_duration_sec.\n"
         "- visual_prompt en inglés (5-25 palabras), describe un plano real.\n"
-        "- on_screen_text en español, 3-6 palabras, sin signos finales."
+        "- on_screen_text en español, 3-6 palabras, sin signos finales.\n"
+        "- Cada escena cubre una porción del narration; sigue el orden del "
+        "script. Cambios de plano cada 30-60 s evitan monotonía en formato "
+        "largo."
     ),
     "seo": (
-        "- title: 50-70 caracteres.\n"
-        "- description: 300-600 caracteres, 2-3 párrafos cortos.\n"
-        "- tags: 5-8 elementos, en español neutro (es-419), sin duplicados."
+        "- title: 50-70 caracteres, palabra clave principal en primeros 60 chars.\n"
+        "- description: 700-1500 caracteres, 3-5 párrafos.\n"
+        "    primer párrafo: hook + palabra clave principal en primeras 25 letras.\n"
+        "    segundo párrafo: qué aprenderá el espectador (3-5 puntos).\n"
+        "    tercer párrafo: cta + recordatorio de consultar profesional.\n"
+        "- tags: 6-10 elementos, mezcla 1-2 broad (high comp) + 4-8 long-tail "
+        "(low comp, score 50+), es-419, sin duplicados."
     ),
 }
 
 # Sub-task decomposition: forces the model to plan before emitting JSON.
 _DECOMP_ES = {
     "script": [
-        "1. Identifica el dolor o duda principal de la idea.",
-        "2. Escribe el hook (60-140 chars) que conecte con ese dolor.",
-        "3. Define 4-6 sections que cubran la respuesta práctica.",
-        "4. Redacta narration uniendo hook + secciones + cta (110-150 palabras).",
-        "5. Cuenta palabras de narration. Ajusta si está fuera de rango.",
-        "6. Solo entonces construye el JSON.",
+        "1. Identifica el dolor o duda principal de la idea y el resultado concreto que el espectador 45+ obtiene tras 20-30 min.",
+        "2. Escribe el hook (80-180 chars) que conecte con el dolor + promesa.",
+        "3. Define 10-15 sections que cubran la respuesta práctica con profundidad para 20-30 min: cada sección debe tener un sub-punto único + ejemplo o anécdota.",
+        "4. Redacta narration uniendo hook + intro + secciones + resumen + cta. Target: 2900-4350 palabras (~20-30 min a 145 wpm).",
+        "5. Cuenta palabras de narration. Si está fuera de rango, agrega o elimina ejemplos hasta caer en 2900-4350.",
+        "6. Verifica transiciones fluidas entre secciones (\"además\", \"otro hábito\", \"si esto te suena\"...).",
+        "7. Evita relleno: cada párrafo aporta valor concreto; el espectador debe sentir que el tiempo está bien invertido.",
+        "8. Solo entonces construye el JSON.",
     ],
     "scenes": [
-        "1. Lee narration del script aprobado y elige un total_duration_sec entre 50 y 65 s.",
-        "2. Divide narration en 4-6 bloques sucesivos cuyas duraciones sumen total_duration_sec.",
+        "1. Lee narration del script aprobado y elige un total_duration_sec entre 1200 y 1800 s.",
+        "2. Divide narration en 24-40 bloques sucesivos cuyas duraciones sumen total_duration_sec. Cada bloque ~30-60 s.",
         "3. Para cada bloque: redacta on_screen_text (3-6 palabras en español), caption (1 frase), visual_prompt (5-25 palabras en INGLÉS, estilo de búsqueda en banco de imágenes), motion (de la lista permitida).",
-        "4. Asigna ids scene-01, scene-02... en orden.",
-        "5. Vuelve a sumar duration_sec. Si no coincide con total_duration_sec, ajusta una escena para cuadrar.",
+        "4. Asigna ids scene-01, scene-02... en orden, hasta scene-NN.",
+        "5. Vuelve a sumar duration_sec. Si no coincide con total_duration_sec, ajusta una o dos escenas (preferiblemente la primera o última) para cuadrar exactamente.",
         "6. asset_refs DEBE ser {} (objeto), nunca [] (array).",
-        "7. Solo entonces construye el JSON.",
+        "7. Varía visual_prompt entre escenas para evitar monotonía visual en formato largo.",
+        "8. Solo entonces construye el JSON.",
     ],
     "seo": [
         "1. Extrae el tema y el beneficio principal del script y las escenas.",

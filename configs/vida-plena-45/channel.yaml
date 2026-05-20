@@ -33,13 +33,26 @@ personas:
   - id: "rosa"
     profile_path: "configs/vida-plena-45/personas/rosa.md"
     weight: 1.0
+content_format:
+  type: "long_form"
+  target_duration_sec: 1500       # 25 min sweet spot for 20-30 min long-form
+  duration_sec_min: 1200          # 20 min hard floor
+  duration_sec_max: 1800          # 30 min hard ceiling
+  scenes_count_min: 24
+  scenes_count_max: 40
+  publish_schedule:
+    cadence: "3 per week"
+    days: ["Monday", "Wednesday", "Friday"]
+    time_local: "19:00"
+    timezone: "America/Mexico_City"
+
 qa_rules:
   script_path: "configs/vida-plena-45/qa-rules/script.yaml"
   scene_path: "configs/vida-plena-45/qa-rules/scene.yaml"
   asset_path: "configs/vida-plena-45/qa-rules/asset.yaml"
   thresholds:
     max_retry_per_qa: 3
-    max_average_sentence_words: 15
+    max_average_sentence_words: 20
     max_thumbnail_words: 6
 positioning:
   forbidden_phrases:

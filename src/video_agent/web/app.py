@@ -1531,7 +1531,7 @@ async def post_auto_script_qa(
     try:
         output = await auto_script_qa_stage(
             job_dir, channel_path,
-            _one_shot_with_briefing(client, "gemini", "qa", channel_path, job_dir),
+            _one_shot_with_briefing(client, "claude", "qa", channel_path, job_dir),
         )
     except StageInputMissingError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1554,7 +1554,7 @@ async def post_auto_scenes_qa(
     try:
         output = await auto_scenes_qa_stage(
             job_dir, channel_path,
-            _one_shot_with_briefing(client, "gemini", "qa", channel_path, job_dir),
+            _one_shot_with_briefing(client, "claude", "qa", channel_path, job_dir),
         )
     except StageInputMissingError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1577,7 +1577,7 @@ async def post_auto_seo_qa(
     try:
         output = await auto_seo_qa_stage(
             job_dir, channel_path,
-            _one_shot_with_briefing(client, "gemini", "qa", channel_path, job_dir),
+            _one_shot_with_briefing(client, "claude", "qa", channel_path, job_dir),
         )
     except StageInputMissingError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1614,7 +1614,7 @@ async def post_run_all(
         )
 
     # Open ONE ChatGPT temp chat for the whole writing pipeline
-    # (script_promote, scenes_promote, seo_promote) and ONE Gemini
+    # (script_promote, scenes_promote, seo_promote) and ONE Claude
     # temp chat for the whole QA pipeline (script_qa, scenes_qa,
     # seo_qa). The tabs stay open across stages so the model carries
     # context, and we only close them when /run-all finishes.
@@ -1630,18 +1630,18 @@ async def post_run_all(
         return None
 
     chatgpt_sender = None
-    gemini_sender = None
+    qa_sender = None
     chatgpt_close = _noop_close
-    gemini_close = _noop_close
+    qa_close = _noop_close
     try:
         chatgpt_sender, chatgpt_close = await client.open_persistent_session("chatgpt")
-        gemini_sender, gemini_close = await client.open_persistent_session("gemini")
+        qa_sender, qa_close = await client.open_persistent_session("claude")
 
         async def chatgpt_fn(msgs):
             return await chatgpt_sender(list(msgs))
 
-        async def gemini_fn(msgs):
-            return await gemini_sender(list(msgs))
+        async def qa_fn(msgs):
+            return await qa_sender(list(msgs))
 
         # Brief each tab once before any task message.
         await chatgpt_sender(
@@ -1654,7 +1654,7 @@ async def post_run_all(
                 )
             ]
         )
-        await gemini_sender(
+        await qa_sender(
             [
                 build_initial_briefing(
                     channel_config,
@@ -1671,7 +1671,7 @@ async def post_run_all(
         await _record(
             "script_qa",
             await auto_qa_with_rework(
-                "script", job_dir, channel_path, chatgpt_fn, gemini_fn
+                "script", job_dir, channel_path, chatgpt_fn, qa_fn
             ),
         )
         await _record(
@@ -1681,7 +1681,7 @@ async def post_run_all(
         await _record(
             "scenes_qa",
             await auto_qa_with_rework(
-                "scenes", job_dir, channel_path, chatgpt_fn, gemini_fn
+                "scenes", job_dir, channel_path, chatgpt_fn, qa_fn
             ),
         )
         await _record(
@@ -1691,7 +1691,7 @@ async def post_run_all(
         await _record(
             "seo_qa",
             await auto_qa_with_rework(
-                "seo", job_dir, channel_path, chatgpt_fn, gemini_fn
+                "seo", job_dir, channel_path, chatgpt_fn, qa_fn
             ),
         )
         await _record("render", run_render_stage(job_dir, channel_path))
@@ -1726,7 +1726,7 @@ async def post_run_all(
         except Exception:
             pass
         try:
-            await gemini_close()
+            await qa_close()
         except Exception:
             pass
 

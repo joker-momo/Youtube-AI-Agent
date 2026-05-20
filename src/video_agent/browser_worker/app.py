@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from video_agent.browser_worker.drivers import (
     BrowserDriverError,
     ChatGPTDriver,
+    ClaudeDriver,
     GeminiDriver,
     LoginRequiredError,
     VidIQDriver,
@@ -39,11 +40,18 @@ def _is_logged_out_url(site: str, url: str) -> bool:
         return "auth.openai.com" in host or "/auth/login" in path or path == "/login"
     if site == "gemini":
         return "accounts.google.com" in host or "signin" in path
+    if site == "claude":
+        return (
+            "claude.ai/login" in url.lower()
+            or "claude.ai/sign-in" in url.lower()
+            or "/signin" in path
+            or "/auth/" in path
+        )
     return False
 
 
 def _login_required_message(site: str) -> str:
-    label = {"chatgpt": "ChatGPT", "gemini": "Gemini"}.get(site, site)
+    label = {"chatgpt": "ChatGPT", "gemini": "Gemini", "claude": "Claude"}.get(site, site)
     return (
         f"Login required for {label} in the browser-runtime profile. "
         "Open http://localhost:7900 (noVNC), sign in once, then retry."
@@ -87,6 +95,7 @@ def _target_url(site: str) -> str:
     targets = {
         "chatgpt": "https://chatgpt.com/",
         "gemini": "https://gemini.google.com/app",
+        "claude": "https://claude.ai/new",
     }
     if site not in targets:
         raise ValueError(f"Unsupported auth site: {site}")
@@ -166,7 +175,7 @@ async def _connect_runtime():
 
 async def _open_session(site: str) -> str:
     """Create a new session: connect runtime, open page, run driver.open()."""
-    if site not in {"chatgpt", "gemini", "vidiq"}:
+    if site not in {"chatgpt", "gemini", "claude", "vidiq"}:
         raise HTTPException(status_code=404, detail=f"Unsupported site: {site}")
     try:
         pw_ctx, browser = await _connect_runtime()
@@ -188,6 +197,8 @@ async def _open_session(site: str) -> str:
             driver = ChatGPTDriver(page)
         elif site == "gemini":
             driver = GeminiDriver(page)
+        elif site == "claude":
+            driver = ClaudeDriver(page)
         else:
             driver = VidIQDriver(page)
         try:
@@ -319,6 +330,8 @@ async def _drive(site: str, prompt: str, timeout_ms: int) -> dict:
                     driver = ChatGPTDriver(page)
                 elif site == "gemini":
                     driver = GeminiDriver(page)
+                elif site == "claude":
+                    driver = ClaudeDriver(page)
                 else:  # defensive; routes only call known sites
                     raise HTTPException(
                         status_code=404, detail=f"Unsupported site: {site}"
@@ -417,6 +430,26 @@ async def gemini_close_session(session_id: str):
     return None
 
 
+@app.post("/claude/sessions", response_model=OpenSessionResponse)
+async def claude_open_session() -> dict:
+    sid = await _open_session("claude")
+    return {"session_id": sid, "site": "claude"}
+
+
+@app.post("/claude/sessions/{session_id}/send")
+async def claude_session_send(session_id: str, payload: SendPromptRequest) -> dict:
+    raw = await _send_in_session(session_id, payload.prompt, payload.response_timeout_ms)
+    return {"site": "claude", "session_id": session_id, "raw_response": raw}
+
+
+@app.delete("/claude/sessions/{session_id}", status_code=204)
+async def claude_close_session(session_id: str):
+    closed = await _close_session(session_id)
+    if not closed:
+        raise HTTPException(status_code=404, detail=f"Unknown session: {session_id}")
+    return None
+
+
 class KeywordRequest(BaseModel):
     keyword: str
     response_timeout_ms: int = 30_000
@@ -487,6 +520,11 @@ async def chatgpt_send(payload: SendPromptRequest) -> dict:
 @app.post("/gemini/send")
 async def gemini_send(payload: SendPromptRequest) -> dict:
     return await _drive("gemini", payload.prompt, payload.response_timeout_ms)
+
+
+@app.post("/claude/send")
+async def claude_send(payload: SendPromptRequest) -> dict:
+    return await _drive("claude", payload.prompt, payload.response_timeout_ms)
 
 
 @app.get("/auth/{site}/status")

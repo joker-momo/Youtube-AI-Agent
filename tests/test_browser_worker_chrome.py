@@ -40,3 +40,9 @@ def test_is_logged_out_url_detects_gemini_login_redirects():
         "gemini", "https://accounts.google.com/signin/v2/identifier"
     )
     assert not _is_logged_out_url("gemini", "https://gemini.google.com/app")
+
+
+def test_is_logged_out_url_detects_claude_login_redirects():
+    assert _is_logged_out_url("claude", "https://claude.ai/login")
+    assert _is_logged_out_url("claude", "https://claude.ai/sign-in")
+    assert not _is_logged_out_url("claude", "https://claude.ai/new")

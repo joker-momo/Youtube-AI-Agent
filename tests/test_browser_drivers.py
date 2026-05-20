@@ -6,6 +6,7 @@ from video_agent.browser_worker.drivers.base import (
     normalise_response_text,
 )
 from video_agent.browser_worker.drivers.chatgpt import _is_login_url as chatgpt_is_login
+from video_agent.browser_worker.drivers.claude import _is_login_url as claude_is_login
 from video_agent.browser_worker.drivers.gemini import _is_login_url as gemini_is_login
 
 
@@ -43,6 +44,12 @@ def test_chatgpt_login_url_detection():
 def test_gemini_login_url_detection():
     assert gemini_is_login("https://accounts.google.com/signin/v2/identifier")
     assert not gemini_is_login("https://gemini.google.com/app")
+
+
+def test_claude_login_url_detection():
+    assert claude_is_login("https://claude.ai/login")
+    assert claude_is_login("https://claude.ai/sign-in")
+    assert not claude_is_login("https://claude.ai/new")
 
 
 def test_humanize_env_threshold(monkeypatch):

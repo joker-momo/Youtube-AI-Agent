@@ -1,6 +1,6 @@
 # Youtube AI Agent Project Status
 
-Last updated: 2026-05-20 (Browser Appliance landed: split runtime + worker)
+Last updated: 2026-05-20 (Browser Appliance + ChatGPT/Gemini driver scaffold)
 
 This file is the living project tracker. Update it whenever a meaningful system capability is added, changed, verified, or deferred so a new reader can quickly understand what the system does, what is being built now, and what remains.
 
@@ -219,6 +219,40 @@ Decisions already chosen:
 - Docker verification passed: `docker compose run --rm video-agent pytest -q`
   -> `109 passed in 14.21s`.
 
+### V3 Phase 1 Step 11 ChatGPT + Gemini driver scaffold
+
+- New package `src/video_agent/browser_worker/drivers/` with:
+  - `base.py`: `BrowserDriverError`, `LoginRequiredError`, debug
+    screenshot helper (`save_trace_screenshot`), `normalise_response_text`.
+  - `chatgpt.py`: `ChatGPTDriver.send(prompt)` opens a temporary chat at
+    `chatgpt.com/?model=gpt-4o&temporary-chat=true`, types into the
+    contenteditable composer, clicks send, waits for the stop button to
+    disappear and the assistant turn to grow, then scrapes
+    `[data-message-author-role='assistant'] .markdown` text. Multiple
+    selector fallbacks because ChatGPT's UI churns frequently.
+  - `gemini.py`: same shape for `gemini.google.com/app` using
+    `rich-textarea` and `model-response`/`message-content` selectors.
+- Drivers never attempt to log in; signed-out profiles raise
+  `LoginRequiredError` with a debug screenshot. Operator signs in via
+  noVNC (`http://127.0.0.1:7900/vnc.html`).
+- Browser-worker exposes new HTTP routes:
+  - `POST /chatgpt/send` body `{prompt, response_timeout_ms?}` returns
+    `{site, raw_response}`.
+  - `POST /gemini/send` same contract.
+- Errors map to HTTP: login required -> `409 {login_required: true,
+  screenshot}`; selector/response failure -> `502 {error, screenshot}`.
+- Debug screenshots are written under `BROWSER_TRACE_DIR`
+  (default `/data/trace`); mount this as a volume to inspect failures.
+- New tests `tests/test_browser_drivers.py` cover pure helpers
+  (`normalise_response_text`, login URL detectors, error subclassing).
+  End-to-end driver behaviour is verified manually via the runtime
+  container — selectors will need updates as ChatGPT/Gemini UI changes.
+- Live smoke (with Browser Appliance up): empty prompt returns
+  `502 {"detail":{"error":"Empty prompt","screenshot":""}}` from
+  `POST /chatgpt/send`, proving the route is wired and validation works.
+- Docker verification passed: `docker compose run --rm video-agent pytest -q`
+  -> `116 passed in 14.19s`.
+
 ## Target V3 Architecture
 
 ```text
@@ -283,7 +317,7 @@ Latest full verification:
 
 ```text
 docker compose run --rm video-agent pytest -q
-109 passed in 14.21s
+116 passed in 14.19s
 ```
 
 ## Fresh Operator Run

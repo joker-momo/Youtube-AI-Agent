@@ -6,6 +6,14 @@ from urllib.parse import urlparse, urlunparse
 
 import httpx
 from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+from video_agent.browser_worker.drivers import (
+    BrowserDriverError,
+    ChatGPTDriver,
+    GeminiDriver,
+    LoginRequiredError,
+)
 
 app = FastAPI(title="video-agent-browser-worker", version="0.2.0")
 
@@ -118,6 +126,80 @@ async def runtime() -> dict:
             status_code=503,
             detail={"cdp_url": url, "error": str(exc)},
         ) from exc
+
+
+class SendPromptRequest(BaseModel):
+    prompt: str
+    response_timeout_ms: int = 180_000
+
+
+async def _drive(site: str, prompt: str, timeout_ms: int) -> dict:
+    """Open a page on the runtime, run the driver, close, return text."""
+    from playwright.async_api import async_playwright
+
+    cdp_url = _cdp_url()
+    try:
+        ws_endpoint = await _resolve_browser_ws(cdp_url)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"cdp_url": cdp_url, "error": str(exc)},
+        ) from exc
+
+    async with async_playwright() as pw:
+        browser = await pw.chromium.connect_over_cdp(ws_endpoint)
+        try:
+            context = (
+                browser.contexts[0]
+                if browser.contexts
+                else await browser.new_context()
+            )
+            page = await context.new_page()
+            try:
+                if site == "chatgpt":
+                    driver = ChatGPTDriver(page)
+                elif site == "gemini":
+                    driver = GeminiDriver(page)
+                else:  # defensive; routes only call known sites
+                    raise HTTPException(
+                        status_code=404, detail=f"Unsupported site: {site}"
+                    )
+                text = await driver.send(prompt, response_timeout_ms=timeout_ms)
+                return {"site": site, "raw_response": text}
+            except LoginRequiredError as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": str(exc),
+                        "screenshot": exc.screenshot_path or "",
+                        "login_required": True,
+                    },
+                ) from exc
+            except BrowserDriverError as exc:
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "error": str(exc),
+                        "screenshot": exc.screenshot_path or "",
+                    },
+                ) from exc
+            finally:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+        finally:
+            await browser.close()
+
+
+@app.post("/chatgpt/send")
+async def chatgpt_send(payload: SendPromptRequest) -> dict:
+    return await _drive("chatgpt", payload.prompt, payload.response_timeout_ms)
+
+
+@app.post("/gemini/send")
+async def gemini_send(payload: SendPromptRequest) -> dict:
+    return await _drive("gemini", payload.prompt, payload.response_timeout_ms)
 
 
 @app.get("/auth/{site}/status")

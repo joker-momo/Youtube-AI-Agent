@@ -77,6 +77,13 @@ Networks:
     runtime is not reachable).
   - `GET /auth/{site}/status` — opens a page for ChatGPT or Gemini and
     reports whether the operator needs to log in via noVNC.
+  - `POST /chatgpt/send` — body `{prompt, response_timeout_ms?}`. Opens
+    a fresh temporary chat at `chatgpt.com/?model=gpt-4o&temporary-chat=true`,
+    types the prompt, sends, waits for the assistant turn to settle, and
+    returns `{site, raw_response}`. Returns HTTP 409 with
+    `login_required: true` when the profile is signed out, HTTP 502 with
+    a screenshot path when a selector or response fails.
+  - `POST /gemini/send` — same contract for `gemini.google.com/app`.
 - Stateless; restart freely.
 
 ## CDP host rewrite

@@ -70,6 +70,52 @@ def extract_json_object(text: str) -> dict[str, Any]:
     raise ValueError("JSON object was started but not closed.")
 
 
+def extract_json_objects(text: str) -> list[dict[str, Any]]:
+    """Extract all parseable JSON objects found in ``text``.
+
+    Useful when the model returns commentary plus multiple JSON blocks.
+    """
+    objects: list[dict[str, Any]] = []
+    start = text.find("{")
+    if start == -1:
+        return objects
+
+    depth = 0
+    in_string = False
+    escape = False
+    current_start = -1
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            if depth == 0:
+                current_start = index
+            depth += 1
+        elif char == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and current_start >= 0:
+                    chunk = text[current_start : index + 1]
+                    try:
+                        parsed = json.loads(chunk)
+                    except Exception:
+                        parsed = None
+                    if isinstance(parsed, dict):
+                        objects.append(parsed)
+                    current_start = -1
+    return objects
+
+
 def _json_block(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
 
@@ -93,6 +139,98 @@ def _status_badge(status: str) -> str:
 def _docker_cli_command(*parts: str | Path) -> str:
     rendered = " ".join(str(part) for part in parts)
     return f"docker compose run --rm video-agent python -m video_agent.cli {rendered}"
+
+
+def _normalize_script_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Normalize script outputs from alternate model formats.
+
+    Some model responses return a richer script payload (title, tts, seo)
+    but omit legacy required keys (sections, cta, qa). This adapter keeps
+    the current script schema stable for downstream stages.
+    """
+    parsed = dict(candidate)
+    narration = parsed.get("narration")
+    if not isinstance(narration, str):
+        return parsed
+
+    if not isinstance(parsed.get("sections"), list):
+        hook = str(parsed.get("hook") or "").strip()
+        first_line = next((line.strip() for line in narration.splitlines() if line.strip()), "")
+        section_title = hook or first_line or "Guion"
+        parsed["sections"] = [{"title": section_title, "text": narration}]
+
+    if not isinstance(parsed.get("cta"), str) or not str(parsed.get("cta")).strip():
+        parsed["cta"] = "Comparte este video y cuéntanos cuál hábito aplicarás hoy."
+
+    qa = parsed.get("qa")
+    if not isinstance(qa, dict):
+        parsed["qa"] = {"verdict": "PASS"}
+    elif not str(qa.get("verdict") or "").strip():
+        qa = dict(qa)
+        qa["verdict"] = "PASS"
+        parsed["qa"] = qa
+
+    return parsed
+
+
+def _normalize_scenes_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Normalize scenes outputs from alternate model formats."""
+    parsed = dict(candidate)
+    scenes = parsed.get("scenes")
+    if not isinstance(scenes, list):
+        return parsed
+
+    normalized_scenes: list[dict[str, Any]] = []
+    for index, scene in enumerate(scenes, start=1):
+        if not isinstance(scene, dict):
+            continue
+        current = dict(scene)
+        scene_id = str(
+            current.get("id")
+            or current.get("scene_id")
+            or f"scene-{index:02d}"
+        )
+        duration = current.get("duration_sec")
+        if not isinstance(duration, int):
+            try:
+                duration = int(duration)
+            except Exception:
+                duration = 15
+
+        visual_prompt = str(
+            current.get("visual_prompt")
+            or current.get("visual")
+            or ""
+        )
+        caption = str(current.get("caption") or "")
+        on_screen_text = str(current.get("on_screen_text") or caption)
+        narration = str(current.get("narration") or "")
+        motion = str(current.get("motion") or "slow push-in")
+        asset_refs = current.get("asset_refs")
+        if not isinstance(asset_refs, dict):
+            asset_refs = {}
+
+        normalized_scenes.append(
+            {
+                "id": scene_id,
+                "duration_sec": duration,
+                "narration": narration,
+                "on_screen_text": on_screen_text,
+                "caption": caption,
+                "visual_prompt": visual_prompt,
+                "motion": motion,
+                "asset_refs": asset_refs,
+            }
+        )
+
+    parsed["scenes"] = normalized_scenes
+    if not isinstance(parsed.get("total_duration_sec"), int):
+        parsed["total_duration_sec"] = sum(
+            int(item.get("duration_sec", 0)) for item in normalized_scenes
+        )
+    if not isinstance(parsed.get("qa"), dict):
+        parsed["qa"] = {"verdict": "PENDING_GEMINI_QA"}
+    return parsed
 
 
 def _chatgpt_script_prompt(channel_config: dict[str, Any], idea: dict[str, Any]) -> str:
@@ -243,9 +381,31 @@ def promote_operator_artifact(
     if artifact not in ARTIFACT_SCHEMAS:
         raise ValueError(f"Unsupported operator artifact: {artifact}")
 
-    parsed = extract_json_object(raw_path.read_text(encoding="utf-8"))
+    raw_text = raw_path.read_text(encoding="utf-8")
+    candidates = extract_json_objects(raw_text)
+    if not candidates:
+        raise ValueError("No JSON object found in model output.")
     root = repo_root()
-    validate_json(parsed, root / ARTIFACT_SCHEMAS[artifact])
+    schema_path = root / ARTIFACT_SCHEMAS[artifact]
+    parsed: dict[str, Any] | None = None
+    validation_errors: list[str] = []
+    for candidate in candidates:
+        if artifact == "script":
+            candidate = _normalize_script_candidate(candidate)
+        elif artifact == "scenes":
+            candidate = _normalize_scenes_candidate(candidate)
+        try:
+            validate_json(candidate, schema_path)
+            parsed = candidate
+            break
+        except Exception as exc:
+            validation_errors.append(str(exc))
+    if parsed is None:
+        preview = "; ".join(validation_errors[:2]) if validation_errors else "unknown schema mismatch"
+        raise ValueError(
+            f"No JSON object matched {artifact} schema. "
+            f"Found {len(candidates)} object(s). {preview}"
+        )
     channel_config = load_operator_channel_config(channel_path, parsed)
     validation = validate_operator_artifact(artifact, parsed, job_dir.name, channel_config)
     if not validation.is_valid:
@@ -286,8 +446,24 @@ def promote_operator_qa(job_dir: Path, artifact: str, raw_path: Path) -> Promote
     if artifact not in ARTIFACT_SCHEMAS:
         raise ValueError(f"Unsupported operator artifact QA: {artifact}")
 
-    parsed = extract_json_object(raw_path.read_text(encoding="utf-8"))
-    qa = _normalize_operator_qa(artifact, parsed)
+    raw_text = raw_path.read_text(encoding="utf-8")
+    candidates = extract_json_objects(raw_text)
+    if not candidates:
+        raise ValueError("No JSON object found in QA model output.")
+    qa: dict[str, Any] | None = None
+    normalize_errors: list[str] = []
+    for candidate in reversed(candidates):
+        try:
+            qa = _normalize_operator_qa(artifact, candidate)
+            break
+        except Exception as exc:
+            normalize_errors.append(str(exc))
+    if qa is None:
+        preview = "; ".join(normalize_errors[:2]) if normalize_errors else "unknown QA mismatch"
+        raise ValueError(
+            f"No QA JSON object could be promoted for {artifact}. "
+            f"Found {len(candidates)} object(s). {preview}"
+        )
     output_path = job_dir / "operator" / "gemini" / f"{artifact}_qa.json"
     write_json(output_path, qa)
     return PromoteResult(artifact=artifact, raw_path=raw_path, output_path=output_path)

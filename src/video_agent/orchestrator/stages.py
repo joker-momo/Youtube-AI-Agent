@@ -425,7 +425,12 @@ async def _auto_run_then_promote(
             "browser-worker returned an empty response for "
             f"{promote_stage_name}"
         )
-    return promoter(job_dir, channel_path, raw_response)
+    try:
+        return promoter(job_dir, channel_path, raw_response)
+    except ValueError as exc:
+        raise StageInputMissingError(
+            f"Promotion failed for {promote_stage_name}: {exc}"
+        ) from exc
 
 
 async def auto_script_stage(

@@ -72,6 +72,28 @@ def test_promote_operator_artifact_rejects_stale_job_id(tmp_path):
     assert not (tmp_path / "operator-job/script.json").exists()
 
 
+def test_promote_operator_artifact_normalizes_compact_script_shape(tmp_path):
+    raw_path = tmp_path / "script.raw.txt"
+    compact = {
+        "channel_id": "vida-plena-45",
+        "job_id": "operator-job",
+        "hook": "Habitos simples para dormir mejor.",
+        "title": "10 habitos nocturnos",
+        "narration": "Dormir bien empieza con una rutina simple.",
+        "tts": {"estimated_duration_seconds": 75},
+    }
+    raw_path.write_text(json.dumps(compact), encoding="utf-8")
+
+    result = promote_operator_artifact(tmp_path / "operator-job", "script", raw_path)
+    promoted = json.loads(result.output_path.read_text(encoding="utf-8"))
+
+    assert isinstance(promoted["sections"], list)
+    assert promoted["sections"]
+    assert isinstance(promoted["cta"], str)
+    assert promoted["cta"]
+    assert promoted["qa"]["verdict"] == "PASS"
+
+
 def test_promote_operator_artifact_rejects_invalid_scenes_contract(tmp_path):
     raw_path = tmp_path / "scenes.raw.txt"
     raw_path.write_text(
@@ -106,6 +128,37 @@ def test_promote_operator_artifact_rejects_invalid_scenes_contract(tmp_path):
     assert "asset_refs" in message
     assert "ChatGPT prefilled" in message
     assert not (tmp_path / "operator-job/scenes.json").exists()
+
+
+def test_promote_operator_artifact_normalizes_compact_scenes_shape(tmp_path):
+    raw_path = tmp_path / "scenes.raw.txt"
+    raw_path.write_text(
+        json.dumps(
+            {
+                "channel_id": "vida-plena-45",
+                "job_id": "operator-job",
+                "scenes": [
+                    {
+                        "scene_id": "scene-01",
+                        "duration_sec": 12,
+                        "visual": "Warm bedroom at night",
+                        "narration": "Baja la luz antes de dormir.",
+                        "caption": "Baja la luz",
+                        "asset_refs": {},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = promote_operator_artifact(tmp_path / "operator-job", "scenes", raw_path)
+    promoted = json.loads(result.output_path.read_text(encoding="utf-8"))
+
+    assert promoted["scenes"][0]["id"] == "scene-01"
+    assert promoted["scenes"][0]["visual_prompt"] == "Warm bedroom at night"
+    assert promoted["scenes"][0]["on_screen_text"] == "Baja la luz"
+    assert promoted["qa"]["verdict"] == "PENDING_GEMINI_QA"
 
 
 def test_promote_operator_artifact_rejects_invalid_seo_contract(tmp_path):

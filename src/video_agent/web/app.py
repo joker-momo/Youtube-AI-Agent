@@ -1613,6 +1613,20 @@ async def post_run_all(
             {"stage": stage_label, "output": str(output_path.relative_to(job_dir))}
         )
 
+    # Resume from the current stage instead of always restarting from
+    # script/script_promote. This lets callers continue a partially
+    # completed pipeline by re-hitting /run-all.
+    state = load_job(job_dir)
+    stage_order = [s.name for s in state.stages]
+    pending_stage = next((s.name for s in state.stages if s.status != "completed"), None)
+    if pending_stage is None:
+        return {"completed": completed, "state": state.to_dict()}
+    if pending_stage not in stage_order:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": f"Unknown pending stage: {pending_stage}"},
+        )
+
     # Open ONE ChatGPT temp chat for the whole writing pipeline
     # (script_promote, scenes_promote, seo_promote) and ONE Claude
     # temp chat for the whole QA pipeline (script_qa, scenes_qa,
@@ -1624,8 +1638,6 @@ async def post_run_all(
     from video_agent.utils.json_io import read_yaml as _read_yaml
 
     channel_config = _read_yaml(channel_path)
-    state = load_job(job_dir)
-
     async def _noop_close() -> None:
         return None
 
@@ -1664,38 +1676,49 @@ async def post_run_all(
                 )
             ]
         )
-        await _record(
-            "script_promote",
-            await auto_script_stage(job_dir, channel_path, chatgpt_fn),
-        )
-        await _record(
-            "script_qa",
-            await auto_qa_with_rework(
-                "script", job_dir, channel_path, chatgpt_fn, qa_fn
-            ),
-        )
-        await _record(
-            "scenes_promote",
-            await auto_scenes_stage(job_dir, channel_path, chatgpt_fn),
-        )
-        await _record(
-            "scenes_qa",
-            await auto_qa_with_rework(
-                "scenes", job_dir, channel_path, chatgpt_fn, qa_fn
-            ),
-        )
-        await _record(
-            "seo_promote",
-            await auto_seo_stage(job_dir, channel_path, chatgpt_fn),
-        )
-        await _record(
-            "seo_qa",
-            await auto_qa_with_rework(
-                "seo", job_dir, channel_path, chatgpt_fn, qa_fn
-            ),
-        )
-        await _record("render", run_render_stage(job_dir, channel_path))
-        await _record("review", run_review_stage(job_dir))
+        start_idx = stage_order.index(pending_stage)
+        remaining = set(stage_order[start_idx:])
+
+        if "script" in remaining or "script_promote" in remaining:
+            await _record(
+                "script_promote",
+                await auto_script_stage(job_dir, channel_path, chatgpt_fn),
+            )
+        if "script_qa" in remaining:
+            await _record(
+                "script_qa",
+                await auto_qa_with_rework(
+                    "script", job_dir, channel_path, chatgpt_fn, qa_fn
+                ),
+            )
+        if "scenes" in remaining or "scenes_promote" in remaining:
+            await _record(
+                "scenes_promote",
+                await auto_scenes_stage(job_dir, channel_path, chatgpt_fn),
+            )
+        if "scenes_qa" in remaining:
+            await _record(
+                "scenes_qa",
+                await auto_qa_with_rework(
+                    "scenes", job_dir, channel_path, chatgpt_fn, qa_fn
+                ),
+            )
+        if "seo" in remaining or "seo_promote" in remaining:
+            await _record(
+                "seo_promote",
+                await auto_seo_stage(job_dir, channel_path, chatgpt_fn),
+            )
+        if "seo_qa" in remaining:
+            await _record(
+                "seo_qa",
+                await auto_qa_with_rework(
+                    "seo", job_dir, channel_path, chatgpt_fn, qa_fn
+                ),
+            )
+        if "render" in remaining:
+            await _record("render", run_render_stage(job_dir, channel_path))
+        if "review" in remaining:
+            await _record("review", run_review_stage(job_dir))
     except StageInputMissingError as exc:
         state = load_job(job_dir)
         raise HTTPException(

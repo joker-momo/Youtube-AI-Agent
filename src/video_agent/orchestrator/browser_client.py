@@ -22,10 +22,10 @@ class BrowserClient:
     """Thin async HTTP client for the ``browser-worker`` FastAPI service.
 
     The orchestrator stages use this to drive ChatGPT and Gemini through
-    the Browser Appliance. ``request_timeout`` is the outer HTTP read
-    timeout (seconds); the inner per-prompt timeout is passed to the
-    worker as ``response_timeout_ms`` so the worker's Playwright wait
-    matches the HTTP wait.
+    the Browser Appliance. ``request_timeout`` is the baseline HTTP read
+    timeout (seconds). Per-prompt calls extend that timeout beyond the
+    worker's ``response_timeout_ms`` so the worker has time to return a
+    structured error instead of the orchestrator dropping the connection.
     """
 
     def __init__(
@@ -39,6 +39,9 @@ class BrowserClient:
             or os.environ.get("BROWSER_WORKER_URL", "http://browser-worker:8001")
         ).rstrip("/")
         self.request_timeout = request_timeout
+
+    def _timeout_for_response(self, response_timeout_ms: int) -> float:
+        return max(self.request_timeout, response_timeout_ms / 1000.0 + 30.0)
 
     async def chatgpt_send(
         self,
@@ -57,7 +60,7 @@ class BrowserClient:
         return await self._send("gemini", prompt, response_timeout_ms)
 
     async def _send(self, site: str, prompt: str, ms: int) -> str:
-        async with httpx.AsyncClient(timeout=self.request_timeout) as http:
+        async with httpx.AsyncClient(timeout=self._timeout_for_response(ms)) as http:
             response = await http.post(
                 f"{self.base_url}/{site}/send",
                 json={"prompt": prompt, "response_timeout_ms": ms},
@@ -121,7 +124,8 @@ class BrowserClient:
         *,
         response_timeout_ms: int = 300_000,
     ) -> str:
-        async with httpx.AsyncClient(timeout=self.request_timeout) as http:
+        timeout = self._timeout_for_response(response_timeout_ms)
+        async with httpx.AsyncClient(timeout=timeout) as http:
             response = await http.post(
                 f"{self.base_url}/{site}/sessions/{session_id}/send",
                 json={"prompt": prompt, "response_timeout_ms": response_timeout_ms},

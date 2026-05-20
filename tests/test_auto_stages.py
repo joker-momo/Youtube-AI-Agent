@@ -479,6 +479,18 @@ def test_browser_client_env_override(monkeypatch):
     assert client.base_url == "http://other:9999"
 
 
+def test_browser_client_extends_http_timeout_past_worker_timeout():
+    client = BrowserClient(request_timeout=300.0)
+
+    assert client._timeout_for_response(300_000) == 330.0
+
+
+def test_browser_client_keeps_larger_configured_http_timeout():
+    client = BrowserClient(request_timeout=420.0)
+
+    assert client._timeout_for_response(300_000) == 420.0
+
+
 # ---------- /run-all -------------------------------------------------------
 
 

@@ -34,6 +34,7 @@ Decisions already chosen:
 - Browser web UI access for ChatGPT Plus, Gemini, vidIQ, and ChatGPT image generation; no LLM API client in Phase 1.
 - Separate `browser-worker` container using Playwright CDP attach to host Chrome on port `9222`.
 - Dedicated host Chrome profile; user logs in manually. The system must not auto-login.
+- Dedicated CDP profile is required because Chrome blocks remote debugging on the default Chrome user-data directory (`DevTools remote debugging requires a non-default data directory`). The user's regular Chrome profile such as `CodeX` can be inspected for its directory name, but the automation path must use a separate non-default profile such as `$HOME/.video-agent/chrome-cdp-profile`. The user signs in to ChatGPT/Gemini manually inside that dedicated profile; browser-worker auth checks should open the target page and report `login_required` when the profile is not signed in.
 - Sequential per-step flow with file-based state detection.
 - Fail-soft browser handling: save trace, expose prompt path, allow user retry.
 - Manual YouTube upload in Phase 1.

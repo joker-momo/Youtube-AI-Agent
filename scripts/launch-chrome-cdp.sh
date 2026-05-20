@@ -7,6 +7,7 @@ set -euo pipefail
 
 PORT="${CHROME_CDP_PORT:-9222}"
 PROFILE_DIR="${CHROME_CDP_PROFILE:-$HOME/.video-agent/chrome-cdp-profile}"
+PROFILE_DIRECTORY="${CHROME_PROFILE_DIRECTORY:-}"
 
 mkdir -p "$PROFILE_DIR"
 
@@ -38,9 +39,18 @@ fi
 
 echo "Launching Chrome with CDP on port $PORT"
 echo "Profile: $PROFILE_DIR"
+if [[ -n "$PROFILE_DIRECTORY" ]]; then
+  echo "Chrome profile directory: $PROFILE_DIRECTORY"
+fi
+
+PROFILE_DIRECTORY_ARGS=()
+if [[ -n "$PROFILE_DIRECTORY" ]]; then
+  PROFILE_DIRECTORY_ARGS=(--profile-directory="$PROFILE_DIRECTORY")
+fi
 
 exec "$CHROME_BIN" \
   --remote-debugging-port="$PORT" \
   --user-data-dir="$PROFILE_DIR" \
+  "${PROFILE_DIRECTORY_ARGS[@]}" \
   --no-first-run \
   --no-default-browser-check

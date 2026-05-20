@@ -29,7 +29,44 @@ _ROLES_ES = {
         "el idioma, la audiencia y el posicionamiento del canal. Nunca "
         "usas clickbait ni afirmaciones médicas."
     ),
+    "script_qa": (
+        "Eres revisor (QA) de guiones para videos cortos de bienestar. "
+        "Revisas el artefacto contra el esquema, el contrato de longitud, "
+        "el tono del canal, las frases prohibidas/preferidas y la seguridad "
+        "médica. Devuelves un JSON estricto con verdict, scores, issues y "
+        "required_changes. Eres riguroso: PASS solo si NO queda nada por "
+        "cambiar."
+    ),
+    "scenes_qa": (
+        "Eres revisor (QA) de escenas. Verificas suma de duraciones, "
+        "formato de IDs, visual_prompt en inglés, asset_refs como objeto, "
+        "tono y seguridad. Devuelves un JSON estricto con verdict, scores, "
+        "issues y required_changes. PASS solo si NO queda nada por cambiar."
+    ),
+    "seo_qa": (
+        "Eres revisor (QA) de SEO de YouTube. Verificas language=es-419, "
+        "rango de tags, ausencia de duplicados, ausencia de frases "
+        "prohibidas, longitud de title/description y ai_disclosure=true. "
+        "Devuelves un JSON estricto con verdict, scores, issues y "
+        "required_changes. PASS solo si NO queda nada por cambiar."
+    ),
 }
+
+_QA_SCHEMA = (
+    "{\n"
+    '  "verdict": "PASS" | "NEEDS_REWORK",\n'
+    '  "scores": {\n'
+    '    "schema_fit": int (1-5),\n'
+    '    "channel_fit": int (1-5),\n'
+    '    "safety": int (1-5),\n'
+    '    "clarity": int (1-5)\n'
+    "  },\n"
+    '  "issues": array de strings (descripciones cortas),\n'
+    '  "required_changes": array de strings (acciones concretas)\n'
+    "}\n"
+    "Usa verdict=PASS solo si issues y required_changes están vacíos."
+)
+
 
 # Per-stage explicit schema descriptions. These supplement (not replace)
 # the v2 prompt's schema summary so the model has unambiguous types and
@@ -83,6 +120,9 @@ _SCHEMA_ES = {
         '  "thumbnail_path": str (ruta relativa, por ej. "thumbnail.jpg")\n'
         "}"
     ),
+    "script_qa": _QA_SCHEMA,
+    "scenes_qa": _QA_SCHEMA,
+    "seo_qa": _QA_SCHEMA,
 }
 
 # Length contracts: short, declarative, easy to verify mentally.
@@ -220,6 +260,92 @@ def _read_brand_voice(channel_config: dict) -> str:
         return ""
 
 
+def build_initial_briefing(
+    channel_config: dict,
+    *,
+    kind: str,
+    job_id: str,
+    channel_id: str,
+) -> str:
+    """Initial message of a persistent temp chat.
+
+    ``kind`` is ``"writing"`` (sent to ChatGPT before the
+    script/scenes/seo stages) or ``"qa"`` (sent to Gemini before the
+    QA stages). The pipeline sends this exactly once per tab so the
+    model commits the role + channel DNA + hard constraints to the
+    conversation context, and the subsequent task messages stay short.
+    """
+    if kind == "qa":
+        role = (
+            "Eres revisor (QA) profesional de contenido de video corto de "
+            "bienestar para YouTube. Tu única función en esta conversación "
+            "es revisar artefactos contra el esquema, el contrato de "
+            "longitud, el tono del canal, las frases prohibidas/preferidas, "
+            "y la seguridad médica. Cada vez que te pase un artefacto, "
+            "devolverás UN solo JSON con verdict, scores, issues y "
+            "required_changes, y nada más."
+        )
+    else:
+        role = (
+            "Eres un equipo creativo profesional para videos cortos de "
+            "bienestar en YouTube: guionista, director de escenas y "
+            "especialista en SEO. Yo te pediré tres tareas seguidas en "
+            "esta misma conversación: primero el guión, luego las "
+            "escenas, luego el SEO. Mantén el mismo tono y respeta las "
+            "mismas restricciones en las tres."
+        )
+    summary = _channel_summary(channel_config)
+    brand_voice = _read_brand_voice(channel_config)
+    forbidden_tone = ", ".join(_NEGATIVE_TERMS_ES)
+
+    blocks = [
+        "# Rol para toda esta conversación",
+        role,
+        "",
+        "# Contexto del canal",
+        summary,
+    ]
+    if brand_voice:
+        blocks.extend(
+            [
+                "",
+                "# Guía de voz del canal (brand voice)",
+                brand_voice,
+            ]
+        )
+    blocks.extend(
+        [
+            "",
+            "# Restricciones absolutas (válidas para TODAS las respuestas)",
+            f'- Usa exactamente job_id="{job_id}" y channel_id="{channel_id}" '
+            "en cualquier artefacto que generes. No los inventes ni los acortes.",
+            "- Responde siempre en español neutro (es-419).",
+            "- Conserva los acentos correctos. Nunca uses transliteraciones.",
+            "- Nunca des consejos médicos específicos; sugiere consultar a un "
+            "profesional cuando aplique.",
+            f"- Evita estas palabras manipulativas: {forbidden_tone}.",
+            "- Cuando te pida un artefacto, devuelve UN SOLO objeto JSON "
+            "válido. Sin texto adicional. Sin bloques de código markdown. "
+            "Si tu primera respuesta no fuera JSON puro, autocorrígete y "
+            "reenvía solo el JSON sin disculpas ni explicaciones.",
+            "",
+            "# Anti-alucinación",
+            "- Si la idea no provee datos concretos (estadísticas, citas, "
+            "fuentes, nombres propios, marcas), NO los inventes.",
+            "- Usa lenguaje cualitativo: \"muchas personas reportan...\", "
+            "\"algunos estudios sugieren...\".",
+            "- Si no puedes cumplir alguna restricción, marca el artefacto "
+            "como `qa.verdict=NEEDS_REWORK` con `qa.issues` describiendo el "
+            "problema en vez de inventar contenido.",
+            "",
+            "Responde solo `OK` para confirmar que entendiste el rol, el "
+            "contexto y las restricciones. Espera mi próximo mensaje con la "
+            "primera tarea concreta.",
+        ]
+    )
+    return "\n".join(blocks)
+
+
 def build_stage_briefing(
     channel_config: dict,
     stage_name: str,
@@ -291,12 +417,22 @@ def build_task_prompt(
     stage_name: str,
     existing_prompt: str,
 ) -> str:
-    """Second message of the session: v2 task + schema + length + decomp + self-check."""
+    """Per-stage task message for a persistent temp chat.
+
+    Sent AFTER ``build_initial_briefing``. Includes a short hat-swap
+    line (model already has full role+context+constraints) plus the v2
+    task, explicit schema, length contract, decomposition checklist,
+    and self-check.
+    """
+    role_hint = _ROLES_ES.get(stage_name, "")
     schema = _SCHEMA_ES.get(stage_name, "")
     length = _LENGTH_ES.get(stage_name, "")
     decomp = _DECOMP_ES.get(stage_name, [])
 
     blocks = [
+        f"# Cambia de sombrero: {stage_name}",
+        role_hint,
+        "",
         "# Tarea (v2)",
         existing_prompt,
     ]

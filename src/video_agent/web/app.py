@@ -25,9 +25,13 @@ from video_agent.orchestrator.orchestrator import StageError
 from video_agent.orchestrator.stages import (
     IDEA_FILE,
     StageInputMissingError,
+    auto_scenes_qa_stage,
     auto_scenes_stage,
+    auto_script_qa_stage,
     auto_script_stage,
+    auto_seo_qa_stage,
     auto_seo_stage,
+    promote_qa_stage,
     promote_scenes_stage,
     promote_seo_stage,
     promote_script_stage,
@@ -287,6 +291,39 @@ def post_run_review(
     return {"output": str(output.relative_to(job_dir)), "state": state.to_dict()}
 
 
+def _one_shot_with_briefing(
+    client: BrowserClient,
+    site: str,
+    kind: str,
+    channel_path: Path,
+    job_dir: Path,
+):
+    """Wrap ``client.run_session`` so the one-shot tab receives the
+    initial briefing as its first message and the task as the second.
+
+    Used by the per-stage ``/stages/X/auto`` routes which create a
+    fresh tab per request (no shared context with previous calls).
+    The /run-all flow uses ``open_persistent_session`` instead so the
+    briefing is sent only once for the whole pipeline.
+    """
+    from video_agent.orchestrator.briefing import build_initial_briefing
+    from video_agent.utils.json_io import read_yaml as _read_yaml
+
+    channel_config = _read_yaml(channel_path)
+    state = load_job(job_dir)
+    briefing = build_initial_briefing(
+        channel_config,
+        kind=kind,
+        job_id=state.job_id,
+        channel_id=state.channel_id,
+    )
+
+    async def fn(msgs):
+        return await client.run_session(site, [briefing] + list(msgs))
+
+    return fn
+
+
 def get_browser_client() -> BrowserClient:
     """FastAPI dependency: returns the BrowserClient used by auto stages.
 
@@ -327,7 +364,7 @@ async def post_auto_script(
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     try:
-        output = await auto_script_stage(job_dir, channel_path, lambda msgs: client.run_session("chatgpt", list(msgs)))
+        output = await auto_script_stage(job_dir, channel_path, _one_shot_with_briefing(client, "chatgpt", "writing", channel_path, job_dir))
     except StageInputMissingError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except BrowserClientError as exc:
@@ -347,7 +384,7 @@ async def post_auto_scenes(
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     try:
-        output = await auto_scenes_stage(job_dir, channel_path, lambda msgs: client.run_session("chatgpt", list(msgs)))
+        output = await auto_scenes_stage(job_dir, channel_path, _one_shot_with_briefing(client, "chatgpt", "writing", channel_path, job_dir))
     except StageInputMissingError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except BrowserClientError as exc:
@@ -367,7 +404,76 @@ async def post_auto_seo(
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     try:
-        output = await auto_seo_stage(job_dir, channel_path, lambda msgs: client.run_session("chatgpt", list(msgs)))
+        output = await auto_seo_stage(job_dir, channel_path, _one_shot_with_briefing(client, "chatgpt", "writing", channel_path, job_dir))
+    except StageInputMissingError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except BrowserClientError as exc:
+        raise _handle_browser_client_error(exc) from exc
+    state = load_job(job_dir)
+    return {"output": str(output.relative_to(job_dir)), "state": state.to_dict()}
+
+
+@app.post("/jobs/{job_id}/stages/script_qa/auto")
+async def post_auto_script_qa(
+    job_id: str,
+    jobs_root: Path = Depends(get_jobs_root),
+    channel_path: Path = Depends(get_channel_path),
+    client: BrowserClient = Depends(get_browser_client),
+) -> dict:
+    job_dir = jobs_root / job_id
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    try:
+        output = await auto_script_qa_stage(
+            job_dir, channel_path,
+            _one_shot_with_briefing(client, "gemini", "qa", channel_path, job_dir),
+        )
+    except StageInputMissingError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except BrowserClientError as exc:
+        raise _handle_browser_client_error(exc) from exc
+    state = load_job(job_dir)
+    return {"output": str(output.relative_to(job_dir)), "state": state.to_dict()}
+
+
+@app.post("/jobs/{job_id}/stages/scenes_qa/auto")
+async def post_auto_scenes_qa(
+    job_id: str,
+    jobs_root: Path = Depends(get_jobs_root),
+    channel_path: Path = Depends(get_channel_path),
+    client: BrowserClient = Depends(get_browser_client),
+) -> dict:
+    job_dir = jobs_root / job_id
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    try:
+        output = await auto_scenes_qa_stage(
+            job_dir, channel_path,
+            _one_shot_with_briefing(client, "gemini", "qa", channel_path, job_dir),
+        )
+    except StageInputMissingError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except BrowserClientError as exc:
+        raise _handle_browser_client_error(exc) from exc
+    state = load_job(job_dir)
+    return {"output": str(output.relative_to(job_dir)), "state": state.to_dict()}
+
+
+@app.post("/jobs/{job_id}/stages/seo_qa/auto")
+async def post_auto_seo_qa(
+    job_id: str,
+    jobs_root: Path = Depends(get_jobs_root),
+    channel_path: Path = Depends(get_channel_path),
+    client: BrowserClient = Depends(get_browser_client),
+) -> dict:
+    job_dir = jobs_root / job_id
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    try:
+        output = await auto_seo_qa_stage(
+            job_dir, channel_path,
+            _one_shot_with_briefing(client, "gemini", "qa", channel_path, job_dir),
+        )
     except StageInputMissingError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except BrowserClientError as exc:
@@ -402,18 +508,80 @@ async def post_run_all(
             {"stage": stage_label, "output": str(output_path.relative_to(job_dir))}
         )
 
+    # Open ONE ChatGPT temp chat for the whole writing pipeline
+    # (script_promote, scenes_promote, seo_promote) and ONE Gemini
+    # temp chat for the whole QA pipeline (script_qa, scenes_qa,
+    # seo_qa). The tabs stay open across stages so the model carries
+    # context, and we only close them when /run-all finishes.
+    # Send the role+context+constraints briefing ONCE per tab; each
+    # stage then only sends its short task message.
+    from video_agent.orchestrator.briefing import build_initial_briefing
+    from video_agent.utils.json_io import read_yaml as _read_yaml
+
+    channel_config = _read_yaml(channel_path)
+    state = load_job(job_dir)
+
+    async def _noop_close() -> None:
+        return None
+
+    chatgpt_sender = None
+    gemini_sender = None
+    chatgpt_close = _noop_close
+    gemini_close = _noop_close
     try:
+        chatgpt_sender, chatgpt_close = await client.open_persistent_session("chatgpt")
+        gemini_sender, gemini_close = await client.open_persistent_session("gemini")
+
+        async def chatgpt_fn(msgs):
+            return await chatgpt_sender(list(msgs))
+
+        async def gemini_fn(msgs):
+            return await gemini_sender(list(msgs))
+
+        # Brief each tab once before any task message.
+        await chatgpt_sender(
+            [
+                build_initial_briefing(
+                    channel_config,
+                    kind="writing",
+                    job_id=state.job_id,
+                    channel_id=state.channel_id,
+                )
+            ]
+        )
+        await gemini_sender(
+            [
+                build_initial_briefing(
+                    channel_config,
+                    kind="qa",
+                    job_id=state.job_id,
+                    channel_id=state.channel_id,
+                )
+            ]
+        )
         await _record(
             "script_promote",
-            await auto_script_stage(job_dir, channel_path, lambda msgs: client.run_session("chatgpt", list(msgs))),
+            await auto_script_stage(job_dir, channel_path, chatgpt_fn),
+        )
+        await _record(
+            "script_qa",
+            await auto_script_qa_stage(job_dir, channel_path, gemini_fn),
         )
         await _record(
             "scenes_promote",
-            await auto_scenes_stage(job_dir, channel_path, lambda msgs: client.run_session("chatgpt", list(msgs))),
+            await auto_scenes_stage(job_dir, channel_path, chatgpt_fn),
+        )
+        await _record(
+            "scenes_qa",
+            await auto_scenes_qa_stage(job_dir, channel_path, gemini_fn),
         )
         await _record(
             "seo_promote",
-            await auto_seo_stage(job_dir, channel_path, lambda msgs: client.run_session("chatgpt", list(msgs))),
+            await auto_seo_stage(job_dir, channel_path, chatgpt_fn),
+        )
+        await _record(
+            "seo_qa",
+            await auto_seo_qa_stage(job_dir, channel_path, gemini_fn),
         )
         await _record("render", run_render_stage(job_dir, channel_path))
         await _record("review", run_review_stage(job_dir))
@@ -439,6 +607,17 @@ async def post_run_all(
         detail["stopped_at"] = state.current_stage
         detail["state"] = state.to_dict()
         raise HTTPException(status_code=http_exc.status_code, detail=detail) from exc
+    finally:
+        # Always close the persistent tabs so a failure never leaks
+        # browser-runtime pages.
+        try:
+            await chatgpt_close()
+        except Exception:
+            pass
+        try:
+            await gemini_close()
+        except Exception:
+            pass
 
     state = load_job(job_dir)
     return {"completed": completed, "state": state.to_dict()}

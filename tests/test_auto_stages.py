@@ -151,8 +151,52 @@ class FakeBrowserClient:
     def calls(self) -> list[list[str]]:
         return self.sessions
 
+    async def open_persistent_session(self, site: str):
+        # All persistent sends go into one "session" list per call
+        # so the test still asserts each stage's [briefing, task].
+        async def sender(messages, *, response_timeout_ms: int = 180_000) -> str:
+            return await self.run_session(site, messages)
+
+        async def closer() -> None:
+            return None
+
+        return sender, closer
+
 
 # ---------- direct module-level auto stage tests ---------------------------
+
+
+def _fake_pass_qa(job_dir: Path, artifact: str) -> None:
+    """Mark <artifact>_qa as PASS and advance current_stage.
+
+    Lets tests that only care about the ChatGPT chain skip the Gemini
+    QA stage that DEFAULT_STAGES now inserts between each promote and
+    the next prompt stage.
+    """
+    from video_agent.orchestrator.job_state import load_job, save_job
+    stage_name = f"{artifact}_qa"
+    state = load_job(job_dir)
+    if state.current_stage != stage_name:
+        return
+    stage = state.stage(stage_name)
+    stage.status = "completed"
+    next_pending = next((s for s in state.stages if s.status == "pending"), None)
+    if next_pending is not None:
+        state.current_stage = next_pending.name
+    save_job(job_dir, state)
+    qa_dir = job_dir / "operator" / "gemini"
+    qa_dir.mkdir(parents=True, exist_ok=True)
+    (qa_dir / f"{artifact}_qa.json").write_text(
+        json.dumps(
+            {
+                "verdict": "PASS",
+                "scores": {"schema_fit": 5, "channel_fit": 5, "safety": 5, "clarity": 5},
+                "issues": [],
+                "required_changes": [],
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def _seed_script(job_dir: Path, channel_path: Path, idea_payload: dict) -> None:
@@ -188,12 +232,11 @@ def test_auto_script_runs_prompt_and_promote(
     promoted = json.loads(output.read_text(encoding="utf-8"))
     assert promoted["job_id"] == "job-auto"
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
-    assert state["current_stage"] == "scenes"
+    assert state["current_stage"] == "script_qa"
     assert len(fake.calls) == 1
-    # Each stage opens one session, sends two messages: briefing then task.
-    assert len(fake.calls[0]) == 2
-    assert "Rol" in fake.calls[0][0] and "Contexto del canal" in fake.calls[0][0]
-    assert "SCRIPT artifact" in fake.calls[0][1]
+    # Auto stage now sends only the task; briefing is the caller's job.
+    assert len(fake.calls[0]) == 1
+    assert "SCRIPT artifact" in fake.calls[0][0]
 
 
 def test_auto_script_skips_runner_when_already_promote(
@@ -247,6 +290,7 @@ def test_auto_scenes_runs_after_script_promoted(
         channel_path,
         raw_response=json.dumps(valid_script_payload, ensure_ascii=False),
     )
+    _fake_pass_qa(job_dir, "script")
     fake = FakeBrowserClient(
         queue=[json.dumps(valid_scenes_payload, ensure_ascii=False)]
     )
@@ -258,7 +302,7 @@ def test_auto_scenes_runs_after_script_promoted(
     assert output == job_dir / "scenes.json"
     assert (job_dir / SCENES_PROMPT_PATH).exists()
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
-    assert state["current_stage"] == "seo"
+    assert state["current_stage"] == "scenes_qa"
 
 
 def test_auto_seo_runs_after_scenes_promoted(
@@ -277,12 +321,14 @@ def test_auto_seo_runs_after_scenes_promoted(
         channel_path,
         raw_response=json.dumps(valid_script_payload, ensure_ascii=False),
     )
+    _fake_pass_qa(job_dir, "script")
     run_scenes_stage(job_dir, channel_path)
     promote_scenes_stage(
         job_dir,
         channel_path,
         raw_response=json.dumps(valid_scenes_payload, ensure_ascii=False),
     )
+    _fake_pass_qa(job_dir, "scenes")
     fake = FakeBrowserClient(
         queue=[json.dumps(valid_seo_payload, ensure_ascii=False)]
     )
@@ -294,7 +340,7 @@ def test_auto_seo_runs_after_scenes_promoted(
     assert output == job_dir / "seo.json"
     assert (job_dir / SEO_PROMPT_PATH).exists()
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
-    assert state["current_stage"] == "render"
+    assert state["current_stage"] == "seo_qa"
 
 
 def test_auto_script_wrong_stage_raises(
@@ -365,7 +411,7 @@ def test_http_auto_script(
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["output"] == "script.json"
-    assert body["state"]["current_stage"] == "scenes"
+    assert body["state"]["current_stage"] == "script_qa"
     assert len(fake.calls) == 1
 
 
@@ -447,11 +493,24 @@ def test_http_run_all_success(
     _create_job(http_client)
     http_client.post("/jobs/job-auto/idea", json=idea_payload)
 
+    qa_pass = json.dumps(
+        {
+            "verdict": "PASS",
+            "scores": {"schema_fit": 5, "channel_fit": 5, "safety": 5, "clarity": 5},
+            "issues": [],
+            "required_changes": [],
+        }
+    )
     fake = FakeBrowserClient(
         queue=[
+            "OK",  # chatgpt briefing ack
+            "OK",  # gemini briefing ack
             json.dumps(valid_script_payload, ensure_ascii=False),
+            qa_pass,
             json.dumps(valid_scenes_payload, ensure_ascii=False),
+            qa_pass,
             json.dumps(valid_seo_payload, ensure_ascii=False),
+            qa_pass,
         ]
     )
     app.dependency_overrides[get_browser_client] = lambda: fake
@@ -492,14 +551,17 @@ def test_http_run_all_success(
     stages = [c["stage"] for c in body["completed"]]
     assert stages == [
         "script_promote",
+        "script_qa",
         "scenes_promote",
+        "scenes_qa",
         "seo_promote",
+        "seo_qa",
         "render",
         "review",
     ]
-    # All 8 underlying stages should be completed now.
     assert all(s["status"] == "completed" for s in body["state"]["stages"])
-    assert len(fake.calls) == 3  # one ChatGPT call per auto stage
+    # 2 briefing sends + 3 ChatGPT task sends + 3 Gemini task sends = 8
+    assert len(fake.calls) == 8
 
 
 def test_http_run_all_stops_on_worker_error(
@@ -522,11 +584,122 @@ def test_http_run_all_stops_on_worker_error(
 
     assert r.status_code == 502
     detail = r.json()["detail"]
-    assert detail["completed"] == []  # nothing finished before the failure
-    assert detail["stopped_at"] == "script_promote"
+    assert detail["completed"] == []
+    # Persistent-session /run-all fails on the very first briefing
+    # send, before run_script_stage advances the state.
+    assert detail["stopped_at"] == "script"
     assert "state" in detail
 
 
 def test_http_run_all_unknown_job_returns_404(http_client: TestClient):
     r = http_client.post("/jobs/missing/run-all")
     assert r.status_code == 404
+
+
+# ---------- Gemini QA stages -----------------------------------------------
+
+
+def _qa_pass_payload() -> dict:
+    return {
+        "verdict": "PASS",
+        "scores": {"schema_fit": 5, "channel_fit": 5, "safety": 5, "clarity": 5},
+        "issues": [],
+        "required_changes": [],
+    }
+
+
+def _qa_fail_payload(issues: list[str]) -> dict:
+    return {
+        "verdict": "NEEDS_REWORK",
+        "scores": {"schema_fit": 3, "channel_fit": 3, "safety": 4, "clarity": 4},
+        "issues": issues,
+        "required_changes": ["Rework upstream artifact"],
+    }
+
+
+def _advance_through_script_promote(
+    job_dir: Path, channel_path: Path, idea_payload: dict, script_payload: dict
+) -> None:
+    _seed_script(job_dir, channel_path, idea_payload)
+    run_script_stage(job_dir, channel_path)
+    promote_script_stage(
+        job_dir,
+        channel_path,
+        raw_response=json.dumps(script_payload, ensure_ascii=False),
+    )
+
+
+def test_auto_script_qa_pass_advances_to_scenes(
+    tmp_path: Path,
+    channel_path: Path,
+    idea_payload: dict,
+    valid_script_payload: dict,
+):
+    from video_agent.orchestrator.stages import auto_script_qa_stage
+
+    job_dir = tmp_path / "job-auto"
+    _advance_through_script_promote(
+        job_dir, channel_path, idea_payload, valid_script_payload
+    )
+    fake = FakeBrowserClient(queue=[json.dumps(_qa_pass_payload())])
+
+    output = asyncio.run(
+        auto_script_qa_stage(
+            job_dir,
+            channel_path,
+            lambda msgs: fake.run_session("gemini", msgs),
+        )
+    )
+
+    assert output == job_dir / "operator" / "gemini" / "script_qa.json"
+    state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    assert state["current_stage"] == "scenes"
+    assert any(s["name"] == "script_qa" and s["status"] == "completed" for s in state["stages"])
+
+
+def test_auto_script_qa_fail_raises_with_issues(
+    tmp_path: Path,
+    channel_path: Path,
+    idea_payload: dict,
+    valid_script_payload: dict,
+):
+    from video_agent.orchestrator.stages import auto_script_qa_stage
+
+    job_dir = tmp_path / "job-auto"
+    _advance_through_script_promote(
+        job_dir, channel_path, idea_payload, valid_script_payload
+    )
+    fake = FakeBrowserClient(
+        queue=[json.dumps(_qa_fail_payload(["tono fuera de marca"]))]
+    )
+
+    with pytest.raises(StageInputMissingError, match="NEEDS_REWORK"):
+        asyncio.run(
+            auto_script_qa_stage(
+                job_dir,
+                channel_path,
+                lambda msgs: fake.run_session("gemini", msgs),
+            )
+        )
+    state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    assert state["current_stage"] == "script_qa"  # not advanced
+
+
+def test_promote_qa_stage_rejects_non_pass(
+    tmp_path: Path,
+    channel_path: Path,
+    idea_payload: dict,
+    valid_script_payload: dict,
+):
+    from video_agent.orchestrator.stages import promote_qa_stage
+
+    job_dir = tmp_path / "job-auto"
+    _advance_through_script_promote(
+        job_dir, channel_path, idea_payload, valid_script_payload
+    )
+    with pytest.raises(StageInputMissingError, match="NEEDS_REWORK"):
+        promote_qa_stage(
+            job_dir,
+            "script",
+            json.dumps(_qa_fail_payload(["issue"])),
+        )

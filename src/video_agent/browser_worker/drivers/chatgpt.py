@@ -54,6 +54,39 @@ def _is_login_url(url: str) -> bool:
     )
 
 
+async def _wait_for_stable_response(
+    page: "Page",
+    scrape_js: str,
+    prior_text: str,
+    *,
+    response_timeout_ms: int,
+    poll_ms: int = 500,
+    stable_ms: int = 2_000,
+) -> str | None:
+    """Poll ``scrape_js`` until the result differs from ``prior_text`` AND
+    has not changed for ``stable_ms``. Returns the stable text or None on
+    timeout. Defends against scraping a partial streaming response.
+    """
+    import time
+
+    deadline = time.monotonic() + response_timeout_ms / 1000.0
+    last_seen: str | None = None
+    stable_since: float | None = None
+    while time.monotonic() < deadline:
+        current = await page.evaluate(scrape_js)
+        if current and current != prior_text:
+            if current == last_seen:
+                if stable_since is None:
+                    stable_since = time.monotonic()
+                elif (time.monotonic() - stable_since) * 1000.0 >= stable_ms:
+                    return current
+            else:
+                last_seen = current
+                stable_since = None
+        await page.wait_for_timeout(poll_ms)
+    return None
+
+
 async def _first_matching(page: "Page", selectors: tuple[str, ...], timeout_ms: int):
     for selector in selectors:
         locator = page.locator(selector).first
@@ -145,7 +178,7 @@ class ChatGPTDriver:
         await human_pause(self.page)
         self._opened = True
 
-    async def send_message(self, prompt: str, *, response_timeout_ms: int = 180_000) -> str:
+    async def send_message(self, prompt: str, *, response_timeout_ms: int = 300_000) -> str:
         """Type ``prompt`` into the open chat, send, wait for the new
         assistant turn, and return its scraped text. Does NOT close the
         tab — caller decides session lifetime.
@@ -209,20 +242,21 @@ class ChatGPTDriver:
         except Exception:
             pass
 
-        try:
-            await self.page.wait_for_function(
-                f"(prior) => {{ const t = ({scrape_js})(); return t && t !== prior; }}",
-                arg=prior_text,
-                timeout=response_timeout_ms,
-            )
-        except Exception:
+        # Wait until the response (a) differs from prior AND (b) stops
+        # growing for 2 s. Without the stability check we sometimes
+        # scrape mid-stream and get a truncated JSON.
+        text = await _wait_for_stable_response(
+            self.page,
+            scrape_js,
+            prior_text,
+            response_timeout_ms=response_timeout_ms,
+        )
+        if text is None:
             shot = await save_trace_screenshot(self.page, prefix="chatgpt-no-response")
             raise BrowserDriverError(
                 "ChatGPT response did not arrive in time.",
                 screenshot_path=shot,
             )
-
-        text = await self.page.evaluate(scrape_js)
         if not text:
             shot = await save_trace_screenshot(self.page, prefix="chatgpt-empty")
             raise BrowserDriverError(
@@ -236,7 +270,7 @@ class ChatGPTDriver:
         )
         return text
 
-    async def send(self, prompt: str, *, response_timeout_ms: int = 180_000) -> str:
+    async def send(self, prompt: str, *, response_timeout_ms: int = 300_000) -> str:
         """One-shot: open + send_message. Tab stays open; caller closes."""
         await self.open()
         return await self.send_message(prompt, response_timeout_ms=response_timeout_ms)

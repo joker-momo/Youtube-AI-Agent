@@ -109,6 +109,34 @@ def valid_seo_payload() -> dict:
     }
 
 
+def _fake_pass_qa(job_dir: Path, artifact: str) -> None:
+    from video_agent.orchestrator.job_state import load_job, save_job
+
+    stage_name = f"{artifact}_qa"
+    state = load_job(job_dir)
+    if state.current_stage != stage_name:
+        return
+    stage = state.stage(stage_name)
+    stage.status = "completed"
+    nxt = next((s for s in state.stages if s.status == "pending"), None)
+    if nxt is not None:
+        state.current_stage = nxt.name
+    save_job(job_dir, state)
+    qa_dir = job_dir / "operator" / "gemini"
+    qa_dir.mkdir(parents=True, exist_ok=True)
+    (qa_dir / f"{artifact}_qa.json").write_text(
+        json.dumps(
+            {
+                "verdict": "PASS",
+                "scores": {"schema_fit": 5, "channel_fit": 5, "safety": 5, "clarity": 5},
+                "issues": [],
+                "required_changes": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def _prepare_promoted_script(
     job_dir: Path,
     channel_path: Path,
@@ -125,6 +153,7 @@ def _prepare_promoted_script(
         channel_path,
         raw_response=json.dumps(valid_script_payload, ensure_ascii=False),
     )
+    _fake_pass_qa(job_dir, "script")
 
 
 def _prepare_promoted_scenes(
@@ -141,6 +170,7 @@ def _prepare_promoted_scenes(
         channel_path,
         raw_response=json.dumps(valid_scenes_payload, ensure_ascii=False),
     )
+    _fake_pass_qa(job_dir, "scenes")
 
 
 def test_run_script_stage_writes_prompt(tmp_path: Path, channel_path: Path, idea_payload: dict):
@@ -200,7 +230,7 @@ def test_promote_script_stage_writes_raw_and_promoted_script(
     promoted = json.loads(output.read_text(encoding="utf-8"))
     assert promoted["job_id"] == "job-s1"
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
-    assert state["current_stage"] == "scenes"
+    assert state["current_stage"] == "script_qa"
     script_promote = next(s for s in state["stages"] if s["name"] == "script_promote")
     assert script_promote["status"] == "completed"
 
@@ -287,7 +317,7 @@ def test_promote_scenes_stage_writes_raw_and_promoted_scenes(
     promoted = json.loads(output.read_text(encoding="utf-8"))
     assert promoted["job_id"] == "job-s1"
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
-    assert state["current_stage"] == "seo"
+    assert state["current_stage"] == "scenes_qa"
     scenes_promote = next(s for s in state["stages"] if s["name"] == "scenes_promote")
     assert scenes_promote["status"] == "completed"
 
@@ -376,7 +406,7 @@ def test_promote_seo_stage_writes_raw_and_promoted_seo(
     promoted = json.loads(output.read_text(encoding="utf-8"))
     assert promoted["job_id"] == "job-s1"
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
-    assert state["current_stage"] == "render"
+    assert state["current_stage"] == "seo_qa"
     seo_promote = next(s for s in state["stages"] if s["name"] == "seo_promote")
     assert seo_promote["status"] == "completed"
 
@@ -417,6 +447,7 @@ def test_run_render_stage_uses_operator_render_without_qa_gate(
     )
     run_seo_stage(job_dir, channel_path)
     promote_seo_stage(job_dir, channel_path, raw_response=json.dumps(valid_seo_payload))
+    _fake_pass_qa(job_dir, "seo")
     calls = []
 
     def fake_render_operator_job(options):
@@ -462,6 +493,7 @@ def test_run_review_stage_writes_review_and_completes_job(
     )
     run_seo_stage(job_dir, channel_path)
     promote_seo_stage(job_dir, channel_path, raw_response=json.dumps(valid_seo_payload))
+    _fake_pass_qa(job_dir, "seo")
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
     next(s for s in state["stages"] if s["name"] == "render")["status"] = "completed"
     state["current_stage"] = "review"
@@ -542,11 +574,12 @@ def test_post_promote_script_via_http(client: TestClient, idea_payload: dict, va
     assert body["output"] == "script.json"
     script_promote = next(s for s in body["state"]["stages"] if s["name"] == "script_promote")
     assert script_promote["status"] == "completed"
-    assert body["state"]["current_stage"] == "scenes"
+    assert body["state"]["current_stage"] == "script_qa"
 
 
 def test_post_run_scenes_via_http(
     client: TestClient,
+    tmp_path: Path,
     idea_payload: dict,
     valid_script_payload: dict,
 ):
@@ -557,6 +590,7 @@ def test_post_run_scenes_via_http(
         "/jobs/job-s1/stages/script/promote",
         json={"raw_response": json.dumps(valid_script_payload, ensure_ascii=False)},
     )
+    _fake_pass_qa(tmp_path / "job-s1", "script")
 
     response = client.post("/jobs/job-s1/stages/scenes/run")
 
@@ -570,6 +604,7 @@ def test_post_run_scenes_via_http(
 
 def test_post_promote_scenes_via_http(
     client: TestClient,
+    tmp_path: Path,
     idea_payload: dict,
     valid_script_payload: dict,
     valid_scenes_payload: dict,
@@ -581,6 +616,7 @@ def test_post_promote_scenes_via_http(
         "/jobs/job-s1/stages/script/promote",
         json={"raw_response": json.dumps(valid_script_payload, ensure_ascii=False)},
     )
+    _fake_pass_qa(tmp_path / "job-s1", "script")
     client.post("/jobs/job-s1/stages/scenes/run")
 
     response = client.post(
@@ -593,11 +629,12 @@ def test_post_promote_scenes_via_http(
     assert body["output"] == "scenes.json"
     scenes_promote = next(s for s in body["state"]["stages"] if s["name"] == "scenes_promote")
     assert scenes_promote["status"] == "completed"
-    assert body["state"]["current_stage"] == "seo"
+    assert body["state"]["current_stage"] == "scenes_qa"
 
 
 def test_post_promote_scenes_invalid_raw_returns_409(
     client: TestClient,
+    tmp_path: Path,
     idea_payload: dict,
     valid_script_payload: dict,
     valid_scenes_payload: dict,
@@ -609,6 +646,7 @@ def test_post_promote_scenes_invalid_raw_returns_409(
         "/jobs/job-s1/stages/script/promote",
         json={"raw_response": json.dumps(valid_script_payload, ensure_ascii=False)},
     )
+    _fake_pass_qa(tmp_path / "job-s1", "script")
     client.post("/jobs/job-s1/stages/scenes/run")
     stale_payload = {**valid_scenes_payload, "job_id": "old-job"}
 
@@ -623,6 +661,7 @@ def test_post_promote_scenes_invalid_raw_returns_409(
 
 def test_post_run_seo_via_http(
     client: TestClient,
+    tmp_path: Path,
     idea_payload: dict,
     valid_script_payload: dict,
     valid_scenes_payload: dict,
@@ -634,11 +673,13 @@ def test_post_run_seo_via_http(
         "/jobs/job-s1/stages/script/promote",
         json={"raw_response": json.dumps(valid_script_payload, ensure_ascii=False)},
     )
+    _fake_pass_qa(tmp_path / "job-s1", "script")
     client.post("/jobs/job-s1/stages/scenes/run")
     client.post(
         "/jobs/job-s1/stages/scenes/promote",
         json={"raw_response": json.dumps(valid_scenes_payload, ensure_ascii=False)},
     )
+    _fake_pass_qa(tmp_path / "job-s1", "scenes")
 
     response = client.post("/jobs/job-s1/stages/seo/run")
 
@@ -652,6 +693,7 @@ def test_post_run_seo_via_http(
 
 def test_post_promote_seo_via_http(
     client: TestClient,
+    tmp_path: Path,
     idea_payload: dict,
     valid_script_payload: dict,
     valid_scenes_payload: dict,
@@ -664,11 +706,13 @@ def test_post_promote_seo_via_http(
         "/jobs/job-s1/stages/script/promote",
         json={"raw_response": json.dumps(valid_script_payload, ensure_ascii=False)},
     )
+    _fake_pass_qa(tmp_path / "job-s1", "script")
     client.post("/jobs/job-s1/stages/scenes/run")
     client.post(
         "/jobs/job-s1/stages/scenes/promote",
         json={"raw_response": json.dumps(valid_scenes_payload, ensure_ascii=False)},
     )
+    _fake_pass_qa(tmp_path / "job-s1", "scenes")
     client.post("/jobs/job-s1/stages/seo/run")
 
     response = client.post(
@@ -681,11 +725,12 @@ def test_post_promote_seo_via_http(
     assert body["output"] == "seo.json"
     seo_promote = next(s for s in body["state"]["stages"] if s["name"] == "seo_promote")
     assert seo_promote["status"] == "completed"
-    assert body["state"]["current_stage"] == "render"
+    assert body["state"]["current_stage"] == "seo_qa"
 
 
 def test_post_promote_seo_invalid_raw_returns_409(
     client: TestClient,
+    tmp_path: Path,
     idea_payload: dict,
     valid_script_payload: dict,
     valid_scenes_payload: dict,
@@ -698,11 +743,13 @@ def test_post_promote_seo_invalid_raw_returns_409(
         "/jobs/job-s1/stages/script/promote",
         json={"raw_response": json.dumps(valid_script_payload, ensure_ascii=False)},
     )
+    _fake_pass_qa(tmp_path / "job-s1", "script")
     client.post("/jobs/job-s1/stages/scenes/run")
     client.post(
         "/jobs/job-s1/stages/scenes/promote",
         json={"raw_response": json.dumps(valid_scenes_payload, ensure_ascii=False)},
     )
+    _fake_pass_qa(tmp_path / "job-s1", "scenes")
     client.post("/jobs/job-s1/stages/seo/run")
     stale_payload = {**valid_seo_payload, "job_id": "old-job"}
 
@@ -717,6 +764,7 @@ def test_post_promote_seo_invalid_raw_returns_409(
 
 def test_post_run_render_via_http(
     client: TestClient,
+    tmp_path: Path,
     idea_payload: dict,
     valid_script_payload: dict,
     valid_scenes_payload: dict,
@@ -730,16 +778,19 @@ def test_post_run_render_via_http(
         "/jobs/job-s1/stages/script/promote",
         json={"raw_response": json.dumps(valid_script_payload, ensure_ascii=False)},
     )
+    _fake_pass_qa(tmp_path / "job-s1", "script")
     client.post("/jobs/job-s1/stages/scenes/run")
     client.post(
         "/jobs/job-s1/stages/scenes/promote",
         json={"raw_response": json.dumps(valid_scenes_payload, ensure_ascii=False)},
     )
+    _fake_pass_qa(tmp_path / "job-s1", "scenes")
     client.post("/jobs/job-s1/stages/seo/run")
     client.post(
         "/jobs/job-s1/stages/seo/promote",
         json={"raw_response": json.dumps(valid_seo_payload, ensure_ascii=False)},
     )
+    _fake_pass_qa(tmp_path / "job-s1", "seo")
 
     def fake_render_operator_job(options):
         for filename in [
@@ -767,6 +818,7 @@ def test_post_run_render_via_http(
 
 def test_post_run_review_via_http(
     client: TestClient,
+    tmp_path: Path,
     idea_payload: dict,
     valid_script_payload: dict,
     valid_scenes_payload: dict,
@@ -780,16 +832,19 @@ def test_post_run_review_via_http(
         "/jobs/job-s1/stages/script/promote",
         json={"raw_response": json.dumps(valid_script_payload, ensure_ascii=False)},
     )
+    _fake_pass_qa(tmp_path / "job-s1", "script")
     client.post("/jobs/job-s1/stages/scenes/run")
     client.post(
         "/jobs/job-s1/stages/scenes/promote",
         json={"raw_response": json.dumps(valid_scenes_payload, ensure_ascii=False)},
     )
+    _fake_pass_qa(tmp_path / "job-s1", "scenes")
     client.post("/jobs/job-s1/stages/seo/run")
     client.post(
         "/jobs/job-s1/stages/seo/promote",
         json={"raw_response": json.dumps(valid_seo_payload, ensure_ascii=False)},
     )
+    _fake_pass_qa(tmp_path / "job-s1", "seo")
 
     def fake_render_operator_job(options):
         (options.job_dir / "video.mp4").write_text("ok", encoding="utf-8")

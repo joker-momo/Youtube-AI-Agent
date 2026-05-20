@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Awaitable, Callable, Sequence
 
@@ -8,7 +9,9 @@ from video_agent.operator import (
     _chatgpt_scenes_prompt,
     _chatgpt_seo_prompt,
     _chatgpt_script_prompt,
+    _gemini_qa_prompt,
     promote_operator_artifact,
+    promote_operator_qa,
     write_operator_review,
 )
 from video_agent.orchestrator.job_state import load_job, save_job
@@ -24,6 +27,9 @@ SCENES_PROMPT_PATH = Path("operator/chatgpt/scenes_prompt.md")
 SCENES_RAW_PATH = Path("operator/chatgpt/scenes.raw.txt")
 SEO_PROMPT_PATH = Path("operator/chatgpt/seo_prompt.md")
 SEO_RAW_PATH = Path("operator/chatgpt/seo.raw.txt")
+SCRIPT_QA_RAW_PATH = Path("operator/gemini/script_qa.raw.txt")
+SCENES_QA_RAW_PATH = Path("operator/gemini/scenes_qa.raw.txt")
+SEO_QA_RAW_PATH = Path("operator/gemini/seo_qa.raw.txt")
 
 
 class StageInputMissingError(Exception):
@@ -274,6 +280,63 @@ def run_review_stage(job_dir: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# Gemini QA stages (script_qa, scenes_qa, seo_qa).
+# ---------------------------------------------------------------------------
+
+_QA_ARTIFACT_FILE = {
+    "script": "script.json",
+    "scenes": "scenes.json",
+    "seo": "seo.json",
+}
+_QA_RAW_PATH = {
+    "script": SCRIPT_QA_RAW_PATH,
+    "scenes": SCENES_QA_RAW_PATH,
+    "seo": SEO_QA_RAW_PATH,
+}
+
+
+def promote_qa_stage(job_dir: Path, artifact: str, raw_response: str) -> Path:
+    """Promote a raw Gemini QA response into ``operator/gemini/<art>_qa.json``.
+
+    ``artifact`` is one of ``script``, ``scenes``, ``seo``. The stage
+    name written to the job state is ``<artifact>_qa``. Verdict must
+    be PASS; anything else raises ``StageInputMissingError`` with the
+    issues so the caller can decide whether to retry the upstream
+    promote stage.
+    """
+    if artifact not in _QA_ARTIFACT_FILE:
+        raise StageInputMissingError(f"Unsupported QA artifact: {artifact}")
+    stage_name = f"{artifact}_qa"
+    state = load_job(job_dir)
+    if state.current_stage != stage_name:
+        raise StageInputMissingError(
+            f"Cannot run {stage_name} from current_stage={state.current_stage!r}"
+        )
+    if not raw_response.strip():
+        raise StageInputMissingError(f"Missing raw Gemini QA response for {artifact}")
+
+    raw_path = job_dir / _QA_RAW_PATH[artifact]
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    raw_path.write_text(raw_response, encoding="utf-8")
+
+    try:
+        result = promote_operator_qa(job_dir, artifact, raw_path)
+    except ValueError as exc:
+        raise StageInputMissingError(str(exc)) from exc
+
+    qa_payload = json.loads(result.output_path.read_text(encoding="utf-8"))
+    verdict = str(qa_payload.get("verdict", "")).upper()
+    if verdict != "PASS":
+        issues = qa_payload.get("issues") or qa_payload.get("required_changes") or []
+        raise StageInputMissingError(
+            f"Gemini QA verdict for {artifact} is {verdict or 'MISSING'}: {issues}"
+        )
+
+    _complete_stage(job_dir, stage_name, result.output_path)
+    return result.output_path
+
+
+# ---------------------------------------------------------------------------
 # Auto-driven stages: orchestrator -> browser-worker -> ChatGPT.
 # ---------------------------------------------------------------------------
 
@@ -297,15 +360,17 @@ async def _auto_run_then_promote(
     promote_stage_name: str,
     briefing_stage_name: str,
 ) -> Path:
-    """Generic auto-stage: render prompt, brief the model in one session, promote.
+    """Generic auto-stage: render prompt, send task into the session, promote.
 
-    Flow per stage (one temp chat, two user messages, then close):
-      1. Run the prompt stage (if needed) to produce the v2 prompt file.
-      2. Build a role + channel-context briefing as message #1.
-      3. Send the v2 prompt as message #2.
-      4. Promote the model's last response through the v2 validator.
+    The caller (typically /run-all) is responsible for opening the
+    persistent temp chat and sending the initial briefing **once** at
+    the start. This stage helper only builds and sends the
+    stage-specific task message; the model already has the channel DNA
+    in its context.
 
-    The session_fn closes the temp chat after both messages are sent.
+    If ``session_fn`` is the legacy one-shot ``run_session``, the
+    standalone /stages/X/auto routes wrap it so that the initial
+    briefing is sent as the first message of the same one-shot tab.
     """
     state = load_job(job_dir)
     if state.current_stage == run_stage_name:
@@ -321,22 +386,11 @@ async def _auto_run_then_promote(
         raise StageInputMissingError(f"Missing prompt file {prompt_path}")
     prompt_text = prompt_path.read_text(encoding="utf-8")
 
-    # Local imports to avoid a cycle at module load.
-    from video_agent.orchestrator.briefing import (
-        build_stage_briefing,
-        build_task_prompt,
-    )
+    from video_agent.orchestrator.briefing import build_task_prompt
 
-    channel_config = read_yaml(channel_path)
-    briefing = build_stage_briefing(
-        channel_config,
-        briefing_stage_name,
-        job_id=state.job_id,
-        channel_id=state.channel_id,
-    )
     task = build_task_prompt(briefing_stage_name, prompt_text)
 
-    raw_response = await session_fn([briefing, task])
+    raw_response = await session_fn([task])
     if not isinstance(raw_response, str) or not raw_response.strip():
         raise StageInputMissingError(
             "browser-worker returned an empty response for "
@@ -396,4 +450,80 @@ async def auto_seo_stage(
         run_stage_name="seo",
         promote_stage_name="seo_promote",
         briefing_stage_name="seo",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Auto Gemini QA stages: orchestrator -> browser-worker -> Gemini.
+# ---------------------------------------------------------------------------
+
+
+async def _auto_qa(
+    *,
+    job_dir: Path,
+    channel_path: Path,
+    artifact: str,
+    session_fn: SessionFn,
+) -> Path:
+    stage_name = f"{artifact}_qa"
+    state = load_job(job_dir)
+    if state.current_stage != stage_name:
+        raise StageInputMissingError(
+            f"Cannot auto-run {stage_name} from current_stage={state.current_stage!r}"
+        )
+    artifact_path = job_dir / _QA_ARTIFACT_FILE[artifact]
+    if not artifact_path.exists():
+        raise StageInputMissingError(f"Missing {artifact_path}")
+
+    artifact_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+    base_prompt = _gemini_qa_prompt(artifact, artifact_payload)
+
+    from video_agent.orchestrator.briefing import build_task_prompt
+
+    task = build_task_prompt(stage_name, base_prompt)
+
+    raw_response = await session_fn([task])
+    if not isinstance(raw_response, str) or not raw_response.strip():
+        raise StageInputMissingError(
+            f"browser-worker returned an empty Gemini QA response for {artifact}"
+        )
+    return promote_qa_stage(job_dir, artifact, raw_response)
+
+
+async def auto_script_qa_stage(
+    job_dir: Path,
+    channel_path: Path,
+    session_fn: SessionFn,
+) -> Path:
+    return await _auto_qa(
+        job_dir=job_dir,
+        channel_path=channel_path,
+        artifact="script",
+        session_fn=session_fn,
+    )
+
+
+async def auto_scenes_qa_stage(
+    job_dir: Path,
+    channel_path: Path,
+    session_fn: SessionFn,
+) -> Path:
+    return await _auto_qa(
+        job_dir=job_dir,
+        channel_path=channel_path,
+        artifact="scenes",
+        session_fn=session_fn,
+    )
+
+
+async def auto_seo_qa_stage(
+    job_dir: Path,
+    channel_path: Path,
+    session_fn: SessionFn,
+) -> Path:
+    return await _auto_qa(
+        job_dir=job_dir,
+        channel_path=channel_path,
+        artifact="seo",
+        session_fn=session_fn,
     )

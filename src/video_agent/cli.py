@@ -98,6 +98,32 @@ def build_parser() -> argparse.ArgumentParser:
     audit_parser = subparsers.add_parser("audit", help="Write a visual QA audit for existing job directories.")
     audit_parser.add_argument("--job", action="append", required=True, type=Path)
     audit_parser.add_argument("--audit-path", type=Path)
+
+    auto_parser = subparsers.add_parser(
+        "auto",
+        help="End-to-end auto pipeline via the V3 FastAPI app (POST /run-all).",
+    )
+    auto_parser.add_argument("--idea", required=True, type=Path)
+    auto_parser.add_argument(
+        "--job-id",
+        help="Job id to use. Defaults to auto-<unix-ts>.",
+    )
+    auto_parser.add_argument(
+        "--channel-id",
+        default="vida-plena-45",
+        help="Channel id stored in job.json. Default vida-plena-45.",
+    )
+    auto_parser.add_argument(
+        "--app-url",
+        default="http://127.0.0.1:8000",
+        help="V3 app base URL. Default http://127.0.0.1:8000.",
+    )
+    auto_parser.add_argument(
+        "--timeout",
+        type=int,
+        default=1800,
+        help="HTTP read timeout in seconds. Default 1800 (30 min).",
+    )
     return parser
 
 
@@ -225,8 +251,85 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"audit.md: {args.audit_path}")
         print(markdown, end="")
         return 0
+    if args.command == "auto":
+        return _run_auto(args)
     parser.error("Unknown command")
     return 2
+
+
+def _run_auto(args: argparse.Namespace) -> int:
+    """Drive the V3 /run-all pipeline from the command line."""
+    import json
+    import time
+    import urllib.request
+    import urllib.error
+
+    base = args.app_url.rstrip("/")
+    idea_path = Path(args.idea)
+    if not idea_path.exists():
+        print(f"idea file not found: {idea_path}")
+        return 2
+    idea_payload = json.loads(idea_path.read_text(encoding="utf-8"))
+    job_id = args.job_id or f"auto-{int(time.time())}"
+
+    def _post(url: str, payload: dict | None, timeout: int) -> tuple[int, dict]:
+        body = b""
+        headers = {}
+        if payload is not None:
+            body = json.dumps(payload).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.status, json.loads(resp.read() or b"{}")
+        except urllib.error.HTTPError as exc:
+            try:
+                detail = json.loads(exc.read() or b"{}")
+            except Exception:
+                detail = {"error": str(exc)}
+            return exc.code, detail
+
+    print(f"Job id: {job_id}")
+    print(f"App: {base}")
+
+    status, body = _post(
+        f"{base}/jobs",
+        {
+            "job_id": job_id,
+            "channel_id": args.channel_id,
+            "idea_path": str(idea_path),
+        },
+        timeout=30,
+    )
+    if status != 201:
+        print(f"Create job failed ({status}): {body}")
+        return 1
+    print("Job created.")
+
+    status, body = _post(f"{base}/jobs/{job_id}/idea", idea_payload, timeout=30)
+    if status != 201:
+        print(f"Upload idea failed ({status}): {body}")
+        return 1
+    print("Idea uploaded. Starting /run-all (browser session may take minutes)...")
+
+    start = time.time()
+    status, body = _post(f"{base}/jobs/{job_id}/run-all", None, timeout=args.timeout)
+    elapsed = time.time() - start
+    print(f"/run-all returned HTTP {status} in {elapsed:.1f}s")
+    if status == 200:
+        for entry in body.get("completed", []):
+            print(f"  {entry['stage']}: {entry['output']}")
+        print(f"Final current_stage: {body.get('state', {}).get('current_stage')}")
+        return 0
+    detail = body.get("detail", body)
+    if isinstance(detail, dict):
+        print(f"Stopped at: {detail.get('stopped_at')}")
+        print(f"Error: {detail.get('error')}")
+        for entry in detail.get("completed", []):
+            print(f"  completed: {entry['stage']}: {entry['output']}")
+    else:
+        print(detail)
+    return 1
 
 
 if __name__ == "__main__":

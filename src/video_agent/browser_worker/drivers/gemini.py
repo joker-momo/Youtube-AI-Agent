@@ -136,7 +136,7 @@ class GeminiDriver:
         await human_pause(self.page)
         self._opened = True
 
-    async def send_message(self, prompt: str, *, response_timeout_ms: int = 180_000) -> str:
+    async def send_message(self, prompt: str, *, response_timeout_ms: int = 300_000) -> str:
         if not self._opened:
             await self.open()
         if not prompt.strip():
@@ -151,6 +151,11 @@ class GeminiDriver:
                 "model-response .markdown",
                 "model-response",
                 ".markdown.markdown-main-panel",
+                ".markdown",
+                "[data-test-id*='response']",
+                "[data-message-author='model']",
+                "chat-history-message:last-child",
+                "model-response-content",
               ];
               for (const s of selectors) {
                 const nodes = document.querySelectorAll(s);
@@ -159,7 +164,21 @@ class GeminiDriver:
                 const text = (last.innerText || '').trim();
                 if (text) return text;
               }
-              return '';
+              // Fallback: scan all elements in main, return the last
+              // sizable text block that doesn't look like the user
+              // prompt (our prompts include "Cambia de sombrero" or
+              // "Restricciones absolutas").
+              const main = document.querySelector('main') || document.body;
+              const candidates = Array.from(main.querySelectorAll('div, article, section'));
+              let best = '';
+              for (const node of candidates) {
+                const txt = (node.innerText || '').trim();
+                if (txt.length < 20) continue;
+                if (txt.includes('Cambia de sombrero')) continue;
+                if (txt.includes('Restricciones absolutas')) continue;
+                if (txt.length > best.length) best = txt;
+              }
+              return best;
             }
         """
         prior_text = await self.page.evaluate(scrape_js)
@@ -192,20 +211,22 @@ class GeminiDriver:
         except Exception:
             pass
 
-        try:
-            await self.page.wait_for_function(
-                f"(prior) => {{ const t = ({scrape_js})(); return t && t !== prior; }}",
-                arg=prior_text,
-                timeout=response_timeout_ms,
-            )
-        except Exception:
+        from video_agent.browser_worker.drivers.chatgpt import (
+            _wait_for_stable_response,
+        )
+
+        text = await _wait_for_stable_response(
+            self.page,
+            scrape_js,
+            prior_text,
+            response_timeout_ms=response_timeout_ms,
+        )
+        if text is None:
             shot = await save_trace_screenshot(self.page, prefix="gemini-no-response")
             raise BrowserDriverError(
                 "Gemini response did not arrive in time.",
                 screenshot_path=shot,
             )
-
-        text = await self.page.evaluate(scrape_js)
         if not text:
             shot = await save_trace_screenshot(self.page, prefix="gemini-empty")
             raise BrowserDriverError(
@@ -219,6 +240,6 @@ class GeminiDriver:
         )
         return text
 
-    async def send(self, prompt: str, *, response_timeout_ms: int = 180_000) -> str:
+    async def send(self, prompt: str, *, response_timeout_ms: int = 300_000) -> str:
         await self.open()
         return await self.send_message(prompt, response_timeout_ms=response_timeout_ms)

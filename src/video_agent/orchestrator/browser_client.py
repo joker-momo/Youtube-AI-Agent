@@ -44,7 +44,7 @@ class BrowserClient:
         self,
         prompt: str,
         *,
-        response_timeout_ms: int = 180_000,
+        response_timeout_ms: int = 300_000,
     ) -> str:
         return await self._send("chatgpt", prompt, response_timeout_ms)
 
@@ -52,7 +52,7 @@ class BrowserClient:
         self,
         prompt: str,
         *,
-        response_timeout_ms: int = 180_000,
+        response_timeout_ms: int = 300_000,
     ) -> str:
         return await self._send("gemini", prompt, response_timeout_ms)
 
@@ -119,7 +119,7 @@ class BrowserClient:
         session_id: str,
         prompt: str,
         *,
-        response_timeout_ms: int = 180_000,
+        response_timeout_ms: int = 300_000,
     ) -> str:
         async with httpx.AsyncClient(timeout=self.request_timeout) as http:
             response = await http.post(
@@ -146,12 +146,16 @@ class BrowserClient:
         site: str,
         messages: list[str],
         *,
-        response_timeout_ms: int = 180_000,
+        response_timeout_ms: int = 300_000,
     ) -> str:
         """Open a temp chat, send each ``messages`` in order, return last response.
 
         Always closes the session in a finally so a partial failure
         does not leak runtime tabs.
+
+        Useful for one-shot stage routes. For multi-stage pipelines
+        that should share a single temp chat across stages, use
+        ``open_persistent_session`` instead.
         """
         if not messages:
             raise BrowserClientError(
@@ -175,3 +179,42 @@ class BrowserClient:
                 await self.close_session(site, session_id)
             except Exception:
                 pass
+
+    async def open_persistent_session(self, site: str):
+        """Open a long-lived temp chat; return ``(sender, closer)``.
+
+        ``sender(messages)`` sends each message into the same tab and
+        returns the last assistant response. ``closer()`` releases the
+        tab. The caller MUST invoke ``closer()`` in a finally so a
+        partial failure never leaks the runtime page.
+
+        This is what the V3 pipeline uses so all three ChatGPT stages
+        (script_promote, scenes_promote, seo_promote) share one tab,
+        and similarly for the three Gemini QA stages.
+        """
+        session_id = await self.open_session(site)
+
+        async def sender(messages, *, response_timeout_ms: int = 300_000) -> str:
+            if not messages:
+                raise BrowserClientError(
+                    "persistent sender requires at least one message",
+                    status_code=400,
+                    detail={},
+                )
+            last = ""
+            for prompt in messages:
+                last = await self.send_in_session(
+                    site,
+                    session_id,
+                    prompt,
+                    response_timeout_ms=response_timeout_ms,
+                )
+            return last
+
+        async def closer() -> None:
+            try:
+                await self.close_session(site, session_id)
+            except Exception:
+                pass
+
+        return sender, closer

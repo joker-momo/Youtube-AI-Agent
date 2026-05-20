@@ -132,7 +132,7 @@ async def runtime() -> dict:
 
 class SendPromptRequest(BaseModel):
     prompt: str
-    response_timeout_ms: int = 180_000
+    response_timeout_ms: int = 300_000
 
 
 class OpenSessionResponse(BaseModel):

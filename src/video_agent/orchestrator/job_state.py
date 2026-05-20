@@ -9,10 +9,13 @@ JOB_FILE = "job.json"
 DEFAULT_STAGES: tuple[str, ...] = (
     "script",
     "script_promote",
+    "script_qa",
     "scenes",
     "scenes_promote",
+    "scenes_qa",
     "seo",
     "seo_promote",
+    "seo_qa",
     "render",
     "review",
 )

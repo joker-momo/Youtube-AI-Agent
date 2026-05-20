@@ -334,7 +334,7 @@ async def _auto_run_then_promote(
         job_id=state.job_id,
         channel_id=state.channel_id,
     )
-    task = build_task_prompt(prompt_text)
+    task = build_task_prompt(briefing_stage_name, prompt_text)
 
     raw_response = await session_fn([briefing, task])
     if not isinstance(raw_response, str) or not raw_response.strip():

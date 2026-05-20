@@ -1,6 +1,6 @@
 # Youtube AI Agent Project Status
 
-Last updated: 2026-05-20 (Per-stage temp-chat sessions + role/context briefing)
+Last updated: 2026-05-20 (Prompt quality batch: schema, length, brand voice, decomp, self-check)
 
 This file is the living project tracker. Update it whenever a meaningful system capability is added, changed, verified, or deferred so a new reader can quickly understand what the system does, what is being built now, and what remains.
 
@@ -536,6 +536,73 @@ Browser Appliance:
 
 Docker verification: `133 passed in 15.82s` (tests updated to feed
 `run_session` and assert briefing + task arrive as two messages).
+
+### V3 Phase 1 Step 15 Prompt-quality batch (DNA reinforcement)
+
+Eight enhancements to `briefing.py`, all aimed at making the channel
+DNA reproduce across every video without manual fixup. Persona
+injection was intentionally skipped — DNA consistency first; we'll
+diversify only once we have 10-20 published videos to learn from.
+
+Briefing message (first turn of every per-stage temp chat) now also
+includes:
+
+- **Brand voice file** loaded from `channel.brand_voice_path`. If the
+  channel YAML points at a markdown file, the worker injects its text
+  verbatim under `# Guía de voz del canal (brand voice)`.
+- **Negative tone constraints**: an explicit list of manipulative
+  phrases the model must never use (`milagro`, `cura definitiva`,
+  `garantizado`, `100% efectivo`, `comprobado científicamente`,
+  `el mejor`, `secreto`, `fácil y rápido`, `experto número uno`).
+- **Anti-hallucination rule**: if the idea lacks concrete stats /
+  citations / brand names / proper nouns, the model must use
+  qualitative language ("muchas personas reportan…") instead of
+  inventing data.
+- **Format-strict + self-correct rule**: if the first reply is not
+  pure JSON, autocorrect and re-send only the JSON — no apologies,
+  no commentary.
+
+Task message (second turn) now also includes per-stage:
+
+- **Explicit output schema** (JSON-Schema-ish shorthand) with types
+  and bounds for every field. Removes "guess the type" failure mode.
+- **Length contract** with exact ranges in chars / words / seconds
+  derived from the idea's `target_duration_sec` and the channel's
+  TTS `pace_wpm`. Locks video duration drift.
+- **Sub-task decomposition checklist**: 6-7 numbered steps the model
+  must follow before emitting JSON. Forces planning ("divide the
+  narration into N blocks, sum their durations, only then build the
+  JSON").
+- **Expanded self-check** (7 items including hard `qa.verdict=
+  NEEDS_REWORK` fallback if any check fails).
+
+Live verified end-to-end with the user signed into ChatGPT,
+`POST /jobs/brf2-1779253828/run-all` -> 200 in **4m18s** wall.
+Every contract met by ChatGPT without manual fixup:
+
+  Stage      Contract                                  Output
+  --------------------------------------------------------------------
+  script     hook 60-140 chars                          102 chars
+  script     narration 110-150 words                    118 words
+  script     sections 4-6                               5
+  scenes     total_duration_sec 50-65                   58
+  scenes     scenes count 4-6                           5
+  scenes     sum(duration_sec) == total                 58 == 58
+  scenes     visual_prompt in English                   all English
+  scenes     ids scene-01..NN sequential                yes
+  seo        title 50-70 chars                          51 chars
+  seo        description 300-600 chars                  359 chars
+  seo        tags 5-8                                   7
+  seo        preferred phrases used when applies        "mediana edad",
+                                                        "segunda juventud"
+  brand      calm + respectful tone (from MD)           matched
+
+No forbidden phrases. No invented stats. Accents preserved. The
+duration contract in particular is a big win — `sum(duration_sec)`
+hitting `total_duration_sec` exactly used to require Gemini QA to
+catch and force a rewrite.
+
+Docker verification: `133 passed in 23.64s`.
 
 ## Target V3 Architecture
 

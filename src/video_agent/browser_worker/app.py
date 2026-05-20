@@ -512,6 +512,86 @@ async def vidiq_close_session(session_id: str):
     return None
 
 
+class ImagePromptRequest(BaseModel):
+    prompt: str
+    project_name: str
+    out_path: str  # absolute path inside the worker container
+    response_timeout_ms: int = 240_000
+
+
+@app.post("/chatgpt/image")
+async def chatgpt_image(payload: ImagePromptRequest) -> dict:
+    """One-shot ChatGPT image generation via the Projects workflow.
+
+    Opens a new Chromium page, creates a project named
+    ``payload.project_name``, sends ``payload.prompt`` as an image-gen
+    request, downloads the resulting image to ``payload.out_path``,
+    and closes the page. Each call creates a fresh project so images
+    stay organised per video / per scene.
+    """
+    from pathlib import Path as _P
+    from playwright.async_api import async_playwright
+
+    from video_agent.browser_worker.drivers import ChatGPTImageDriver
+
+    cdp_url = _cdp_url()
+    try:
+        ws_endpoint = await _resolve_browser_ws(cdp_url)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"cdp_url": cdp_url, "error": str(exc)},
+        ) from exc
+
+    async with async_playwright() as pw:
+        browser = await pw.chromium.connect_over_cdp(ws_endpoint)
+        try:
+            context = (
+                browser.contexts[0]
+                if browser.contexts
+                else await browser.new_context()
+            )
+            page = await context.new_page()
+            await human_pause(page, min_ms=400, max_ms=900)
+            try:
+                driver = ChatGPTImageDriver(page)
+                result = await driver.generate_image(
+                    payload.prompt,
+                    project_name=payload.project_name,
+                    out_path=_P(payload.out_path),
+                    response_timeout_ms=payload.response_timeout_ms,
+                )
+                return result
+            except LoginRequiredError as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": str(exc),
+                        "screenshot": exc.screenshot_path or "",
+                        "login_required": True,
+                    },
+                ) from exc
+            except BrowserDriverError as exc:
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "error": str(exc),
+                        "screenshot": exc.screenshot_path or "",
+                    },
+                ) from exc
+            finally:
+                try:
+                    await human_pause(page, min_ms=400, max_ms=900)
+                except Exception:
+                    pass
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+        finally:
+            await browser.close()
+
+
 @app.post("/chatgpt/send")
 async def chatgpt_send(payload: SendPromptRequest) -> dict:
     return await _drive("chatgpt", payload.prompt, payload.response_timeout_ms)

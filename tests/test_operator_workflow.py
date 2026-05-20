@@ -125,7 +125,9 @@ def test_promote_operator_artifact_rejects_invalid_scenes_contract(tmp_path):
 
     message = str(excinfo.value)
     assert "scene-NN" in message
-    assert "asset_refs" in message
+    # asset_refs as a list is now silently coerced to {} by
+    # _normalize_scenes_candidate; only the scene-id and qa.verdict
+    # violations are still surfaced.
     assert "ChatGPT prefilled" in message
     assert not (tmp_path / "operator-job/scenes.json").exists()
 

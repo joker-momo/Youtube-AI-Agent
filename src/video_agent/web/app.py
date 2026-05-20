@@ -89,7 +89,12 @@ def list_jobs(jobs_root: Path = Depends(get_jobs_root)) -> dict:
                 payload = json.loads(job_file.read_text(encoding="utf-8"))
             except Exception:
                 continue
-            stages = payload.get("stages", [])
+            current_stage = payload.get("current_stage")
+            stages = []
+            for raw_stage in payload.get("stages", []):
+                stage = dict(raw_stage)
+                stage["status"] = _effective_stage_status(stage, current_stage)
+                stages.append(stage)
             done = sum(1 for s in stages if s.get("status") == "completed")
             total = len(stages)
             in_progress = [
@@ -99,7 +104,7 @@ def list_jobs(jobs_root: Path = Depends(get_jobs_root)) -> dict:
                 {
                     "job_id": payload.get("job_id"),
                     "channel_id": payload.get("channel_id"),
-                    "current_stage": payload.get("current_stage"),
+                    "current_stage": current_stage,
                     "created_at": payload.get("created_at"),
                     "updated_at": payload.get("updated_at"),
                     "stages_done": done,
@@ -223,6 +228,13 @@ def _stage_duration_seconds(stage: dict) -> float | None:
     return max(0.0, end - start)
 
 
+def _effective_stage_status(stage: dict, current_stage: str | None) -> str:
+    status = str(stage.get("status") or "pending")
+    if status == "pending" and stage.get("name") == current_stage:
+        return "in_progress"
+    return status
+
+
 @app.get("/jobs/{job_id}/timeline")
 def job_timeline(
     job_id: str,
@@ -264,7 +276,10 @@ def job_timeline(
     remaining_eta = 0.0
     completed_so_far = 0
     total_stages = len(state.get("stages", []))
-    for stage in state.get("stages", []):
+    current_stage = state.get("current_stage")
+    for raw_stage in state.get("stages", []):
+        stage = dict(raw_stage)
+        stage["status"] = _effective_stage_status(stage, current_stage)
         name = stage.get("name")
         cfg = _STAGE_ARTIFACTS.get(name, {})
         inputs = []
@@ -834,12 +849,29 @@ async function fetchJobs() {
   try {
     const r = await fetch('/jobs');
     const d = await r.json();
+    const jobs = d.jobs || [];
     document.getElementById('job-count').textContent = d.count + ' jobs';
     document.getElementById('panel-count').textContent = d.count + ' jobs';
-    renderKpis(d.jobs || []);
-    renderJobsList(d.jobs);
-    if (!SELECTED_ID && d.jobs && d.jobs.length) selectJob(d.jobs[0].job_id);
-    if (SELECTED_ID) fetchTimeline(SELECTED_ID);
+    renderKpis(jobs);
+    renderJobsList(jobs);
+
+    // If the selected job was deleted, automatically switch to the
+    // newest available job so timeline + websocket stay live.
+    const hasSelected = SELECTED_ID && jobs.some(j => j.job_id === SELECTED_ID);
+    if (!hasSelected) {
+      SELECTED_ID = null;
+      if (jobs.length) {
+        selectJob(jobs[0].job_id);
+        return;
+      }
+      if (WS) { try { WS.close(); } catch (e) {} WS = null; }
+      const dot = document.getElementById('ws-dot');
+      const label = document.getElementById('ws-label');
+      dot.className = 'ws-dot off';
+      label.textContent = 'disconnected';
+      return;
+    }
+    fetchTimeline(SELECTED_ID);
   } catch (e) { console.error(e); }
 }
 
@@ -1765,37 +1797,84 @@ async def post_run_all(
     qa_sender = None
     chatgpt_close = _noop_close
     qa_close = _noop_close
+
+    async def _open_with_retry(site: str, attempts: int = 3):
+        last_exc: BrowserClientError | None = None
+        for idx in range(attempts):
+            try:
+                return await client.open_persistent_session(site)
+            except BrowserClientError as exc:
+                last_exc = exc
+                # Retry only for transient 5xx worker failures.
+                if exc.status_code < 500 or idx == attempts - 1:
+                    raise
+                await asyncio.sleep(1.0 + idx * 0.5)
+        assert last_exc is not None
+        raise last_exc
+
+    async def _send_with_retry(sender, messages, attempts: int = 3) -> str:
+        last_exc: BrowserClientError | None = None
+        for idx in range(attempts):
+            try:
+                return await sender(list(messages))
+            except BrowserClientError as exc:
+                last_exc = exc
+                if exc.status_code < 500 or idx == attempts - 1:
+                    raise
+                await asyncio.sleep(1.0 + idx * 0.5)
+        assert last_exc is not None
+        raise last_exc
+
+    need_writing_tab = any(
+        s in remaining for s in ("script", "script_promote", "scenes", "scenes_promote", "seo", "seo_promote")
+    )
+    need_qa_tab = any(s in remaining for s in ("script_qa", "scenes_qa", "seo_qa"))
+
     try:
-        chatgpt_sender, chatgpt_close = await client.open_persistent_session("chatgpt")
-        qa_sender, qa_close = await client.open_persistent_session("claude")
+        if need_writing_tab:
+            chatgpt_sender, chatgpt_close = await _open_with_retry("chatgpt")
+        if need_qa_tab:
+            qa_sender, qa_close = await _open_with_retry("claude")
 
         async def chatgpt_fn(msgs):
-            return await chatgpt_sender(list(msgs))
+            if chatgpt_sender is None:
+                raise StageInputMissingError(
+                    "ChatGPT session not available for writing stage."
+                )
+            return await _send_with_retry(chatgpt_sender, msgs)
 
         async def qa_fn(msgs):
-            return await qa_sender(list(msgs))
+            if qa_sender is None:
+                raise StageInputMissingError(
+                    "Claude session not available for QA stage."
+                )
+            return await _send_with_retry(qa_sender, msgs)
 
         # Brief each tab once before any task message.
-        await chatgpt_sender(
-            [
-                build_initial_briefing(
-                    channel_config,
-                    kind="writing",
-                    job_id=state.job_id,
-                    channel_id=state.channel_id,
-                )
-            ]
-        )
-        await qa_sender(
-            [
-                build_initial_briefing(
-                    channel_config,
-                    kind="qa",
-                    job_id=state.job_id,
-                    channel_id=state.channel_id,
-                )
-            ]
-        )
+        if need_writing_tab:
+            await _send_with_retry(
+                chatgpt_sender,
+                [
+                    build_initial_briefing(
+                        channel_config,
+                        kind="writing",
+                        job_id=state.job_id,
+                        channel_id=state.channel_id,
+                    )
+                ],
+            )
+        if need_qa_tab:
+            await _send_with_retry(
+                qa_sender,
+                [
+                    build_initial_briefing(
+                        channel_config,
+                        kind="qa",
+                        job_id=state.job_id,
+                        channel_id=state.channel_id,
+                    )
+                ],
+            )
 
         if "script" in remaining or "script_promote" in remaining:
             await _record(

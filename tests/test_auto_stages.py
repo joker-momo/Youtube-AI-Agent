@@ -1065,7 +1065,7 @@ async def _good_vidiq_fn(keywords: list[str]) -> list[dict]:
 
 
 async def _low_vidiq_fn(keywords: list[str]) -> list[dict]:
-    return [{"keyword": kw, "score": 20, "volume": "Low", "competition": "High", "related": []} for kw in keywords]
+    return [{"keyword": kw, "score": -1, "volume": "Low", "competition": "High", "related": []} for kw in keywords]
 
 
 async def _fail_vidiq_fn(keywords: list[str]) -> list[dict]:

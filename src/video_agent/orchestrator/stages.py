@@ -426,6 +426,32 @@ async def _auto_run_then_promote(
             "browser-worker returned an empty response for "
             f"{promote_stage_name}"
         )
+
+    # Continuation loop: if the model truncated mid-JSON, send "Continúa"
+    # and append until the JSON parses or we give up (max 4 continuations).
+    import json as _json
+
+    _CONTINUE_MSG = (
+        "Continúa exactamente desde donde te quedaste, "
+        "sin repetir nada de lo anterior."
+    )
+    _max_continuations = 4
+    for _attempt in range(_max_continuations):
+        try:
+            _json.loads(raw_response.strip())
+            break  # valid JSON — proceed to promote
+        except _json.JSONDecodeError:
+            # Check if there's any JSON start; if not, don't bother continuing
+            if "{" not in raw_response:
+                break
+            # Looks truncated — ask the model to continue
+            continuation = await session_fn([_CONTINUE_MSG])
+            if not isinstance(continuation, str) or not continuation.strip():
+                break
+            raw_response = raw_response + continuation
+    else:
+        pass  # exhausted continuations — let promoter decide
+
     try:
         return promoter(job_dir, channel_path, raw_response)
     except ValueError as exc:

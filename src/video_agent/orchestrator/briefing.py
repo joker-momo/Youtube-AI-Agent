@@ -472,8 +472,8 @@ def build_task_prompt(
             "5. ¿Sin palabras manipulativas (milagro, cura, garantizado, etc.)?",
             "6. ¿Sin estadísticas, citas, marcas o nombres inventados?",
             "7. ¿Devolveré un único objeto JSON válido sin markdown ni comentarios?",
-            "Si alguno falla, NO devuelvas el artefacto: devuelve",
-            "`{\"qa\":{\"verdict\":\"NEEDS_REWORK\",\"issues\":[descripción de cada fallo]}}`.",
+            "Anota cualquier fallo en el campo `qa.issues` con verdict NEEDS_REWORK, pero "
+            "SIEMPRE devuelve el artefacto completo — nunca devuelvas solo el objeto QA.",
             "",
             "Ahora responde **únicamente** el JSON solicitado.",
         ]

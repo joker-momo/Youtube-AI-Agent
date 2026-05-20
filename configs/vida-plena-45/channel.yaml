@@ -66,6 +66,16 @@ positioning:
     - "adultos 45+"
     - "mediana edad"
     - "segunda juventud"
+research_gate:
+  # vidIQ free tier scores Spanish long-tail phrases lower than English.
+  # Calibrated to 20 after observing that "insomnio" (short keyword) = 63
+  # while "Insomnio despues de los 45..." (long phrase) = 26.
+  # Topics with best_score >= 20 have real search presence; null scores
+  # (not enough data) are allowed through (verdict=pass).
+  min_score: 20
+  max_competition: "High"
+  min_tag_score: 20
+
 seo:
   language: "es-419"
   min_tags: 5

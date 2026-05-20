@@ -234,7 +234,9 @@ class BrowserClient:
                 json={"keywords": keywords, "response_timeout_ms": response_timeout_ms},
             )
         if response.status_code in (200, 201):
-            return response.json()
+            data = response.json()
+            # Worker returns {"session_id": ..., "results": [...]}
+            return data["results"] if isinstance(data, dict) and "results" in data else data
         try:
             detail = response.json().get("detail", response.text)
         except Exception:

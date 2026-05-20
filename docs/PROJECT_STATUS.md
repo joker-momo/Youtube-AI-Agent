@@ -1,6 +1,6 @@
 # Youtube AI Agent Project Status
 
-Last updated: 2026-05-20 (Long-form 20-30 min pipeline + Claude QA + YouTube-style dashboard + vidIQ driver)
+Last updated: 2026-05-20 (Phase B: batch `assets_chatgpt` stage + full pipeline image gen)
 
 This file is the living project tracker. Update it whenever a meaningful system capability is added, changed, verified, or deferred so a new reader can quickly understand what the system does, what is being built now, and what remains.
 
@@ -765,12 +765,50 @@ Docker verification: ``143 passed in 18.48s``.
 - `tests/test_operator_workflow.py` adds coverage for multi-JSON
   Claude output.
 
+### V3 Phase 1 Step 22 ChatGPT per-scene image gen (Phase A + Phase B)
+
+**Phase A** (commit `771d6eb`):
+
+- `BrowserClient.generate_image(prompt, project_name, out_path)` wraps
+  `POST /chatgpt/image` on the browser-worker.
+- `generate_scene_asset(job_dir, channel_path, scene_id, image_fn)`:
+  looks up `visual_prompt` in `scenes.json`, builds a brand-consistent
+  image prompt with the style prefix (16:9 cinematic, soft natural
+  light, no text/watermark, adultos 45+), calls `image_fn`, and patches
+  `scenes.json → scenes[n].asset_refs.primary` with the relative path.
+- `_find_asset_refs_primary` in `stages/assets.py` resolves
+  `asset_refs.primary` and gives it higher priority than the stock/local
+  directory lookup, so the render stage automatically picks up
+  ChatGPT-generated images.
+- HTTP route: `POST /jobs/{id}/scenes/{scene_id}/generate_asset`
+  → `{scene_id, src, local_path, project_name, bytes, asset_refs_primary}`.
+- `docker-compose.yml`: `browser-worker` mounts `./jobs:/app/jobs` so
+  files written by the worker are visible from the host.
+- Live verified: 87 s wall, 1.9 MB PNG, correct couple-in-robes scene.
+
+**Phase B** (commit `a2ee3df`):
+
+- `assets_chatgpt` added to `DEFAULT_STAGES` between `seo_qa` and `render`.
+- `auto_assets_chatgpt_stage(job_dir, channel_path, image_fn, throttle_sec=8.0)`:
+  iterates all scene IDs, calls `generate_scene_asset` per scene with an
+  8 s throttle between calls; a failed scene logs `SCENE_ASSET_FAILED`
+  and continues — render falls back to stock/placeholder for that scene.
+- `/run-all` now runs `assets_chatgpt` between the `seo_qa` and `render`
+  blocks, passing `client.generate_image`.
+- `FakeBrowserClient` in tests gains a `generate_image` stub.
+- 3 new unit tests: gen_all_scenes, continue_on_failure, wrong_stage.
+- 4 existing render/review tests updated (`_fake_pass_assets_chatgpt`).
+- 150 tests green.
+
 ### Current operational state
 
-- 143 tests pass (`docker compose run --rm video-agent pytest -q`).
+- 150 tests pass (`docker compose run --rm app pytest -q`).
 - Pipeline produces 20-30 min long-form videos end-to-end with
-  ChatGPT writing + Claude QA + Remotion render, all through the
-  Browser Appliance (host noVNC for manual login once).
+  ChatGPT writing + Claude QA + ChatGPT image gen + Remotion render,
+  all through the Browser Appliance (host noVNC for manual login once).
+- Full pipeline stage order: `script → script_promote → script_qa →
+  scenes → scenes_promote → scenes_qa → seo → seo_promote → seo_qa →
+  assets_chatgpt → render → review`.
 - Dashboard at `http://127.0.0.1:8000/` gives step-by-step progress
   + ETA + final video / metadata / thumbnail ready to copy into
   YouTube Studio.
@@ -927,7 +965,7 @@ The command will either:
 - `idea_research` stage with vidIQ topic gate (score keyword + scrape top-10 competitors) is not wired into the pipeline yet — driver exists but no stage / route.
 - `seo_vidiq` stage that scores final tags + title via vidIQ and swaps weak tags is not built.
 - Idea generation is still manual (user writes `idea.json`); no auto idea-batch generator from channel niche + trends.
-- ChatGPT image generation per scene is not integrated; pipeline still uses Pexels/Pixabay stock for visuals.
+- ChatGPT image generation per scene is integrated (`assets_chatgpt` stage in pipeline); stock/placeholder fallback still fires when image gen fails for a scene.
 - Long-form pipeline has been smoke-tested manually but no automated test asserts the 20-30 min config end-to-end (would require ~30-40 min wall to run).
 - YouTube upload is still manual (operator copies title/desc/tags from dashboard, drags video.mp4 into Studio); no Playwright auto-upload driver.
 - Analytics ingestion (retention curve / CTR feedback into next prompt) is deferred.
@@ -953,5 +991,6 @@ The command will either:
    briefing.
 5. **`run-batch` endpoint** — queue multiple `/run-all` runs back
    to back so a single overnight session produces a week of videos.
-6. **ChatGPT image generation** as an asset source for higher
-   visual consistency across scenes.
+6. **First production run** — 3 videos for Vida Plena 45+ Mon/Wed/Fri
+   cadence through `/run-all` with ChatGPT image gen active; capture
+   retention + CTR to feed back into briefing.

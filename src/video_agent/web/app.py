@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from video_agent.contracts import EVENT_LOG
@@ -63,6 +64,223 @@ def get_jobs_root() -> Path:
 @app.get("/health")
 def health() -> dict:
     return {"ok": True, "service": "app"}
+
+
+@app.get("/jobs")
+def list_jobs(jobs_root: Path = Depends(get_jobs_root)) -> dict:
+    """List every job folder under JOBS_DIR that has a ``job.json``.
+
+    Returns a summary view per job (stage progress + duration) suitable
+    for the dashboard. Heavy fields (stages array) are included so the
+    dashboard does not need a second round-trip per row.
+    """
+    items = []
+    if jobs_root.exists():
+        for entry in sorted(jobs_root.iterdir(), reverse=True):
+            job_file = entry / "job.json"
+            if not job_file.exists():
+                continue
+            try:
+                payload = json.loads(job_file.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            stages = payload.get("stages", [])
+            done = sum(1 for s in stages if s.get("status") == "completed")
+            total = len(stages)
+            in_progress = [
+                s["name"] for s in stages if s.get("status") == "in_progress"
+            ]
+            items.append(
+                {
+                    "job_id": payload.get("job_id"),
+                    "channel_id": payload.get("channel_id"),
+                    "current_stage": payload.get("current_stage"),
+                    "created_at": payload.get("created_at"),
+                    "updated_at": payload.get("updated_at"),
+                    "stages_done": done,
+                    "stages_total": total,
+                    "in_progress": in_progress,
+                    "stages": stages,
+                }
+            )
+    return {"count": len(items), "jobs": items}
+
+
+@app.get("/", response_class=HTMLResponse)
+def dashboard() -> str:
+    return _DASHBOARD_HTML
+
+
+_DASHBOARD_HTML = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Video Agent Dashboard</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #0c0c0e; color: #e6e6e6; }
+  header { padding: 12px 20px; background: #14141a; border-bottom: 1px solid #23232a; display: flex; justify-content: space-between; align-items: center; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header .meta { font-size: 12px; color: #888; }
+  main { display: grid; grid-template-columns: 380px 1fr; height: calc(100vh - 49px); }
+  #jobs-panel { border-right: 1px solid #23232a; overflow-y: auto; padding: 10px; }
+  #detail-panel { padding: 16px 22px; overflow-y: auto; }
+  .job-card { padding: 10px 12px; margin-bottom: 8px; background: #15151b; border: 1px solid #23232a; border-radius: 6px; cursor: pointer; transition: background 120ms; }
+  .job-card:hover { background: #1c1c24; }
+  .job-card.active { border-color: #4a78d6; background: #1a2030; }
+  .job-id { font-size: 12px; font-weight: 600; word-break: break-all; }
+  .job-meta { font-size: 11px; color: #777; margin-top: 4px; display: flex; justify-content: space-between; }
+  .progress-bar { height: 4px; background: #23232a; margin-top: 6px; border-radius: 2px; overflow: hidden; }
+  .progress-fill { height: 100%; background: #4a78d6; transition: width 200ms; }
+  .progress-fill.completed { background: #4ad67a; }
+  .progress-fill.failed { background: #d65d4a; }
+  h2 { font-size: 14px; color: #aaa; margin: 0 0 10px; }
+  .stage-row { display: flex; align-items: center; padding: 6px 8px; margin-bottom: 4px; background: #15151b; border-radius: 4px; font-size: 12px; }
+  .stage-status { width: 90px; font-weight: 600; }
+  .stage-status.pending { color: #666; }
+  .stage-status.in_progress { color: #4a78d6; }
+  .stage-status.completed { color: #4ad67a; }
+  .stage-status.failed { color: #d65d4a; }
+  .stage-name { flex: 1; }
+  .stage-times { color: #555; font-size: 11px; }
+  .events { background: #0a0a0d; padding: 10px; border-radius: 4px; max-height: 360px; overflow-y: auto; font-size: 11px; }
+  .events .ev { padding: 3px 0; border-bottom: 1px dotted #1a1a22; }
+  .events .ev:last-child { border-bottom: none; }
+  .ev-ts { color: #555; margin-right: 8px; }
+  .ev-kind { color: #4a78d6; margin-right: 6px; font-weight: 600; }
+  .ev-stage { color: #4ad67a; }
+  .ev-kind.JOB_COMPLETED { color: #4ad67a; }
+  .ev-kind.STAGE_FAILED { color: #d65d4a; }
+  .empty { color: #555; padding: 30px; text-align: center; }
+  .ws-indicator { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; vertical-align: middle; }
+  .ws-indicator.live { background: #4ad67a; box-shadow: 0 0 4px #4ad67a; }
+  .ws-indicator.off { background: #555; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Video Agent Dashboard</h1>
+  <div class="meta"><span class="ws-indicator off" id="ws-dot"></span><span id="ws-label">disconnected</span> · <span id="job-count">0</span> jobs</div>
+</header>
+<main>
+  <div id="jobs-panel">
+    <div id="jobs-list"></div>
+  </div>
+  <div id="detail-panel">
+    <div class="empty">Select a job on the left to see live progress.</div>
+  </div>
+</main>
+<script>
+let SELECTED = null;
+let WS = null;
+
+async function fetchJobs() {
+  const r = await fetch('/jobs');
+  const d = await r.json();
+  document.getElementById('job-count').textContent = d.count;
+  renderJobsList(d.jobs);
+  if (SELECTED) {
+    const updated = d.jobs.find(j => j.job_id === SELECTED.job_id);
+    if (updated) renderDetail(updated);
+  }
+}
+
+function renderJobsList(jobs) {
+  const root = document.getElementById('jobs-list');
+  root.innerHTML = '';
+  for (const j of jobs) {
+    const pct = j.stages_total ? (100 * j.stages_done / j.stages_total) : 0;
+    const card = document.createElement('div');
+    card.className = 'job-card' + (SELECTED && SELECTED.job_id === j.job_id ? ' active' : '');
+    const failed = j.stages.some(s => s.status === 'failed');
+    const allDone = j.stages_total > 0 && j.stages_done === j.stages_total;
+    const fillCls = allDone ? 'completed' : (failed ? 'failed' : '');
+    card.innerHTML = `
+      <div class="job-id">${j.job_id}</div>
+      <div class="job-meta">
+        <span>${j.current_stage}</span>
+        <span>${j.stages_done}/${j.stages_total}</span>
+      </div>
+      <div class="progress-bar"><div class="progress-fill ${fillCls}" style="width:${pct}%"></div></div>
+    `;
+    card.onclick = () => selectJob(j);
+    root.appendChild(card);
+  }
+}
+
+function selectJob(j) {
+  SELECTED = j;
+  document.querySelectorAll('.job-card').forEach(c => c.classList.remove('active'));
+  event && event.currentTarget && event.currentTarget.classList.add('active');
+  renderDetail(j);
+  reopenWs(j.job_id);
+}
+
+function renderDetail(j) {
+  const root = document.getElementById('detail-panel');
+  root.innerHTML = `
+    <h2>${j.job_id} · ${j.channel_id}</h2>
+    <div style="font-size:12px;color:#666;margin-bottom:14px">
+      created ${j.created_at || ''} · updated ${j.updated_at || ''}
+    </div>
+    <h2>Stages</h2>
+    <div id="stages"></div>
+    <h2 style="margin-top:18px">Events <span style="color:#555;font-weight:normal">(live)</span></h2>
+    <div class="events" id="events"></div>
+  `;
+  const stagesEl = document.getElementById('stages');
+  for (const s of (j.stages || [])) {
+    const row = document.createElement('div');
+    row.className = 'stage-row';
+    const times = [];
+    if (s.started_at) times.push('start ' + s.started_at.slice(11, 19));
+    if (s.completed_at) times.push('end ' + s.completed_at.slice(11, 19));
+    row.innerHTML = `
+      <span class="stage-status ${s.status}">${s.status}</span>
+      <span class="stage-name">${s.name}</span>
+      <span class="stage-times">${times.join(' · ')}</span>
+    `;
+    stagesEl.appendChild(row);
+  }
+}
+
+function reopenWs(jobId) {
+  if (WS) { try { WS.close(); } catch (e) {} WS = null; }
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  WS = new WebSocket(`${proto}//${location.host}/jobs/${jobId}/events`);
+  const dot = document.getElementById('ws-dot');
+  const label = document.getElementById('ws-label');
+  WS.onopen = () => { dot.className = 'ws-indicator live'; label.textContent = 'live'; };
+  WS.onclose = () => { dot.className = 'ws-indicator off'; label.textContent = 'disconnected'; };
+  WS.onerror = () => { dot.className = 'ws-indicator off'; label.textContent = 'error'; };
+  WS.onmessage = (msg) => {
+    try {
+      const ev = JSON.parse(msg.data);
+      appendEvent(ev);
+      // Refresh detail soon to reflect new stage status.
+      setTimeout(fetchJobs, 200);
+    } catch (e) {}
+  };
+}
+
+function appendEvent(ev) {
+  const root = document.getElementById('events');
+  if (!root) return;
+  const div = document.createElement('div');
+  div.className = 'ev';
+  const ts = (ev.ts || '').slice(11, 19);
+  const stage = (ev.data && ev.data.stage) ? ev.data.stage : '';
+  div.innerHTML = `<span class="ev-ts">${ts}</span><span class="ev-kind ${ev.event}">${ev.event}</span><span class="ev-stage">${stage}</span>`;
+  root.appendChild(div);
+  root.scrollTop = root.scrollHeight;
+}
+
+fetchJobs();
+setInterval(fetchJobs, 4000);
+</script>
+</body>
+</html>
+"""
 
 
 @app.post("/jobs", status_code=201)

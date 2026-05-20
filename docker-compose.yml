@@ -75,6 +75,9 @@ services:
       # browser-worker talks to the runtime container over the internal
       # Docker network. No host Chrome, no host.docker.internal hop.
       CHROME_CDP_URL: ${CHROME_CDP_URL:-http://browser-runtime:9222}
+      BROWSER_TRACE_DIR: /data/trace
+    volumes:
+      - ./browser_trace:/data/trace
     ports:
       - "127.0.0.1:8001:8001"
     networks:

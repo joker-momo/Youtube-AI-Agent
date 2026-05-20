@@ -13,6 +13,7 @@ from video_agent.browser_worker.drivers import (
     ChatGPTDriver,
     GeminiDriver,
     LoginRequiredError,
+    save_trace_screenshot,
 )
 
 app = FastAPI(title="video-agent-browser-worker", version="0.2.0")
@@ -183,6 +184,25 @@ async def _drive(site: str, prompt: str, timeout_ms: int) -> dict:
                         "screenshot": exc.screenshot_path or "",
                     },
                 ) from exc
+            except HTTPException:
+                raise
+            except Exception as exc:
+                # Playwright TimeoutError, navigation failures, etc. We
+                # want a structured response with a screenshot rather
+                # than a bare 500.
+                try:
+                    shot = await save_trace_screenshot(
+                        page, prefix=f"{site}-uncaught"
+                    )
+                except Exception:
+                    shot = ""
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "screenshot": shot,
+                    },
+                ) from exc
             finally:
                 try:
                     await page.close()
@@ -213,8 +233,9 @@ async def auth_status(site: str) -> dict:
 
     cdp_url = _cdp_url()
     try:
+        ws_endpoint = await _resolve_browser_ws(cdp_url)
         async with async_playwright() as pw:
-            browser = await pw.chromium.connect_over_cdp(cdp_url)
+            browser = await pw.chromium.connect_over_cdp(ws_endpoint)
             try:
                 context = (
                     browser.contexts[0]

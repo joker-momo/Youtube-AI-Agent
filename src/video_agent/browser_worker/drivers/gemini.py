@@ -30,7 +30,13 @@ STOP_BUTTON_SELECTORS = (
     "button[aria-label*='Stop']",
 )
 
-RESPONSE_BLOCK_SELECTOR = "model-response, message-content"
+RESPONSE_BLOCK_SELECTOR = (
+    "model-response, "
+    "message-content, "
+    ".model-response-text, "
+    "[data-test-id='conversation-turn-2'], "
+    ".markdown.markdown-main-panel"
+)
 
 
 def _is_login_url(url: str) -> bool:
@@ -95,14 +101,29 @@ class GeminiDriver:
         except Exception:
             pass
 
+        scrape_js = """
+            () => {
+              const selectors = [
+                ".model-response-text",
+                "message-content .markdown",
+                "message-content",
+                "model-response .markdown",
+                "model-response",
+                ".markdown.markdown-main-panel",
+              ];
+              for (const s of selectors) {
+                const nodes = document.querySelectorAll(s);
+                if (nodes.length === 0) continue;
+                const last = nodes[nodes.length - 1];
+                const text = (last.innerText || '').trim();
+                if (text) return text;
+              }
+              return '';
+            }
+        """
         try:
             await self.page.wait_for_function(
-                "(s) => {"
-                "  const nodes = document.querySelectorAll(s);"
-                "  const last = nodes[nodes.length - 1];"
-                "  return last && last.innerText && last.innerText.length > 32;"
-                "}",
-                arg=RESPONSE_BLOCK_SELECTOR,
+                f"() => ({scrape_js})().length > 0",
                 timeout=response_timeout_ms,
             )
         except Exception:
@@ -112,14 +133,7 @@ class GeminiDriver:
                 screenshot_path=shot,
             )
 
-        text = await self.page.evaluate(
-            "(s) => {"
-            "  const nodes = document.querySelectorAll(s);"
-            "  const last = nodes[nodes.length - 1];"
-            "  return last ? (last.innerText || '').trim() : '';"
-            "}",
-            arg=RESPONSE_BLOCK_SELECTOR,
-        )
+        text = await self.page.evaluate(scrape_js)
         if not text:
             shot = await save_trace_screenshot(self.page, prefix="gemini-empty")
             raise BrowserDriverError(

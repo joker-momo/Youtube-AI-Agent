@@ -1,6 +1,6 @@
 # Youtube AI Agent Project Status
 
-Last updated: 2026-05-20 (Browser Appliance + ChatGPT/Gemini driver scaffold)
+Last updated: 2026-05-20 (ChatGPT + Gemini drivers verified end-to-end)
 
 This file is the living project tracker. Update it whenever a meaningful system capability is added, changed, verified, or deferred so a new reader can quickly understand what the system does, what is being built now, and what remains.
 
@@ -252,6 +252,46 @@ Decisions already chosen:
   `POST /chatgpt/send`, proving the route is wired and validation works.
 - Docker verification passed: `docker compose run --rm video-agent pytest -q`
   -> `116 passed in 14.19s`.
+
+### V3 Phase 1 Step 11b ChatGPT + Gemini drivers verified end-to-end
+
+- Fixed `auth_status` route to route through `_resolve_browser_ws` (it
+  was still calling `connect_over_cdp(cdp_url)` directly, which 500'd
+  because Chromium's `/json/version` rejects non-`Host: localhost`).
+- `ChatGPTDriver` now dismisses ChatGPT's "No model training"
+  temporary-chat consent dialog before clicking the composer (the
+  modal's backdrop intercepts pointer events otherwise). It clicks the
+  common confirmation buttons (`Continue`, `Got it`, `Okay`, `OK`,
+  `I understand`, dialog close), then falls back to pressing Escape,
+  retrying up to three times.
+- Driver response wait/scrape now uses a multi-selector cascade and
+  drops the previous `> 32 chars` length threshold (it broke "PONG"-
+  style short answers). ChatGPT cascade tries
+  `[data-message-author-role='assistant']`,
+  `[data-testid='conversation-turn-content']`, and
+  `article[data-message-author-role='assistant']`. Gemini cascade
+  tries `.model-response-text`, `message-content .markdown`,
+  `message-content`, `model-response .markdown`, `model-response`,
+  and `.markdown.markdown-main-panel`.
+- `browser-worker` `_drive` catches any uncaught Playwright exception
+  (`TimeoutError`, navigation failure, ...) and converts it into a
+  structured `HTTP 502 {error, screenshot}` instead of bare 500.
+- Compose mounts `./browser_trace:/data/trace` for `browser-worker`
+  with `BROWSER_TRACE_DIR=/data/trace`, and `.gitignore` excludes
+  `browser_trace/`. Debug screenshots taken by drivers are inspectable
+  from the host immediately.
+- Live verification with the user logged in via noVNC:
+  - `GET /auth/chatgpt/status` -> `{"logged_in": true, ...}`
+  - `GET /auth/gemini/status` -> `{"logged_in": true, ...}`
+  - `POST /chatgpt/send {"prompt":"Reply with exactly: PONG"}` ->
+    `{"site":"chatgpt","raw_response":"pong"}`
+  - `POST /chatgpt/send` with `Return one JSON object {greeting, language}`
+    -> `{"raw_response":"{\"greeting\":\"Hola\",\"language\":\"Spanish\"}"}`
+  - `POST /gemini/send {"prompt":"Reply with exactly: PONG"}` ->
+    `{"site":"gemini","raw_response":"PONG"}`
+  - `POST /gemini/send` JSON test ->
+    `{"raw_response":"{\"ok\": true, \"language\": \"Spanish\"}"}`
+- Docker verification: `116 passed in 15.01s`.
 
 ## Target V3 Architecture
 

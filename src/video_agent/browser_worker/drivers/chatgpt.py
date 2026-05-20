@@ -59,6 +59,48 @@ async def _first_matching(page: "Page", selectors: tuple[str, ...], timeout_ms: 
     return None
 
 
+async def _dismiss_modals(page: "Page") -> None:
+    """Best-effort dismiss of ChatGPT consent / onboarding dialogs.
+
+    The ?temporary-chat=true URL surfaces a "No model training" dialog
+    whose backdrop intercepts pointer events; until it is closed the
+    composer cannot be clicked. We click the most common confirmation
+    buttons and fall back to pressing Escape.
+    """
+    dismiss_selectors = (
+        "dialog button:has-text('Continue')",
+        "dialog button:has-text('Got it')",
+        "dialog button:has-text('Okay')",
+        "dialog button:has-text('OK')",
+        "dialog button:has-text('I understand')",
+        "dialog button[aria-label*='Close']",
+    )
+    for _ in range(3):
+        any_dialog = page.locator("dialog[open]").first
+        try:
+            visible = await any_dialog.is_visible(timeout=500)
+        except Exception:
+            visible = False
+        if not visible:
+            return
+        clicked = False
+        for selector in dismiss_selectors:
+            button = page.locator(selector).first
+            try:
+                if await button.is_visible(timeout=300):
+                    await button.click(timeout=2_000)
+                    clicked = True
+                    break
+            except Exception:
+                continue
+        if not clicked:
+            try:
+                await page.keyboard.press("Escape")
+            except Exception:
+                pass
+        await page.wait_for_timeout(400)
+
+
 class ChatGPTDriver:
     """Single-shot ChatGPT driver: open temporary chat, send, scrape.
 
@@ -84,6 +126,8 @@ class ChatGPTDriver:
                 "to sign in.",
                 screenshot_path=shot,
             )
+
+        await _dismiss_modals(self.page)
 
         composer = await _first_matching(self.page, COMPOSER_SELECTORS, 10_000)
         if composer is None:
@@ -116,15 +160,32 @@ class ChatGPTDriver:
         except Exception:
             pass
 
-        # Belt-and-braces: wait for the latest assistant turn to settle.
+        # Belt-and-braces: wait for any assistant text to appear. The
+        # temporary-chat UI sometimes renders a short "Fast answer"
+        # block outside of the regular assistant turn container, so we
+        # accept multiple candidate selectors and any non-empty text.
+        scrape_js = """
+            () => {
+              const selectors = [
+                "[data-message-author-role='assistant']",
+                "[data-testid='conversation-turn-content'][data-author='assistant']",
+                "article[data-message-author-role='assistant']",
+                "div[data-message-author-role='assistant'] .markdown",
+              ];
+              for (const s of selectors) {
+                const nodes = document.querySelectorAll(s);
+                if (nodes.length === 0) continue;
+                const last = nodes[nodes.length - 1];
+                const inner = last.querySelector('.markdown') || last;
+                const text = (inner.innerText || '').trim();
+                if (text) return text;
+              }
+              return '';
+            }
+        """
         try:
             await self.page.wait_for_function(
-                "(s) => {"
-                "  const nodes = document.querySelectorAll(s);"
-                "  const last = nodes[nodes.length - 1];"
-                "  return last && last.innerText && last.innerText.length > 32;"
-                "}",
-                arg=ASSISTANT_TURN_SELECTOR,
+                f"() => ({scrape_js})().length > 0",
                 timeout=response_timeout_ms,
             )
         except Exception:
@@ -134,16 +195,7 @@ class ChatGPTDriver:
                 screenshot_path=shot,
             )
 
-        text = await self.page.evaluate(
-            "(s) => {"
-            "  const nodes = document.querySelectorAll(s);"
-            "  const last = nodes[nodes.length - 1];"
-            "  if (!last) return '';"
-            "  const md = last.querySelector('.markdown') || last;"
-            "  return md.innerText.trim();"
-            "}",
-            arg=ASSISTANT_TURN_SELECTOR,
-        )
+        text = await self.page.evaluate(scrape_js)
         if not text:
             shot = await save_trace_screenshot(self.page, prefix="chatgpt-empty")
             raise BrowserDriverError(

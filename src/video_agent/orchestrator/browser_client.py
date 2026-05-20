@@ -189,6 +189,73 @@ class BrowserClient:
             detail=response.text,
         )
 
+    # ------------------------------------------------------------------
+    # vidIQ keyword scoring helpers.
+    # ------------------------------------------------------------------
+
+    async def vidiq_score(
+        self,
+        keyword: str,
+        *,
+        session_id: str,
+        response_timeout_ms: int = 30_000,
+    ) -> dict:
+        """Score a single keyword via the vidIQ session."""
+        timeout = self._timeout_for_response(response_timeout_ms)
+        async with httpx.AsyncClient(timeout=timeout) as http:
+            response = await http.post(
+                f"{self.base_url}/vidiq/sessions/{session_id}/score",
+                json={"keyword": keyword, "response_timeout_ms": response_timeout_ms},
+            )
+        if response.status_code in (200, 201):
+            return response.json()
+        try:
+            detail = response.json().get("detail", response.text)
+        except Exception:
+            detail = response.text
+        raise BrowserClientError(
+            f"browser-worker /vidiq/score returned HTTP {response.status_code}",
+            status_code=response.status_code,
+            detail=detail,
+        )
+
+    async def vidiq_score_batch(
+        self,
+        keywords: list[str],
+        *,
+        session_id: str,
+        response_timeout_ms: int = 60_000,
+    ) -> list[dict]:
+        """Score a list of keywords via the vidIQ session (sequential in worker)."""
+        timeout = self._timeout_for_response(response_timeout_ms * len(keywords))
+        async with httpx.AsyncClient(timeout=timeout) as http:
+            response = await http.post(
+                f"{self.base_url}/vidiq/sessions/{session_id}/score_batch",
+                json={"keywords": keywords, "response_timeout_ms": response_timeout_ms},
+            )
+        if response.status_code in (200, 201):
+            return response.json()
+        try:
+            detail = response.json().get("detail", response.text)
+        except Exception:
+            detail = response.text
+        raise BrowserClientError(
+            f"browser-worker /vidiq/score_batch returned HTTP {response.status_code}",
+            status_code=response.status_code,
+            detail=detail,
+        )
+
+    async def run_vidiq_scores(self, keywords: list[str]) -> list[dict]:
+        """Open a vidIQ session, score all keywords, close. Return scores."""
+        session_id = await self.open_session("vidiq")
+        try:
+            return await self.vidiq_score_batch(keywords, session_id=session_id)
+        finally:
+            try:
+                await self.close_session("vidiq", session_id)
+            except Exception:
+                pass
+
     async def run_session(
         self,
         site: str,

@@ -21,3 +21,7 @@ __pycache__/
 !.env.example
 .DS_Store
 browser_trace/
+/.claude
+/.codegraph
+/.cursor
+/.wolf

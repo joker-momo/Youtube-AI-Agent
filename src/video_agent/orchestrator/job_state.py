@@ -7,6 +7,7 @@ from pathlib import Path
 JOB_FILE = "job.json"
 
 DEFAULT_STAGES: tuple[str, ...] = (
+    "idea_research",
     "script",
     "script_promote",
     "script_qa",
@@ -16,6 +17,7 @@ DEFAULT_STAGES: tuple[str, ...] = (
     "seo",
     "seo_promote",
     "seo_qa",
+    "seo_vidiq",
     "assets_chatgpt",
     "render",
     "review",

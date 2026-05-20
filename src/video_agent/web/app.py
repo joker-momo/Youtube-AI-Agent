@@ -27,7 +27,9 @@ from video_agent.orchestrator.stages import (
     IDEA_FILE,
     StageInputMissingError,
     auto_assets_chatgpt_stage,
+    auto_idea_research_stage,
     auto_qa_with_rework,
+    auto_seo_vidiq_stage,
     auto_scenes_qa_stage,
     auto_scenes_stage,
     auto_script_qa_stage,
@@ -1662,6 +1664,38 @@ async def post_run_all(
             detail={"error": f"Unknown pending stage: {pending_stage}"},
         )
 
+    # idea_research uses run_vidiq_scores (not the session tab API) so
+    # run it BEFORE opening persistent tabs. This way a browser-worker
+    # error on the ChatGPT/Claude briefing doesn't hide a gate block.
+    start_idx = stage_order.index(pending_stage)
+    remaining = set(stage_order[start_idx:])
+
+    if "idea_research" in remaining:
+        try:
+            await _record(
+                "idea_research",
+                await auto_idea_research_stage(
+                    job_dir, channel_path, client.run_vidiq_scores
+                ),
+            )
+        except StageInputMissingError as exc:
+            state = load_job(job_dir)
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": str(exc),
+                    "completed": completed,
+                    "stopped_at": state.current_stage,
+                    "state": state.to_dict(),
+                },
+            ) from exc
+        # Reload remaining from updated state.
+        state = load_job(job_dir)
+        new_pending = next((s.name for s in state.stages if s.status != "completed"), None)
+        if new_pending is None:
+            return {"completed": completed, "state": state.to_dict()}
+        remaining = set(stage_order[stage_order.index(new_pending):])
+
     # Open ONE ChatGPT temp chat for the whole writing pipeline
     # (script_promote, scenes_promote, seo_promote) and ONE Claude
     # temp chat for the whole QA pipeline (script_qa, scenes_qa,
@@ -1711,8 +1745,6 @@ async def post_run_all(
                 )
             ]
         )
-        start_idx = stage_order.index(pending_stage)
-        remaining = set(stage_order[start_idx:])
 
         if "script" in remaining or "script_promote" in remaining:
             await _record(
@@ -1748,6 +1780,13 @@ async def post_run_all(
                 "seo_qa",
                 await auto_qa_with_rework(
                     "seo", job_dir, channel_path, chatgpt_fn, qa_fn
+                ),
+            )
+        if "seo_vidiq" in remaining:
+            await _record(
+                "seo_vidiq",
+                await auto_seo_vidiq_stage(
+                    job_dir, channel_path, client.run_vidiq_scores
                 ),
             )
         if "assets_chatgpt" in remaining:

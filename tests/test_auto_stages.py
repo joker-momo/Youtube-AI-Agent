@@ -176,6 +176,9 @@ class FakeBrowserClient:
             fh.write(b"\x89PNG stub")
         return {"src": "https://example.com/img.png", "local_path": out_path, "project_name": project_name, "bytes": 9}
 
+    async def run_vidiq_scores(self, keywords: list[str]) -> list[dict]:
+        return [{"keyword": kw, "score": 55, "volume": "Medium", "competition": "Low", "related": []} for kw in keywords]
+
 
 # ---------- direct module-level auto stage tests ---------------------------
 
@@ -213,6 +216,18 @@ def _fake_pass_qa(job_dir: Path, artifact: str) -> None:
     )
 
 
+def _fake_pass_stage(job_dir: Path, stage_name: str) -> None:
+    from video_agent.orchestrator.job_state import load_job, save_job
+    state = load_job(job_dir)
+    if state.current_stage != stage_name:
+        return
+    state.stage(stage_name).status = "completed"
+    nxt = next((s for s in state.stages if s.status == "pending"), None)
+    if nxt is not None:
+        state.current_stage = nxt.name
+    save_job(job_dir, state)
+
+
 def _seed_script(job_dir: Path, channel_path: Path, idea_payload: dict) -> None:
     create_job(
         job_dir,
@@ -223,6 +238,7 @@ def _seed_script(job_dir: Path, channel_path: Path, idea_payload: dict) -> None:
     (job_dir / "idea.json").write_text(
         json.dumps(idea_payload, ensure_ascii=False), encoding="utf-8"
     )
+    _fake_pass_stage(job_dir, "idea_research")
 
 
 def test_auto_script_runs_prompt_and_promote(
@@ -406,11 +422,13 @@ def _create_job(client: TestClient, job_id: str = "job-auto") -> None:
 
 def test_http_auto_script(
     http_client: TestClient,
+    tmp_path: Path,
     idea_payload: dict,
     valid_script_payload: dict,
 ):
     _create_job(http_client)
     http_client.post("/jobs/job-auto/idea", json=idea_payload)
+    _fake_pass_stage(tmp_path / "job-auto", "idea_research")
 
     fake = FakeBrowserClient(
         queue=[json.dumps(valid_script_payload, ensure_ascii=False)]
@@ -431,10 +449,12 @@ def test_http_auto_script(
 
 def test_http_auto_script_login_required_returns_409(
     http_client: TestClient,
+    tmp_path: Path,
     idea_payload: dict,
 ):
     _create_job(http_client)
     http_client.post("/jobs/job-auto/idea", json=idea_payload)
+    _fake_pass_stage(tmp_path / "job-auto", "idea_research")
 
     fake = FakeBrowserClient()
     fake.error = LoginRequiredFromWorker(
@@ -455,10 +475,12 @@ def test_http_auto_script_login_required_returns_409(
 
 def test_http_auto_script_worker_error_returns_502(
     http_client: TestClient,
+    tmp_path: Path,
     idea_payload: dict,
 ):
     _create_job(http_client)
     http_client.post("/jobs/job-auto/idea", json=idea_payload)
+    _fake_pass_stage(tmp_path / "job-auto", "idea_research")
 
     fake = FakeBrowserClient()
     fake.error = BrowserClientError(
@@ -581,18 +603,21 @@ def test_http_run_all_success(
     body = r.json()
     stages = [c["stage"] for c in body["completed"]]
     assert stages == [
+        "idea_research",
         "script_promote",
         "script_qa",
         "scenes_promote",
         "scenes_qa",
         "seo_promote",
         "seo_qa",
+        "seo_vidiq",
         "assets_chatgpt",
         "render",
         "review",
     ]
     assert all(s["status"] == "completed" for s in body["state"]["stages"])
     # 2 briefing sends + 3 ChatGPT task sends + 3 Gemini task sends = 8
+    # idea_research + seo_vidiq use run_vidiq_scores (not session queue)
     assert len(fake.calls) == 8
 
 
@@ -616,7 +641,9 @@ def test_http_run_all_stops_on_worker_error(
 
     assert r.status_code == 502
     detail = r.json()["detail"]
-    assert detail["completed"] == []
+    # idea_research calls run_vidiq_scores (not run_session), so it
+    # completes before the ChatGPT briefing fails.
+    assert "idea_research" in [c["stage"] for c in detail["completed"]]
     # Persistent-session /run-all fails on the very first briefing
     # send, before run_script_stage advances the state.
     assert detail["stopped_at"] == "script"
@@ -975,3 +1002,191 @@ def test_auto_assets_chatgpt_wrong_stage_raises(tmp_path, channel_path):
         asyncio.run(
             auto_assets_chatgpt_stage(job_dir, channel_path, _fake_image_fn, throttle_sec=0)
         )
+
+
+# ---------------------------------------------------------------------------
+# idea_research + seo_vidiq stage tests
+# ---------------------------------------------------------------------------
+
+
+def _seed_at_stage(job_dir: Path, stage_name: str, extra_files: dict | None = None) -> None:
+    """Create a job with current_stage = stage_name; all prior stages completed."""
+    from video_agent.orchestrator.job_state import (
+        DEFAULT_STAGES,
+        JobState,
+        StageStatus,
+        save_job,
+    )
+    from video_agent.orchestrator.orchestrator import _now
+
+    ts = _now()
+    stages = []
+    found = False
+    for name in DEFAULT_STAGES:
+        if name == stage_name:
+            stages.append(StageStatus(name=name, status="pending"))
+            found = True
+        elif not found:
+            stages.append(StageStatus(name=name, status="completed", started_at=ts, completed_at=ts))
+        else:
+            stages.append(StageStatus(name=name, status="pending"))
+
+    state = JobState(
+        job_id="job-research",
+        channel_id="vida-plena-45",
+        idea_path="idea.json",
+        created_at=ts,
+        updated_at=ts,
+        current_stage=stage_name,
+        stages=stages,
+    )
+    job_dir.mkdir(parents=True, exist_ok=True)
+    save_job(job_dir, state)
+    for fname, content in (extra_files or {}).items():
+        p = job_dir / fname
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(
+            json.dumps(content, ensure_ascii=False) if isinstance(content, dict) else content,
+            encoding="utf-8",
+        )
+
+
+_IDEA_PAYLOAD = {
+    "topic": "Habitos nocturnos para dormir mejor despues de los 45",
+    "title_seed": "5 habitos nocturnos para dormir mejor",
+    "target_duration_sec": 54,
+    "key_points": ["respira", "sin pantallas"],
+    "angle": "simple y realista",
+}
+
+
+async def _good_vidiq_fn(keywords: list[str]) -> list[dict]:
+    return [{"keyword": kw, "score": 55, "volume": "Medium", "competition": "Low", "related": []} for kw in keywords]
+
+
+async def _low_vidiq_fn(keywords: list[str]) -> list[dict]:
+    return [{"keyword": kw, "score": 20, "volume": "Low", "competition": "High", "related": []} for kw in keywords]
+
+
+async def _fail_vidiq_fn(keywords: list[str]) -> list[dict]:
+    raise RuntimeError("vidIQ down")
+
+
+# --- idea_research tests ---
+
+def test_idea_research_pass(tmp_path, channel_path):
+    from video_agent.orchestrator.stages import auto_idea_research_stage
+
+    job_dir = tmp_path / "job-research"
+    _seed_at_stage(job_dir, "idea_research", {"idea.json": _IDEA_PAYLOAD})
+
+    output = asyncio.run(auto_idea_research_stage(job_dir, channel_path, _good_vidiq_fn))
+
+    assert output == job_dir / "research.json"
+    research = json.loads(output.read_text(encoding="utf-8"))
+    assert research["verdict"] == "pass"
+    assert research["best_score"] == 55
+    state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    assert state["current_stage"] == "script"
+
+
+def test_idea_research_blocked_low_score(tmp_path, channel_path):
+    from video_agent.orchestrator.stages import auto_idea_research_stage
+
+    job_dir = tmp_path / "job-research"
+    _seed_at_stage(job_dir, "idea_research", {"idea.json": _IDEA_PAYLOAD})
+
+    with pytest.raises(StageInputMissingError, match="score"):
+        asyncio.run(auto_idea_research_stage(job_dir, channel_path, _low_vidiq_fn))
+
+    research = json.loads((job_dir / "research.json").read_text(encoding="utf-8"))
+    assert research["verdict"] == "blocked_low_score"
+    # stage NOT completed — current_stage stays idea_research
+    state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    assert state["current_stage"] == "idea_research"
+
+
+def test_idea_research_vidiq_unavailable_skips_gate(tmp_path, channel_path):
+    from video_agent.orchestrator.stages import auto_idea_research_stage
+    from video_agent.contracts import EVENT_LOG
+
+    job_dir = tmp_path / "job-research"
+    _seed_at_stage(job_dir, "idea_research", {"idea.json": _IDEA_PAYLOAD})
+
+    output = asyncio.run(auto_idea_research_stage(job_dir, channel_path, _fail_vidiq_fn))
+
+    research = json.loads(output.read_text(encoding="utf-8"))
+    assert research["verdict"] == "skipped"
+    state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    assert state["current_stage"] == "script"
+    events = (job_dir / EVENT_LOG).read_text(encoding="utf-8")
+    assert "RESEARCH_VIDIQ_UNAVAILABLE" in events
+
+
+# --- seo_vidiq tests ---
+
+_SEO_PAYLOAD = {
+    "job_id": "job-research",
+    "title": "5 hábitos nocturnos para dormir mejor",
+    "description": "Rutina suave y realista para descansar.",
+    "tags": ["dormir mejor", "rutina nocturna", "vida plena 45", "bienestar", "descanso"],
+    "language": "es-419",
+    "ai_disclosure": True,
+    "thumbnail_path": "thumbnail.jpg",
+}
+
+
+async def _tag_vidiq_fn(keywords: list[str]) -> list[dict]:
+    """Return score=10 for first tag (will be swapped), 60 for the rest."""
+    results = []
+    for i, kw in enumerate(keywords):
+        if i == 0:
+            results.append({
+                "keyword": kw,
+                "score": 10,
+                "related": [{"keyword": "sueño reparador", "score": 55}],
+            })
+        else:
+            results.append({"keyword": kw, "score": 60, "related": []})
+    return results
+
+
+def test_seo_vidiq_swaps_weak_tag(tmp_path, channel_path):
+    from video_agent.orchestrator.stages import auto_seo_vidiq_stage
+
+    job_dir = tmp_path / "job-research"
+    _seed_at_stage(job_dir, "seo_vidiq", {"seo.json": _SEO_PAYLOAD})
+
+    output = asyncio.run(auto_seo_vidiq_stage(job_dir, channel_path, _tag_vidiq_fn))
+
+    assert output == job_dir / "seo_vidiq_report.json"
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert len(report["swaps"]) == 1
+    assert report["swaps"][0]["original"] == "dormir mejor"
+    assert report["swaps"][0]["replacement"] == "sueño reparador"
+
+    seo = json.loads((job_dir / "seo.json").read_text(encoding="utf-8"))
+    assert "sueño reparador" in seo["tags"]
+    assert "dormir mejor" not in seo["tags"]
+
+    state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    assert state["current_stage"] == "assets_chatgpt"
+
+
+def test_seo_vidiq_soft_fails_on_vidiq_error(tmp_path, channel_path):
+    from video_agent.orchestrator.stages import auto_seo_vidiq_stage
+
+    job_dir = tmp_path / "job-research"
+    _seed_at_stage(job_dir, "seo_vidiq", {"seo.json": _SEO_PAYLOAD})
+
+    output = asyncio.run(auto_seo_vidiq_stage(job_dir, channel_path, _fail_vidiq_fn))
+
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["vidiq_error"] is not None
+    assert report["swaps"] == []
+    # seo.json unchanged
+    seo = json.loads((job_dir / "seo.json").read_text(encoding="utf-8"))
+    assert seo["tags"] == _SEO_PAYLOAD["tags"]
+    # stage still completes
+    state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    assert state["current_stage"] == "assets_chatgpt"

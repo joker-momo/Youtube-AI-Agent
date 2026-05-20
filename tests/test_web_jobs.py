@@ -34,7 +34,7 @@ def _create(client: TestClient, job_id: str = "job-a") -> dict:
 def test_create_and_get_job(client: TestClient):
     created = _create(client)
     assert created["job_id"] == "job-a"
-    assert created["current_stage"] == "script"
+    assert created["current_stage"] == "idea_research"
 
     response = client.get("/jobs/job-a")
     assert response.status_code == 200
@@ -70,7 +70,7 @@ def test_advance_progresses_and_emits_events(client: TestClient):
     response = client.post("/jobs/job-b/advance")
     state = response.json()
     assert state["stages"][0]["status"] == "completed"
-    assert state["current_stage"] == "script_promote"
+    assert state["current_stage"] == "script"
 
     response = client.get("/jobs/job-b/events")
     assert response.status_code == 200

@@ -565,6 +565,252 @@ async def auto_seo_qa_stage(
 
 
 # ---------------------------------------------------------------------------
+# idea_research stage: vidIQ keyword gate before script.
+# ---------------------------------------------------------------------------
+
+RESEARCH_FILE = "research.json"
+_DEFAULT_MIN_SCORE = 40
+_DEFAULT_MAX_COMPETITION = "High"  # vidIQ labels: Low / Medium / High / Very High
+_COMPETITION_RANK = {"low": 0, "medium": 1, "high": 2, "very high": 3}
+
+
+def _competition_rank(label: str | None) -> int:
+    return _COMPETITION_RANK.get((label or "").strip().lower(), 99)
+
+
+def _research_gate_config(channel_path: Path) -> dict:
+    try:
+        cfg = read_yaml(channel_path)
+        gate = cfg.get("research_gate") or {}
+        return {
+            "min_score": int(gate.get("min_score", _DEFAULT_MIN_SCORE)),
+            "max_competition": gate.get("max_competition", _DEFAULT_MAX_COMPETITION),
+        }
+    except Exception:
+        return {"min_score": _DEFAULT_MIN_SCORE, "max_competition": _DEFAULT_MAX_COMPETITION}
+
+
+def _idea_keywords(idea: dict) -> list[str]:
+    """Build 3-5 keyword variants from idea.topic + title_seed."""
+    base = idea.get("topic", "").strip()
+    seed = idea.get("title_seed", "").strip()
+    keywords = []
+    if base:
+        keywords.append(base)
+    if seed and seed.lower() != base.lower():
+        keywords.append(seed)
+    # short variant (first 6 words)
+    words = base.split()
+    if len(words) > 4:
+        short = " ".join(words[:5])
+        if short not in keywords:
+            keywords.append(short)
+    return keywords[:5]
+
+
+async def auto_idea_research_stage(
+    job_dir: Path,
+    channel_path: Path,
+    vidiq_fn,
+) -> Path:
+    """Score idea keywords via vidIQ and gate low-potential topics.
+
+    ``vidiq_fn(keywords: list[str]) -> list[dict]`` is typically
+    ``BrowserClient.run_vidiq_scores``. Returns ``research.json``.
+    Raises ``StageInputMissingError`` when the best keyword score is
+    below ``channel.yaml -> research_gate.min_score`` (default 40),
+    so ``/run-all`` halts and the operator can choose a better idea.
+    """
+    stage_name = "idea_research"
+    state = load_job(job_dir)
+    if state.current_stage != stage_name:
+        raise StageInputMissingError(
+            f"Cannot run {stage_name} from current_stage={state.current_stage!r}"
+        )
+    idea_path = job_dir / IDEA_FILE
+    if not idea_path.exists():
+        raise StageInputMissingError(f"Missing {idea_path}")
+
+    idea = json.loads(idea_path.read_text(encoding="utf-8"))
+    keywords = _idea_keywords(idea)
+    if not keywords:
+        raise StageInputMissingError("idea.json has no topic or title_seed to score")
+
+    gate = _research_gate_config(channel_path)
+
+    try:
+        scores = await vidiq_fn(keywords)
+    except Exception as exc:
+        # vidIQ unavailable: skip gate, log warning, advance.
+        EventLogger(job_dir / EVENT_LOG).log(
+            "RESEARCH_VIDIQ_UNAVAILABLE",
+            {"job_id": state.job_id, "error": str(exc)},
+        )
+        research = {
+            "keywords": keywords,
+            "scores": [],
+            "gate": gate,
+            "best_score": None,
+            "verdict": "skipped",
+            "note": f"vidIQ unavailable: {exc}",
+        }
+        output_path = job_dir / RESEARCH_FILE
+        _write_json(output_path, research)
+        _complete_stage(job_dir, stage_name, output_path)
+        return output_path
+
+    valid_scores = [s for s in scores if isinstance(s.get("score"), int)]
+    best = max((s["score"] for s in valid_scores), default=None)
+
+    verdict = "pass"
+    block_reason = None
+    if best is not None and best < gate["min_score"]:
+        verdict = "blocked_low_score"
+        block_reason = (
+            f"Best keyword score {best} < min_score {gate['min_score']}. "
+            "Choose a higher-demand topic."
+        )
+
+    research = {
+        "keywords": keywords,
+        "scores": scores,
+        "gate": gate,
+        "best_score": best,
+        "verdict": verdict,
+        "block_reason": block_reason,
+    }
+    output_path = job_dir / RESEARCH_FILE
+    _write_json(output_path, research)
+
+    EventLogger(job_dir / EVENT_LOG).log(
+        "IDEA_RESEARCH_COMPLETE",
+        {"job_id": state.job_id, "best_score": best, "verdict": verdict},
+    )
+
+    if verdict != "pass":
+        raise StageInputMissingError(block_reason or "idea_research gate failed")
+
+    _complete_stage(job_dir, stage_name, output_path)
+    return output_path
+
+
+# ---------------------------------------------------------------------------
+# seo_vidiq stage: score + swap weak tags after seo_qa.
+# ---------------------------------------------------------------------------
+
+SEO_VIDIQ_REPORT_FILE = "seo_vidiq_report.json"
+_DEFAULT_MIN_TAG_SCORE = 30
+
+
+def _seo_vidiq_min_score(channel_path: Path) -> int:
+    try:
+        cfg = read_yaml(channel_path)
+        return int(
+            cfg.get("research_gate", {}).get("min_tag_score", _DEFAULT_MIN_TAG_SCORE)
+        )
+    except Exception:
+        return _DEFAULT_MIN_TAG_SCORE
+
+
+async def auto_seo_vidiq_stage(
+    job_dir: Path,
+    channel_path: Path,
+    vidiq_fn,
+) -> Path:
+    """Score SEO tags via vidIQ and swap low-scoring ones for related suggestions.
+
+    Reads ``seo.json``, scores every tag, replaces tags whose score is
+    below ``channel.yaml -> research_gate.min_tag_score`` (default 30)
+    with the highest-scoring related keyword from that tag's vidIQ panel.
+    Writes the updated ``seo.json`` and a ``seo_vidiq_report.json``.
+
+    vidIQ failures are soft: the stage always completes; a ``note``
+    field records any errors so the operator can review.
+    """
+    stage_name = "seo_vidiq"
+    state = load_job(job_dir)
+    if state.current_stage != stage_name:
+        raise StageInputMissingError(
+            f"Cannot run {stage_name} from current_stage={state.current_stage!r}"
+        )
+    seo_path = job_dir / "seo.json"
+    if not seo_path.exists():
+        raise StageInputMissingError(f"Missing {seo_path}")
+
+    seo = json.loads(seo_path.read_text(encoding="utf-8"))
+    original_tags: list[str] = list(seo.get("tags") or [])
+    min_score = _seo_vidiq_min_score(channel_path)
+
+    tag_scores: list[dict] = []
+    vidiq_error: str | None = None
+    try:
+        tag_scores = await vidiq_fn(original_tags)
+    except Exception as exc:
+        vidiq_error = str(exc)
+
+    report: dict = {
+        "original_tags": original_tags,
+        "min_score": min_score,
+        "tag_scores": tag_scores,
+        "swaps": [],
+        "final_tags": list(original_tags),
+        "vidiq_error": vidiq_error,
+    }
+
+    if not vidiq_error and tag_scores:
+        new_tags = list(original_tags)
+        for entry in tag_scores:
+            kw = entry.get("keyword", "")
+            score = entry.get("score")
+            if score is None or score >= min_score:
+                continue
+            # Find the best related keyword not already in the tag list.
+            related = sorted(
+                entry.get("related") or [],
+                key=lambda r: r.get("score", 0),
+                reverse=True,
+            )
+            replacement = None
+            for r in related:
+                candidate = r.get("keyword", "").strip()
+                if candidate and candidate.lower() not in {t.lower() for t in new_tags}:
+                    replacement = candidate
+                    break
+            if replacement:
+                idx = next(
+                    (i for i, t in enumerate(new_tags) if t.lower() == kw.lower()), None
+                )
+                if idx is not None:
+                    new_tags[idx] = replacement
+                    report["swaps"].append(
+                        {
+                            "original": kw,
+                            "score": score,
+                            "replacement": replacement,
+                            "replacement_score": related[0].get("score") if related else None,
+                        }
+                    )
+        report["final_tags"] = new_tags
+        seo["tags"] = new_tags
+        _write_json(seo_path, seo)
+
+    report_path = job_dir / SEO_VIDIQ_REPORT_FILE
+    _write_json(report_path, report)
+
+    EventLogger(job_dir / EVENT_LOG).log(
+        "SEO_VIDIQ_COMPLETE",
+        {
+            "job_id": state.job_id,
+            "swaps": len(report["swaps"]),
+            "vidiq_error": vidiq_error,
+        },
+    )
+
+    _complete_stage(job_dir, stage_name, report_path)
+    return report_path
+
+
+# ---------------------------------------------------------------------------
 # Per-scene image generation via ChatGPT projects.
 # ---------------------------------------------------------------------------
 

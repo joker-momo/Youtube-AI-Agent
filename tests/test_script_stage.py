@@ -137,19 +137,32 @@ def _fake_pass_qa(job_dir: Path, artifact: str) -> None:
     )
 
 
-def _fake_pass_assets_chatgpt(job_dir: Path) -> None:
-    """Mark assets_chatgpt as completed and advance to render."""
+def _fake_pass_stage(job_dir: Path, stage_name: str) -> None:
+    """Mark any single stage as completed and advance current_stage."""
     from video_agent.orchestrator.job_state import load_job, save_job
 
     state = load_job(job_dir)
-    if state.current_stage != "assets_chatgpt":
+    if state.current_stage != stage_name:
         return
-    stage = state.stage("assets_chatgpt")
+    stage = state.stage(stage_name)
     stage.status = "completed"
     nxt = next((s for s in state.stages if s.status == "pending"), None)
     if nxt is not None:
         state.current_stage = nxt.name
     save_job(job_dir, state)
+
+
+def _fake_pass_idea_research(job_dir: Path) -> None:
+    _fake_pass_stage(job_dir, "idea_research")
+
+
+def _fake_pass_seo_vidiq(job_dir: Path) -> None:
+    _fake_pass_stage(job_dir, "seo_vidiq")
+
+
+def _fake_pass_assets_chatgpt(job_dir: Path) -> None:
+    """Mark assets_chatgpt as completed and advance to render."""
+    _fake_pass_stage(job_dir, "assets_chatgpt")
 
 
 def _prepare_promoted_script(
@@ -162,6 +175,7 @@ def _prepare_promoted_script(
     (job_dir / "idea.json").write_text(
         json.dumps(idea_payload, ensure_ascii=False), encoding="utf-8"
     )
+    _fake_pass_idea_research(job_dir)
     run_script_stage(job_dir, channel_path)
     promote_script_stage(
         job_dir,
@@ -194,7 +208,7 @@ def test_run_script_stage_writes_prompt(tmp_path: Path, channel_path: Path, idea
     (job_dir / "idea.json").write_text(
         json.dumps(idea_payload, ensure_ascii=False), encoding="utf-8"
     )
-
+    _fake_pass_idea_research(job_dir)
     output = run_script_stage(job_dir, channel_path)
     assert output == job_dir / SCRIPT_PROMPT_PATH
     assert output.exists()
@@ -216,6 +230,7 @@ def test_run_script_stage_writes_prompt(tmp_path: Path, channel_path: Path, idea
 def test_run_script_stage_missing_idea_raises(tmp_path: Path, channel_path: Path):
     job_dir = tmp_path / "job-s2"
     create_job(job_dir, job_id="job-s2", channel_id="vida-plena-45", idea_path="idea.json")
+    _fake_pass_idea_research(job_dir)
     with pytest.raises(StageInputMissingError):
         run_script_stage(job_dir, channel_path)
 
@@ -231,6 +246,7 @@ def test_promote_script_stage_writes_raw_and_promoted_script(
     (job_dir / "idea.json").write_text(
         json.dumps(idea_payload, ensure_ascii=False), encoding="utf-8"
     )
+    _fake_pass_idea_research(job_dir)
     run_script_stage(job_dir, channel_path)
 
     output = promote_script_stage(
@@ -269,6 +285,7 @@ def test_promote_script_stage_rejects_stale_raw_response(
     (job_dir / "idea.json").write_text(
         json.dumps(idea_payload, ensure_ascii=False), encoding="utf-8"
     )
+    _fake_pass_idea_research(job_dir)
     run_script_stage(job_dir, channel_path)
     stale_payload = {**valid_script_payload, "job_id": "old-job"}
 
@@ -463,6 +480,7 @@ def test_run_render_stage_uses_operator_render_without_qa_gate(
     run_seo_stage(job_dir, channel_path)
     promote_seo_stage(job_dir, channel_path, raw_response=json.dumps(valid_seo_payload))
     _fake_pass_qa(job_dir, "seo")
+    _fake_pass_seo_vidiq(job_dir)
     _fake_pass_assets_chatgpt(job_dir)
     calls = []
 
@@ -510,6 +528,7 @@ def test_run_review_stage_writes_review_and_completes_job(
     run_seo_stage(job_dir, channel_path)
     promote_seo_stage(job_dir, channel_path, raw_response=json.dumps(valid_seo_payload))
     _fake_pass_qa(job_dir, "seo")
+    _fake_pass_seo_vidiq(job_dir)
     _fake_pass_assets_chatgpt(job_dir)
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
     next(s for s in state["stages"] if s["name"] == "render")["status"] = "completed"
@@ -559,10 +578,11 @@ def _create_job(client: TestClient, job_id: str = "job-http"):
     assert response.status_code == 201, response.text
 
 
-def test_post_idea_then_run_script_via_http(client: TestClient, idea_payload: dict):
+def test_post_idea_then_run_script_via_http(client: TestClient, tmp_path: Path, idea_payload: dict):
     _create_job(client, "job-http")
     response = client.post("/jobs/job-http/idea", json=idea_payload)
     assert response.status_code == 201
+    _fake_pass_idea_research(tmp_path / "job-http")
 
     response = client.post("/jobs/job-http/stages/script/run")
     assert response.status_code == 200
@@ -574,10 +594,11 @@ def test_post_idea_then_run_script_via_http(client: TestClient, idea_payload: di
     assert state["current_stage"] == "script_promote"
 
 
-def test_post_promote_script_via_http(client: TestClient, idea_payload: dict, valid_script_payload: dict):
+def test_post_promote_script_via_http(client: TestClient, tmp_path: Path, idea_payload: dict, valid_script_payload: dict):
     _create_job(client, "job-s1")
     response = client.post("/jobs/job-s1/idea", json=idea_payload)
     assert response.status_code == 201
+    _fake_pass_idea_research(tmp_path / "job-s1")
     response = client.post("/jobs/job-s1/stages/script/run")
     assert response.status_code == 200
 
@@ -602,6 +623,7 @@ def test_post_run_scenes_via_http(
 ):
     _create_job(client, "job-s1")
     client.post("/jobs/job-s1/idea", json=idea_payload)
+    _fake_pass_idea_research(tmp_path / "job-s1")
     client.post("/jobs/job-s1/stages/script/run")
     client.post(
         "/jobs/job-s1/stages/script/promote",
@@ -628,6 +650,7 @@ def test_post_promote_scenes_via_http(
 ):
     _create_job(client, "job-s1")
     client.post("/jobs/job-s1/idea", json=idea_payload)
+    _fake_pass_idea_research(tmp_path / "job-s1")
     client.post("/jobs/job-s1/stages/script/run")
     client.post(
         "/jobs/job-s1/stages/script/promote",
@@ -658,6 +681,7 @@ def test_post_promote_scenes_invalid_raw_returns_409(
 ):
     _create_job(client, "job-s1")
     client.post("/jobs/job-s1/idea", json=idea_payload)
+    _fake_pass_idea_research(tmp_path / "job-s1")
     client.post("/jobs/job-s1/stages/script/run")
     client.post(
         "/jobs/job-s1/stages/script/promote",
@@ -685,6 +709,7 @@ def test_post_run_seo_via_http(
 ):
     _create_job(client, "job-s1")
     client.post("/jobs/job-s1/idea", json=idea_payload)
+    _fake_pass_idea_research(tmp_path / "job-s1")
     client.post("/jobs/job-s1/stages/script/run")
     client.post(
         "/jobs/job-s1/stages/script/promote",
@@ -718,6 +743,7 @@ def test_post_promote_seo_via_http(
 ):
     _create_job(client, "job-s1")
     client.post("/jobs/job-s1/idea", json=idea_payload)
+    _fake_pass_idea_research(tmp_path / "job-s1")
     client.post("/jobs/job-s1/stages/script/run")
     client.post(
         "/jobs/job-s1/stages/script/promote",
@@ -755,6 +781,7 @@ def test_post_promote_seo_invalid_raw_returns_409(
 ):
     _create_job(client, "job-s1")
     client.post("/jobs/job-s1/idea", json=idea_payload)
+    _fake_pass_idea_research(tmp_path / "job-s1")
     client.post("/jobs/job-s1/stages/script/run")
     client.post(
         "/jobs/job-s1/stages/script/promote",
@@ -790,6 +817,7 @@ def test_post_run_render_via_http(
 ):
     _create_job(client, "job-s1")
     client.post("/jobs/job-s1/idea", json=idea_payload)
+    _fake_pass_idea_research(tmp_path / "job-s1")
     client.post("/jobs/job-s1/stages/script/run")
     client.post(
         "/jobs/job-s1/stages/script/promote",
@@ -808,6 +836,7 @@ def test_post_run_render_via_http(
         json={"raw_response": json.dumps(valid_seo_payload, ensure_ascii=False)},
     )
     _fake_pass_qa(tmp_path / "job-s1", "seo")
+    _fake_pass_seo_vidiq(tmp_path / "job-s1")
     _fake_pass_assets_chatgpt(tmp_path / "job-s1")
 
     def fake_render_operator_job(options):
@@ -845,6 +874,7 @@ def test_post_run_review_via_http(
 ):
     _create_job(client, "job-s1")
     client.post("/jobs/job-s1/idea", json=idea_payload)
+    _fake_pass_idea_research(tmp_path / "job-s1")
     client.post("/jobs/job-s1/stages/script/run")
     client.post(
         "/jobs/job-s1/stages/script/promote",
@@ -863,6 +893,7 @@ def test_post_run_review_via_http(
         json={"raw_response": json.dumps(valid_seo_payload, ensure_ascii=False)},
     )
     _fake_pass_qa(tmp_path / "job-s1", "seo")
+    _fake_pass_seo_vidiq(tmp_path / "job-s1")
     _fake_pass_assets_chatgpt(tmp_path / "job-s1")
 
     def fake_render_operator_job(options):
@@ -890,11 +921,13 @@ def test_post_run_review_via_http(
 
 def test_post_promote_script_invalid_raw_returns_409(
     client: TestClient,
+    tmp_path: Path,
     idea_payload: dict,
     valid_script_payload: dict,
 ):
     _create_job(client, "job-s1")
     client.post("/jobs/job-s1/idea", json=idea_payload)
+    _fake_pass_idea_research(tmp_path / "job-s1")
     client.post("/jobs/job-s1/stages/script/run")
     stale_payload = {**valid_script_payload, "job_id": "old-job"}
 

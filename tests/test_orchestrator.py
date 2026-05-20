@@ -61,7 +61,7 @@ def test_advance_progresses_through_stages(tmp_path: Path):
     state = advance(job_dir)
     assert state.stage(DEFAULT_STAGES[0]).status == "completed"
     assert state.current_stage == DEFAULT_STAGES[1]
-    assert DEFAULT_STAGES[1] == "script_promote"
+    assert DEFAULT_STAGES[1] == "script"
     assert "script_qa" in DEFAULT_STAGES
     assert "scenes_promote" in DEFAULT_STAGES
     assert "scenes_qa" in DEFAULT_STAGES

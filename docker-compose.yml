@@ -1,3 +1,7 @@
+networks:
+  appliance_net:
+    driver: bridge
+
 services:
   video-agent:
     build: .
@@ -27,11 +31,13 @@ services:
       PIXABAY_API_KEY: ${PIXABAY_API_KEY:-}
       BROWSER_WORKER_URL: http://browser-worker:8001
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./jobs:/app/jobs
       - ./caches:/app/caches
       - ./asset_library:/app/asset_library
+    networks:
+      - appliance_net
     command:
       - uvicorn
       - video_agent.web.app:app
@@ -40,15 +46,37 @@ services:
       - --port
       - "8000"
 
+  browser-runtime:
+    build:
+      context: .
+      dockerfile: docker/browser-runtime/Dockerfile
+    shm_size: "2gb"
+    environment:
+      CHROME_PROFILE_DIR: /data/profile
+      CHROME_CDP_PORT: "9222"
+    volumes:
+      - ./browser_profiles/default:/data/profile
+    ports:
+      # noVNC web UI bound to localhost only — never expose the LAN.
+      - "127.0.0.1:7900:7900"
+    networks:
+      - appliance_net
+    # CDP port 9222 stays unpublished; reachable only via the
+    # appliance_net Docker network from browser-worker.
+
   browser-worker:
     build: .
     working_dir: /app
     environment:
-      CHROME_CDP_URL: ${CHROME_CDP_URL:-http://host.docker.internal:9222}
+      # browser-worker talks to the runtime container over the internal
+      # Docker network. No host Chrome, no host.docker.internal hop.
+      CHROME_CDP_URL: ${CHROME_CDP_URL:-http://browser-runtime:9222}
     ports:
-      - "8001:8001"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - "127.0.0.1:8001:8001"
+    networks:
+      - appliance_net
+    depends_on:
+      - browser-runtime
     command:
       - uvicorn
       - video_agent.browser_worker.app:app

@@ -1,5 +1,7 @@
 .superpowers/
 jobs/
+browser_profiles/*
+!browser_profiles/.gitkeep
 node_modules/
 remotion/node_modules/
 remotion/public/jobs/

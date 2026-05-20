@@ -1,6 +1,6 @@
 # Youtube AI Agent Project Status
 
-Last updated: 2026-05-20 (V3 Phase 1 Step 9 implemented and Docker-verified)
+Last updated: 2026-05-20 (Browser Appliance landed: split runtime + worker)
 
 This file is the living project tracker. Update it whenever a meaningful system capability is added, changed, verified, or deferred so a new reader can quickly understand what the system does, what is being built now, and what remains.
 
@@ -183,6 +183,42 @@ Decisions already chosen:
 - Tests were added for direct render stage behavior, QA-gate bypass, direct review completion, HTTP render, and HTTP review.
 - Docker verification passed: `docker compose run --rm video-agent pytest -q` -> `105 passed in 14.52s`.
 
+### V3 Phase 1 Step 10 Browser Appliance (split runtime + worker)
+
+- Host Chrome + CDP attach approach is removed. Browser is now packaged as
+  the **Browser Appliance** described in [docs/BROWSER_APPLIANCE.md](BROWSER_APPLIANCE.md).
+- `docker/browser-runtime/Dockerfile` builds on
+  `mcr.microsoft.com/playwright:v1.49.0-jammy` and adds `xvfb`, `fluxbox`,
+  `x11vnc`, `novnc`/`websockify`, `socat`, and `supervisor`.
+- `supervisord` runs Xvfb (`:99`), fluxbox, x11vnc, noVNC on `127.0.0.1:7900`,
+  a `socat` forwarder publishing `0.0.0.0:9222 -> 127.0.0.1:9223` (Chromium 119+
+  refuses non-loopback CDP binds), and Chromium itself via
+  `docker/browser-runtime/launch-chromium.sh`.
+- Chromium uses `--user-data-dir=/data/profile` so manual logins persist
+  in the `./browser_profiles/default/` volume mount across restarts.
+- `launch-chromium.sh` removes stale `SingletonLock`/`SingletonCookie`/
+  `SingletonSocket` files so a hard kill does not block the next start.
+- `docker-compose.yml` adds an internal bridge network `appliance_net`;
+  CDP port 9222 is reachable only on that network and never published to
+  the host. `app`, `browser-worker`, and `browser-runtime` share the
+  network; `app`/`browser-worker` HTTP ports bind to `127.0.0.1` only.
+- `browser-worker` now defaults `CHROME_CDP_URL=http://browser-runtime:9222`
+  and drops the old `host.docker.internal` plumbing.
+- Worker fetches `/json/version` with a forced `Host: localhost` header
+  (Chromium rejects other Host headers as DNS rebinding) and rewrites
+  the advertised `webSocketDebuggerUrl` host to match `CHROME_CDP_URL`
+  so Playwright actually connects to the runtime instead of the worker's
+  own loopback.
+- `GET /chrome` was replaced by `GET /runtime`, which returns
+  `{ok, cdp_url, contexts, pages}`. `tests/test_browser_worker_chrome.py`
+  was rewritten accordingly.
+- `scripts/launch-chrome-cdp.sh` is deleted.
+- Live smoke test: `curl http://127.0.0.1:8001/runtime` returns
+  `{"ok":true,"cdp_url":"http://browser-runtime:9222","contexts":1,"pages":1}`
+  with the Browser Appliance up; noVNC `GET /vnc.html` returns HTTP 200.
+- Docker verification passed: `docker compose run --rm video-agent pytest -q`
+  -> `109 passed in 14.21s`.
+
 ## Target V3 Architecture
 
 ```text
@@ -197,7 +233,7 @@ User browser
   -> browser-worker container
       -> Playwright drivers
       -> ChatGPT/Gemini/vidIQ/image generation browser operations
-      -> host Chrome dedicated profile via CDP
+      -> browser-runtime container (Chromium + Xvfb + noVNC + CDP) over internal appliance_net
 ```
 
 State must remain file-based under `jobs/<job_id>/`, including:
@@ -247,7 +283,7 @@ Latest full verification:
 
 ```text
 docker compose run --rm video-agent pytest -q
-105 passed in 14.52s
+109 passed in 14.21s
 ```
 
 ## Fresh Operator Run

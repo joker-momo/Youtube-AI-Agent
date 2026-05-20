@@ -3,32 +3,30 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from video_agent.browser_worker.app import (
+    _cdp_url,
     _is_logged_out_url,
-    _resolve_cdp_url,
     app,
 )
 
 
-def test_chrome_returns_503_when_cdp_unreachable(monkeypatch):
+def test_runtime_returns_503_when_cdp_unreachable(monkeypatch):
     monkeypatch.setenv("CHROME_CDP_URL", "http://127.0.0.1:1")
     client = TestClient(app)
-    response = client.get("/chrome")
+    response = client.get("/runtime")
     assert response.status_code == 503
     detail = response.json()["detail"]
     assert detail["cdp_url"] == "http://127.0.0.1:1"
     assert "error" in detail
 
 
-def test_resolve_cdp_url_replaces_host_docker_internal_with_ip(monkeypatch):
-    monkeypatch.setattr("socket.gethostbyname", lambda host: "192.168.65.254")
+def test_cdp_url_defaults_to_runtime_container(monkeypatch):
+    monkeypatch.delenv("CHROME_CDP_URL", raising=False)
+    assert _cdp_url() == "http://browser-runtime:9222"
 
-    assert _resolve_cdp_url("http://host.docker.internal:9222") == "http://192.168.65.254:9222"
 
-
-def test_resolve_cdp_url_leaves_other_hosts_unchanged(monkeypatch):
-    monkeypatch.setattr("socket.gethostbyname", lambda host: "192.168.65.254")
-
-    assert _resolve_cdp_url("http://127.0.0.1:9222") == "http://127.0.0.1:9222"
+def test_cdp_url_respects_override(monkeypatch):
+    monkeypatch.setenv("CHROME_CDP_URL", "http://other-host:9333")
+    assert _cdp_url() == "http://other-host:9333"
 
 
 def test_is_logged_out_url_detects_chatgpt_login_redirects():
@@ -38,5 +36,7 @@ def test_is_logged_out_url_detects_chatgpt_login_redirects():
 
 
 def test_is_logged_out_url_detects_gemini_login_redirects():
-    assert _is_logged_out_url("gemini", "https://accounts.google.com/signin/v2/identifier")
+    assert _is_logged_out_url(
+        "gemini", "https://accounts.google.com/signin/v2/identifier"
+    )
     assert not _is_logged_out_url("gemini", "https://gemini.google.com/app")

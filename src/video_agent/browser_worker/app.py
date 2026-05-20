@@ -2,42 +2,22 @@ from __future__ import annotations
 
 import os
 import re
-import socket
-from urllib.parse import ParseResult, urlparse, urlunparse
+from urllib.parse import urlparse, urlunparse
 
+import httpx
 from fastapi import FastAPI, HTTPException
 
-app = FastAPI(title="video-agent-browser-worker", version="0.1.0")
+app = FastAPI(title="video-agent-browser-worker", version="0.2.0")
 
 
 def _cdp_url() -> str:
-    return os.environ.get("CHROME_CDP_URL", "http://host.docker.internal:9222")
+    """CDP endpoint for the Browser Appliance runtime container.
 
-
-def _resolve_cdp_url(url: str) -> str:
-    parsed = urlparse(url)
-    if parsed.hostname != "host.docker.internal":
-        return url
-
-    host_ip = socket.gethostbyname(parsed.hostname)
-    netloc = host_ip
-    if parsed.port is not None:
-        netloc = f"{host_ip}:{parsed.port}"
-    if parsed.username:
-        auth = parsed.username
-        if parsed.password:
-            auth = f"{auth}:{parsed.password}"
-        netloc = f"{auth}@{netloc}"
-    return urlunparse(
-        ParseResult(
-            scheme=parsed.scheme,
-            netloc=netloc,
-            path=parsed.path,
-            params=parsed.params,
-            query=parsed.query,
-            fragment=parsed.fragment,
-        )
-    )
+    Defaults to ``http://browser-runtime:9222``; the runtime container
+    exposes CDP on the internal ``appliance_net`` Docker network only,
+    so this URL is reachable from the worker but never from the host.
+    """
+    return os.environ.get("CHROME_CDP_URL", "http://browser-runtime:9222")
 
 
 def _is_logged_out_url(site: str, url: str) -> bool:
@@ -54,9 +34,42 @@ def _is_logged_out_url(site: str, url: str) -> bool:
 def _login_required_message(site: str) -> str:
     label = {"chatgpt": "ChatGPT", "gemini": "Gemini"}.get(site, site)
     return (
-        f"Login required for {label} in the dedicated Chrome CDP profile. "
-        "Open the Chrome window, sign in manually, then retry."
+        f"Login required for {label} in the browser-runtime profile. "
+        "Open http://localhost:7900 (noVNC), sign in once, then retry."
     )
+
+
+async def _resolve_browser_ws(base_cdp_url: str) -> str:
+    """Fetch Chromium's CDP entrypoint and rewrite the host.
+
+    Chromium 119+ refuses to bind CDP on anything but loopback, even when
+    ``--remote-debugging-address`` is passed. The runtime container uses
+    socat to publish the loopback port on 0.0.0.0 inside its network
+    namespace, but Chromium's ``/json/version`` response still advertises
+    ``ws://127.0.0.1:<port>/...`` as the websocket endpoint. Playwright
+    would follow that literally and fail because 127.0.0.1 in the worker
+    container is the worker itself. We rewrite the host/port of the
+    advertised websocket URL to match ``base_cdp_url`` so the connection
+    actually reaches the runtime.
+    """
+    # Chromium's CDP HTTP server enforces ``Host: localhost`` to defend
+    # against DNS rebinding. The runtime container reaches that server
+    # via the docker network, so requests would arrive with
+    # ``Host: browser-runtime`` and be rejected with 500. Forcing the
+    # header back to localhost matches what Chromium expects.
+    async with httpx.AsyncClient(
+        timeout=5.0,
+        headers={"Host": "localhost"},
+    ) as http:
+        response = await http.get(f"{base_cdp_url.rstrip('/')}/json/version")
+        response.raise_for_status()
+        payload = response.json()
+    ws_url = payload.get("webSocketDebuggerUrl")
+    if not ws_url:
+        raise RuntimeError("webSocketDebuggerUrl missing from /json/version")
+    base = urlparse(base_cdp_url)
+    rewritten = urlparse(ws_url)._replace(netloc=base.netloc)
+    return urlunparse(rewritten)
 
 
 def _target_url(site: str) -> str:
@@ -74,28 +87,27 @@ def health() -> dict:
     return {"ok": True, "service": "browser-worker"}
 
 
-@app.get("/chrome")
-async def chrome() -> dict:
-    """Diagnostic: connect to host Chrome over CDP and report counts.
+@app.get("/runtime")
+async def runtime() -> dict:
+    """Diagnostic: connect to the Browser Appliance runtime over CDP.
 
-    Returns 503 with the underlying error if the CDP endpoint is
-    unreachable, so the caller can decide whether to retry or instruct
-    the user to launch the host Chrome profile.
+    Returns 503 with the underlying error when the runtime container is
+    not reachable (typically because ``docker compose up browser-runtime``
+    has not been started or Chromium is still booting).
     """
     from playwright.async_api import async_playwright
 
-    requested_url = _cdp_url()
-    url = _resolve_cdp_url(requested_url)
+    url = _cdp_url()
     try:
         async with async_playwright() as pw:
-            browser = await pw.chromium.connect_over_cdp(url)
+            ws_endpoint = await _resolve_browser_ws(url)
+            browser = await pw.chromium.connect_over_cdp(ws_endpoint)
             try:
                 contexts = browser.contexts
                 pages = sum(len(ctx.pages) for ctx in contexts)
                 return {
                     "ok": True,
                     "cdp_url": url,
-                    "requested_cdp_url": requested_url,
                     "contexts": len(contexts),
                     "pages": pages,
                 }
@@ -104,7 +116,7 @@ async def chrome() -> dict:
     except Exception as exc:
         raise HTTPException(
             status_code=503,
-            detail={"cdp_url": requested_url, "resolved_cdp_url": url, "error": str(exc)},
+            detail={"cdp_url": url, "error": str(exc)},
         ) from exc
 
 
@@ -117,20 +129,25 @@ async def auth_status(site: str) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    requested_url = _cdp_url()
-    cdp_url = _resolve_cdp_url(requested_url)
+    cdp_url = _cdp_url()
     try:
         async with async_playwright() as pw:
             browser = await pw.chromium.connect_over_cdp(cdp_url)
             try:
-                context = browser.contexts[0] if browser.contexts else await browser.new_context()
+                context = (
+                    browser.contexts[0]
+                    if browser.contexts
+                    else await browser.new_context()
+                )
                 page = await context.new_page()
                 await page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
                 await page.wait_for_timeout(1500)
                 current_url = page.url
                 logged_out = _is_logged_out_url(site, current_url)
                 if not logged_out:
-                    login_cue = page.get_by_role("button", name=re.compile(r"^(log in|sign in)$", re.I))
+                    login_cue = page.get_by_role(
+                        "button", name=re.compile(r"^(log in|sign in)$", re.I)
+                    )
                     try:
                         logged_out = await login_cue.first.is_visible(timeout=1000)
                     except Exception:
@@ -142,12 +159,16 @@ async def auth_status(site: str) -> dict:
                     "current_url": current_url,
                     "login_required": logged_out,
                     "logged_in": not logged_out,
-                    "message": _login_required_message(site) if logged_out else "Logged in.",
+                    "message": (
+                        _login_required_message(site)
+                        if logged_out
+                        else "Logged in."
+                    ),
                 }
             finally:
                 await browser.close()
     except Exception as exc:
         raise HTTPException(
             status_code=503,
-            detail={"cdp_url": requested_url, "resolved_cdp_url": cdp_url, "error": str(exc)},
+            detail={"cdp_url": cdp_url, "error": str(exc)},
         ) from exc

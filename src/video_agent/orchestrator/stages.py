@@ -556,3 +556,131 @@ async def auto_seo_qa_stage(
         artifact="seo",
         session_fn=session_fn,
     )
+
+
+# ---------------------------------------------------------------------------
+# Rework loop: QA NEEDS_REWORK -> feed issues back to ChatGPT -> re-promote.
+# ---------------------------------------------------------------------------
+
+
+_QA_STAGE_FN = {
+    "script": auto_script_qa_stage,
+    "scenes": auto_scenes_qa_stage,
+    "seo": auto_seo_qa_stage,
+}
+
+_ARTIFACT_PROMOTER = {
+    "script": promote_script_stage,
+    "scenes": promote_scenes_stage,
+    "seo": promote_seo_stage,
+}
+
+
+def _reset_promote_and_qa(job_dir: Path, artifact: str) -> None:
+    """Reset ``<artifact>_promote`` and ``<artifact>_qa`` to pending."""
+    promote_name = f"{artifact}_promote"
+    qa_name = f"{artifact}_qa"
+    state = load_job(job_dir)
+    for s in state.stages:
+        if s.name in (promote_name, qa_name):
+            s.status = "pending"
+            s.started_at = None
+            s.completed_at = None
+            s.error = None
+    state.current_stage = promote_name
+    state.updated_at = _now()
+    save_job(job_dir, state)
+
+
+async def auto_rework_artifact(
+    artifact: str,
+    job_dir: Path,
+    channel_path: Path,
+    chatgpt_fn: SessionFn,
+) -> Path:
+    """Send QA issues back to ChatGPT and re-promote the artifact.
+
+    Reads ``operator/gemini/<artifact>_qa.json`` to extract issues and
+    required_changes, resets the ``<artifact>_promote`` + ``<artifact>_qa``
+    stages to pending, sends a rework message into the persistent
+    ChatGPT tab, and re-runs the promoter with the new response.
+    """
+    qa_path = job_dir / "operator" / "gemini" / f"{artifact}_qa.json"
+    if not qa_path.exists():
+        raise StageInputMissingError(
+            f"Missing {qa_path}; cannot rework {artifact}"
+        )
+    qa_payload = json.loads(qa_path.read_text(encoding="utf-8"))
+    issues = qa_payload.get("issues") or []
+    required_changes = qa_payload.get("required_changes") or []
+
+    _reset_promote_and_qa(job_dir, artifact)
+
+    issue_lines = "\n".join(f"- {i}" for i in issues) or "- (sin issues listadas)"
+    change_lines = (
+        "\n".join(f"- {c}" for c in required_changes)
+        or "- (sin required_changes listadas)"
+    )
+    rework_msg = (
+        f"# Rework del artefacto `{artifact}`\n"
+        f"Tu artefacto anterior recibió verdict NEEDS_REWORK del revisor "
+        f"(Gemini). Reescribe el artefacto JSON corrigiendo SOLO los puntos "
+        f"a continuación. Mantén el mismo esquema, idioma es-419, job_id y "
+        f"channel_id.\n\n"
+        f"## Issues detectadas\n{issue_lines}\n\n"
+        f"## Cambios requeridos\n{change_lines}\n\n"
+        f"Devuelve UN SOLO objeto JSON válido del artefacto `{artifact}` "
+        f"completo (no solo el diff). Sin markdown ni comentarios."
+    )
+
+    new_raw = await chatgpt_fn([rework_msg])
+    if not isinstance(new_raw, str) or not new_raw.strip():
+        raise StageInputMissingError(
+            f"browser-worker returned an empty rework response for {artifact}"
+        )
+
+    promoter = _ARTIFACT_PROMOTER[artifact]
+    return promoter(job_dir, channel_path, new_raw)
+
+
+def _max_retries_per_qa(channel_path: Path, default: int = 3) -> int:
+    try:
+        cfg = read_yaml(channel_path)
+        return int(
+            cfg.get("qa_rules", {}).get("thresholds", {}).get(
+                "max_retry_per_qa", default
+            )
+        )
+    except Exception:
+        return default
+
+
+async def auto_qa_with_rework(
+    artifact: str,
+    job_dir: Path,
+    channel_path: Path,
+    chatgpt_fn: SessionFn,
+    gemini_fn: SessionFn,
+) -> Path:
+    """Run ``<artifact>_qa``; if NEEDS_REWORK, rework via ChatGPT and retry.
+
+    Honours ``channel.yaml -> qa_rules.thresholds.max_retry_per_qa``
+    (default 3). After all retries are exhausted, re-raises the last
+    ``StageInputMissingError`` so /run-all halts cleanly with the
+    failed QA's issues in the response detail.
+    """
+    qa_fn = _QA_STAGE_FN[artifact]
+    max_retries = _max_retries_per_qa(channel_path)
+    last_exc: StageInputMissingError | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            return await qa_fn(job_dir, channel_path, gemini_fn)
+        except StageInputMissingError as exc:
+            last_exc = exc
+            if attempt >= max_retries:
+                break
+            await auto_rework_artifact(
+                artifact, job_dir, channel_path, chatgpt_fn
+            )
+    assert last_exc is not None
+    raise last_exc

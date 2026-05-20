@@ -25,6 +25,7 @@ from video_agent.orchestrator.orchestrator import StageError
 from video_agent.orchestrator.stages import (
     IDEA_FILE,
     StageInputMissingError,
+    auto_qa_with_rework,
     auto_scenes_qa_stage,
     auto_scenes_stage,
     auto_script_qa_stage,
@@ -565,7 +566,9 @@ async def post_run_all(
         )
         await _record(
             "script_qa",
-            await auto_script_qa_stage(job_dir, channel_path, gemini_fn),
+            await auto_qa_with_rework(
+                "script", job_dir, channel_path, chatgpt_fn, gemini_fn
+            ),
         )
         await _record(
             "scenes_promote",
@@ -573,7 +576,9 @@ async def post_run_all(
         )
         await _record(
             "scenes_qa",
-            await auto_scenes_qa_stage(job_dir, channel_path, gemini_fn),
+            await auto_qa_with_rework(
+                "scenes", job_dir, channel_path, chatgpt_fn, gemini_fn
+            ),
         )
         await _record(
             "seo_promote",
@@ -581,7 +586,9 @@ async def post_run_all(
         )
         await _record(
             "seo_qa",
-            await auto_seo_qa_stage(job_dir, channel_path, gemini_fn),
+            await auto_qa_with_rework(
+                "seo", job_dir, channel_path, chatgpt_fn, gemini_fn
+            ),
         )
         await _record("render", run_render_stage(job_dir, channel_path))
         await _record("review", run_review_stage(job_dir))

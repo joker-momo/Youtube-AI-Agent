@@ -62,28 +62,66 @@ async def _wait_for_stable_response(
     response_timeout_ms: int,
     poll_ms: int = 500,
     stable_ms: int = 2_000,
+    log_tag: str = "scrape",
 ) -> str | None:
     """Poll ``scrape_js`` until the result differs from ``prior_text`` AND
     has not changed for ``stable_ms``. Returns the stable text or None on
     timeout. Defends against scraping a partial streaming response.
+
+    Emits one log line per poll iteration so the operator can see what
+    the scrape is (or is not) picking up while a stage runs.
     """
+    import sys
     import time
 
     deadline = time.monotonic() + response_timeout_ms / 1000.0
     last_seen: str | None = None
     stable_since: float | None = None
+    iteration = 0
+    prior_len = len(prior_text or "")
+    print(
+        f"[{log_tag}] start prior_len={prior_len} timeout_ms={response_timeout_ms}",
+        flush=True,
+        file=sys.stderr,
+    )
     while time.monotonic() < deadline:
+        iteration += 1
         current = await page.evaluate(scrape_js)
+        cur_len = len(current or "")
+        diff = (current or "") != prior_text
+        same_as_last = current == last_seen
+        stable_for = (
+            (time.monotonic() - stable_since) * 1000.0 if stable_since else 0
+        )
+        if iteration <= 3 or iteration % 10 == 0:
+            preview = (current or "")[:80].replace("\n", " ")
+            print(
+                f"[{log_tag}] iter={iteration} len={cur_len} "
+                f"diff_from_prior={diff} same_as_last={same_as_last} "
+                f"stable_ms={int(stable_for)} preview={preview!r}",
+                flush=True,
+                file=sys.stderr,
+            )
         if current and current != prior_text:
             if current == last_seen:
                 if stable_since is None:
                     stable_since = time.monotonic()
                 elif (time.monotonic() - stable_since) * 1000.0 >= stable_ms:
+                    print(
+                        f"[{log_tag}] STABLE after iter={iteration} len={cur_len}",
+                        flush=True,
+                        file=sys.stderr,
+                    )
                     return current
             else:
                 last_seen = current
                 stable_since = None
         await page.wait_for_timeout(poll_ms)
+    print(
+        f"[{log_tag}] TIMEOUT after iter={iteration} last_len={len(last_seen or '')}",
+        flush=True,
+        file=sys.stderr,
+    )
     return None
 
 
@@ -250,6 +288,7 @@ class ChatGPTDriver:
             scrape_js,
             prior_text,
             response_timeout_ms=response_timeout_ms,
+            log_tag="chatgpt",
         )
         if text is None:
             shot = await save_trace_screenshot(self.page, prefix="chatgpt-no-response")

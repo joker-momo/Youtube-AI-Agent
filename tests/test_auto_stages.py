@@ -697,6 +697,91 @@ def test_auto_script_qa_fail_raises_with_issues(
     assert state["current_stage"] == "script_qa"  # not advanced
 
 
+def test_auto_qa_with_rework_passes_after_one_retry(
+    tmp_path: Path,
+    channel_path: Path,
+    idea_payload: dict,
+    valid_script_payload: dict,
+):
+    from video_agent.orchestrator.stages import auto_qa_with_rework
+
+    job_dir = tmp_path / "job-auto"
+    _advance_through_script_promote(
+        job_dir, channel_path, idea_payload, valid_script_payload
+    )
+
+    # First QA call: NEEDS_REWORK. Then ChatGPT rework returns a valid
+    # new script payload (same shape, fine for promoter). Second QA
+    # call: PASS.
+    rework_script = dict(valid_script_payload)
+    rework_script["hook"] = "Reworked hook con pequeños ajustes prácticos."
+    fake = FakeBrowserClient(
+        queue=[
+            json.dumps(_qa_fail_payload(["narration too long"])),
+            json.dumps(rework_script, ensure_ascii=False),
+            json.dumps(_qa_pass_payload()),
+        ]
+    )
+
+    output = asyncio.run(
+        auto_qa_with_rework(
+            "script",
+            job_dir,
+            channel_path,
+            chatgpt_fn=lambda msgs: fake.run_session("chatgpt", msgs),
+            gemini_fn=lambda msgs: fake.run_session("gemini", msgs),
+        )
+    )
+    assert output == job_dir / "operator" / "gemini" / "script_qa.json"
+    state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    script_qa = next(s for s in state["stages"] if s["name"] == "script_qa")
+    assert script_qa["status"] == "completed"
+    # Three sessions: failing QA, rework chat, passing QA.
+    assert len(fake.calls) == 3
+
+
+def test_auto_qa_with_rework_gives_up_after_max_retries(
+    tmp_path: Path,
+    channel_path: Path,
+    idea_payload: dict,
+    valid_script_payload: dict,
+):
+    from video_agent.orchestrator.stages import auto_qa_with_rework
+
+    job_dir = tmp_path / "job-auto"
+    _advance_through_script_promote(
+        job_dir, channel_path, idea_payload, valid_script_payload
+    )
+
+    # Always fail QA; channel.yaml default max_retry_per_qa=3 so the
+    # sequence is qa, rework, qa, rework, qa, rework, qa -> 4 QA + 3
+    # reworks = 7 sessions before raising.
+    rework_script = dict(valid_script_payload)
+    rework_script["hook"] = "Rework attempt"
+    fake = FakeBrowserClient(
+        queue=[
+            json.dumps(_qa_fail_payload(["still broken"])),
+            json.dumps(rework_script, ensure_ascii=False),
+            json.dumps(_qa_fail_payload(["still broken"])),
+            json.dumps(rework_script, ensure_ascii=False),
+            json.dumps(_qa_fail_payload(["still broken"])),
+            json.dumps(rework_script, ensure_ascii=False),
+            json.dumps(_qa_fail_payload(["still broken"])),
+        ]
+    )
+    with pytest.raises(StageInputMissingError, match="NEEDS_REWORK"):
+        asyncio.run(
+            auto_qa_with_rework(
+                "script",
+                job_dir,
+                channel_path,
+                chatgpt_fn=lambda msgs: fake.run_session("chatgpt", msgs),
+                gemini_fn=lambda msgs: fake.run_session("gemini", msgs),
+            )
+        )
+    assert len(fake.calls) == 7
+
+
 def test_promote_qa_stage_rejects_non_pass(
     tmp_path: Path,
     channel_path: Path,

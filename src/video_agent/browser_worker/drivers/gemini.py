@@ -142,8 +142,36 @@ class GeminiDriver:
         if not prompt.strip():
             raise BrowserDriverError("Empty prompt")
 
+        # Scrape returns a composite "[count=N]\n<text>" so the
+        # _wait_for_stable_response text-diff strategy reacts to EITHER
+        # a new JSON response (count grows) OR a new plain reply
+        # (text changes — e.g. "OK" to a briefing). The driver strips
+        # the [count=N] prefix before returning the response.
         scrape_js = """
             () => {
+              const text = document.body.innerText || '';
+              const objects = [];
+              let depth = 0;
+              let start = -1;
+              for (let i = 0; i < text.length; i++) {
+                const ch = text[i];
+                if (ch === '{') {
+                  if (depth === 0) start = i;
+                  depth++;
+                } else if (ch === '}') {
+                  if (depth > 0) {
+                    depth--;
+                    if (depth === 0 && start >= 0) {
+                      objects.push(text.slice(start, i + 1));
+                      start = -1;
+                    }
+                  }
+                }
+              }
+              const responses = objects.filter(o =>
+                !o.includes('Cambia de sombrero')
+                && !o.includes('Restricciones absolutas')
+              );
               const selectors = [
                 ".model-response-text",
                 "message-content .markdown",
@@ -157,28 +185,21 @@ class GeminiDriver:
                 "chat-history-message:last-child",
                 "model-response-content",
               ];
+              let knownText = '';
               for (const s of selectors) {
                 const nodes = document.querySelectorAll(s);
                 if (nodes.length === 0) continue;
                 const last = nodes[nodes.length - 1];
-                const text = (last.innerText || '').trim();
-                if (text) return text;
+                const t = (last.innerText || '').trim();
+                if (t && !t.includes('Cambia de sombrero')
+                      && !t.includes('Restricciones absolutas')) {
+                  knownText = t;
+                  break;
+                }
               }
-              // Fallback: scan all elements in main, return the last
-              // sizable text block that doesn't look like the user
-              // prompt (our prompts include "Cambia de sombrero" or
-              // "Restricciones absolutas").
-              const main = document.querySelector('main') || document.body;
-              const candidates = Array.from(main.querySelectorAll('div, article, section'));
-              let best = '';
-              for (const node of candidates) {
-                const txt = (node.innerText || '').trim();
-                if (txt.length < 20) continue;
-                if (txt.includes('Cambia de sombrero')) continue;
-                if (txt.includes('Restricciones absolutas')) continue;
-                if (txt.length > best.length) best = txt;
-              }
-              return best;
+              const last = knownText
+                || (responses.length ? responses[responses.length - 1] : '');
+              return `[count=${responses.length}]\\n${last}`;
             }
         """
         prior_text = await self.page.evaluate(scrape_js)
@@ -220,6 +241,7 @@ class GeminiDriver:
             scrape_js,
             prior_text,
             response_timeout_ms=response_timeout_ms,
+            log_tag="gemini",
         )
         if text is None:
             shot = await save_trace_screenshot(self.page, prefix="gemini-no-response")
@@ -227,6 +249,9 @@ class GeminiDriver:
                 "Gemini response did not arrive in time.",
                 screenshot_path=shot,
             )
+        # Strip the "[count=N]\n" prefix the scrape composite uses.
+        import re as _re
+        text = _re.sub(r"^\[count=\d+\]\n", "", text)
         if not text:
             shot = await save_trace_screenshot(self.page, prefix="gemini-empty")
             raise BrowserDriverError(

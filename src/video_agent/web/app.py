@@ -338,108 +338,465 @@ _DASHBOARD_HTML = """<!doctype html>
 <meta charset="utf-8">
 <title>Video Agent Dashboard</title>
 <style>
+  :root {
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --ink: #0f0f0f;
+    --muted: #606060;
+    --muted-2: #8c8f94;
+    --line: #e5e7eb;
+    --line-strong: #d6d9de;
+    --rail: #0f0f0f;
+    --red: #cc0000;
+    --blue: #1c62b9;
+    --blue-soft: #e7f1fc;
+    --green: #2da14c;
+    --green-soft: #e9f7ee;
+    --amber: #b66a00;
+    --amber-soft: #fff6e6;
+    --shadow: 0 1px 2px rgba(15,15,15,.04), 0 10px 28px rgba(15,15,15,.06);
+  }
   * { box-sizing: border-box; }
-  body { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #0c0c0e; color: #e6e6e6; }
-  header { padding: 12px 20px; background: #14141a; border-bottom: 1px solid #23232a; display: flex; justify-content: space-between; align-items: center; }
-  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
-  header .meta { font-size: 12px; color: #888; }
-  main { display: grid; grid-template-columns: 320px 1fr; height: calc(100vh - 49px); }
-  #jobs-panel { border-right: 1px solid #23232a; overflow-y: auto; padding: 10px; }
-  #detail-panel { padding: 16px 22px; overflow-y: auto; }
-  .job-card { padding: 10px 12px; margin-bottom: 8px; background: #15151b; border: 1px solid #23232a; border-radius: 6px; cursor: pointer; }
-  .job-card:hover { background: #1c1c24; }
-  .job-card.active { border-color: #4a78d6; background: #1a2030; }
-  .job-id { font-size: 12px; font-weight: 600; word-break: break-all; }
-  .job-meta { font-size: 11px; color: #777; margin-top: 4px; display: flex; justify-content: space-between; }
-  .progress-bar { height: 4px; background: #23232a; margin-top: 6px; border-radius: 2px; overflow: hidden; }
-  .progress-fill { height: 100%; background: #4a78d6; transition: width 200ms; }
-  .progress-fill.completed { background: #4ad67a; }
-  .progress-fill.failed { background: #d65d4a; }
-  h2 { font-size: 14px; color: #aaa; margin: 18px 0 10px; }
-  h2:first-child { margin-top: 0; }
-  .summary { background: #15151b; padding: 14px 16px; border-radius: 6px; margin-bottom: 16px; }
-  .summary .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-  .summary .pct { font-size: 26px; font-weight: 600; color: #4a78d6; }
-  .summary .eta { font-size: 12px; color: #888; }
-  .big-bar { height: 8px; background: #23232a; border-radius: 4px; overflow: hidden; }
-  .big-fill { height: 100%; background: linear-gradient(90deg, #4a78d6, #4ad67a); transition: width 300ms; }
-  .timeline { display: flex; flex-direction: column; gap: 6px; }
-  .step { background: #15151b; border: 1px solid #23232a; border-radius: 6px; overflow: hidden; }
-  .step .head { padding: 10px 14px; display: flex; align-items: center; cursor: pointer; gap: 12px; }
-  .step .head:hover { background: #1a1a22; }
-  .step .num { width: 22px; height: 22px; border-radius: 50%; background: #23232a; color: #aaa; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; }
-  .step.completed .num { background: #4ad67a; color: #0c0c0e; }
-  .step.in_progress .num { background: #4a78d6; color: #0c0c0e; animation: pulse 1.4s infinite; }
-  .step.failed .num { background: #d65d4a; color: #fff; }
-  @keyframes pulse { 0%,100% { transform: scale(1); opacity:1; } 50% { transform: scale(1.15); opacity:0.7;} }
-  .step .name { flex: 1; font-size: 13px; font-weight: 500; }
-  .step .badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #23232a; color: #aaa; }
-  .step.completed .badge { background: #1f3522; color: #4ad67a; }
-  .step.in_progress .badge { background: #1a2030; color: #4a78d6; }
-  .step.failed .badge { background: #36211e; color: #d65d4a; }
-  .step .dur { font-size: 11px; color: #555; min-width: 50px; text-align: right; }
-  .step .body { display: none; padding: 0 14px 14px; border-top: 1px solid #23232a; }
-  .step.open .body { display: block; }
-  .artgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 10px; }
-  .artbox { background: #0a0a0d; border: 1px solid #23232a; border-radius: 4px; padding: 8px 10px; min-height: 60px; }
-  .artbox .lbl { font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
-  .artbox .file { font-size: 11px; color: #4a78d6; cursor: pointer; padding: 2px 0; }
-  .artbox .file:hover { text-decoration: underline; }
-  .artbox .file.missing { color: #555; cursor: default; }
-  .artbox .file.missing:hover { text-decoration: none; }
-  pre.dump { background: #0a0a0d; padding: 10px; border-radius: 4px; max-height: 300px; overflow: auto; font-size: 11px; color: #c9c9c9; white-space: pre-wrap; word-break: break-word; margin-top: 6px; }
-  .events { background: #0a0a0d; padding: 10px; border-radius: 4px; max-height: 240px; overflow-y: auto; font-size: 11px; }
-  .events .ev { padding: 3px 0; border-bottom: 1px dotted #1a1a22; }
-  .ev-ts { color: #555; margin-right: 8px; }
-  .ev-kind { color: #4a78d6; margin-right: 6px; font-weight: 600; }
-  .ev-stage { color: #4ad67a; }
-  .ev-kind.JOB_COMPLETED { color: #4ad67a; }
-  .ev-kind.STAGE_FAILED, .ev-kind.STAGE_NEEDS_REWORK { color: #d65d4a; }
-  .empty { color: #555; padding: 30px; text-align: center; }
-  .ws-indicator { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; vertical-align: middle; }
-  .ws-indicator.live { background: #4ad67a; box-shadow: 0 0 4px #4ad67a; }
-  .ws-indicator.off { background: #555; }
-  .final-block { background: linear-gradient(180deg, #14141a, #15151b); border: 1px solid #2a4a2e; border-radius: 8px; padding: 18px; margin-top: 16px; }
-  .final-block video { width: 100%; max-height: 480px; background: #000; border-radius: 4px; }
-  .final-block .thumb { display: inline-block; vertical-align: top; margin-right: 14px; }
-  .final-block .thumb img { width: 240px; height: auto; border-radius: 4px; }
-  .final-block .meta-line { font-size: 12px; color: #aaa; margin-bottom: 6px; }
-  .final-block .copybox { background: #0a0a0d; padding: 10px; border-radius: 4px; font-size: 12px; margin: 6px 0; position: relative; }
-  .final-block .copybtn { position: absolute; top: 6px; right: 6px; font-size: 10px; padding: 2px 8px; background: #23232a; color: #aaa; border: none; border-radius: 3px; cursor: pointer; }
-  .final-block .copybtn:hover { background: #2c2c34; }
-  .final-block .tag { display: inline-block; background: #1a2030; color: #4a78d6; padding: 2px 8px; border-radius: 10px; font-size: 11px; margin: 2px 4px 2px 0; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    letter-spacing: 0;
+  }
+  button { font: inherit; }
+  .app-shell { min-height: 100vh; display: grid; grid-template-columns: 96px minmax(0, 1fr); }
+  .rail {
+    background: var(--rail);
+    color: #fff;
+    padding: 28px 18px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 28px;
+  }
+  .logo {
+    width: 52px;
+    height: 36px;
+    border-radius: 8px;
+    background: var(--red);
+    position: relative;
+    box-shadow: inset 0 -8px 14px rgba(0,0,0,.16);
+  }
+  .logo:after {
+    content: "";
+    position: absolute;
+    left: 21px;
+    top: 10px;
+    border-left: 14px solid #fff;
+    border-top: 8px solid transparent;
+    border-bottom: 8px solid transparent;
+  }
+  .rail-nav { width: 100%; display: grid; gap: 12px; margin-top: 10px; }
+  .rail-pill {
+    height: 34px;
+    border-radius: 8px;
+    display: grid;
+    place-items: center;
+    color: #a7a7a7;
+    font-size: 12px;
+    border: 1px solid #262626;
+  }
+  .rail-pill.active { color: #fff; background: #242424; border-color: #343434; }
+  .workspace { min-width: 0; display: grid; grid-template-rows: 76px minmax(0, 1fr); }
+  .topbar {
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 34px;
+    gap: 20px;
+  }
+  .brand h1 { margin: 0; font-size: 16px; line-height: 1.2; font-weight: 750; }
+  .brand p { margin: 5px 0 0; font-size: 12px; color: var(--muted); }
+  .top-meta { display: flex; align-items: center; gap: 14px; font-size: 12px; color: var(--muted); }
+  .ws-dot { width: 8px; height: 8px; border-radius: 999px; display: inline-block; background: #b8bcc2; }
+  .ws-dot.live { background: var(--green); box-shadow: 0 0 0 4px rgba(45,161,76,.12); }
+  .ws-dot.off { background: #b8bcc2; }
+  .refresh-btn {
+    border: 1px solid var(--line-strong);
+    background: #fff;
+    color: var(--ink);
+    border-radius: 8px;
+    height: 34px;
+    padding: 0 12px;
+    cursor: pointer;
+  }
+  .refresh-btn:hover { border-color: #b9bec6; background: #fafafa; }
+  .page {
+    min-height: 0;
+    overflow: auto;
+    padding: 30px 34px 40px;
+  }
+  .page-head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 24px;
+    margin-bottom: 22px;
+  }
+  .page-title h2 { margin: 0; font-size: 25px; font-weight: 780; }
+  .page-title p { margin: 7px 0 0; color: var(--muted); font-size: 13px; }
+  .primary-action {
+    border: 0;
+    background: var(--red);
+    color: #fff;
+    border-radius: 8px;
+    height: 36px;
+    padding: 0 16px;
+    font-weight: 650;
+    box-shadow: 0 8px 18px rgba(204,0,0,.18);
+  }
+  .kpis {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    margin-bottom: 22px;
+  }
+  .kpi {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 17px 18px;
+    min-height: 92px;
+    box-shadow: var(--shadow);
+  }
+  .kpi-label { font-size: 11px; color: var(--muted); font-weight: 650; text-transform: uppercase; letter-spacing: .04em; }
+  .kpi-value { margin-top: 9px; font-size: 25px; font-weight: 780; }
+  .kpi-sub { margin-top: 5px; color: var(--muted-2); font-size: 12px; }
+  .content-grid { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 12px; align-items: start; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    box-shadow: var(--shadow);
+  }
+  .jobs-panel { min-height: 560px; overflow: hidden; }
+  .panel-head {
+    padding: 18px 18px 12px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .panel-title { font-size: 13px; font-weight: 750; }
+  .panel-count { font-size: 11px; color: var(--muted); }
+  #jobs-list { padding: 12px; display: grid; gap: 10px; max-height: 660px; overflow: auto; }
+  .job-card {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+    padding: 13px 14px;
+    cursor: pointer;
+    transition: border-color 150ms, background 150ms, transform 150ms;
+  }
+  .job-card:hover { border-color: #c9cdd3; transform: translateY(-1px); }
+  .job-card.active { border-color: var(--red); background: #fffbfb; box-shadow: inset 3px 0 0 var(--red); }
+  .job-row { display: flex; justify-content: space-between; gap: 10px; align-items: start; }
+  .job-id { font-size: 12px; font-weight: 750; line-height: 1.35; word-break: break-word; }
+  .job-count { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .job-stage { margin-top: 8px; color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 7px; }
+  .state-dot { width: 7px; height: 7px; border-radius: 999px; background: #b8bcc2; flex: 0 0 auto; }
+  .state-dot.completed { background: var(--green); }
+  .state-dot.in_progress { background: var(--blue); }
+  .state-dot.failed { background: var(--red); }
+  .job-meta { margin-top: 10px; color: var(--muted-2); font-size: 11px; display: flex; justify-content: space-between; gap: 10px; }
+  .job-bar { height: 5px; background: #edf0f3; border-radius: 999px; overflow: hidden; margin-top: 11px; }
+  .job-bar div { height: 100%; background: var(--blue); border-radius: inherit; transition: width 200ms; }
+  .job-bar.completed div { background: var(--green); }
+  .job-bar.failed div { background: var(--red); }
+  .detail-panel { min-height: 560px; padding: 24px; }
+  .empty {
+    min-height: 520px;
+    display: grid;
+    place-items: center;
+    text-align: center;
+    color: var(--muted);
+    border: 1px dashed var(--line-strong);
+    border-radius: 8px;
+    background: #fafafa;
+  }
+  .summary-card { border: 1px solid var(--line); border-radius: 8px; padding: 18px; background: #fff; }
+  .sum-row { display: flex; justify-content: space-between; gap: 24px; align-items: start; }
+  .sum-id { font-size: 20px; font-weight: 780; line-height: 1.2; word-break: break-word; }
+  .sum-meta { margin-top: 9px; color: var(--muted); font-size: 12px; display: flex; flex-wrap: wrap; gap: 9px; align-items: center; }
+  .channel-pill { display: inline-flex; align-items: center; gap: 7px; }
+  .avatar {
+    width: 22px;
+    height: 22px;
+    border-radius: 999px;
+    background: #111;
+    color: #fff;
+    display: inline-grid;
+    place-items: center;
+    font-size: 10px;
+    font-weight: 750;
+  }
+  .sum-pct { font-size: 34px; font-weight: 800; text-align: right; line-height: 1; }
+  .pct-unit { font-size: 17px; color: var(--muted); margin-left: 2px; }
+  .sum-eta { margin-top: 8px; text-align: right; color: var(--muted); font-size: 12px; }
+  .sum-bar { margin-top: 18px; height: 9px; border-radius: 999px; background: #edf0f3; overflow: hidden; }
+  .sum-bar div { height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--blue), #3ea6ff); transition: width 240ms; }
+  .sum-bar.completed div { background: var(--green); }
+  .sum-bar.failed div { background: var(--red); }
+  .stage-strip { margin-top: 16px; display: grid; grid-template-columns: repeat(11, minmax(16px, 1fr)); gap: 6px; }
+  .stage-seg { height: 7px; background: #edf0f3; border-radius: 999px; position: relative; }
+  .stage-seg.completed { background: var(--green); }
+  .stage-seg.in_progress { background: #3ea6ff; }
+  .stage-seg.failed { background: var(--red); }
+  .stage-seg .tip {
+    display: none;
+    position: absolute;
+    bottom: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    white-space: nowrap;
+    background: #111;
+    color: #fff;
+    font-size: 11px;
+    padding: 5px 7px;
+    border-radius: 6px;
+    z-index: 4;
+  }
+  .stage-seg:hover .tip { display: block; }
+  .sum-stagerow { margin-top: 13px; color: var(--muted); font-size: 12px; display: flex; justify-content: space-between; gap: 14px; }
+  .section-title {
+    margin: 22px 0 10px;
+    display: flex;
+    justify-content: space-between;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 650;
+  }
+  .timeline { display: grid; gap: 10px; }
+  .step { border: 1px solid var(--line); border-radius: 8px; background: #fff; overflow: hidden; }
+  .step.completed { border-color: #d6eadb; }
+  .step.in_progress { border-color: #b9d7f7; background: #fbfdff; }
+  .step.failed { border-color: #f0c9c9; background: #fffafa; }
+  .step-head {
+    min-height: 58px;
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr) auto;
+    gap: 13px;
+    align-items: center;
+    padding: 12px 14px;
+    cursor: pointer;
+  }
+  .step-head:hover { background: #fafafa; }
+  .step-num {
+    width: 28px;
+    height: 28px;
+    border-radius: 999px;
+    display: grid;
+    place-items: center;
+    background: #f1f2f4;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 750;
+  }
+  .step.completed .step-num { background: var(--green); color: #fff; }
+  .step.in_progress .step-num { background: var(--blue); color: #fff; }
+  .step.failed .step-num { background: var(--red); color: #fff; }
+  .step-label .name { display: block; font-size: 13px; font-weight: 750; }
+  .step-label .code { display: block; margin-top: 4px; font-size: 11px; color: var(--muted-2); }
+  .step-meta { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
+  .pill { border-radius: 999px; padding: 4px 9px; background: #f1f2f4; color: var(--muted); font-size: 11px; font-weight: 700; }
+  .pill.completed { background: var(--green-soft); color: var(--green); }
+  .pill.in_progress { background: var(--blue-soft); color: var(--blue); }
+  .pill.failed { background: #ffe8e8; color: var(--red); }
+  .caret { color: var(--muted-2); font-size: 20px; line-height: 1; transition: transform 150ms; }
+  .step.open .caret { transform: rotate(90deg); }
+  .step-body { display: none; padding: 0 14px 14px 55px; }
+  .step.open .step-body { display: block; }
+  .io-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .io-box { border: 1px solid var(--line); border-radius: 8px; background: #fafafa; padding: 10px; min-height: 68px; }
+  .io-title { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; font-weight: 750; margin-bottom: 7px; }
+  .file-row {
+    height: 30px;
+    border-radius: 6px;
+    display: grid;
+    grid-template-columns: 18px minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+    color: var(--blue);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 0 7px;
+  }
+  .file-row:hover { background: #edf4ff; }
+  .file-row.missing { color: var(--muted-2); cursor: default; }
+  .file-row.missing:hover { background: transparent; }
+  .file-icon { width: 16px; height: 16px; color: currentColor; }
+  .file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file-size { color: var(--muted-2); font-size: 11px; }
+  .preview { margin-top: 12px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #fff; }
+  .preview-head { min-height: 36px; display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px 11px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+  .preview-close { width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--line); background: #fff; cursor: pointer; color: var(--muted); }
+  .preview pre, pre.dump {
+    margin: 0;
+    padding: 13px;
+    max-height: 360px;
+    overflow: auto;
+    background: #0f1115;
+    color: #d7dce2;
+    font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .preview img, .preview video { width: 100%; display: block; background: #000; }
+  .final { margin-top: 22px; border: 1px solid #cfe6d5; border-radius: 8px; background: #fbfffc; padding: 18px; }
+  .final-title { display: flex; align-items: center; gap: 10px; font-weight: 780; margin-bottom: 14px; }
+  .badge { font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--green-soft); color: var(--green); }
+  .final video { width: 100%; max-height: 500px; background: #000; border-radius: 8px; display: block; }
+  .final-cols { margin-top: 16px; display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 16px; align-items: start; }
+  .thumb-img { width: 100%; border-radius: 8px; border: 1px solid var(--line); background: #111; display: block; }
+  .copy-row { border: 1px solid var(--line); border-radius: 8px; background: #fff; margin-bottom: 10px; overflow: hidden; }
+  .crh { min-height: 37px; padding: 8px 10px; display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--line); }
+  .cr-label { font-size: 12px; font-weight: 750; }
+  .count { color: var(--muted-2); font-weight: 500; }
+  .copy-btn {
+    border: 1px solid var(--line-strong);
+    background: #fff;
+    border-radius: 6px;
+    height: 26px;
+    padding: 0 9px;
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 11px;
+  }
+  .copy-btn.copied { border-color: #cfe6d5; color: var(--green); background: var(--green-soft); }
+  .copy-content { padding: 10px; color: #222; font-size: 13px; line-height: 1.5; white-space: pre-wrap; }
+  .copy-content.scroll { max-height: 190px; overflow: auto; }
+  .tag-chips { padding: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .tag-chip { border-radius: 999px; background: #f1f6fd; color: var(--blue); padding: 4px 8px; font-size: 12px; }
+  .download-link { display: inline-flex; align-items: center; gap: 8px; color: var(--blue); font-size: 12px; text-decoration: none; margin-top: 3px; font-weight: 650; }
+  .download-link:hover { text-decoration: underline; }
+  .events { margin-top: 22px; border: 1px solid var(--line); border-radius: 8px; background: #fff; overflow: hidden; }
+  .events-head { min-height: 42px; padding: 0 14px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .events-head h3 { margin: 0; font-size: 13px; }
+  .events-count { color: var(--muted); font-size: 12px; }
+  .events-body { display: none; max-height: 240px; overflow: auto; padding: 8px 12px; }
+  .events.open .events-body { display: block; }
+  .events.open .caret { transform: rotate(90deg); }
+  .ev-row { min-height: 28px; display: grid; grid-template-columns: 72px 160px minmax(0, 1fr); gap: 10px; align-items: center; font-size: 12px; border-bottom: 1px dotted var(--line); }
+  .ev-row:last-child { border-bottom: 0; }
+  .ts { color: var(--muted-2); font-variant-numeric: tabular-nums; }
+  .ev-kind { font-weight: 750; color: var(--blue); }
+  .ev-kind.JOB_COMPLETED { color: var(--green); }
+  .ev-kind.STAGE_FAILED, .ev-kind.STAGE_NEEDS_REWORK { color: var(--red); }
+  .ev-stage { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .toast {
+    position: fixed;
+    right: 24px;
+    bottom: 24px;
+    background: #111;
+    color: #fff;
+    border-radius: 8px;
+    padding: 10px 13px;
+    font-size: 12px;
+    opacity: 0;
+    transform: translateY(8px);
+    pointer-events: none;
+    transition: opacity 160ms, transform 160ms;
+  }
+  .toast.show { opacity: 1; transform: translateY(0); }
+  @media (max-width: 980px) {
+    .app-shell { grid-template-columns: 1fr; }
+    .rail { display: none; }
+    .workspace { grid-template-rows: auto minmax(0, 1fr); }
+    .topbar { padding: 18px; align-items: flex-start; }
+    .page { padding: 18px; }
+    .page-head { align-items: flex-start; flex-direction: column; }
+    .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .content-grid { grid-template-columns: 1fr; }
+    .final-cols, .io-grid { grid-template-columns: 1fr; }
+    .step-body { padding-left: 14px; }
+  }
+  @media (max-width: 620px) {
+    .kpis { grid-template-columns: 1fr; }
+    .topbar { flex-direction: column; gap: 12px; }
+    .sum-row, .sum-stagerow { flex-direction: column; }
+    .sum-pct, .sum-eta { text-align: left; }
+    .step-head { grid-template-columns: 28px minmax(0, 1fr); }
+    .step-meta { grid-column: 2; }
+  }
 </style>
 </head>
 <body>
-<header>
-  <h1>Video Agent Dashboard</h1>
-  <div class="meta"><span class="ws-indicator off" id="ws-dot"></span><span id="ws-label">disconnected</span> · <span id="job-count">0</span> jobs</div>
-</header>
-<main>
-  <div id="jobs-panel">
-    <div id="jobs-list"></div>
+<div class="app-shell">
+  <aside class="rail">
+    <div class="logo" aria-label="Video Agent"></div>
+    <nav class="rail-nav" aria-label="Dashboard sections">
+      <div class="rail-pill active">Jobs</div>
+      <div class="rail-pill">AI</div>
+      <div class="rail-pill">Files</div>
+      <div class="rail-pill">Logs</div>
+    </nav>
+  </aside>
+  <div class="workspace">
+    <header class="topbar">
+      <div class="brand">
+        <h1>Video Agent</h1>
+        <p>Vida Plena 45+ production dashboard</p>
+      </div>
+      <div class="top-meta">
+        <span><span class="ws-dot off" id="ws-dot"></span><span id="ws-label">disconnected</span></span>
+        <span id="job-count">0</span>
+        <button class="refresh-btn" id="refresh-btn" type="button">Refresh</button>
+      </div>
+    </header>
+    <main class="page">
+      <div class="page-head">
+        <div class="page-title">
+          <h2>Production Jobs</h2>
+          <p>Track generation, QA, render artifacts, and final YouTube metadata.</p>
+        </div>
+        <button class="primary-action" type="button" onclick="fetchJobs()">Refresh jobs</button>
+      </div>
+      <section class="kpis" id="kpis"></section>
+      <section class="content-grid">
+        <div class="panel jobs-panel">
+          <div class="panel-head">
+            <div class="panel-title">Job queue</div>
+            <div class="panel-count" id="panel-count">0 jobs</div>
+          </div>
+          <div id="jobs-list"></div>
+        </div>
+        <div class="panel detail-panel" id="detail-panel">
+          <div class="empty">Chọn một job bên trái để xem timeline, artifact và output.</div>
+        </div>
+      </section>
+    </main>
   </div>
-  <div id="detail-panel">
-    <div class="empty">Chọn 1 job bên trái để xem chi tiết từng bước.</div>
-  </div>
-</main>
+</div>
+<div class="toast" id="toast"></div>
 <script>
 let SELECTED_ID = null;
 let WS = null;
 let OPEN_STAGES = new Set();
+let EVENTS_OPEN = false;
+let LAST_TIMELINE = null;
 
 const STAGE_LABEL = {
-  script: '1. Script — sinh prompt cho ChatGPT',
-  script_promote: '2. Script promote — nhận + validate JSON',
-  script_qa: '3. Script QA — Gemini review',
-  scenes: '4. Scenes — sinh prompt scenes',
-  scenes_promote: '5. Scenes promote — nhận + validate JSON',
-  scenes_qa: '6. Scenes QA — Gemini review',
-  seo: '7. SEO — sinh prompt SEO',
-  seo_promote: '8. SEO promote — nhận + validate JSON',
-  seo_qa: '9. SEO QA — Gemini review',
-  render: '10. Render — assets + TTS + Remotion → video.mp4',
-  review: '11. Review — operator_review.html',
+  script: 'Script prompt',
+  script_promote: 'Script JSON',
+  script_qa: 'Script QA',
+  scenes: 'Scenes prompt',
+  scenes_promote: 'Scenes JSON',
+  scenes_qa: 'Scenes QA',
+  seo: 'SEO prompt',
+  seo_promote: 'SEO JSON',
+  seo_qa: 'SEO QA',
+  render: 'Render video',
+  review: 'Review page',
 };
 
 function fmtSec(s) {
@@ -449,14 +806,50 @@ function fmtSec(s) {
   return Math.floor(s/60) + 'm ' + (s%60) + 's';
 }
 
+function fmtSize(n) {
+  n = Number(n || 0);
+  if (n < 1024) return n + 'B';
+  if (n < 1024 * 1024) return Math.round(n / 1024) + 'KB';
+  return (n / 1024 / 1024).toFixed(1) + 'MB';
+}
+
+function fmtTime(ts) {
+  return ts ? ts.slice(11, 19) : '-';
+}
+
+function jobState(job) {
+  const stages = job.stages || [];
+  if (stages.some(s => s.status === 'failed')) return 'failed';
+  if (job.stages_total > 0 && job.stages_done === job.stages_total) return 'completed';
+  if (stages.some(s => s.status === 'in_progress')) return 'in_progress';
+  return 'pending';
+}
+
 async function fetchJobs() {
   try {
     const r = await fetch('/jobs');
     const d = await r.json();
-    document.getElementById('job-count').textContent = d.count;
+    document.getElementById('job-count').textContent = d.count + ' jobs';
+    document.getElementById('panel-count').textContent = d.count + ' jobs';
+    renderKpis(d.jobs || []);
     renderJobsList(d.jobs);
+    if (!SELECTED_ID && d.jobs && d.jobs.length) selectJob(d.jobs[0].job_id);
     if (SELECTED_ID) fetchTimeline(SELECTED_ID);
   } catch (e) { console.error(e); }
+}
+
+function renderKpis(jobs) {
+  const total = jobs.length;
+  const completed = jobs.filter(j => jobState(j) === 'completed').length;
+  const active = jobs.filter(j => jobState(j) === 'in_progress').length;
+  const failed = jobs.filter(j => jobState(j) === 'failed').length;
+  const avg = total ? Math.round(jobs.reduce((sum, j) => sum + (j.stages_total ? 100 * j.stages_done / j.stages_total : 0), 0) / total) : 0;
+  document.getElementById('kpis').innerHTML = `
+    <div class="kpi"><div class="kpi-label">Total jobs</div><div class="kpi-value">${total}</div><div class="kpi-sub">folders in jobs/</div></div>
+    <div class="kpi"><div class="kpi-label">Active</div><div class="kpi-value">${active}</div><div class="kpi-sub">currently running</div></div>
+    <div class="kpi"><div class="kpi-label">Completed</div><div class="kpi-value">${completed}</div><div class="kpi-sub">ready or reviewed</div></div>
+    <div class="kpi"><div class="kpi-label">Avg progress</div><div class="kpi-value">${avg}%</div><div class="kpi-sub">${failed} failed job${failed === 1 ? '' : 's'}</div></div>
+  `;
 }
 
 function renderJobsList(jobs) {
@@ -464,22 +857,29 @@ function renderJobsList(jobs) {
   root.innerHTML = '';
   for (const j of jobs) {
     const pct = j.stages_total ? (100 * j.stages_done / j.stages_total) : 0;
-    const failed = (j.stages || []).some(s => s.status === 'failed');
-    const allDone = j.stages_total > 0 && j.stages_done === j.stages_total;
-    const fillCls = allDone ? 'completed' : (failed ? 'failed' : '');
+    const state = jobState(j);
+    const fillCls = state === 'completed' ? 'completed' : (state === 'failed' ? 'failed' : '');
     const card = document.createElement('div');
     card.className = 'job-card' + (SELECTED_ID === j.job_id ? ' active' : '');
     card.innerHTML = `
-      <div class="job-id">${j.job_id}</div>
-      <div class="job-meta">
-        <span>${j.current_stage}</span>
-        <span>${j.stages_done}/${j.stages_total}</span>
+      <div class="job-row">
+        <div class="job-id">${escapeHtml(j.job_id)}</div>
+        <div class="job-count"><b>${j.stages_done}</b>/${j.stages_total}</div>
       </div>
-      <div class="progress-bar"><div class="progress-fill ${fillCls}" style="width:${pct}%"></div></div>
+      <div class="job-stage">
+        <span class="state-dot ${state}"></span>
+        <span>${escapeHtml(STAGE_LABEL[j.current_stage] || j.current_stage || 'pending')}</span>
+      </div>
+      <div class="job-meta">
+        <span>${escapeHtml(j.channel_id || '-')}</span>
+        <span>${fmtTime(j.updated_at)}</span>
+      </div>
+      <div class="job-bar ${fillCls}"><div style="width:${pct}%"></div></div>
     `;
     card.onclick = () => selectJob(j.job_id);
     root.appendChild(card);
   }
+  if (!jobs.length) root.innerHTML = '<div class="empty" style="min-height:320px">Chưa có job nào.</div>';
 }
 
 function selectJob(jobId) {
@@ -495,6 +895,7 @@ async function fetchTimeline(jobId) {
     const r = await fetch('/jobs/' + encodeURIComponent(jobId) + '/timeline');
     if (!r.ok) return;
     const t = await r.json();
+    LAST_TIMELINE = t;
     renderTimeline(t);
   } catch (e) { console.error(e); }
 }
@@ -502,27 +903,49 @@ async function fetchTimeline(jobId) {
 function renderTimeline(t) {
   const root = document.getElementById('detail-panel');
   const allDone = t.stages_total > 0 && t.stages_done === t.stages_total;
+  const failed = (t.stages || []).some(s => s.status === 'failed');
   const renderStage = t.stages.find(s => s.name === 'render');
   const videoReady = renderStage && (renderStage.outputs || []).some(o => o.path === 'video.mp4' && o.exists);
+  const channelInitials = (t.channel_id || 'VA').split('-').slice(0, 2).map(s => s[0] || '').join('').toUpperCase();
+  const stageStrip = t.stages.map((s, i) => {
+    const cls = s.status === 'completed' ? 'completed' : s.status === 'in_progress' ? 'in_progress' : s.status === 'failed' ? 'failed' : '';
+    const label = STAGE_LABEL[s.name] || s.name;
+    return `<div class="stage-seg ${cls}"><span class="tip">${i + 1}. ${escapeHtml(label)}</span></div>`;
+  }).join('');
+  const barClass = failed ? 'failed' : allDone ? 'completed' : '';
   root.innerHTML = `
-    <div class="summary">
-      <div class="top">
-        <div>
-          <div style="font-size:14px;font-weight:600;color:#fff">${t.job_id}</div>
-          <div style="font-size:11px;color:#666">${t.channel_id} · cập nhật ${(t.updated_at||'').slice(11,19)}</div>
+    <div class="summary-card">
+      <div class="sum-row">
+        <div class="sum-left">
+          <div class="sum-id">${escapeHtml(t.job_id)}</div>
+          <div class="sum-meta">
+            <span class="channel-pill"><span class="avatar">${escapeHtml(channelInitials)}</span>${escapeHtml(t.channel_id || '-')}</span>
+            <span>updated ${fmtTime(t.updated_at)}</span>
+            <span>created ${fmtTime(t.created_at)}</span>
+          </div>
         </div>
-        <div style="text-align:right">
-          <div class="pct">${t.percent}%</div>
-          <div class="eta">${allDone ? 'Hoàn thành' : 'ETA còn ~' + fmtSec(t.remaining_eta_seconds)}</div>
+        <div class="sum-right">
+          <div class="sum-pct">${Math.round(t.percent)}<span class="pct-unit">%</span></div>
+          <div class="sum-eta">${failed ? '<b style="color:var(--red)">Failed</b>' : allDone ? '<b>Completed</b>' : 'ETA ~' + fmtSec(t.remaining_eta_seconds)}</div>
         </div>
       </div>
-      <div class="big-bar"><div class="big-fill" style="width:${t.percent}%"></div></div>
+      <div class="sum-bar ${barClass}"><div style="width:${t.percent}%"></div></div>
+      <div class="stage-strip">${stageStrip}</div>
+      <div class="sum-stagerow">
+        <span>Current: <b>${escapeHtml(STAGE_LABEL[t.current_stage] || t.current_stage || '-')}</b></span>
+        <span>${t.stages_done}/${t.stages_total} stages</span>
+      </div>
     </div>
-    <h2>Các bước</h2>
+    <div class="section-title"><span>Pipeline stages</span><span>${t.stages_done}/${t.stages_total} done</span></div>
     <div class="timeline" id="timeline"></div>
     ${videoReady ? '<div id="final-mount"></div>' : ''}
-    <h2>Events</h2>
-    <div class="events" id="events"></div>
+    <div class="events ${EVENTS_OPEN ? 'open' : ''}" id="events-panel">
+      <div class="events-head" onclick="toggleEvents()">
+        <h3>WebSocket events</h3>
+        <div><span class="events-count" id="events-count">live stream</span><span class="caret">›</span></div>
+      </div>
+      <div class="events-body" id="events"></div>
+    </div>
   `;
   const tl = document.getElementById('timeline');
   t.stages.forEach((s, idx) => tl.appendChild(renderStep(t.job_id, s, idx)));
@@ -537,27 +960,26 @@ function renderStep(jobId, s, idx) {
     ? fmtSec(s.actual_seconds)
     : (s.status === 'completed' ? '' : '~' + fmtSec(s.eta_seconds));
   el.innerHTML = `
-    <div class="head">
-      <span class="num">${idx+1}</span>
-      <span class="name">${label}</span>
-      <span class="badge">${s.status}</span>
-      <span class="dur">${durTxt}</span>
+    <div class="step-head">
+      <span class="step-num">${s.status === 'completed' ? checkIcon() : s.status === 'failed' ? xIcon() : idx + 1}</span>
+      <span class="step-label"><span class="name">${escapeHtml(label)}</span><span class="code">${escapeHtml(s.name)}</span></span>
+      <span class="step-meta"><span class="pill ${s.status}">${statusText(s.status)}</span><span class="step-dur">${durTxt}</span><span class="caret">›</span></span>
     </div>
-    <div class="body">
-      <div class="artgrid">
-        <div class="artbox">
-          <div class="lbl">INPUT</div>
-          ${(s.inputs||[]).map(i => renderFile(jobId, i)).join('') || '<div style="color:#555;font-size:11px">(không có)</div>'}
+    <div class="step-body">
+      <div class="io-grid">
+        <div class="io-box">
+          <div class="io-title">Input</div>
+          ${(s.inputs||[]).map(i => renderFile(jobId, i)).join('') || '<div style="color:var(--muted-2);font-size:12px;padding:6px">No input</div>'}
         </div>
-        <div class="artbox">
-          <div class="lbl">OUTPUT</div>
-          ${(s.outputs||[]).map(o => renderFile(jobId, o)).join('') || '<div style="color:#555;font-size:11px">(chưa có)</div>'}
+        <div class="io-box">
+          <div class="io-title">Output</div>
+          ${(s.outputs||[]).map(o => renderFile(jobId, o)).join('') || '<div style="color:var(--muted-2);font-size:12px;padding:6px">No output yet</div>'}
         </div>
       </div>
       <div class="preview-mount" id="preview-${s.name}"></div>
     </div>
   `;
-  el.querySelector('.head').onclick = () => {
+  el.querySelector('.step-head').onclick = () => {
     el.classList.toggle('open');
     if (el.classList.contains('open')) OPEN_STAGES.add(s.name);
     else OPEN_STAGES.delete(s.name);
@@ -566,10 +988,17 @@ function renderStep(jobId, s, idx) {
 }
 
 function renderFile(jobId, f) {
-  const cls = f.exists ? 'file' : 'file missing';
-  const sz = f.exists ? ' (' + (f.size < 1024 ? f.size + 'B' : Math.round(f.size/1024) + 'KB') + ')' : ' (chưa có)';
-  const onclick = f.exists ? `onclick="previewArtifact('${jobId}','${f.path.replace(/'/g,"\'")}')"` : '';
-  return `<div class="${cls}" ${onclick}>📄 ${f.path}${sz}</div>`;
+  const cls = f.exists ? 'file-row' : 'file-row missing';
+  const sz = f.exists ? fmtSize(f.size) : 'missing';
+  const safePath = escapeHtml(f.path);
+  const onclick = f.exists ? `onclick="previewArtifact('${escapeJs(jobId)}','${escapeJs(f.path)}')"` : '';
+  return `
+    <div class="${cls}" ${onclick}>
+      <svg class="file-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+      <span class="file-name" title="${safePath}">${safePath}</span>
+      <span class="file-size">${sz}</span>
+    </div>
+  `;
 }
 
 async function previewArtifact(jobId, path) {
@@ -580,12 +1009,13 @@ async function previewArtifact(jobId, path) {
   });
   if (!mount) return;
   const url = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(path);
+  const name = path.split('/').pop();
   if (/\.(png|jpe?g|gif|webp)$/i.test(path)) {
-    mount.innerHTML = `<img src="${url}" style="max-width:100%;border-radius:4px;margin-top:8px">`;
+    mount.innerHTML = `<div class="preview"><div class="preview-head"><span><b>${escapeHtml(name)}</b> · ${escapeHtml(path)}</span><button class="preview-close" onclick="this.closest('.preview').remove()">x</button></div><img src="${url}" alt="${escapeHtml(name)}"></div>`;
     return;
   }
   if (/\.mp4$/i.test(path)) {
-    mount.innerHTML = `<video src="${url}" controls style="width:100%;margin-top:8px;border-radius:4px"></video>`;
+    mount.innerHTML = `<div class="preview"><div class="preview-head"><span><b>${escapeHtml(name)}</b> · ${escapeHtml(path)}</span><button class="preview-close" onclick="this.closest('.preview').remove()">x</button></div><video src="${url}" controls></video></div>`;
     return;
   }
   try {
@@ -595,14 +1025,39 @@ async function previewArtifact(jobId, path) {
     if (/\.json$/i.test(path)) {
       try { formatted = JSON.stringify(JSON.parse(txt), null, 2); } catch (e) {}
     }
-    mount.innerHTML = `<pre class="dump">${escapeHtml(formatted.slice(0, 8000))}${txt.length > 8000 ? '\n…(truncated)' : ''}</pre>`;
+    const truncMark = txt.length > 8000 ? ' (truncated)' : '';
+    mount.innerHTML = `<div class="preview"><div class="preview-head"><span><b>${escapeHtml(name)}</b> · ${escapeHtml(path)}</span><button class="preview-close" onclick="this.closest('.preview').remove()">x</button></div><pre>${escapeHtml(formatted.slice(0, 8000))}${truncMark}</pre></div>`;
   } catch (e) {
-    mount.innerHTML = `<div style="color:#d65d4a;font-size:11px;margin-top:6px">${e.message}</div>`;
+    mount.innerHTML = `<div class="preview"><div class="preview-head"><span>${escapeHtml(path)}</span></div><pre>${escapeHtml(e.message)}</pre></div>`;
   }
 }
 
 function escapeHtml(s) {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
+}
+
+function escapeJs(s) {
+  return String(s).replace(/\\\\/g, '\\\\\\\\').replace(/'/g, "\\\\'").replace(/\\n/g, '\\\\n').replace(/\\r/g, '');
+}
+
+function checkIcon() {
+  return '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+}
+
+function xIcon() {
+  return '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"></line><line x1="18" y1="6" x2="6" y2="18"></line></svg>';
+}
+
+function statusText(status) {
+  if (status === 'completed') return 'done';
+  if (status === 'in_progress') return 'running';
+  if (status === 'failed') return 'failed';
+  return 'waiting';
 }
 
 async function renderFinal(t) {
@@ -616,34 +1071,32 @@ async function renderFinal(t) {
     const sr = await fetch('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=seo.json');
     if (sr.ok) seo = await sr.json();
   } catch (e) {}
-  const tags = (seo.tags || []).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join('');
+  const tags = (seo.tags || []).map(t => `<span class="tag-chip">${escapeHtml(t)}</span>`).join('');
   mount.innerHTML = `
-    <div class="final-block">
-      <h2 style="margin-top:0;color:#4ad67a">🎬 Video sẵn sàng đăng YouTube</h2>
+    <div class="final">
+      <div class="final-title"><span>Final output</span><span class="badge">ready</span></div>
       <video src="${videoUrl}" controls></video>
-      <div style="margin-top:14px">
-        <div class="thumb">
-          <div class="meta-line">Thumbnail:</div>
-          <img src="${thumbUrl}" alt="thumbnail">
+      <div class="final-cols">
+        <div>
+          <img class="thumb-img" src="${thumbUrl}" alt="thumbnail">
+          <a class="download-link" href="${videoUrl}" download>Download video.mp4</a>
         </div>
-        <div style="display:inline-block;width:calc(100% - 270px);vertical-align:top">
-          <div class="meta-line">Title (${(seo.title||'').length} chars):</div>
-          <div class="copybox">
-            <button class="copybtn" onclick="copyText(this,'${(seo.title||'').replace(/'/g,"\\'").replace(/\n/g,' ')}')">copy</button>
-            ${escapeHtml(seo.title || '(missing)')}
+        <div>
+          <div class="copy-row">
+            <div class="crh"><div class="cr-label">Title <span class="count">${(seo.title || '').length}/100</span></div><button class="copy-btn" data-clip="${escapeHtml((seo.title||'').replace(/\\n/g,' '))}" onclick="copyText(this, this.dataset.clip)">copy</button></div>
+            <div class="copy-content">${escapeHtml(seo.title || '(missing)')}</div>
           </div>
-          <div class="meta-line">Description (${(seo.description||'').length} chars):</div>
-          <div class="copybox" style="max-height:200px;overflow:auto">
-            <button class="copybtn" onclick="copyText(this, document.getElementById('seo-desc').innerText)">copy</button>
-            <span id="seo-desc">${escapeHtml(seo.description || '(missing)')}</span>
+          <div class="copy-row">
+            <div class="crh"><div class="cr-label">Description <span class="count">${(seo.description || '').length} chars</span></div><button class="copy-btn" onclick="copyText(this, document.getElementById('seo-desc').innerText)">copy</button></div>
+            <div class="copy-content scroll" id="seo-desc">${escapeHtml(seo.description || '(missing)')}</div>
           </div>
-          <div class="meta-line">Tags (${(seo.tags||[]).length}):</div>
-          <div class="copybox">
-            <button class="copybtn" onclick="copyText(this, '${(seo.tags||[]).join(', ').replace(/'/g,"\\'")}')">copy</button>
-            ${tags || '(missing)'}
+          <div class="copy-row">
+            <div class="crh"><div class="cr-label">Tags <span class="count">${(seo.tags || []).length}</span></div><button class="copy-btn" data-clip="${escapeHtml((seo.tags || []).join(', '))}" onclick="copyText(this, this.dataset.clip)">copy</button></div>
+            <div class="tag-chips">${tags || '<span class="tag-chip">(missing)</span>'}</div>
           </div>
-          <div class="meta-line">Language: ${seo.language || '?'} · AI disclosure: ${seo.ai_disclosure ? 'yes' : 'no'}</div>
-          <a href="${videoUrl}" download style="display:inline-block;margin-top:8px;color:#4a78d6;font-size:12px">⬇️ tải video.mp4</a>
+          <div class="copy-row">
+            <div class="copy-content">Language: ${escapeHtml(seo.language || '?')} · AI disclosure: ${seo.ai_disclosure ? 'yes' : 'no'}</div>
+          </div>
         </div>
       </div>
     </div>
@@ -651,10 +1104,13 @@ async function renderFinal(t) {
 }
 
 function copyText(btn, text) {
-  navigator.clipboard.writeText(text).then(() => {
+  navigator.clipboard.writeText(text || '').then(() => {
     const orig = btn.textContent;
     btn.textContent = 'copied!';
+    btn.classList.add('copied');
+    showToast('Copied to clipboard');
     setTimeout(() => btn.textContent = orig, 1200);
+    setTimeout(() => btn.classList.remove('copied'), 1200);
   });
 }
 
@@ -664,9 +1120,9 @@ function reopenWs(jobId) {
   WS = new WebSocket(`${proto}//${location.host}/jobs/${jobId}/events`);
   const dot = document.getElementById('ws-dot');
   const label = document.getElementById('ws-label');
-  WS.onopen = () => { dot.className = 'ws-indicator live'; label.textContent = 'live'; };
-  WS.onclose = () => { dot.className = 'ws-indicator off'; label.textContent = 'disconnected'; };
-  WS.onerror = () => { dot.className = 'ws-indicator off'; label.textContent = 'error'; };
+  WS.onopen = () => { dot.className = 'ws-dot live'; label.textContent = 'live'; };
+  WS.onclose = () => { dot.className = 'ws-dot off'; label.textContent = 'disconnected'; };
+  WS.onerror = () => { dot.className = 'ws-dot off'; label.textContent = 'error'; };
   WS.onmessage = (msg) => {
     try {
       const ev = JSON.parse(msg.data);
@@ -676,18 +1132,35 @@ function reopenWs(jobId) {
   };
 }
 
+function toggleEvents() {
+  EVENTS_OPEN = !EVENTS_OPEN;
+  const panel = document.getElementById('events-panel');
+  if (panel) panel.classList.toggle('open', EVENTS_OPEN);
+}
+
 function appendEvent(ev) {
   const root = document.getElementById('events');
   if (!root) return;
   const div = document.createElement('div');
-  div.className = 'ev';
+  div.className = 'ev-row';
   const ts = (ev.ts || '').slice(11, 19);
   const stage = (ev.data && ev.data.stage) ? ev.data.stage : '';
-  div.innerHTML = `<span class="ev-ts">${ts}</span><span class="ev-kind ${ev.event}">${ev.event}</span><span class="ev-stage">${stage}</span>`;
+  div.innerHTML = `<span class="ts">${escapeHtml(ts)}</span><span class="ev-kind ${escapeHtml(ev.event)}">${escapeHtml(ev.event)}</span><span class="ev-stage">${escapeHtml(STAGE_LABEL[stage] || stage)}</span>`;
   root.appendChild(div);
+  const count = document.getElementById('events-count');
+  if (count) count.textContent = root.children.length + ' events';
   root.scrollTop = root.scrollHeight;
 }
 
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => t.classList.remove('show'), 1600);
+}
+
+document.getElementById('refresh-btn').onclick = fetchJobs;
 fetchJobs();
 setInterval(fetchJobs, 4000);
 </script>

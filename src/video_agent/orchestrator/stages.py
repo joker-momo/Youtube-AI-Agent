@@ -8,9 +8,11 @@ from video_agent.operator import (
     _chatgpt_seo_prompt,
     _chatgpt_script_prompt,
     promote_operator_artifact,
+    write_operator_review,
 )
 from video_agent.orchestrator.job_state import load_job, save_job
 from video_agent.orchestrator.orchestrator import _now
+from video_agent.pipeline import OperatorRenderOptions, render_operator_job
 from video_agent.utils.json_io import read_json, read_yaml
 from video_agent.utils.logging import EventLogger
 
@@ -226,3 +228,45 @@ def promote_seo_stage(job_dir: Path, channel_path: Path, raw_response: str) -> P
 
     _complete_stage(job_dir, "seo_promote", result.output_path)
     return result.output_path
+
+
+def run_render_stage(job_dir: Path, channel_path: Path) -> Path:
+    state = load_job(job_dir)
+    if state.current_stage != "render":
+        raise StageInputMissingError(
+            f"Cannot run render stage from current_stage={state.current_stage!r}"
+        )
+    if not channel_path.exists():
+        raise StageInputMissingError(f"Missing channel config {channel_path}")
+
+    try:
+        render_operator_job(
+            OperatorRenderOptions(
+                channel_path=channel_path,
+                job_dir=job_dir,
+                render=True,
+                require_operator_qa=False,
+            )
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        raise StageInputMissingError(str(exc)) from exc
+
+    output_path = job_dir / "video.mp4"
+    _complete_stage(job_dir, "render", output_path)
+    return output_path
+
+
+def run_review_stage(job_dir: Path) -> Path:
+    state = load_job(job_dir)
+    if state.current_stage != "review":
+        raise StageInputMissingError(
+            f"Cannot run review stage from current_stage={state.current_stage!r}"
+        )
+
+    try:
+        output_path = write_operator_review(job_dir)
+    except (FileNotFoundError, ValueError) as exc:
+        raise StageInputMissingError(str(exc)) from exc
+
+    _complete_stage(job_dir, "review", output_path)
+    return output_path

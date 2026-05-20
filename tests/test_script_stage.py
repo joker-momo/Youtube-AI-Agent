@@ -19,9 +19,11 @@ from video_agent.orchestrator.stages import (
     promote_scenes_stage,
     promote_seo_stage,
     promote_script_stage,
+    run_render_stage,
     run_scenes_stage,
     run_seo_stage,
     run_script_stage,
+    run_review_stage,
 )
 from video_agent.web.app import app, get_channel_path, get_jobs_root
 
@@ -400,6 +402,92 @@ def test_promote_seo_stage_rejects_stale_raw_response(
     assert not (job_dir / "seo.json").exists()
 
 
+def test_run_render_stage_uses_operator_render_without_qa_gate(
+    tmp_path: Path,
+    channel_path: Path,
+    idea_payload: dict,
+    valid_script_payload: dict,
+    valid_scenes_payload: dict,
+    valid_seo_payload: dict,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    job_dir = tmp_path / "job-s1"
+    _prepare_promoted_scenes(
+        job_dir, channel_path, idea_payload, valid_script_payload, valid_scenes_payload
+    )
+    run_seo_stage(job_dir, channel_path)
+    promote_seo_stage(job_dir, channel_path, raw_response=json.dumps(valid_seo_payload))
+    calls = []
+
+    def fake_render_operator_job(options):
+        calls.append(options)
+        for filename in [
+            "render_props.json",
+            "visual_review.json",
+            "visual_contact_sheet.jpg",
+            "thumbnail.jpg",
+            "video.mp4",
+            "report.md",
+        ]:
+            (job_dir / filename).write_text("ok", encoding="utf-8")
+        return object()
+
+    monkeypatch.setattr("video_agent.orchestrator.stages.render_operator_job", fake_render_operator_job)
+
+    output = run_render_stage(job_dir, channel_path)
+
+    assert output == job_dir / "video.mp4"
+    assert calls[0].channel_path == channel_path
+    assert calls[0].job_dir == job_dir
+    assert calls[0].render is True
+    assert calls[0].require_operator_qa is False
+    state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    assert state["current_stage"] == "review"
+    render_stage = next(s for s in state["stages"] if s["name"] == "render")
+    assert render_stage["status"] == "completed"
+
+
+def test_run_review_stage_writes_review_and_completes_job(
+    tmp_path: Path,
+    channel_path: Path,
+    idea_payload: dict,
+    valid_script_payload: dict,
+    valid_scenes_payload: dict,
+    valid_seo_payload: dict,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    job_dir = tmp_path / "job-s1"
+    _prepare_promoted_scenes(
+        job_dir, channel_path, idea_payload, valid_script_payload, valid_scenes_payload
+    )
+    run_seo_stage(job_dir, channel_path)
+    promote_seo_stage(job_dir, channel_path, raw_response=json.dumps(valid_seo_payload))
+    state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    next(s for s in state["stages"] if s["name"] == "render")["status"] = "completed"
+    state["current_stage"] = "review"
+    (job_dir / "job.json").write_text(json.dumps(state), encoding="utf-8")
+
+    def fake_write_operator_review(actual_job_dir):
+        output = actual_job_dir / "operator_review.html"
+        output.write_text("<html>review</html>", encoding="utf-8")
+        return output
+
+    monkeypatch.setattr("video_agent.orchestrator.stages.write_operator_review", fake_write_operator_review)
+
+    output = run_review_stage(job_dir)
+
+    assert output == job_dir / "operator_review.html"
+    state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    assert state["current_stage"] == "review"
+    assert all(s["status"] == "completed" for s in state["stages"])
+    events = [
+        json.loads(line)
+        for line in (job_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert events[-1]["event"] == "JOB_COMPLETED"
+
+
 @pytest.fixture
 def client(tmp_path: Path, channel_path: Path):
     app.dependency_overrides[get_jobs_root] = lambda: tmp_path
@@ -625,6 +713,105 @@ def test_post_promote_seo_invalid_raw_returns_409(
 
     assert response.status_code == 409
     assert "job_id mismatch" in response.json()["detail"]
+
+
+def test_post_run_render_via_http(
+    client: TestClient,
+    idea_payload: dict,
+    valid_script_payload: dict,
+    valid_scenes_payload: dict,
+    valid_seo_payload: dict,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _create_job(client, "job-s1")
+    client.post("/jobs/job-s1/idea", json=idea_payload)
+    client.post("/jobs/job-s1/stages/script/run")
+    client.post(
+        "/jobs/job-s1/stages/script/promote",
+        json={"raw_response": json.dumps(valid_script_payload, ensure_ascii=False)},
+    )
+    client.post("/jobs/job-s1/stages/scenes/run")
+    client.post(
+        "/jobs/job-s1/stages/scenes/promote",
+        json={"raw_response": json.dumps(valid_scenes_payload, ensure_ascii=False)},
+    )
+    client.post("/jobs/job-s1/stages/seo/run")
+    client.post(
+        "/jobs/job-s1/stages/seo/promote",
+        json={"raw_response": json.dumps(valid_seo_payload, ensure_ascii=False)},
+    )
+
+    def fake_render_operator_job(options):
+        for filename in [
+            "render_props.json",
+            "visual_review.json",
+            "visual_contact_sheet.jpg",
+            "thumbnail.jpg",
+            "video.mp4",
+            "report.md",
+        ]:
+            (options.job_dir / filename).write_text("ok", encoding="utf-8")
+        return object()
+
+    monkeypatch.setattr("video_agent.orchestrator.stages.render_operator_job", fake_render_operator_job)
+
+    response = client.post("/jobs/job-s1/stages/render/run")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["output"] == "video.mp4"
+    render_stage = next(s for s in body["state"]["stages"] if s["name"] == "render")
+    assert render_stage["status"] == "completed"
+    assert body["state"]["current_stage"] == "review"
+
+
+def test_post_run_review_via_http(
+    client: TestClient,
+    idea_payload: dict,
+    valid_script_payload: dict,
+    valid_scenes_payload: dict,
+    valid_seo_payload: dict,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _create_job(client, "job-s1")
+    client.post("/jobs/job-s1/idea", json=idea_payload)
+    client.post("/jobs/job-s1/stages/script/run")
+    client.post(
+        "/jobs/job-s1/stages/script/promote",
+        json={"raw_response": json.dumps(valid_script_payload, ensure_ascii=False)},
+    )
+    client.post("/jobs/job-s1/stages/scenes/run")
+    client.post(
+        "/jobs/job-s1/stages/scenes/promote",
+        json={"raw_response": json.dumps(valid_scenes_payload, ensure_ascii=False)},
+    )
+    client.post("/jobs/job-s1/stages/seo/run")
+    client.post(
+        "/jobs/job-s1/stages/seo/promote",
+        json={"raw_response": json.dumps(valid_seo_payload, ensure_ascii=False)},
+    )
+
+    def fake_render_operator_job(options):
+        (options.job_dir / "video.mp4").write_text("ok", encoding="utf-8")
+        return object()
+
+    def fake_write_operator_review(job_dir):
+        output = job_dir / "operator_review.html"
+        output.write_text("<html>review</html>", encoding="utf-8")
+        return output
+
+    monkeypatch.setattr("video_agent.orchestrator.stages.render_operator_job", fake_render_operator_job)
+    monkeypatch.setattr("video_agent.orchestrator.stages.write_operator_review", fake_write_operator_review)
+    client.post("/jobs/job-s1/stages/render/run")
+
+    response = client.post("/jobs/job-s1/stages/review/run")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["output"] == "operator_review.html"
+    review_stage = next(s for s in body["state"]["stages"] if s["name"] == "review")
+    assert review_stage["status"] == "completed"
+    assert all(s["status"] == "completed" for s in body["state"]["stages"])
 
 
 def test_post_promote_script_invalid_raw_returns_409(

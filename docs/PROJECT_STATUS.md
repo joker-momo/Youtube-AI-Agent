@@ -1,6 +1,6 @@
 # Youtube AI Agent Project Status
 
-Last updated: 2026-05-20 (V3 Phase 1 Step 8 implemented and Docker-verified)
+Last updated: 2026-05-20 (V3 Phase 1 Step 9 implemented and Docker-verified)
 
 This file is the living project tracker. Update it whenever a meaningful system capability is added, changed, verified, or deferred so a new reader can quickly understand what the system does, what is being built now, and what remains.
 
@@ -170,6 +170,18 @@ Decisions already chosen:
 - Tests were added for direct SEO prompt generation, missing-scenes guard, direct SEO promotion, stale `job_id` rejection, HTTP run, HTTP promotion, and HTTP 409 on invalid raw output.
 - Docker verification passed: `docker compose run --rm video-agent pytest -q` -> `101 passed in 15.61s`.
 
+### V3 Phase 1 Step 9 Render + Review Stages
+
+- `src/video_agent/orchestrator/stages.py` exposes `run_render_stage(job_dir, channel_path)` and `run_review_stage(job_dir)`.
+- `run_render_stage` reuses the existing operator render pipeline via `render_operator_job(OperatorRenderOptions(...))`, with `require_operator_qa=False` so V3 can complete the first end-to-end render path before Gemini QA stages are ported.
+- `run_render_stage` writes the existing render artifacts (`render_props.json`, `visual_review.json`, `visual_contact_sheet.jpg`, `thumbnail.jpg`, `video.mp4`, `report.md`, and `operator_review.html` through the operator pipeline), emits `STAGE_COMPLETED`, and advances `current_stage` to `review`.
+- `run_review_stage` refreshes `operator_review.html` through `write_operator_review`, emits `STAGE_COMPLETED`, and completes the V3 job.
+- FastAPI exposes:
+  - `POST /jobs/{job_id}/stages/render/run`
+  - `POST /jobs/{job_id}/stages/review/run`
+- Tests were added for direct render stage behavior, QA-gate bypass, direct review completion, HTTP render, and HTTP review.
+- Docker verification passed: `docker compose run --rm video-agent pytest -q` -> `105 passed in 14.52s`.
+
 ## Target V3 Architecture
 
 ```text
@@ -234,7 +246,7 @@ Latest full verification:
 
 ```text
 docker compose run --rm video-agent pytest -q
-101 passed in 15.61s
+105 passed in 14.52s
 ```
 
 ## Fresh Operator Run
@@ -310,7 +322,7 @@ The command will either:
 
 ## Not Yet Done
 
-- V3 FastAPI app runs the `script`, `scenes`, and `seo` stages end-to-end; `render` and `review` stages still advance through stubs.
+- V3 FastAPI app runs the `script`, `scenes`, `seo`, `render`, and `review` stages end-to-end from promoted artifacts.
 - Browser-worker has health and CDP diagnostic routes, but no ChatGPT/Gemini/vidIQ/image-generation drivers yet.
 - ChatGPT/Gemini/vidIQ browser automation is not yet packaged into a service.
 - WebSocket progress UI and `events.jsonl` replay are not implemented yet.
@@ -321,9 +333,9 @@ The command will either:
 
 ## Next Recommended Work
 
-V3 Phase 1 Steps 1-8 complete (health + orchestrator + job HTTP/WS + CDP diagnostic + script/scenes/SEO prompt+promote stages; 101/101 tests green). Next:
+V3 Phase 1 Steps 1-9 complete (health + orchestrator + job HTTP/WS + CDP diagnostic + script/scenes/SEO prompt+promote stages + render/review stages; 105/105 tests green). Next:
 
-1. Commit Step 8.
-2. V3 Phase 1 Step 9 — wire `render` and `review` into the orchestrator; reuse existing render pipeline.
-3. Browser-worker driver work (ChatGPT/Gemini/vidIQ Playwright flows) tracked separately under Step 10.
-4. Smoke-test the host Chrome path with `scripts/launch-chrome-cdp.sh` + `GET /chrome` before depending on the browser-worker.
+1. Commit Step 9.
+2. Browser-worker driver work (ChatGPT/Gemini/vidIQ Playwright flows) tracked separately under Step 10.
+3. Smoke-test the host Chrome path with `scripts/launch-chrome-cdp.sh` + `GET /chrome` before depending on the browser-worker.
+4. Add Gemini QA stages once the render path is usable through the web app.

@@ -11,12 +11,16 @@ from video_agent.orchestrator import create_job
 from video_agent.orchestrator.stages import (
     SCENES_PROMPT_PATH,
     SCENES_RAW_PATH,
+    SEO_PROMPT_PATH,
+    SEO_RAW_PATH,
     SCRIPT_PROMPT_PATH,
     SCRIPT_RAW_PATH,
     StageInputMissingError,
     promote_scenes_stage,
+    promote_seo_stage,
     promote_script_stage,
     run_scenes_stage,
+    run_seo_stage,
     run_script_stage,
 )
 from video_agent.web.app import app, get_channel_path, get_jobs_root
@@ -84,6 +88,25 @@ def valid_scenes_payload() -> dict:
     }
 
 
+@pytest.fixture
+def valid_seo_payload() -> dict:
+    return {
+        "job_id": "job-s1",
+        "title": "Duerme Mejor Con Un Hábito Sencillo",
+        "description": "Una guía breve de Vida Plena 45+ para preparar el descanso con calma.",
+        "tags": [
+            "sueño saludable",
+            "descanso",
+            "bienestar 45+",
+            "hábitos saludables",
+            "vida plena",
+        ],
+        "language": "es-419",
+        "ai_disclosure": True,
+        "thumbnail_path": "thumbnail.jpg",
+    }
+
+
 def _prepare_promoted_script(
     job_dir: Path,
     channel_path: Path,
@@ -99,6 +122,22 @@ def _prepare_promoted_script(
         job_dir,
         channel_path,
         raw_response=json.dumps(valid_script_payload, ensure_ascii=False),
+    )
+
+
+def _prepare_promoted_scenes(
+    job_dir: Path,
+    channel_path: Path,
+    idea_payload: dict,
+    valid_script_payload: dict,
+    valid_scenes_payload: dict,
+) -> None:
+    _prepare_promoted_script(job_dir, channel_path, idea_payload, valid_script_payload)
+    run_scenes_stage(job_dir, channel_path)
+    promote_scenes_stage(
+        job_dir,
+        channel_path,
+        raw_response=json.dumps(valid_scenes_payload, ensure_ascii=False),
     )
 
 
@@ -269,6 +308,98 @@ def test_promote_scenes_stage_rejects_stale_raw_response(
     assert not (job_dir / "scenes.json").exists()
 
 
+def test_run_seo_stage_writes_prompt(
+    tmp_path: Path,
+    channel_path: Path,
+    idea_payload: dict,
+    valid_script_payload: dict,
+    valid_scenes_payload: dict,
+):
+    job_dir = tmp_path / "job-s1"
+    _prepare_promoted_scenes(
+        job_dir, channel_path, idea_payload, valid_script_payload, valid_scenes_payload
+    )
+
+    output = run_seo_stage(job_dir, channel_path)
+
+    assert output == job_dir / SEO_PROMPT_PATH
+    assert output.exists()
+    text = output.read_text(encoding="utf-8")
+    assert "SEO artifact" in text
+    assert valid_script_payload["narration"] in text
+    assert valid_scenes_payload["scenes"][0]["visual_prompt"] in text
+    state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    assert state["current_stage"] == "seo_promote"
+
+
+def test_run_seo_stage_missing_scenes_raises(
+    tmp_path: Path,
+    channel_path: Path,
+    idea_payload: dict,
+    valid_script_payload: dict,
+):
+    job_dir = tmp_path / "job-s1"
+    _prepare_promoted_script(job_dir, channel_path, idea_payload, valid_script_payload)
+    state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    state["current_stage"] = "seo"
+    (job_dir / "job.json").write_text(json.dumps(state), encoding="utf-8")
+
+    with pytest.raises(StageInputMissingError, match="scenes.json"):
+        run_seo_stage(job_dir, channel_path)
+
+
+def test_promote_seo_stage_writes_raw_and_promoted_seo(
+    tmp_path: Path,
+    channel_path: Path,
+    idea_payload: dict,
+    valid_script_payload: dict,
+    valid_scenes_payload: dict,
+    valid_seo_payload: dict,
+):
+    job_dir = tmp_path / "job-s1"
+    _prepare_promoted_scenes(
+        job_dir, channel_path, idea_payload, valid_script_payload, valid_scenes_payload
+    )
+    run_seo_stage(job_dir, channel_path)
+
+    output = promote_seo_stage(
+        job_dir,
+        channel_path,
+        raw_response=f"```json\n{json.dumps(valid_seo_payload, ensure_ascii=False)}\n```",
+    )
+
+    assert output == job_dir / "seo.json"
+    assert output.exists()
+    assert (job_dir / SEO_RAW_PATH).exists()
+    promoted = json.loads(output.read_text(encoding="utf-8"))
+    assert promoted["job_id"] == "job-s1"
+    state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    assert state["current_stage"] == "render"
+    seo_promote = next(s for s in state["stages"] if s["name"] == "seo_promote")
+    assert seo_promote["status"] == "completed"
+
+
+def test_promote_seo_stage_rejects_stale_raw_response(
+    tmp_path: Path,
+    channel_path: Path,
+    idea_payload: dict,
+    valid_script_payload: dict,
+    valid_scenes_payload: dict,
+    valid_seo_payload: dict,
+):
+    job_dir = tmp_path / "job-s1"
+    _prepare_promoted_scenes(
+        job_dir, channel_path, idea_payload, valid_script_payload, valid_scenes_payload
+    )
+    run_seo_stage(job_dir, channel_path)
+    stale_payload = {**valid_seo_payload, "job_id": "old-job"}
+
+    with pytest.raises(StageInputMissingError, match="job_id mismatch"):
+        promote_seo_stage(job_dir, channel_path, raw_response=json.dumps(stale_payload))
+
+    assert not (job_dir / "seo.json").exists()
+
+
 @pytest.fixture
 def client(tmp_path: Path, channel_path: Path):
     app.dependency_overrides[get_jobs_root] = lambda: tmp_path
@@ -395,6 +526,100 @@ def test_post_promote_scenes_invalid_raw_returns_409(
 
     response = client.post(
         "/jobs/job-s1/stages/scenes/promote",
+        json={"raw_response": json.dumps(stale_payload, ensure_ascii=False)},
+    )
+
+    assert response.status_code == 409
+    assert "job_id mismatch" in response.json()["detail"]
+
+
+def test_post_run_seo_via_http(
+    client: TestClient,
+    idea_payload: dict,
+    valid_script_payload: dict,
+    valid_scenes_payload: dict,
+):
+    _create_job(client, "job-s1")
+    client.post("/jobs/job-s1/idea", json=idea_payload)
+    client.post("/jobs/job-s1/stages/script/run")
+    client.post(
+        "/jobs/job-s1/stages/script/promote",
+        json={"raw_response": json.dumps(valid_script_payload, ensure_ascii=False)},
+    )
+    client.post("/jobs/job-s1/stages/scenes/run")
+    client.post(
+        "/jobs/job-s1/stages/scenes/promote",
+        json={"raw_response": json.dumps(valid_scenes_payload, ensure_ascii=False)},
+    )
+
+    response = client.post("/jobs/job-s1/stages/seo/run")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["output"] == "operator/chatgpt/seo_prompt.md"
+    seo_stage = next(s for s in body["state"]["stages"] if s["name"] == "seo")
+    assert seo_stage["status"] == "completed"
+    assert body["state"]["current_stage"] == "seo_promote"
+
+
+def test_post_promote_seo_via_http(
+    client: TestClient,
+    idea_payload: dict,
+    valid_script_payload: dict,
+    valid_scenes_payload: dict,
+    valid_seo_payload: dict,
+):
+    _create_job(client, "job-s1")
+    client.post("/jobs/job-s1/idea", json=idea_payload)
+    client.post("/jobs/job-s1/stages/script/run")
+    client.post(
+        "/jobs/job-s1/stages/script/promote",
+        json={"raw_response": json.dumps(valid_script_payload, ensure_ascii=False)},
+    )
+    client.post("/jobs/job-s1/stages/scenes/run")
+    client.post(
+        "/jobs/job-s1/stages/scenes/promote",
+        json={"raw_response": json.dumps(valid_scenes_payload, ensure_ascii=False)},
+    )
+    client.post("/jobs/job-s1/stages/seo/run")
+
+    response = client.post(
+        "/jobs/job-s1/stages/seo/promote",
+        json={"raw_response": json.dumps(valid_seo_payload, ensure_ascii=False)},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["output"] == "seo.json"
+    seo_promote = next(s for s in body["state"]["stages"] if s["name"] == "seo_promote")
+    assert seo_promote["status"] == "completed"
+    assert body["state"]["current_stage"] == "render"
+
+
+def test_post_promote_seo_invalid_raw_returns_409(
+    client: TestClient,
+    idea_payload: dict,
+    valid_script_payload: dict,
+    valid_scenes_payload: dict,
+    valid_seo_payload: dict,
+):
+    _create_job(client, "job-s1")
+    client.post("/jobs/job-s1/idea", json=idea_payload)
+    client.post("/jobs/job-s1/stages/script/run")
+    client.post(
+        "/jobs/job-s1/stages/script/promote",
+        json={"raw_response": json.dumps(valid_script_payload, ensure_ascii=False)},
+    )
+    client.post("/jobs/job-s1/stages/scenes/run")
+    client.post(
+        "/jobs/job-s1/stages/scenes/promote",
+        json={"raw_response": json.dumps(valid_scenes_payload, ensure_ascii=False)},
+    )
+    client.post("/jobs/job-s1/stages/seo/run")
+    stale_payload = {**valid_seo_payload, "job_id": "old-job"}
+
+    response = client.post(
+        "/jobs/job-s1/stages/seo/promote",
         json={"raw_response": json.dumps(stale_payload, ensure_ascii=False)},
     )
 

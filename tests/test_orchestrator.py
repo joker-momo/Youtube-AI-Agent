@@ -63,6 +63,7 @@ def test_advance_progresses_through_stages(tmp_path: Path):
     assert state.current_stage == DEFAULT_STAGES[1]
     assert DEFAULT_STAGES[1] == "script_promote"
     assert DEFAULT_STAGES[3] == "scenes_promote"
+    assert DEFAULT_STAGES[5] == "seo_promote"
 
     # walk through remaining stages
     for _ in range(len(DEFAULT_STAGES) * 2):

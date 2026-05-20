@@ -1,6 +1,6 @@
 # Youtube AI Agent Project Status
 
-Last updated: 2026-05-20 (Gemini driver switched to temporary chat)
+Last updated: 2026-05-20 (Auto pipeline live: script + scenes + seo zero-touch)
 
 This file is the living project tracker. Update it whenever a meaningful system capability is added, changed, verified, or deferred so a new reader can quickly understand what the system does, what is being built now, and what remains.
 
@@ -309,6 +309,54 @@ Decisions already chosen:
   `chatgpt.com/?model=gpt-4o&temporary-chat=true`. Both drivers now
   avoid polluting the operator's permanent chat history.
 - Docker verification: `116 passed in 14.69s`.
+
+### V3 Phase 1 Step 12 Auto pipeline (orchestrator -> browser-worker)
+
+- New module `src/video_agent/orchestrator/browser_client.py` exposes
+  `BrowserClient`, `BrowserClientError`, and `LoginRequiredFromWorker`.
+  The client wraps `POST {site}/send` on the browser-worker and reads
+  `BROWSER_WORKER_URL` (default `http://browser-worker:8001`).
+- `src/video_agent/orchestrator/stages.py` adds `PromptFn` type alias
+  plus three async helpers:
+  - `auto_script_stage(job_dir, channel_path, prompt_fn)`
+  - `auto_scenes_stage(job_dir, channel_path, prompt_fn)`
+  - `auto_seo_stage(job_dir, channel_path, prompt_fn)`
+  
+  Each runs the prompt stage if needed, fetches the model response via
+  `prompt_fn`, then promotes through the existing v2 validators. The
+  helpers prepend an "ABSOLUTE CONSTRAINT" line to the prompt that
+  injects the real `job_id` and `channel_id`, because ChatGPT was
+  otherwise inventing a different job_id that the promoter rejects
+  with `job_id mismatch`.
+- FastAPI exposes:
+  - `POST /jobs/{job_id}/stages/script/auto`
+  - `POST /jobs/{job_id}/stages/scenes/auto`
+  - `POST /jobs/{job_id}/stages/seo/auto`
+  
+  Errors map to HTTP: stage misuse / empty worker response -> `409`,
+  worker login required -> `409 {login_required: true}`, worker
+  selector failure or other 5xx -> `502 {browser_worker_status,
+  browser_worker_detail}`.
+- New `tests/test_auto_stages.py` (12 tests) covers happy path for all
+  three stages, skip-runner-when-already-promote, empty response,
+  wrong-stage guard, HTTP success, HTTP 409 login-required, HTTP 502
+  worker error, HTTP 404 unknown job, and BrowserClient base-URL
+  defaults/override.
+- Live end-to-end verification with the user signed in via noVNC and
+  the Browser Appliance up:
+  - `POST /jobs/auto-1779250210/stages/script/auto` ->
+    `current_stage: scenes`, `output: script.json`
+  - `POST .../scenes/auto` -> `current_stage: seo`, `output: scenes.json`
+  - `POST .../seo/auto` -> `current_stage: render`, `output: seo.json`
+  - Final state: `script`, `script_promote`, `scenes`, `scenes_promote`,
+    `seo`, `seo_promote` all `completed`; `render` and `review`
+    pending.
+  - Real Spanish artifacts written: `jobs/auto-1779250210/script.json`,
+    `scenes.json`, `seo.json` with the correct `job_id`, valid
+    `es-419` SEO, and channel-appropriate hooks.
+  - Zero copy-paste between ChatGPT/Gemini and the orchestrator.
+- Docker verification: `docker compose run --rm video-agent pytest -q`
+  -> `128 passed in 21.89s`.
 
 ## Target V3 Architecture
 

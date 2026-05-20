@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Awaitable, Callable
 
 from video_agent.contracts import EVENT_LOG
 from video_agent.operator import (
@@ -270,3 +271,118 @@ def run_review_stage(job_dir: Path) -> Path:
 
     _complete_stage(job_dir, "review", output_path)
     return output_path
+
+
+# ---------------------------------------------------------------------------
+# Auto-driven stages: orchestrator -> browser-worker -> ChatGPT.
+# ---------------------------------------------------------------------------
+
+PromptFn = Callable[[str], Awaitable[str]]
+"""Async callable: takes a prompt string, returns the raw model response."""
+
+
+async def _auto_run_then_promote(
+    *,
+    job_dir: Path,
+    channel_path: Path,
+    prompt_path: Path,
+    runner: Callable[[Path, Path], Path],
+    promoter: Callable[[Path, Path, str], Path],
+    prompt_fn: PromptFn,
+    run_stage_name: str,
+    promote_stage_name: str,
+) -> Path:
+    """Generic auto-stage: run the prompt stage, fetch raw via worker, promote.
+
+    The flow is split so the helper can recover when called after a
+    partial manual run. Specifically:
+
+    - If ``current_stage`` is the run stage (e.g. ``script``), invoke
+      the runner to write the prompt file and advance to the promote
+      stage.
+    - If ``current_stage`` is the promote stage, skip straight to
+      fetching + promoting using the existing prompt file.
+    - Any other ``current_stage`` raises ``StageInputMissingError``.
+    """
+    state = load_job(job_dir)
+    if state.current_stage == run_stage_name:
+        runner(job_dir, channel_path)
+        state = load_job(job_dir)
+    if state.current_stage != promote_stage_name:
+        raise StageInputMissingError(
+            f"Cannot auto-run {run_stage_name}/{promote_stage_name} from "
+            f"current_stage={state.current_stage!r}"
+        )
+
+    if not prompt_path.exists():
+        raise StageInputMissingError(f"Missing prompt file {prompt_path}")
+    prompt_text = prompt_path.read_text(encoding="utf-8")
+
+    # Inject the real job_id at the top of the prompt so the model
+    # cannot invent its own. Without this, promote_operator_artifact
+    # rejects the response with `job_id mismatch`.
+    state = load_job(job_dir)
+    prompt_text = (
+        f"ABSOLUTE CONSTRAINT: set `job_id` to exactly \"{state.job_id}\" "
+        f"and `channel_id` to exactly \"{state.channel_id}\" in your output. "
+        "Do not invent or shorten these values.\n\n" + prompt_text
+    )
+
+    raw_response = await prompt_fn(prompt_text)
+    if not isinstance(raw_response, str) or not raw_response.strip():
+        raise StageInputMissingError(
+            "browser-worker returned an empty response for "
+            f"{promote_stage_name}"
+        )
+    return promoter(job_dir, channel_path, raw_response)
+
+
+async def auto_script_stage(
+    job_dir: Path,
+    channel_path: Path,
+    prompt_fn: PromptFn,
+) -> Path:
+    return await _auto_run_then_promote(
+        job_dir=job_dir,
+        channel_path=channel_path,
+        prompt_path=job_dir / SCRIPT_PROMPT_PATH,
+        runner=run_script_stage,
+        promoter=promote_script_stage,
+        prompt_fn=prompt_fn,
+        run_stage_name="script",
+        promote_stage_name="script_promote",
+    )
+
+
+async def auto_scenes_stage(
+    job_dir: Path,
+    channel_path: Path,
+    prompt_fn: PromptFn,
+) -> Path:
+    return await _auto_run_then_promote(
+        job_dir=job_dir,
+        channel_path=channel_path,
+        prompt_path=job_dir / SCENES_PROMPT_PATH,
+        runner=run_scenes_stage,
+        promoter=promote_scenes_stage,
+        prompt_fn=prompt_fn,
+        run_stage_name="scenes",
+        promote_stage_name="scenes_promote",
+    )
+
+
+async def auto_seo_stage(
+    job_dir: Path,
+    channel_path: Path,
+    prompt_fn: PromptFn,
+) -> Path:
+    return await _auto_run_then_promote(
+        job_dir=job_dir,
+        channel_path=channel_path,
+        prompt_path=job_dir / SEO_PROMPT_PATH,
+        runner=run_seo_stage,
+        promoter=promote_seo_stage,
+        prompt_fn=prompt_fn,
+        run_stage_name="seo",
+        promote_stage_name="seo_promote",
+    )

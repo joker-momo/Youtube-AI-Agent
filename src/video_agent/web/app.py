@@ -16,10 +16,18 @@ from video_agent.orchestrator import (
     create_job,
     load_job,
 )
+from video_agent.orchestrator.browser_client import (
+    BrowserClient,
+    BrowserClientError,
+    LoginRequiredFromWorker,
+)
 from video_agent.orchestrator.orchestrator import StageError
 from video_agent.orchestrator.stages import (
     IDEA_FILE,
     StageInputMissingError,
+    auto_scenes_stage,
+    auto_script_stage,
+    auto_seo_stage,
     promote_scenes_stage,
     promote_seo_stage,
     promote_script_stage,
@@ -275,6 +283,95 @@ def post_run_review(
         output = run_review_stage(job_dir)
     except StageInputMissingError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    state = load_job(job_dir)
+    return {"output": str(output.relative_to(job_dir)), "state": state.to_dict()}
+
+
+def get_browser_client() -> BrowserClient:
+    """FastAPI dependency: returns the BrowserClient used by auto stages.
+
+    Tests override this with a fake to avoid hitting the real
+    ``browser-worker`` container.
+    """
+    return BrowserClient()
+
+
+def _handle_browser_client_error(exc: BrowserClientError) -> HTTPException:
+    if isinstance(exc, LoginRequiredFromWorker):
+        return HTTPException(
+            status_code=409,
+            detail={
+                "error": str(exc),
+                "browser_worker_detail": exc.detail,
+                "login_required": True,
+            },
+        )
+    return HTTPException(
+        status_code=502,
+        detail={
+            "error": str(exc),
+            "browser_worker_status": exc.status_code,
+            "browser_worker_detail": exc.detail,
+        },
+    )
+
+
+@app.post("/jobs/{job_id}/stages/script/auto")
+async def post_auto_script(
+    job_id: str,
+    jobs_root: Path = Depends(get_jobs_root),
+    channel_path: Path = Depends(get_channel_path),
+    client: BrowserClient = Depends(get_browser_client),
+) -> dict:
+    job_dir = jobs_root / job_id
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    try:
+        output = await auto_script_stage(job_dir, channel_path, client.chatgpt_send)
+    except StageInputMissingError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except BrowserClientError as exc:
+        raise _handle_browser_client_error(exc) from exc
+    state = load_job(job_dir)
+    return {"output": str(output.relative_to(job_dir)), "state": state.to_dict()}
+
+
+@app.post("/jobs/{job_id}/stages/scenes/auto")
+async def post_auto_scenes(
+    job_id: str,
+    jobs_root: Path = Depends(get_jobs_root),
+    channel_path: Path = Depends(get_channel_path),
+    client: BrowserClient = Depends(get_browser_client),
+) -> dict:
+    job_dir = jobs_root / job_id
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    try:
+        output = await auto_scenes_stage(job_dir, channel_path, client.chatgpt_send)
+    except StageInputMissingError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except BrowserClientError as exc:
+        raise _handle_browser_client_error(exc) from exc
+    state = load_job(job_dir)
+    return {"output": str(output.relative_to(job_dir)), "state": state.to_dict()}
+
+
+@app.post("/jobs/{job_id}/stages/seo/auto")
+async def post_auto_seo(
+    job_id: str,
+    jobs_root: Path = Depends(get_jobs_root),
+    channel_path: Path = Depends(get_channel_path),
+    client: BrowserClient = Depends(get_browser_client),
+) -> dict:
+    job_dir = jobs_root / job_id
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    try:
+        output = await auto_seo_stage(job_dir, channel_path, client.chatgpt_send)
+    except StageInputMissingError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except BrowserClientError as exc:
+        raise _handle_browser_client_error(exc) from exc
     state = load_job(job_dir)
     return {"output": str(output.relative_to(job_dir)), "state": state.to_dict()}
 

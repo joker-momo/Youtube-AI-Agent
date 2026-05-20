@@ -13,6 +13,22 @@ if TYPE_CHECKING:
 
 GEMINI_URL = "https://gemini.google.com/app"
 
+# Selectors that toggle Gemini's temporary chat (no history, no model
+# training). Tried in order; any visible match is clicked. If none
+# match (rollout/locale variation), the driver falls back to "New chat".
+TEMP_CHAT_TOGGLE_SELECTORS = (
+    "button[aria-label*='Temporary chat' i]",
+    "button[aria-label*='Temporary' i]",
+    "[data-test-id*='temporary' i]",
+    "button:has-text('Temporary chat')",
+)
+
+NEW_CHAT_SELECTORS = (
+    "a[aria-label*='New chat' i]",
+    "button[aria-label*='New chat' i]",
+    "button:has-text('New chat')",
+)
+
 COMPOSER_SELECTORS = (
     "rich-textarea div[contenteditable='true']",
     "[contenteditable='true'][role='textbox']",
@@ -54,6 +70,34 @@ async def _first_matching(page: "Page", selectors: tuple[str, ...], timeout_ms: 
     return None
 
 
+async def _try_click(page: "Page", selectors: tuple[str, ...], timeout_ms: int = 1500) -> bool:
+    """Best-effort click — returns True if any selector matched and clicked."""
+    for selector in selectors:
+        locator = page.locator(selector).first
+        try:
+            if await locator.is_visible(timeout=timeout_ms):
+                await locator.click(timeout=3000)
+                return True
+        except Exception:
+            continue
+    return False
+
+
+async def _enter_temporary_chat(page: "Page") -> None:
+    """Switch Gemini into temporary chat mode.
+
+    Tries the temporary-chat toggle first; if the rollout/locale does
+    not expose it, falls back to creating a new chat so at least no
+    prior conversation context bleeds into the prompt. Both clicks are
+    best-effort; silent if the UI hides the buttons.
+    """
+    if await _try_click(page, TEMP_CHAT_TOGGLE_SELECTORS):
+        await page.wait_for_timeout(500)
+        return
+    if await _try_click(page, NEW_CHAT_SELECTORS):
+        await page.wait_for_timeout(500)
+
+
 class GeminiDriver:
     """Single-shot Gemini driver: open chat, send, scrape."""
 
@@ -74,6 +118,8 @@ class GeminiDriver:
                 "to sign in.",
                 screenshot_path=shot,
             )
+
+        await _enter_temporary_chat(self.page)
 
         composer = await _first_matching(self.page, COMPOSER_SELECTORS, 10_000)
         if composer is None:

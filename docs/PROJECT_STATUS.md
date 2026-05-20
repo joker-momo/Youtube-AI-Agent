@@ -1,6 +1,6 @@
 # Youtube AI Agent Project Status
 
-Last updated: 2026-05-20 (ChatGPT + Gemini drivers verified end-to-end)
+Last updated: 2026-05-20 (Gemini driver switched to temporary chat)
 
 This file is the living project tracker. Update it whenever a meaningful system capability is added, changed, verified, or deferred so a new reader can quickly understand what the system does, what is being built now, and what remains.
 
@@ -292,6 +292,23 @@ Decisions already chosen:
   - `POST /gemini/send` JSON test ->
     `{"raw_response":"{\"ok\": true, \"language\": \"Spanish\"}"}`
 - Docker verification: `116 passed in 15.01s`.
+
+### V3 Phase 1 Step 11c Gemini temporary chat
+
+- `GeminiDriver.send` now calls `_enter_temporary_chat(page)` before
+  the composer click. The helper tries to click Gemini's "Temporary
+  chat" toggle (`button[aria-label*='Temporary' i]` and variants) and
+  silently falls back to clicking "New chat" if the toggle is hidden
+  by a rollout/locale variation.
+- Live verified: after toggle the page shows the Gemini banner
+  *"Temporary chats don't appear in recent chats and aren't used to
+  improve Google AI. Stored for 72 hours for safety."* and a fresh
+  `Welcome, stranger` view. `POST /gemini/send {"prompt":"Reply with
+  exactly: PONG"}` still returns `{"site":"gemini","raw_response":"PONG"}`.
+- Matches the existing ChatGPT driver behaviour which uses
+  `chatgpt.com/?model=gpt-4o&temporary-chat=true`. Both drivers now
+  avoid polluting the operator's permanent chat history.
+- Docker verification: `116 passed in 14.69s`.
 
 ## Target V3 Architecture
 

@@ -1,6 +1,6 @@
 # Youtube AI Agent Project Status
 
-Last updated: 2026-05-20 (Humanization: hover+click cadence, read pauses, tab beats)
+Last updated: 2026-05-20 (Full V3 pipeline end-to-end verified: video.mp4 produced)
 
 This file is the living project tracker. Update it whenever a meaningful system capability is added, changed, verified, or deferred so a new reader can quickly understand what the system does, what is being built now, and what remains.
 
@@ -412,6 +412,31 @@ Decisions already chosen:
   is visible in noVNC as a person driving the page.
 - Docker verification: `130 passed in 14.45s` (no new tests; the
   humanization changes only affect timing).
+
+### V3 Phase 1 Step 12d End-to-end video produced via V3 pipeline
+
+- Continued job `auto-1779250210` (where the auto script/scenes/seo
+  trio left current_stage at `render`) through the manual `render`
+  and `review` routes:
+  - `POST /jobs/auto-1779250210/stages/render/run`
+    -> `current_stage: review`, `output: video.mp4`, 2m27s wall.
+  - `POST /jobs/auto-1779250210/stages/review/run`
+    -> `output: operator_review.html`. All 8 stages completed,
+    `JOB_COMPLETED` emitted in `events.jsonl`.
+- Final artifacts in `jobs/auto-1779250210/`:
+  - `video.mp4`: H.264 1920x1080 @ 30 fps, AAC audio, 54.06 s,
+    22 MB. Matches the idea's `target_duration_sec: 54`.
+  - `thumbnail.jpg`: 47 KB.
+  - `report.md`: 631 B.
+  - `operator_review.html`: 6.5 KB.
+  - `visual_review.json`: 8.4 KB.
+- This is the first video produced by the V3 pipeline with zero
+  manual copy-paste between ChatGPT and the orchestrator. ChatGPT
+  was driven through the Browser Appliance with humanized cadence.
+- Render and review routes already existed (Step 9); only auto run
+  + auto promote needed the BrowserClient. They are not in the
+  `/stages/.../auto` set yet because rendering does not call the
+  browser-worker.
 
 ## Target V3 Architecture
 

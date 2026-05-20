@@ -1,6 +1,6 @@
 # Youtube AI Agent Project Status
 
-Last updated: 2026-05-20 (Driver humanization layer: randomised pauses + typing)
+Last updated: 2026-05-20 (Humanization: hover+click cadence, read pauses, tab beats)
 
 This file is the living project tracker. Update it whenever a meaningful system capability is added, changed, verified, or deferred so a new reader can quickly understand what the system does, what is being built now, and what remains.
 
@@ -386,6 +386,32 @@ Decisions already chosen:
 - 2 new tests in `tests/test_browser_drivers.py` for env override and
   default sanity.
 - Docker verification: `130 passed in 15.63s`.
+
+### V3 Phase 1 Step 12c Humanization pass 2 (clicks, tabs, read)
+
+- `humanize.py` now exports `human_click(locator)` and
+  `estimate_read_pause_ms(text)` alongside the existing pause/type
+  helpers. `human_click` hovers (with a 80-240 ms hover pause), then
+  clicks, then pauses 250-700 ms — a real pointer cadence.
+- ChatGPT and Gemini drivers no longer call any raw `.click()`:
+  composer click, send-button click, modal-dismiss buttons, and the
+  Gemini temporary-chat toggle / new-chat fallback all go through
+  `human_click`. Every previous `wait_for_timeout(<fixed>)` is now
+  `human_pause(...)` with a randomised window.
+- After a successful scrape both drivers pause for an
+  `estimate_read_pause_ms(text)`-derived interval (~300 wpm, clamped
+  0.8-4 s) so the tab isn't closed the same millisecond the response
+  finishes streaming.
+- `_drive` in `browser_worker/app.py` adds a 300-900 ms beat after
+  `context.new_page()` and a 400-1100 ms beat before `page.close()`
+  so opening and closing a job tab no longer looks like an instant
+  `Ctrl+T` -> `Ctrl+W` script. `auth_status` got the same treatment
+  around its diagnostic navigation.
+- Live verified: short "PONG" round trip is ~16.4 s vs the previous
+  ~11.7 s; the extra ~5 s is the hover/click/read/close cadence and
+  is visible in noVNC as a person driving the page.
+- Docker verification: `130 passed in 14.45s` (no new tests; the
+  humanization changes only affect timing).
 
 ## Target V3 Architecture
 

@@ -13,6 +13,7 @@ from video_agent.browser_worker.drivers import (
     ChatGPTDriver,
     GeminiDriver,
     LoginRequiredError,
+    human_pause,
     save_trace_screenshot,
 )
 
@@ -156,6 +157,9 @@ async def _drive(site: str, prompt: str, timeout_ms: int) -> dict:
                 else await browser.new_context()
             )
             page = await context.new_page()
+            # Brief "tab just opened" beat — humans don't drive a tab
+            # the instant Ctrl+T finishes; let the chrome paint settle.
+            await human_pause(page, min_ms=300, max_ms=900)
             try:
                 if site == "chatgpt":
                     driver = ChatGPTDriver(page)
@@ -204,6 +208,13 @@ async def _drive(site: str, prompt: str, timeout_ms: int) -> dict:
                     },
                 ) from exc
             finally:
+                # Beat before closing the tab — a person glances at the
+                # final state, doesn't slam Ctrl+W the moment the reply
+                # finishes streaming.
+                try:
+                    await human_pause(page, min_ms=400, max_ms=1100)
+                except Exception:
+                    pass
                 try:
                     await page.close()
                 except Exception:
@@ -243,8 +254,9 @@ async def auth_status(site: str) -> dict:
                     else await browser.new_context()
                 )
                 page = await context.new_page()
+                await human_pause(page, min_ms=300, max_ms=900)
                 await page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
-                await page.wait_for_timeout(1500)
+                await human_pause(page, min_ms=1200, max_ms=2200)
                 current_url = page.url
                 logged_out = _is_logged_out_url(site, current_url)
                 if not logged_out:

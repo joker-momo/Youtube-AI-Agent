@@ -50,6 +50,34 @@ async def human_pause(page: "Page", *, min_ms: int | None = None, max_ms: int | 
     await page.wait_for_timeout(random.randint(lo, hi))
 
 
+async def human_click(locator, *, hover_pause_min_ms: int = 80, hover_pause_max_ms: int = 240, post_pause_min_ms: int = 250, post_pause_max_ms: int = 700, click_timeout_ms: int = 5_000) -> None:
+    """Hover, pause, click, pause — the cadence of a human pointer.
+
+    Falls back to a plain click if hover is unsupported (e.g. headless
+    runtimes that disable real pointer events).
+    """
+    try:
+        await locator.hover(timeout=2_000)
+        await asyncio.sleep(random.randint(hover_pause_min_ms, hover_pause_max_ms) / 1000.0)
+    except Exception:
+        pass
+    await locator.click(timeout=click_timeout_ms)
+    await asyncio.sleep(random.randint(post_pause_min_ms, post_pause_max_ms) / 1000.0)
+
+
+def estimate_read_pause_ms(text: str) -> int:
+    """Reading-time pause: ~300 wpm with random jitter, clamped 0.8-4 s.
+
+    Used after a model response arrives so the driver doesn't close
+    the tab instantly — a real user spends a beat to look at the
+    answer before navigating away.
+    """
+    words = max(len(text.split()), 1)
+    base_ms = int((words / 300.0) * 60_000)  # words / (wpm) * 60 000 ms
+    jitter = random.randint(-300, 600)
+    return max(800, min(4_000, base_ms + jitter))
+
+
 async def human_type(page: "Page", text: str) -> None:
     """Insert ``text`` into the focused field the way a person would.
 

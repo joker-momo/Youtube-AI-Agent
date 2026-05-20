@@ -8,7 +8,12 @@ from video_agent.browser_worker.drivers.base import (
     LoginRequiredError,
     save_trace_screenshot,
 )
-from video_agent.browser_worker.drivers.humanize import human_pause, human_type
+from video_agent.browser_worker.drivers.humanize import (
+    estimate_read_pause_ms,
+    human_click,
+    human_pause,
+    human_type,
+)
 
 if TYPE_CHECKING:
     from playwright.async_api import Page
@@ -84,12 +89,14 @@ async def _dismiss_modals(page: "Page") -> None:
             visible = False
         if not visible:
             return
+        # A real user spots the dialog before reacting.
+        await human_pause(page, min_ms=350, max_ms=900)
         clicked = False
         for selector in dismiss_selectors:
             button = page.locator(selector).first
             try:
                 if await button.is_visible(timeout=300):
-                    await button.click(timeout=2_000)
+                    await human_click(button)
                     clicked = True
                     break
             except Exception:
@@ -99,7 +106,7 @@ async def _dismiss_modals(page: "Page") -> None:
                 await page.keyboard.press("Escape")
             except Exception:
                 pass
-        await page.wait_for_timeout(400)
+        await human_pause(page, min_ms=300, max_ms=700)
 
 
 class ChatGPTDriver:
@@ -138,14 +145,14 @@ class ChatGPTDriver:
                 "ChatGPT composer not found.", screenshot_path=shot
             )
 
-        await composer.click()
+        await human_click(composer, hover_pause_min_ms=120, hover_pause_max_ms=320)
         await composer.focus()
         await human_pause(self.page, min_ms=200, max_ms=600)
         # Type via keyboard with randomised per-key delays so the
         # contenteditable div sees a realistic cadence instead of an
         # instant insert_text dump.
         await human_type(self.page, prompt)
-        await human_pause(self.page, min_ms=300, max_ms=900)
+        await human_pause(self.page, min_ms=500, max_ms=1300)
 
         send_button = await _first_matching(self.page, SEND_BUTTON_SELECTORS, 5_000)
         if send_button is None:
@@ -153,7 +160,7 @@ class ChatGPTDriver:
             raise BrowserDriverError(
                 "ChatGPT send button not found.", screenshot_path=shot
             )
-        await send_button.click()
+        await human_click(send_button)
 
         # Wait until the stop-generating button disappears, signalling
         # the assistant turn is complete. Fall back to a long poll on
@@ -207,4 +214,9 @@ class ChatGPTDriver:
                 "ChatGPT returned an empty response.",
                 screenshot_path=shot,
             )
+        # User would skim the answer before navigating away. Pause
+        # proportional to response length, clamped 0.8-4 s.
+        await human_pause(
+            self.page, min_ms=estimate_read_pause_ms(text), max_ms=estimate_read_pause_ms(text) + 200
+        )
         return text

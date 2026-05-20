@@ -7,7 +7,12 @@ from video_agent.browser_worker.drivers.base import (
     LoginRequiredError,
     save_trace_screenshot,
 )
-from video_agent.browser_worker.drivers.humanize import human_pause, human_type
+from video_agent.browser_worker.drivers.humanize import (
+    estimate_read_pause_ms,
+    human_click,
+    human_pause,
+    human_type,
+)
 
 if TYPE_CHECKING:
     from playwright.async_api import Page
@@ -72,12 +77,12 @@ async def _first_matching(page: "Page", selectors: tuple[str, ...], timeout_ms: 
 
 
 async def _try_click(page: "Page", selectors: tuple[str, ...], timeout_ms: int = 1500) -> bool:
-    """Best-effort click — returns True if any selector matched and clicked."""
+    """Best-effort human click — True if any selector matched and clicked."""
     for selector in selectors:
         locator = page.locator(selector).first
         try:
             if await locator.is_visible(timeout=timeout_ms):
-                await locator.click(timeout=3000)
+                await human_click(locator, click_timeout_ms=3_000)
                 return True
         except Exception:
             continue
@@ -93,10 +98,10 @@ async def _enter_temporary_chat(page: "Page") -> None:
     best-effort; silent if the UI hides the buttons.
     """
     if await _try_click(page, TEMP_CHAT_TOGGLE_SELECTORS):
-        await page.wait_for_timeout(500)
+        await human_pause(page, min_ms=600, max_ms=1300)
         return
     if await _try_click(page, NEW_CHAT_SELECTORS):
-        await page.wait_for_timeout(500)
+        await human_pause(page, min_ms=600, max_ms=1300)
 
 
 class GeminiDriver:
@@ -130,11 +135,11 @@ class GeminiDriver:
                 "Gemini composer not found.", screenshot_path=shot
             )
 
-        await composer.click()
+        await human_click(composer, hover_pause_min_ms=120, hover_pause_max_ms=320)
         await composer.focus()
         await human_pause(self.page, min_ms=200, max_ms=600)
         await human_type(self.page, prompt)
-        await human_pause(self.page, min_ms=300, max_ms=900)
+        await human_pause(self.page, min_ms=500, max_ms=1300)
 
         send_button = await _first_matching(self.page, SEND_BUTTON_SELECTORS, 5_000)
         if send_button is None:
@@ -142,7 +147,7 @@ class GeminiDriver:
             raise BrowserDriverError(
                 "Gemini send button not found.", screenshot_path=shot
             )
-        await send_button.click()
+        await human_click(send_button)
 
         try:
             stop = await _first_matching(self.page, STOP_BUTTON_SELECTORS, 5_000)
@@ -190,4 +195,9 @@ class GeminiDriver:
                 "Gemini returned an empty response.",
                 screenshot_path=shot,
             )
+        await human_pause(
+            self.page,
+            min_ms=estimate_read_pause_ms(text),
+            max_ms=estimate_read_pause_ms(text) + 200,
+        )
         return text

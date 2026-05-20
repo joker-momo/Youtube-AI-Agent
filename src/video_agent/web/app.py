@@ -9,7 +9,7 @@ from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconn
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
-from video_agent.contracts import EVENT_LOG
+from video_agent.contracts import EVENT_LOG, repo_root
 from video_agent.orchestrator import (
     JobAlreadyExistsError,
     JobNotFoundError,
@@ -17,6 +17,7 @@ from video_agent.orchestrator import (
     create_job,
     load_job,
 )
+from video_agent.orchestrator.idea_generator import generate_ideas, save_ideas
 from video_agent.orchestrator.browser_client import (
     BrowserClient,
     BrowserClientError,
@@ -1245,6 +1246,10 @@ def get_channel_path() -> Path:
     )
 
 
+def get_inputs_root() -> Path:
+    return Path(os.environ.get("INPUTS_DIR", "/app/inputs"))
+
+
 @app.post("/jobs/{job_id}/idea", status_code=201)
 def post_idea(
     job_id: str,
@@ -1460,6 +1465,52 @@ def _handle_browser_client_error(exc: BrowserClientError) -> HTTPException:
             "browser_worker_detail": exc.detail,
         },
     )
+
+
+class GenerateIdeasRequest(BaseModel):
+    seed_topics: list[str] = []
+    count: int = 10
+
+
+@app.post("/channels/{channel_id}/ideas/generate", status_code=201)
+async def post_generate_ideas(
+    channel_id: str,
+    req: GenerateIdeasRequest,
+    inputs_root: Path = Depends(get_inputs_root),
+    client: BrowserClient = Depends(get_browser_client),
+) -> dict:
+    """Generate N idea JSON files via ChatGPT and save to inputs/ideas/<channel_id>/.
+
+    Returns the list of ideas and their saved file paths relative to inputs_root.
+    """
+    channel_path = repo_root() / "configs" / channel_id / "channel.yaml"
+    if not channel_path.exists():
+        raise HTTPException(status_code=404, detail=f"No config for channel: {channel_id}")
+
+    if not 1 <= req.count <= 50:
+        raise HTTPException(status_code=422, detail="count must be between 1 and 50")
+
+    try:
+        ideas = await generate_ideas(
+            channel_path=channel_path,
+            chatgpt_fn=lambda msgs: client.run_session("chatgpt", msgs),
+            seed_topics=req.seed_topics,
+            count=req.count,
+        )
+    except BrowserClientError as exc:
+        raise _handle_browser_client_error(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    paths = save_ideas(ideas, channel_id=channel_id, out_dir=inputs_root)
+    rel_paths = [str(p.relative_to(inputs_root)) for p in paths]
+
+    return {
+        "channel_id": channel_id,
+        "count": len(ideas),
+        "ideas": ideas,
+        "saved": rel_paths,
+    }
 
 
 @app.post("/jobs/{job_id}/stages/script/auto")

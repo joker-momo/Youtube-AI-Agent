@@ -119,11 +119,17 @@ class ChatGPTDriver:
 
     def __init__(self, page: "Page") -> None:
         self.page = page
+        self._opened = False
 
-    async def send(self, prompt: str, *, response_timeout_ms: int = 180_000) -> str:
-        if not prompt.strip():
-            raise BrowserDriverError("Empty prompt")
+    async def open(self) -> None:
+        """Navigate to a new temporary chat and dismiss consent modals.
 
+        Idempotent: safe to call once per session before the first
+        ``send_message``. Raises ``LoginRequiredError`` if the profile
+        is signed out.
+        """
+        if self._opened:
+            return
         await self.page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=30_000)
         await human_pause(self.page, min_ms=1200, max_ms=2200)
 
@@ -137,45 +143,23 @@ class ChatGPTDriver:
 
         await _dismiss_modals(self.page)
         await human_pause(self.page)
+        self._opened = True
 
-        composer = await _first_matching(self.page, COMPOSER_SELECTORS, 10_000)
-        if composer is None:
-            shot = await save_trace_screenshot(self.page, prefix="chatgpt-no-composer")
-            raise BrowserDriverError(
-                "ChatGPT composer not found.", screenshot_path=shot
-            )
+    async def send_message(self, prompt: str, *, response_timeout_ms: int = 180_000) -> str:
+        """Type ``prompt`` into the open chat, send, wait for the new
+        assistant turn, and return its scraped text. Does NOT close the
+        tab — caller decides session lifetime.
+        """
+        if not self._opened:
+            await self.open()
+        if not prompt.strip():
+            raise BrowserDriverError("Empty prompt")
 
-        await human_click(composer, hover_pause_min_ms=120, hover_pause_max_ms=320)
-        await composer.focus()
-        await human_pause(self.page, min_ms=200, max_ms=600)
-        # Type via keyboard with randomised per-key delays so the
-        # contenteditable div sees a realistic cadence instead of an
-        # instant insert_text dump.
-        await human_type(self.page, prompt)
-        await human_pause(self.page, min_ms=500, max_ms=1300)
-
-        send_button = await _first_matching(self.page, SEND_BUTTON_SELECTORS, 5_000)
-        if send_button is None:
-            shot = await save_trace_screenshot(self.page, prefix="chatgpt-no-send")
-            raise BrowserDriverError(
-                "ChatGPT send button not found.", screenshot_path=shot
-            )
-        await human_click(send_button)
-
-        # Wait until the stop-generating button disappears, signalling
-        # the assistant turn is complete. Fall back to a long poll on
-        # the assistant turn count.
-        try:
-            stop = await _first_matching(self.page, STOP_BUTTON_SELECTORS, 5_000)
-            if stop is not None:
-                await stop.wait_for(state="hidden", timeout=response_timeout_ms)
-        except Exception:
-            pass
-
-        # Belt-and-braces: wait for any assistant text to appear. The
-        # temporary-chat UI sometimes renders a short "Fast answer"
-        # block outside of the regular assistant turn container, so we
-        # accept multiple candidate selectors and any non-empty text.
+        # Capture the LAST assistant text before sending so we can wait
+        # for a different, non-empty text to appear afterwards. This is
+        # more robust than counting turns: ChatGPT temporary chat
+        # sometimes renders short answers (e.g. "OK") in a "Fast answer"
+        # block that doesn't increment the regular assistant-turn count.
         scrape_js = """
             () => {
               const selectors = [
@@ -195,9 +179,40 @@ class ChatGPTDriver:
               return '';
             }
         """
+        prior_text = await self.page.evaluate(scrape_js)
+
+        composer = await _first_matching(self.page, COMPOSER_SELECTORS, 10_000)
+        if composer is None:
+            shot = await save_trace_screenshot(self.page, prefix="chatgpt-no-composer")
+            raise BrowserDriverError(
+                "ChatGPT composer not found.", screenshot_path=shot
+            )
+
+        await human_click(composer, hover_pause_min_ms=120, hover_pause_max_ms=320)
+        await composer.focus()
+        await human_pause(self.page, min_ms=200, max_ms=600)
+        await human_type(self.page, prompt)
+        await human_pause(self.page, min_ms=500, max_ms=1300)
+
+        send_button = await _first_matching(self.page, SEND_BUTTON_SELECTORS, 5_000)
+        if send_button is None:
+            shot = await save_trace_screenshot(self.page, prefix="chatgpt-no-send")
+            raise BrowserDriverError(
+                "ChatGPT send button not found.", screenshot_path=shot
+            )
+        await human_click(send_button)
+
+        try:
+            stop = await _first_matching(self.page, STOP_BUTTON_SELECTORS, 5_000)
+            if stop is not None:
+                await stop.wait_for(state="hidden", timeout=response_timeout_ms)
+        except Exception:
+            pass
+
         try:
             await self.page.wait_for_function(
-                f"() => ({scrape_js})().length > 0",
+                f"(prior) => {{ const t = ({scrape_js})(); return t && t !== prior; }}",
+                arg=prior_text,
                 timeout=response_timeout_ms,
             )
         except Exception:
@@ -214,9 +229,14 @@ class ChatGPTDriver:
                 "ChatGPT returned an empty response.",
                 screenshot_path=shot,
             )
-        # User would skim the answer before navigating away. Pause
-        # proportional to response length, clamped 0.8-4 s.
         await human_pause(
-            self.page, min_ms=estimate_read_pause_ms(text), max_ms=estimate_read_pause_ms(text) + 200
+            self.page,
+            min_ms=estimate_read_pause_ms(text),
+            max_ms=estimate_read_pause_ms(text) + 200,
         )
         return text
+
+    async def send(self, prompt: str, *, response_timeout_ms: int = 180_000) -> str:
+        """One-shot: open + send_message. Tab stays open; caller closes."""
+        await self.open()
+        return await self.send_message(prompt, response_timeout_ms=response_timeout_ms)

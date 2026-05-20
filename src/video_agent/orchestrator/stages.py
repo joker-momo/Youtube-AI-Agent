@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Sequence
 
 from video_agent.contracts import EVENT_LOG
 from video_agent.operator import (
@@ -280,6 +280,10 @@ def run_review_stage(job_dir: Path) -> Path:
 PromptFn = Callable[[str], Awaitable[str]]
 """Async callable: takes a prompt string, returns the raw model response."""
 
+SessionFn = Callable[[Sequence[str]], Awaitable[str]]
+"""Async callable: takes a list of messages to send in one temp chat,
+returns the last assistant response."""
+
 
 async def _auto_run_then_promote(
     *,
@@ -288,21 +292,20 @@ async def _auto_run_then_promote(
     prompt_path: Path,
     runner: Callable[[Path, Path], Path],
     promoter: Callable[[Path, Path, str], Path],
-    prompt_fn: PromptFn,
+    session_fn: SessionFn,
     run_stage_name: str,
     promote_stage_name: str,
+    briefing_stage_name: str,
 ) -> Path:
-    """Generic auto-stage: run the prompt stage, fetch raw via worker, promote.
+    """Generic auto-stage: render prompt, brief the model in one session, promote.
 
-    The flow is split so the helper can recover when called after a
-    partial manual run. Specifically:
+    Flow per stage (one temp chat, two user messages, then close):
+      1. Run the prompt stage (if needed) to produce the v2 prompt file.
+      2. Build a role + channel-context briefing as message #1.
+      3. Send the v2 prompt as message #2.
+      4. Promote the model's last response through the v2 validator.
 
-    - If ``current_stage`` is the run stage (e.g. ``script``), invoke
-      the runner to write the prompt file and advance to the promote
-      stage.
-    - If ``current_stage`` is the promote stage, skip straight to
-      fetching + promoting using the existing prompt file.
-    - Any other ``current_stage`` raises ``StageInputMissingError``.
+    The session_fn closes the temp chat after both messages are sent.
     """
     state = load_job(job_dir)
     if state.current_stage == run_stage_name:
@@ -318,17 +321,22 @@ async def _auto_run_then_promote(
         raise StageInputMissingError(f"Missing prompt file {prompt_path}")
     prompt_text = prompt_path.read_text(encoding="utf-8")
 
-    # Inject the real job_id at the top of the prompt so the model
-    # cannot invent its own. Without this, promote_operator_artifact
-    # rejects the response with `job_id mismatch`.
-    state = load_job(job_dir)
-    prompt_text = (
-        f"ABSOLUTE CONSTRAINT: set `job_id` to exactly \"{state.job_id}\" "
-        f"and `channel_id` to exactly \"{state.channel_id}\" in your output. "
-        "Do not invent or shorten these values.\n\n" + prompt_text
+    # Local imports to avoid a cycle at module load.
+    from video_agent.orchestrator.briefing import (
+        build_stage_briefing,
+        build_task_prompt,
     )
 
-    raw_response = await prompt_fn(prompt_text)
+    channel_config = read_yaml(channel_path)
+    briefing = build_stage_briefing(
+        channel_config,
+        briefing_stage_name,
+        job_id=state.job_id,
+        channel_id=state.channel_id,
+    )
+    task = build_task_prompt(prompt_text)
+
+    raw_response = await session_fn([briefing, task])
     if not isinstance(raw_response, str) or not raw_response.strip():
         raise StageInputMissingError(
             "browser-worker returned an empty response for "
@@ -340,7 +348,7 @@ async def _auto_run_then_promote(
 async def auto_script_stage(
     job_dir: Path,
     channel_path: Path,
-    prompt_fn: PromptFn,
+    session_fn: SessionFn,
 ) -> Path:
     return await _auto_run_then_promote(
         job_dir=job_dir,
@@ -348,16 +356,17 @@ async def auto_script_stage(
         prompt_path=job_dir / SCRIPT_PROMPT_PATH,
         runner=run_script_stage,
         promoter=promote_script_stage,
-        prompt_fn=prompt_fn,
+        session_fn=session_fn,
         run_stage_name="script",
         promote_stage_name="script_promote",
+        briefing_stage_name="script",
     )
 
 
 async def auto_scenes_stage(
     job_dir: Path,
     channel_path: Path,
-    prompt_fn: PromptFn,
+    session_fn: SessionFn,
 ) -> Path:
     return await _auto_run_then_promote(
         job_dir=job_dir,
@@ -365,16 +374,17 @@ async def auto_scenes_stage(
         prompt_path=job_dir / SCENES_PROMPT_PATH,
         runner=run_scenes_stage,
         promoter=promote_scenes_stage,
-        prompt_fn=prompt_fn,
+        session_fn=session_fn,
         run_stage_name="scenes",
         promote_stage_name="scenes_promote",
+        briefing_stage_name="scenes",
     )
 
 
 async def auto_seo_stage(
     job_dir: Path,
     channel_path: Path,
-    prompt_fn: PromptFn,
+    session_fn: SessionFn,
 ) -> Path:
     return await _auto_run_then_promote(
         job_dir=job_dir,
@@ -382,7 +392,8 @@ async def auto_seo_stage(
         prompt_path=job_dir / SEO_PROMPT_PATH,
         runner=run_seo_stage,
         promoter=promote_seo_stage,
-        prompt_fn=prompt_fn,
+        session_fn=session_fn,
         run_stage_name="seo",
         promote_stage_name="seo_promote",
+        briefing_stage_name="seo",
     )

@@ -135,6 +135,154 @@ class SendPromptRequest(BaseModel):
     response_timeout_ms: int = 180_000
 
 
+class OpenSessionResponse(BaseModel):
+    session_id: str
+    site: str
+
+
+# In-memory session registry. Each entry owns a Playwright connection,
+# a Page, and a driver instance. The caller is responsible for closing
+# sessions; orphaned entries hold a CDP connection so the orchestrator
+# should always DELETE in a try/finally.
+import uuid as _uuid
+
+_SESSIONS: dict[str, dict] = {}
+
+
+async def _connect_runtime():
+    """Returns (playwright_ctx, browser, ws_endpoint). Caller must
+    `await playwright_ctx.__aexit__` to release the connection.
+    """
+    from playwright.async_api import async_playwright
+
+    cdp_url = _cdp_url()
+    ws_endpoint = await _resolve_browser_ws(cdp_url)
+    pw_ctx = async_playwright()
+    pw = await pw_ctx.__aenter__()
+    browser = await pw.chromium.connect_over_cdp(ws_endpoint)
+    return pw_ctx, browser
+
+
+async def _open_session(site: str) -> str:
+    """Create a new session: connect runtime, open page, run driver.open()."""
+    if site not in {"chatgpt", "gemini"}:
+        raise HTTPException(status_code=404, detail=f"Unsupported site: {site}")
+    try:
+        pw_ctx, browser = await _connect_runtime()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"cdp_url": _cdp_url(), "error": str(exc)},
+        ) from exc
+
+    try:
+        context = (
+            browser.contexts[0]
+            if browser.contexts
+            else await browser.new_context()
+        )
+        page = await context.new_page()
+        await human_pause(page, min_ms=300, max_ms=900)
+        driver = ChatGPTDriver(page) if site == "chatgpt" else GeminiDriver(page)
+        try:
+            await driver.open()
+        except LoginRequiredError as exc:
+            await page.close()
+            await browser.close()
+            await pw_ctx.__aexit__(None, None, None)
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": str(exc),
+                    "screenshot": exc.screenshot_path or "",
+                    "login_required": True,
+                },
+            ) from exc
+        except BrowserDriverError as exc:
+            await page.close()
+            await browser.close()
+            await pw_ctx.__aexit__(None, None, None)
+            raise HTTPException(
+                status_code=502,
+                detail={"error": str(exc), "screenshot": exc.screenshot_path or ""},
+            ) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        await browser.close()
+        await pw_ctx.__aexit__(None, None, None)
+        raise HTTPException(
+            status_code=502,
+            detail={"error": f"{type(exc).__name__}: {exc}"},
+        ) from exc
+
+    sid = _uuid.uuid4().hex
+    _SESSIONS[sid] = {
+        "site": site,
+        "page": page,
+        "browser": browser,
+        "pw_ctx": pw_ctx,
+        "driver": driver,
+    }
+    return sid
+
+
+async def _close_session(session_id: str) -> bool:
+    entry = _SESSIONS.pop(session_id, None)
+    if entry is None:
+        return False
+    try:
+        await human_pause(entry["page"], min_ms=400, max_ms=1100)
+    except Exception:
+        pass
+    try:
+        await entry["page"].close()
+    except Exception:
+        pass
+    try:
+        await entry["browser"].close()
+    except Exception:
+        pass
+    try:
+        await entry["pw_ctx"].__aexit__(None, None, None)
+    except Exception:
+        pass
+    return True
+
+
+async def _send_in_session(session_id: str, prompt: str, timeout_ms: int) -> str:
+    entry = _SESSIONS.get(session_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"Unknown session: {session_id}")
+    driver = entry["driver"]
+    page = entry["page"]
+    try:
+        return await driver.send_message(prompt, response_timeout_ms=timeout_ms)
+    except LoginRequiredError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": str(exc),
+                "screenshot": exc.screenshot_path or "",
+                "login_required": True,
+            },
+        ) from exc
+    except BrowserDriverError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"error": str(exc), "screenshot": exc.screenshot_path or ""},
+        ) from exc
+    except Exception as exc:
+        try:
+            shot = await save_trace_screenshot(page, prefix=f"{entry['site']}-uncaught")
+        except Exception:
+            shot = ""
+        raise HTTPException(
+            status_code=502,
+            detail={"error": f"{type(exc).__name__}: {exc}", "screenshot": shot},
+        ) from exc
+
+
 async def _drive(site: str, prompt: str, timeout_ms: int) -> dict:
     """Open a page on the runtime, run the driver, close, return text."""
     from playwright.async_api import async_playwright
@@ -221,6 +369,46 @@ async def _drive(site: str, prompt: str, timeout_ms: int) -> dict:
                     pass
         finally:
             await browser.close()
+
+
+@app.post("/chatgpt/sessions", response_model=OpenSessionResponse)
+async def chatgpt_open_session() -> dict:
+    sid = await _open_session("chatgpt")
+    return {"session_id": sid, "site": "chatgpt"}
+
+
+@app.post("/chatgpt/sessions/{session_id}/send")
+async def chatgpt_session_send(session_id: str, payload: SendPromptRequest) -> dict:
+    raw = await _send_in_session(session_id, payload.prompt, payload.response_timeout_ms)
+    return {"site": "chatgpt", "session_id": session_id, "raw_response": raw}
+
+
+@app.delete("/chatgpt/sessions/{session_id}", status_code=204)
+async def chatgpt_close_session(session_id: str):
+    closed = await _close_session(session_id)
+    if not closed:
+        raise HTTPException(status_code=404, detail=f"Unknown session: {session_id}")
+    return None
+
+
+@app.post("/gemini/sessions", response_model=OpenSessionResponse)
+async def gemini_open_session() -> dict:
+    sid = await _open_session("gemini")
+    return {"session_id": sid, "site": "gemini"}
+
+
+@app.post("/gemini/sessions/{session_id}/send")
+async def gemini_session_send(session_id: str, payload: SendPromptRequest) -> dict:
+    raw = await _send_in_session(session_id, payload.prompt, payload.response_timeout_ms)
+    return {"site": "gemini", "session_id": session_id, "raw_response": raw}
+
+
+@app.delete("/gemini/sessions/{session_id}", status_code=204)
+async def gemini_close_session(session_id: str):
+    closed = await _close_session(session_id)
+    if not closed:
+        raise HTTPException(status_code=404, detail=f"Unknown session: {session_id}")
+    return None
 
 
 @app.post("/chatgpt/send")

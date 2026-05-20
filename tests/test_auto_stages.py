@@ -120,22 +120,36 @@ def valid_seo_payload() -> dict:
 
 
 class FakeBrowserClient:
-    """In-process double for the browser-worker."""
+    """In-process double for the browser-worker session API."""
 
     def __init__(self, queue: list[str] | None = None) -> None:
         self.queue = list(queue or [])
-        self.calls: list[str] = []
+        self.sessions: list[list[str]] = []
         self.error: Exception | None = None
 
     async def chatgpt_send(
         self, prompt: str, *, response_timeout_ms: int = 180_000
     ) -> str:
-        self.calls.append(prompt)
+        # Compatibility shim for the older one-shot tests.
+        return await self.run_session("chatgpt", [prompt])
+
+    async def run_session(
+        self,
+        site: str,
+        messages,
+        *,
+        response_timeout_ms: int = 180_000,
+    ) -> str:
+        self.sessions.append(list(messages))
         if self.error is not None:
             raise self.error
         if not self.queue:
             raise AssertionError("FakeBrowserClient out of canned responses")
         return self.queue.pop(0)
+
+    @property
+    def calls(self) -> list[list[str]]:
+        return self.sessions
 
 
 # ---------- direct module-level auto stage tests ---------------------------
@@ -166,7 +180,7 @@ def test_auto_script_runs_prompt_and_promote(
     )
 
     output = asyncio.run(
-        auto_script_stage(job_dir, channel_path, fake.chatgpt_send)
+        auto_script_stage(job_dir, channel_path, lambda msgs: fake.run_session("chatgpt", msgs))
     )
 
     assert output == job_dir / "script.json"
@@ -176,7 +190,10 @@ def test_auto_script_runs_prompt_and_promote(
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
     assert state["current_stage"] == "scenes"
     assert len(fake.calls) == 1
-    assert "SCRIPT artifact" in fake.calls[0]
+    # Each stage opens one session, sends two messages: briefing then task.
+    assert len(fake.calls[0]) == 2
+    assert "Rol" in fake.calls[0][0] and "Contexto del canal" in fake.calls[0][0]
+    assert "SCRIPT artifact" in fake.calls[0][1]
 
 
 def test_auto_script_skips_runner_when_already_promote(
@@ -193,7 +210,7 @@ def test_auto_script_skips_runner_when_already_promote(
     )
 
     output = asyncio.run(
-        auto_script_stage(job_dir, channel_path, fake.chatgpt_send)
+        auto_script_stage(job_dir, channel_path, lambda msgs: fake.run_session("chatgpt", msgs))
     )
 
     assert output == job_dir / "script.json"
@@ -211,7 +228,7 @@ def test_auto_script_rejects_empty_worker_response(
 
     with pytest.raises(StageInputMissingError, match="empty response"):
         asyncio.run(
-            auto_script_stage(job_dir, channel_path, fake.chatgpt_send)
+            auto_script_stage(job_dir, channel_path, lambda msgs: fake.run_session("chatgpt", msgs))
         )
 
 
@@ -235,7 +252,7 @@ def test_auto_scenes_runs_after_script_promoted(
     )
 
     output = asyncio.run(
-        auto_scenes_stage(job_dir, channel_path, fake.chatgpt_send)
+        auto_scenes_stage(job_dir, channel_path, lambda msgs: fake.run_session("chatgpt", msgs))
     )
 
     assert output == job_dir / "scenes.json"
@@ -271,7 +288,7 @@ def test_auto_seo_runs_after_scenes_promoted(
     )
 
     output = asyncio.run(
-        auto_seo_stage(job_dir, channel_path, fake.chatgpt_send)
+        auto_seo_stage(job_dir, channel_path, lambda msgs: fake.run_session("chatgpt", msgs))
     )
 
     assert output == job_dir / "seo.json"
@@ -298,7 +315,7 @@ def test_auto_script_wrong_stage_raises(
 
     with pytest.raises(StageInputMissingError, match="Cannot auto-run"):
         asyncio.run(
-            auto_script_stage(job_dir, channel_path, fake.chatgpt_send)
+            auto_script_stage(job_dir, channel_path, lambda msgs: fake.run_session("chatgpt", msgs))
         )
 
 

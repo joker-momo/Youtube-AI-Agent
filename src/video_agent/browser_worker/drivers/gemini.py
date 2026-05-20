@@ -104,16 +104,23 @@ async def _enter_temporary_chat(page: "Page") -> None:
         await human_pause(page, min_ms=600, max_ms=1300)
 
 
+RESPONSE_BLOCK_FOR_SCRAPE = (
+    ".model-response-text",
+    "message-content",
+    "model-response",
+)
+
+
 class GeminiDriver:
-    """Single-shot Gemini driver: open chat, send, scrape."""
+    """Session-style Gemini driver: open temp chat, send 1+ messages, close."""
 
     def __init__(self, page: "Page") -> None:
         self.page = page
+        self._opened = False
 
-    async def send(self, prompt: str, *, response_timeout_ms: int = 180_000) -> str:
-        if not prompt.strip():
-            raise BrowserDriverError("Empty prompt")
-
+    async def open(self) -> None:
+        if self._opened:
+            return
         await self.page.goto(GEMINI_URL, wait_until="domcontentloaded", timeout=30_000)
         await human_pause(self.page, min_ms=1200, max_ms=2200)
 
@@ -127,6 +134,35 @@ class GeminiDriver:
 
         await _enter_temporary_chat(self.page)
         await human_pause(self.page)
+        self._opened = True
+
+    async def send_message(self, prompt: str, *, response_timeout_ms: int = 180_000) -> str:
+        if not self._opened:
+            await self.open()
+        if not prompt.strip():
+            raise BrowserDriverError("Empty prompt")
+
+        scrape_js = """
+            () => {
+              const selectors = [
+                ".model-response-text",
+                "message-content .markdown",
+                "message-content",
+                "model-response .markdown",
+                "model-response",
+                ".markdown.markdown-main-panel",
+              ];
+              for (const s of selectors) {
+                const nodes = document.querySelectorAll(s);
+                if (nodes.length === 0) continue;
+                const last = nodes[nodes.length - 1];
+                const text = (last.innerText || '').trim();
+                if (text) return text;
+              }
+              return '';
+            }
+        """
+        prior_text = await self.page.evaluate(scrape_js)
 
         composer = await _first_matching(self.page, COMPOSER_SELECTORS, 10_000)
         if composer is None:
@@ -156,29 +192,10 @@ class GeminiDriver:
         except Exception:
             pass
 
-        scrape_js = """
-            () => {
-              const selectors = [
-                ".model-response-text",
-                "message-content .markdown",
-                "message-content",
-                "model-response .markdown",
-                "model-response",
-                ".markdown.markdown-main-panel",
-              ];
-              for (const s of selectors) {
-                const nodes = document.querySelectorAll(s);
-                if (nodes.length === 0) continue;
-                const last = nodes[nodes.length - 1];
-                const text = (last.innerText || '').trim();
-                if (text) return text;
-              }
-              return '';
-            }
-        """
         try:
             await self.page.wait_for_function(
-                f"() => ({scrape_js})().length > 0",
+                f"(prior) => {{ const t = ({scrape_js})(); return t && t !== prior; }}",
+                arg=prior_text,
                 timeout=response_timeout_ms,
             )
         except Exception:
@@ -201,3 +218,7 @@ class GeminiDriver:
             max_ms=estimate_read_pause_ms(text) + 200,
         )
         return text
+
+    async def send(self, prompt: str, *, response_timeout_ms: int = 180_000) -> str:
+        await self.open()
+        return await self.send_message(prompt, response_timeout_ms=response_timeout_ms)

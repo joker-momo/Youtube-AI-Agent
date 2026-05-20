@@ -327,7 +327,7 @@ async def post_auto_script(
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     try:
-        output = await auto_script_stage(job_dir, channel_path, client.chatgpt_send)
+        output = await auto_script_stage(job_dir, channel_path, lambda msgs: client.run_session("chatgpt", list(msgs)))
     except StageInputMissingError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except BrowserClientError as exc:
@@ -347,7 +347,7 @@ async def post_auto_scenes(
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     try:
-        output = await auto_scenes_stage(job_dir, channel_path, client.chatgpt_send)
+        output = await auto_scenes_stage(job_dir, channel_path, lambda msgs: client.run_session("chatgpt", list(msgs)))
     except StageInputMissingError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except BrowserClientError as exc:
@@ -367,7 +367,7 @@ async def post_auto_seo(
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     try:
-        output = await auto_seo_stage(job_dir, channel_path, client.chatgpt_send)
+        output = await auto_seo_stage(job_dir, channel_path, lambda msgs: client.run_session("chatgpt", list(msgs)))
     except StageInputMissingError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except BrowserClientError as exc:
@@ -405,15 +405,15 @@ async def post_run_all(
     try:
         await _record(
             "script_promote",
-            await auto_script_stage(job_dir, channel_path, client.chatgpt_send),
+            await auto_script_stage(job_dir, channel_path, lambda msgs: client.run_session("chatgpt", list(msgs))),
         )
         await _record(
             "scenes_promote",
-            await auto_scenes_stage(job_dir, channel_path, client.chatgpt_send),
+            await auto_scenes_stage(job_dir, channel_path, lambda msgs: client.run_session("chatgpt", list(msgs))),
         )
         await _record(
             "seo_promote",
-            await auto_seo_stage(job_dir, channel_path, client.chatgpt_send),
+            await auto_seo_stage(job_dir, channel_path, lambda msgs: client.run_session("chatgpt", list(msgs))),
         )
         await _record("render", run_render_stage(job_dir, channel_path))
         await _record("review", run_review_stage(job_dir))

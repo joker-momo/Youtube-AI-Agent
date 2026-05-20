@@ -62,7 +62,10 @@ class BrowserClient:
                 f"{self.base_url}/{site}/send",
                 json={"prompt": prompt, "response_timeout_ms": ms},
             )
-        if response.status_code == 200:
+        return self._unwrap(site, "send", response)
+
+    def _unwrap(self, site: str, op: str, response) -> str:
+        if response.status_code in (200, 201):
             return response.json()["raw_response"]
         try:
             detail = response.json().get("detail", response.text)
@@ -77,7 +80,98 @@ class BrowserClient:
                 detail=detail,
             )
         raise BrowserClientError(
-            f"browser-worker {site}/send returned HTTP {response.status_code}",
+            f"browser-worker {site}/{op} returned HTTP {response.status_code}",
             status_code=response.status_code,
             detail=detail,
         )
+
+    # ------------------------------------------------------------------
+    # Session lifecycle: one temp chat per stage, multiple sends allowed.
+    # ------------------------------------------------------------------
+
+    async def open_session(self, site: str) -> str:
+        async with httpx.AsyncClient(timeout=self.request_timeout) as http:
+            response = await http.post(f"{self.base_url}/{site}/sessions")
+        if response.status_code in (200, 201):
+            return response.json()["session_id"]
+        # Reuse _unwrap's error handling.
+        try:
+            detail = response.json().get("detail", response.text)
+        except Exception:
+            detail = response.text
+        if response.status_code == 409 and isinstance(detail, dict) and detail.get(
+            "login_required"
+        ):
+            raise LoginRequiredFromWorker(
+                detail.get("error", "Login required"),
+                status_code=response.status_code,
+                detail=detail,
+            )
+        raise BrowserClientError(
+            f"browser-worker {site}/sessions returned HTTP {response.status_code}",
+            status_code=response.status_code,
+            detail=detail,
+        )
+
+    async def send_in_session(
+        self,
+        site: str,
+        session_id: str,
+        prompt: str,
+        *,
+        response_timeout_ms: int = 180_000,
+    ) -> str:
+        async with httpx.AsyncClient(timeout=self.request_timeout) as http:
+            response = await http.post(
+                f"{self.base_url}/{site}/sessions/{session_id}/send",
+                json={"prompt": prompt, "response_timeout_ms": response_timeout_ms},
+            )
+        return self._unwrap(site, f"sessions/{session_id}/send", response)
+
+    async def close_session(self, site: str, session_id: str) -> None:
+        async with httpx.AsyncClient(timeout=30.0) as http:
+            response = await http.delete(
+                f"{self.base_url}/{site}/sessions/{session_id}"
+            )
+        if response.status_code in (200, 204, 404):
+            return  # 404 = already closed; treat as success for idempotency
+        raise BrowserClientError(
+            f"browser-worker close session returned HTTP {response.status_code}",
+            status_code=response.status_code,
+            detail=response.text,
+        )
+
+    async def run_session(
+        self,
+        site: str,
+        messages: list[str],
+        *,
+        response_timeout_ms: int = 180_000,
+    ) -> str:
+        """Open a temp chat, send each ``messages`` in order, return last response.
+
+        Always closes the session in a finally so a partial failure
+        does not leak runtime tabs.
+        """
+        if not messages:
+            raise BrowserClientError(
+                "run_session requires at least one message",
+                status_code=400,
+                detail={},
+            )
+        session_id = await self.open_session(site)
+        try:
+            last = ""
+            for prompt in messages:
+                last = await self.send_in_session(
+                    site,
+                    session_id,
+                    prompt,
+                    response_timeout_ms=response_timeout_ms,
+                )
+            return last
+        finally:
+            try:
+                await self.close_session(site, session_id)
+            except Exception:
+                pass

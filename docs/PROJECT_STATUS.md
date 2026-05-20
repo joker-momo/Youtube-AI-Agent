@@ -1,6 +1,6 @@
 # Youtube AI Agent Project Status
 
-Last updated: 2026-05-20 (One-shot /run-all: idea.json -> video.mp4 in a single POST)
+Last updated: 2026-05-20 (Per-stage temp-chat sessions + role/context briefing)
 
 This file is the living project tracker. Update it whenever a meaningful system capability is added, changed, verified, or deferred so a new reader can quickly understand what the system does, what is being built now, and what remains.
 
@@ -465,6 +465,77 @@ Decisions already chosen:
     `target_duration_sec`), `thumbnail.jpg` (51 KB), `report.md`,
     `operator_review.html`, `visual_review.json`.
 - Docker verification: `133 passed in 22.09s`.
+
+### V3 Phase 1 Step 14 Session-per-stage + role/context briefing
+
+Two related changes that together make the orchestrator drive ChatGPT
+the way a person would, and brief the model with the channel's voice
++ rules before every task:
+
+1. **Browser-worker session API.** Drivers were refactored into
+   `open()`, `send_message()`, `close()`. New routes:
+   - `POST /chatgpt/sessions` -> `{session_id}` (opens a temp chat
+     tab + dismisses consent modal).
+   - `POST /chatgpt/sessions/{sid}/send` -> `{raw_response}`
+     (types + scrapes inside the existing tab).
+   - `DELETE /chatgpt/sessions/{sid}` -> 204.
+   - Same shape for Gemini. Legacy `POST /chatgpt/send` and
+     `POST /gemini/send` still work for one-shot callers.
+   - Worker holds session state in an in-memory `_SESSIONS` dict
+     keyed by uuid4 hex. Each entry owns its own Playwright
+     connection, page, and driver instance; `_close_session` tears
+     all of them down.
+
+2. **Driver scrape logic switched from "count assistant turns" to
+   "wait for last-text change".** The turn-count heuristic broke when
+   short answers (e.g. "OK") rendered in the temporary-chat Fast
+   Answer block, which uses different selectors than the regular
+   assistant turn container. Both drivers now snapshot the last
+   non-empty assistant text before sending and wait for it to change.
+
+3. **BrowserClient session helpers + `run_session(site, messages)`.**
+   Opens a session, sends each message in order, returns the last
+   response, and closes the session in a `finally` so partial
+   failures never leak runtime tabs.
+
+4. **Per-stage role + context briefing.** New
+   `src/video_agent/orchestrator/briefing.py` builds a Spanish
+   first-message that contains:
+   - A stage-specific role (script / scenes / seo writer).
+   - A channel summary extracted from `channel.yaml`: name,
+     description, audience, niche, avoid-topics, forbidden +
+     preferred positioning phrases, QA thresholds, TTS pace.
+   - Absolute constraints: pinned `job_id` + `channel_id`, language,
+     accents, medical-safety disclaimer, "JSON only" output rule.
+   - Asks the model to reply only `OK` so it commits the briefing
+     before the task arrives.
+   The auto stages send `[briefing, task]` through `run_session`, so
+   one stage = one temp chat = two user messages = close.
+
+5. **Auto stages now take `session_fn: SessionFn` instead of
+   `prompt_fn`.** Each stage opens a fresh temp chat (so prior-stage
+   context never bleeds), sends briefing then task, then closes.
+
+Live verified end-to-end with the user signed into ChatGPT in the
+Browser Appliance:
+
+- Session API smoke: two messages ("Responde solo OK", "Cuánto es
+  2+2? Solo el número") in the same session returned "OK" and "4"
+  respectively; DELETE closed the tab cleanly.
+- `POST /jobs/brf-1779252992/run-all` -> 200,
+  `completed: [script_promote, scenes_promote, seo_promote, render,
+  review]`, **4m15s** wall (vs ~3m43s pre-briefing; the +30s is the
+  briefing messages and per-stage open/close).
+- Output quality jumped vs the un-briefed run:
+  - SEO title and description name the channel ("Vida Plena 45+").
+  - Description includes the preferred phrase "adultos 45+" and the
+    medical-safety line "consulta a un profesional".
+  - Tags within the channel rule (5-8), no forbidden phrases.
+  - Script hook uses preferred positioning vocabulary; accents
+    preserved.
+
+Docker verification: `133 passed in 15.82s` (tests updated to feed
+`run_session` and assert briefing + task arrive as two messages).
 
 ## Target V3 Architecture
 

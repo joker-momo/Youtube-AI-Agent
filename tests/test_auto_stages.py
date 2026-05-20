@@ -162,6 +162,20 @@ class FakeBrowserClient:
 
         return sender, closer
 
+    async def generate_image(
+        self,
+        prompt: str,
+        *,
+        project_name: str,
+        out_path: str,
+        response_timeout_ms: int = 360_000,
+    ) -> dict:
+        import os
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        with open(out_path, "wb") as fh:
+            fh.write(b"\x89PNG stub")
+        return {"src": "https://example.com/img.png", "local_path": out_path, "project_name": project_name, "bytes": 9}
+
 
 # ---------- direct module-level auto stage tests ---------------------------
 
@@ -546,12 +560,17 @@ def test_http_run_all_success(
         _complete_stage(job_dir, "review", out)
         return out
 
+    async def _noop_sleep(_):
+        return
+
     monkeypatch.setattr(
         "video_agent.web.app.run_render_stage", fake_render
     )
     monkeypatch.setattr(
         "video_agent.web.app.run_review_stage", fake_review
     )
+    import asyncio as _asyncio
+    monkeypatch.setattr(_asyncio, "sleep", _noop_sleep)
 
     try:
         r = http_client.post("/jobs/job-auto/run-all")
@@ -568,6 +587,7 @@ def test_http_run_all_success(
         "scenes_qa",
         "seo_promote",
         "seo_qa",
+        "assets_chatgpt",
         "render",
         "review",
     ]
@@ -799,4 +819,159 @@ def test_promote_qa_stage_rejects_non_pass(
             job_dir,
             "script",
             json.dumps(_qa_fail_payload(["issue"])),
+        )
+
+
+# ---------------------------------------------------------------------------
+# auto_assets_chatgpt_stage tests
+# ---------------------------------------------------------------------------
+
+
+def _seed_at_assets_chatgpt(job_dir: Path, scenes_doc: dict) -> None:
+    """Create a job at the ``assets_chatgpt`` stage.
+
+    All stages before ``assets_chatgpt`` are marked completed and
+    ``scenes.json`` is written so the stage has something to iterate.
+    """
+    from video_agent.orchestrator.job_state import (
+        DEFAULT_STAGES,
+        JobState,
+        StageStatus,
+        save_job,
+    )
+    from video_agent.orchestrator.orchestrator import _now
+
+    ts = _now()
+    stages = []
+    found = False
+    for name in DEFAULT_STAGES:
+        if name == "assets_chatgpt":
+            stages.append(StageStatus(name=name, status="pending"))
+            found = True
+        elif not found:
+            stages.append(StageStatus(name=name, status="completed", started_at=ts, completed_at=ts))
+        else:
+            stages.append(StageStatus(name=name, status="pending"))
+
+    state = JobState(
+        job_id="job-assets",
+        channel_id="vida-plena-45",
+        idea_path="idea.json",
+        created_at=ts,
+        updated_at=ts,
+        current_stage="assets_chatgpt",
+        stages=stages,
+    )
+    job_dir.mkdir(parents=True, exist_ok=True)
+    save_job(job_dir, state)
+    (job_dir / "scenes.json").write_text(
+        json.dumps(scenes_doc, ensure_ascii=False), encoding="utf-8"
+    )
+
+
+def _two_scene_doc() -> dict:
+    return {
+        "channel_id": "vida-plena-45",
+        "job_id": "job-assets",
+        "total_duration_sec": 48,
+        "scenes": [
+            {
+                "id": "scene-01",
+                "duration_sec": 24,
+                "narration": "Narration one.",
+                "on_screen_text": "Text one",
+                "caption": "Caption one",
+                "visual_prompt": "Calm bedroom with warm light",
+                "motion": "slow push-in",
+                "asset_refs": {},
+            },
+            {
+                "id": "scene-02",
+                "duration_sec": 24,
+                "narration": "Narration two.",
+                "on_screen_text": "Text two",
+                "caption": "Caption two",
+                "visual_prompt": "Woman reading quietly",
+                "motion": "gentle pan",
+                "asset_refs": {},
+            },
+        ],
+        "qa": {"verdict": "PASS"},
+    }
+
+
+async def _fake_image_fn(prompt: str, *, project_name: str, out_path: str) -> dict:
+    """Fake image_fn: writes a tiny PNG-like stub and returns metadata."""
+    import os
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    with open(out_path, "wb") as f:
+        f.write(b"\x89PNG stub")
+    return {
+        "src": "https://example.com/img.png",
+        "local_path": out_path,
+        "project_name": project_name,
+        "bytes": 9,
+    }
+
+
+def test_auto_assets_chatgpt_gen_all_scenes(tmp_path, channel_path):
+    from video_agent.orchestrator.stages import auto_assets_chatgpt_stage
+
+    job_dir = tmp_path / "job-assets"
+    _seed_at_assets_chatgpt(job_dir, _two_scene_doc())
+
+    output = asyncio.run(
+        auto_assets_chatgpt_stage(job_dir, channel_path, _fake_image_fn, throttle_sec=0)
+    )
+
+    assert output == job_dir / "scenes.json"
+    scenes = json.loads(output.read_text(encoding="utf-8"))
+    for scene in scenes["scenes"]:
+        refs = scene.get("asset_refs", {})
+        assert refs.get("primary", "").endswith(".png"), f"scene {scene['id']} missing primary"
+    state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    assert state["current_stage"] == "render"
+    assert any(s["name"] == "assets_chatgpt" and s["status"] == "completed" for s in state["stages"])
+
+
+async def _failing_image_fn(prompt: str, *, project_name: str, out_path: str) -> dict:
+    from video_agent.orchestrator.browser_client import BrowserClientError
+    raise BrowserClientError("image gen failed", status_code=500, detail={})
+
+
+def test_auto_assets_chatgpt_continues_on_scene_failure(tmp_path, channel_path):
+    """A scene failure emits SCENE_ASSET_FAILED and stage still completes."""
+    from video_agent.orchestrator.stages import auto_assets_chatgpt_stage
+    from video_agent.contracts import EVENT_LOG
+
+    job_dir = tmp_path / "job-assets"
+    _seed_at_assets_chatgpt(job_dir, _two_scene_doc())
+
+    output = asyncio.run(
+        auto_assets_chatgpt_stage(job_dir, channel_path, _failing_image_fn, throttle_sec=0)
+    )
+
+    assert output == job_dir / "scenes.json"
+    state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    assert state["current_stage"] == "render"
+
+    events_text = (job_dir / EVENT_LOG).read_text(encoding="utf-8")
+    assert events_text.count("SCENE_ASSET_FAILED") == 2
+
+
+def test_auto_assets_chatgpt_wrong_stage_raises(tmp_path, channel_path):
+    from video_agent.orchestrator.stages import auto_assets_chatgpt_stage
+
+    job_dir = tmp_path / "job-assets"
+    _seed_at_assets_chatgpt(job_dir, _two_scene_doc())
+
+    # Tamper: set current_stage to something else.
+    from video_agent.orchestrator.job_state import load_job, save_job
+    state = load_job(job_dir)
+    state.current_stage = "render"
+    save_job(job_dir, state)
+
+    with pytest.raises(StageInputMissingError, match="assets_chatgpt"):
+        asyncio.run(
+            auto_assets_chatgpt_stage(job_dir, channel_path, _fake_image_fn, throttle_sec=0)
         )

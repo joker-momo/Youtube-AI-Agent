@@ -26,6 +26,7 @@ from video_agent.orchestrator.orchestrator import StageError
 from video_agent.orchestrator.stages import (
     IDEA_FILE,
     StageInputMissingError,
+    auto_assets_chatgpt_stage,
     auto_qa_with_rework,
     auto_scenes_qa_stage,
     auto_scenes_stage,
@@ -1747,6 +1748,13 @@ async def post_run_all(
                 "seo_qa",
                 await auto_qa_with_rework(
                     "seo", job_dir, channel_path, chatgpt_fn, qa_fn
+                ),
+            )
+        if "assets_chatgpt" in remaining:
+            await _record(
+                "assets_chatgpt",
+                await auto_assets_chatgpt_stage(
+                    job_dir, channel_path, client.generate_image
                 ),
             )
         if "render" in remaining:

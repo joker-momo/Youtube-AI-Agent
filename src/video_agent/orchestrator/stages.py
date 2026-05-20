@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Awaitable, Callable, Sequence
@@ -650,6 +651,58 @@ async def generate_scene_asset(
         },
     )
     return {"scene_id": scene_id, **result, "asset_refs_primary": rel}
+
+
+# ---------------------------------------------------------------------------
+# Batch image generation stage: assets_chatgpt.
+# ---------------------------------------------------------------------------
+
+
+async def auto_assets_chatgpt_stage(
+    job_dir: Path,
+    channel_path: Path,
+    image_fn,
+    *,
+    throttle_sec: float = 8.0,
+) -> Path:
+    """Generate ChatGPT images for every scene, with per-scene throttle + fallback.
+
+    Iterates all scenes in scenes.json and calls ``generate_scene_asset()``
+    for each. A failed scene logs a ``SCENE_ASSET_FAILED`` event and
+    continues — the render stage falls back to stock/placeholder for that
+    scene so the pipeline never halts on a single image failure.
+
+    Returns ``scenes.json`` (updated in-place with ``asset_refs.primary``
+    for each successfully generated scene).
+    """
+    stage_name = "assets_chatgpt"
+    state = load_job(job_dir)
+    if state.current_stage != stage_name:
+        raise StageInputMissingError(
+            f"Cannot run {stage_name} from current_stage={state.current_stage!r}"
+        )
+
+    scenes_path = job_dir / "scenes.json"
+    if not scenes_path.exists():
+        raise StageInputMissingError(f"Missing {scenes_path}")
+
+    scenes_doc = json.loads(scenes_path.read_text(encoding="utf-8"))
+    scene_ids = [s["id"] for s in scenes_doc.get("scenes", [])]
+    logger = EventLogger(job_dir / EVENT_LOG)
+
+    for idx, scene_id in enumerate(scene_ids):
+        if idx > 0:
+            await asyncio.sleep(throttle_sec)
+        try:
+            await generate_scene_asset(job_dir, channel_path, scene_id, image_fn)
+        except Exception as exc:
+            logger.log(
+                "SCENE_ASSET_FAILED",
+                {"job_id": state.job_id, "scene_id": scene_id, "error": str(exc)},
+            )
+
+    _complete_stage(job_dir, stage_name, scenes_path)
+    return scenes_path
 
 
 # ---------------------------------------------------------------------------

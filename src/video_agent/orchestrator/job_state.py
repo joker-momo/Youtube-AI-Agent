@@ -16,6 +16,7 @@ DEFAULT_STAGES: tuple[str, ...] = (
     "seo",
     "seo_promote",
     "seo_qa",
+    "assets_chatgpt",
     "render",
     "review",
 )

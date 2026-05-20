@@ -137,6 +137,21 @@ def _fake_pass_qa(job_dir: Path, artifact: str) -> None:
     )
 
 
+def _fake_pass_assets_chatgpt(job_dir: Path) -> None:
+    """Mark assets_chatgpt as completed and advance to render."""
+    from video_agent.orchestrator.job_state import load_job, save_job
+
+    state = load_job(job_dir)
+    if state.current_stage != "assets_chatgpt":
+        return
+    stage = state.stage("assets_chatgpt")
+    stage.status = "completed"
+    nxt = next((s for s in state.stages if s.status == "pending"), None)
+    if nxt is not None:
+        state.current_stage = nxt.name
+    save_job(job_dir, state)
+
+
 def _prepare_promoted_script(
     job_dir: Path,
     channel_path: Path,
@@ -448,6 +463,7 @@ def test_run_render_stage_uses_operator_render_without_qa_gate(
     run_seo_stage(job_dir, channel_path)
     promote_seo_stage(job_dir, channel_path, raw_response=json.dumps(valid_seo_payload))
     _fake_pass_qa(job_dir, "seo")
+    _fake_pass_assets_chatgpt(job_dir)
     calls = []
 
     def fake_render_operator_job(options):
@@ -494,6 +510,7 @@ def test_run_review_stage_writes_review_and_completes_job(
     run_seo_stage(job_dir, channel_path)
     promote_seo_stage(job_dir, channel_path, raw_response=json.dumps(valid_seo_payload))
     _fake_pass_qa(job_dir, "seo")
+    _fake_pass_assets_chatgpt(job_dir)
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
     next(s for s in state["stages"] if s["name"] == "render")["status"] = "completed"
     state["current_stage"] = "review"
@@ -791,6 +808,7 @@ def test_post_run_render_via_http(
         json={"raw_response": json.dumps(valid_seo_payload, ensure_ascii=False)},
     )
     _fake_pass_qa(tmp_path / "job-s1", "seo")
+    _fake_pass_assets_chatgpt(tmp_path / "job-s1")
 
     def fake_render_operator_job(options):
         for filename in [
@@ -845,6 +863,7 @@ def test_post_run_review_via_http(
         json={"raw_response": json.dumps(valid_seo_payload, ensure_ascii=False)},
     )
     _fake_pass_qa(tmp_path / "job-s1", "seo")
+    _fake_pass_assets_chatgpt(tmp_path / "job-s1")
 
     def fake_render_operator_job(options):
         (options.job_dir / "video.mp4").write_text("ok", encoding="utf-8")

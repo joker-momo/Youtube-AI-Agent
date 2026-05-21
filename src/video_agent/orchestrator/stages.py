@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Awaitable, Callable, Sequence
 
-from video_agent.contracts import EVENT_LOG
+from video_agent.contracts import EVENT_LOG, repo_root
 from video_agent.operator import (
     _chatgpt_scenes_prompt,
     _chatgpt_seo_prompt,
@@ -947,6 +947,30 @@ def _scene_project_name(job_id: str, scene_id: str) -> str:
     return f"{job_id}-{scene_id}"[:60]
 
 
+def _build_thumbnail_prompt(
+    title: str,
+    thumbnail_text: str,
+    accent_color: str,
+    channel_description: str,
+) -> str:
+    return (
+        f"Photorealistic YouTube thumbnail background image. "
+        f"No text, no watermarks, no captions, no overlays. "
+        f"16:9 aspect ratio, high resolution. "
+        f"Topic: '{title}'. "
+        f"Mood/emotion reference: '{thumbnail_text}'. "
+        f"Subject: Hispanic or Latina woman aged 45-55 years old. "
+        f"Her expression conveys the emotion of the hook: concern, relief, or urgency — matching '{thumbnail_text}'. "
+        f"Composition: subject positioned in the left third of the frame, "
+        f"face clearly visible and sharp, looking slightly toward the right (center of frame). "
+        f"Right third of frame is intentionally empty for text overlay. "
+        f"Background: simple, warm-toned, uncluttered. "
+        f"Accent color to complement: {accent_color}. "
+        f"Lighting: soft natural light, professional photography, bokeh background. "
+        f"Channel context: {channel_description}."
+    )
+
+
 async def generate_scene_asset(
     job_dir: Path,
     channel_path: Path,
@@ -1071,6 +1095,71 @@ async def auto_assets_chatgpt_stage(
 
     _complete_stage(job_dir, stage_name, scenes_path)
     return scenes_path
+
+
+# ---------------------------------------------------------------------------
+# Thumbnail background image generation stage.
+# ---------------------------------------------------------------------------
+
+
+async def auto_thumbnail_image_stage(
+    job_dir: Path,
+    channel_path: Path,
+    image_fn,
+) -> Path:
+    stage_name = "thumbnail_image"
+    state = load_job(job_dir)
+    if state.current_stage != stage_name:
+        raise StageInputMissingError(
+            f"Cannot run {stage_name} from current_stage={state.current_stage!r}"
+        )
+
+    seo_path = job_dir / "seo.json"
+    if not seo_path.exists():
+        raise StageInputMissingError(f"Missing {seo_path}")
+    seo = json.loads(seo_path.read_text(encoding="utf-8"))
+
+    if not channel_path.exists():
+        raise StageInputMissingError(f"Missing channel config {channel_path}")
+    channel_config = read_yaml(channel_path)
+
+    variants = seo.get("title_variants") or []
+    thumbnail_text = (variants[0].get("thumbnail_text") or "") if variants else ""
+    if not thumbnail_text:
+        thumbnail_text = seo.get("thumbnail_text") or ""
+    title = seo.get("title") or ""
+    palette = (channel_config.get("style") or {}).get("palette") or {}
+    accent_color = palette.get("accent", "#F2C94C")
+    channel_description = (channel_config.get("channel") or {}).get("description", "Wellness channel for adults 45+")
+
+    prompt = _build_thumbnail_prompt(title, thumbnail_text, accent_color, channel_description)
+
+    assets_dir = job_dir / "assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    out_path = assets_dir / "thumbnail_bg.png"
+    project_name = f"{state.job_id}-thumbnail"[:60]
+
+    await image_fn(
+        prompt=prompt,
+        project_name=project_name,
+        out_path=str(out_path),
+    )
+
+    public_assets_dir = repo_root() / "remotion/public/jobs" / job_dir.name / "assets"
+    public_assets_dir.mkdir(parents=True, exist_ok=True)
+    import shutil as _shutil
+    _shutil.copy2(out_path, public_assets_dir / "thumbnail_bg.png")
+
+    public_ref = f"jobs/{job_dir.name}/assets/thumbnail_bg.png"
+    seo["thumbnail_path"] = public_ref
+    _write_json(seo_path, seo)
+
+    EventLogger(job_dir / EVENT_LOG).log(
+        "THUMBNAIL_IMAGE_GENERATED",
+        {"job_id": state.job_id, "public_path": public_ref},
+    )
+    _complete_stage(job_dir, stage_name, seo_path)
+    return seo_path
 
 
 # ---------------------------------------------------------------------------

@@ -2169,9 +2169,9 @@ async function generateAndScore() {
   btn.disabled = true;
   document.getElementById('ideas-grid').innerHTML = '';
 
-  // ── Step 1: Generate ────────────────────────────────────────────────
-  btn.innerHTML = '<span class="spinner-inline"></span>Generating… (1/2)';
-  status.textContent = 'Asking ChatGPT for ' + count + ' ideas — 30–60 s…';
+  // Single request: backend does vidIQ discovery → ChatGPT expansion internally
+  btn.innerHTML = '<span class="spinner-inline"></span>Scanning vidIQ…';
+  status.textContent = 'Step 1/2 — scoring keywords on vidIQ to find high-opportunity topics…';
 
   let ideas = [], savedPaths = [];
   try {
@@ -2180,46 +2180,34 @@ async function generateAndScore() {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({count, seed_topics: seedTopics}),
     });
+
+    // While waiting, update label to hint that ChatGPT phase started
+    // (we can't stream, so just show a generic second step message after short delay)
+    const labelTimer = setTimeout(() => {
+      if (btn.disabled) {
+        btn.innerHTML = '<span class="spinner-inline"></span>Generating ideas…';
+        status.textContent = 'Step 2/2 — ChatGPT generating ideas from top keywords…';
+      }
+    }, 30000);
+
     const d = await r.json();
+    clearTimeout(labelTimer);
+
     if (!r.ok) {
-      status.textContent = '❌ Generate failed: ' + (d.detail?.error || d.detail || r.status);
+      status.textContent = '❌ Failed: ' + (d.detail?.error || d.detail || r.status);
       return;
     }
     ideas = d.ideas || [];
     savedPaths = (d.saved || []).map(p => 'ideas/' + p.split('ideas/').pop());
+
+    // Ideas already have vidiq_score/vidiq_volume/vidiq_competition from backend
     renderIdeaCards(ideas, savedPaths);
-    status.textContent = '✅ ' + ideas.length + ' ideas generated. Scoring with vidIQ…';
+
+    const topKws = d.top_keywords || [];
+    const best = topKws.length ? ' (best keyword score: ' + (topKws[0].score ?? '?') + '/100)' : '';
+    status.textContent = '✅ ' + ideas.length + ' ideas from top vidIQ keywords' + best + '.';
   } catch (e) {
-    status.textContent = '❌ Generate error: ' + e.message;
-    return;
-  }
-
-  if (!ideas.length) { btn.disabled = false; btn.innerHTML = '✨ Generate + Score'; return; }
-
-  // ── Step 2: Score ────────────────────────────────────────────────────
-  btn.innerHTML = '<span class="spinner-inline"></span>Scoring vidIQ… (2/2)';
-  status.textContent = 'Querying vidIQ for ' + ideas.length + ' ideas — 1–2 min…';
-
-  try {
-    const r = await fetch('/channels/' + encodeURIComponent(channelId) + '/ideas/score', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ideas}),
-    });
-    const d = await r.json();
-    if (!r.ok) {
-      status.textContent = '⚠️ Ideas saved but vidIQ scoring failed: ' + (d.detail || r.status);
-      return;
-    }
-    (d.results || []).forEach((res, i) => {
-      const card = document.getElementById('idea-card-' + i);
-      if (!card) return;
-      const mount = card.querySelector('.idea-score-mount');
-      if (mount) mount.innerHTML = renderIdeaScoreBlock(res);
-    });
-    status.textContent = '✅ ' + ideas.length + ' ideas generated and scored.';
-  } catch (e) {
-    status.textContent = '⚠️ Ideas saved but scoring error: ' + e.message;
+    status.textContent = '❌ Error: ' + e.message;
   } finally {
     btn.disabled = false;
     btn.innerHTML = '✨ Generate + Score';
@@ -2302,16 +2290,37 @@ function renderIdeaCard(idea, savedPath) {
   const points = (idea.key_points || []).slice(0, 4).map(p => `<li>${escapeHtml(p)}</li>`).join('');
   const safeIdea = escapeHtml(JSON.stringify(idea));
   const safePath = escapeHtml(savedPath);
+
+  // Inline score block from pre-computed vidiq_score (no extra fetch needed)
+  const score = idea.vidiq_score ?? null;
+  const vol = idea.vidiq_volume || '';
+  const comp = idea.vidiq_competition || '';
+  const kw = idea.target_keyword || '';
+  let scoreHtml = '';
+  if (score !== null || kw) {
+    const cls = _scoreClass(score);
+    const color = _scoreColor(score);
+    const pct = score != null ? Math.min(100, score) : 0;
+    scoreHtml = `
+      <div class="idea-score-row">
+        ${score !== null ? `<span class="idea-score-badge ${cls}">${score}/100</span>` : ''}
+        ${score !== null ? `<div class="idea-score-bar"><div class="idea-score-bar-fill" style="width:${pct}%;background:${color}"></div></div>` : ''}
+        ${comp ? `<span class="idea-comp-badge">${escapeHtml(comp)}</span>` : ''}
+        ${vol ? `<span class="idea-comp-badge" style="background:#eff6ff;color:#1d4ed8">${escapeHtml(vol)}</span>` : ''}
+      </div>
+      ${kw ? `<div class="idea-related" style="margin-top:4px">🔑 <b>${escapeHtml(kw)}</b></div>` : ''}`;
+  }
+
   return `
     <div class="idea-card">
       <div class="idea-card-title">${escapeHtml(idea.title_seed || idea.topic || '-')}</div>
+      ${scoreHtml}
       <div class="idea-card-angle">${escapeHtml(idea.angle || '')}</div>
       <div class="idea-card-meta">
         ${dur ? `<span class="idea-card-dur">⏱ ${dur}</span>` : ''}
         <span class="idea-card-dur">${escapeHtml(idea.topic || '')}</span>
       </div>
       ${points ? `<ul class="idea-card-points">${points}</ul>` : ''}
-      <div class="idea-score-mount"></div>
       <div class="idea-card-actions">
         <button class="action-btn primary"
           onclick='createJobFromIdea(${safeIdea}, "${safePath}")'>+ Create Job</button>
@@ -2979,9 +2988,14 @@ async def post_generate_ideas(
     inputs_root: Path = Depends(get_inputs_root),
     client: BrowserClient = Depends(get_browser_client),
 ) -> dict:
-    """Generate N idea JSON files via ChatGPT and save to inputs/ideas/<channel_id>/.
+    """Discover high-opportunity keywords via vidIQ, then generate ideas via ChatGPT.
 
-    Returns the list of ideas and their saved file paths relative to inputs_root.
+    Flow:
+      1. Score seed_topics on vidIQ + expand to related keywords.
+      2. Pick top-N keywords by score (high volume / low competition).
+      3. ChatGPT fleshes out one idea per top keyword.
+
+    Returns ideas with pre-computed keyword scores so the UI shows scores immediately.
     """
     channel_path = repo_root() / "configs" / channel_id / "channel.yaml"
     if not channel_path.exists():
@@ -2991,9 +3005,10 @@ async def post_generate_ideas(
         raise HTTPException(status_code=422, detail="count must be between 1 and 50")
 
     try:
-        ideas = await generate_ideas(
+        ideas, top_keywords = await generate_ideas(
             channel_path=channel_path,
             chatgpt_fn=lambda msgs: client.run_session("chatgpt", msgs),
+            vidiq_fn=client.run_vidiq_scores,
             seed_topics=req.seed_topics,
             count=req.count,
         )
@@ -3002,13 +3017,27 @@ async def post_generate_ideas(
     except ValueError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    paths = save_ideas(ideas, channel_id=channel_id, out_dir=inputs_root)
+    # Attach keyword score to each idea by matching target_keyword field
+    kw_score_map = {kw["keyword"].lower(): kw for kw in top_keywords}
+    ideas_with_scores = []
+    for idea in ideas:
+        enriched = dict(idea)
+        target_kw = idea.get("target_keyword", "")
+        kw_data = kw_score_map.get(target_kw.lower(), {})
+        if kw_data:
+            enriched["vidiq_score"] = kw_data.get("score")
+            enriched["vidiq_volume"] = kw_data.get("volume", "")
+            enriched["vidiq_competition"] = kw_data.get("competition", "")
+        ideas_with_scores.append(enriched)
+
+    paths = save_ideas(ideas_with_scores, channel_id=channel_id, out_dir=inputs_root)
     rel_paths = [str(p.relative_to(inputs_root)) for p in paths]
 
     return {
         "channel_id": channel_id,
-        "count": len(ideas),
-        "ideas": ideas,
+        "count": len(ideas_with_scores),
+        "ideas": ideas_with_scores,
+        "top_keywords": top_keywords,
         "saved": rel_paths,
     }
 

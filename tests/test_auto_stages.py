@@ -228,6 +228,38 @@ def _fake_pass_stage(job_dir: Path, stage_name: str) -> None:
     save_job(job_dir, state)
 
 
+def _set_current_stage(job_dir: Path, stage_name: str) -> None:
+    """Force job.json to a specific pending stage with consistent statuses."""
+    from video_agent.orchestrator.job_state import load_job, save_job
+
+    state = load_job(job_dir)
+    found = False
+    for stage in state.stages:
+        if stage.name == stage_name:
+            found = True
+            stage.status = "pending"
+            stage.started_at = None
+            stage.completed_at = None
+            stage.error = None
+            continue
+        if not found:
+            stage.status = "completed"
+            if stage.started_at is None:
+                stage.started_at = state.updated_at
+            if stage.completed_at is None:
+                stage.completed_at = state.updated_at
+            stage.error = None
+        else:
+            stage.status = "pending"
+            stage.started_at = None
+            stage.completed_at = None
+            stage.error = None
+    if not found:
+        raise AssertionError(f"Unknown stage in test setup: {stage_name}")
+    state.current_stage = stage_name
+    save_job(job_dir, state)
+
+
 def _seed_script(job_dir: Path, channel_path: Path, idea_payload: dict) -> None:
     create_job(
         job_dir,
@@ -503,6 +535,103 @@ def test_http_auto_script_unknown_job_returns_404(http_client: TestClient):
     assert r.status_code == 404
 
 
+def test_http_auto_thumbnail_image(
+    http_client: TestClient,
+    tmp_path: Path,
+    monkeypatch,
+):
+    _create_job(http_client)
+    job_dir = tmp_path / "job-auto"
+    _set_current_stage(job_dir, "thumbnail_image")
+    (job_dir / "seo.json").write_text(
+        json.dumps(
+            {
+                "job_id": "job-auto",
+                "title": "5 hábitos nocturnos para dormir mejor",
+                "description": "Rutina suave y realista para descansar mejor.",
+                "tags": [
+                    "dormir mejor",
+                    "rutina nocturna",
+                    "vida plena 45",
+                    "bienestar 45",
+                    "descanso",
+                ],
+                "language": "es-419",
+                "ai_disclosure": True,
+                "thumbnail_path": "",
+                "thumbnail_text": "DUERME MEJOR HOY",
+                "title_variants": [
+                    {
+                        "title": "5 hábitos nocturnos para dormir mejor",
+                        "thumbnail_text": "DUERME MEJOR HOY",
+                        "score": 85,
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    fake = FakeBrowserClient()
+    app.dependency_overrides[get_browser_client] = lambda: fake
+    monkeypatch.setattr("video_agent.orchestrator.stages.repo_root", lambda: tmp_path)
+
+    try:
+        r = http_client.post("/jobs/job-auto/stages/thumbnail_image/auto")
+    finally:
+        app.dependency_overrides.pop(get_browser_client, None)
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["output"] == "seo.json"
+    assert body["state"]["current_stage"] == "whisper_timestamps"
+    seo = json.loads((job_dir / "seo.json").read_text(encoding="utf-8"))
+    assert seo["thumbnail_path"].endswith("/assets/thumbnail_bg.png")
+
+
+def test_http_auto_thumbnail_image_worker_error_returns_502(
+    http_client: TestClient,
+    tmp_path: Path,
+):
+    _create_job(http_client)
+    job_dir = tmp_path / "job-auto"
+    _set_current_stage(job_dir, "thumbnail_image")
+    (job_dir / "seo.json").write_text(
+        json.dumps(
+            {
+                "job_id": "job-auto",
+                "title": "5 hábitos nocturnos para dormir mejor",
+                "description": "Rutina suave y realista para descansar mejor.",
+                "tags": ["dormir mejor"],
+                "language": "es-419",
+                "ai_disclosure": True,
+                "thumbnail_path": "",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    fake = FakeBrowserClient()
+
+    async def _raise_image_error(**kwargs):
+        raise BrowserClientError(
+            "image driver failed", status_code=502, detail={"error": "boom"}
+        )
+
+    fake.generate_image = _raise_image_error  # type: ignore[assignment]
+    app.dependency_overrides[get_browser_client] = lambda: fake
+    try:
+        r = http_client.post("/jobs/job-auto/stages/thumbnail_image/auto")
+    finally:
+        app.dependency_overrides.pop(get_browser_client, None)
+
+    assert r.status_code == 502
+    detail = r.json()["detail"]
+    assert detail["browser_worker_status"] == 502
+
+
 def test_browser_client_default_base_url(monkeypatch):
     monkeypatch.delenv("BROWSER_WORKER_URL", raising=False)
     client = BrowserClient()
@@ -590,23 +719,33 @@ def test_http_run_all_success(
         _complete_stage(job_dir, "whisper_timestamps", out)
         return out
 
+    async def fake_thumbnail(job_dir, channel_path, image_fn):
+        out = job_dir / "seo.json"
+        from video_agent.orchestrator.stages import _complete_stage
+
+        _complete_stage(job_dir, "thumbnail_image", out)
+        return out
+
     async def _noop_sleep(_):
         return
 
     monkeypatch.setattr(
-        "video_agent.web.app.run_render_stage", fake_render
+        "video_agent.web.run_all_pipeline.run_render_stage", fake_render
     )
     monkeypatch.setattr(
-        "video_agent.web.app.run_review_stage", fake_review
+        "video_agent.web.run_all_pipeline.run_review_stage", fake_review
     )
     monkeypatch.setattr(
-        "video_agent.web.app.run_whisper_timestamps_stage", fake_whisper
+        "video_agent.web.run_all_pipeline.run_whisper_timestamps_stage", fake_whisper
+    )
+    monkeypatch.setattr(
+        "video_agent.web.run_all_pipeline.auto_thumbnail_image_stage", fake_thumbnail
     )
     import asyncio as _asyncio
     monkeypatch.setattr(_asyncio, "sleep", _noop_sleep)
 
     try:
-        r = http_client.post("/jobs/job-auto/run-all")
+        r = http_client.post("/jobs/job-auto/run-all?enforce_approvals=false")
     finally:
         app.dependency_overrides.pop(get_browser_client, None)
 
@@ -622,6 +761,7 @@ def test_http_run_all_success(
         "seo_promote",
         "seo_qa",
         "seo_vidiq",
+        "thumbnail_image",
         "whisper_timestamps",
         "render",
         "review",
@@ -630,6 +770,118 @@ def test_http_run_all_success(
     # 2 briefing sends + 3 ChatGPT task sends + 3 Gemini task sends = 8
     # idea_research + seo_vidiq use run_vidiq_scores (not session queue)
     assert len(fake.calls) == 8
+
+
+def test_http_run_all_requires_idea_research_confirmation(
+    http_client: TestClient,
+    monkeypatch,
+    idea_payload: dict,
+    valid_script_payload: dict,
+    valid_scenes_payload: dict,
+    valid_seo_payload: dict,
+):
+    _create_job(http_client)
+    http_client.post("/jobs/job-auto/idea", json=idea_payload)
+
+    qa_pass = json.dumps(
+        {
+            "verdict": "PASS",
+            "scores": {"schema_fit": 5, "channel_fit": 5, "safety": 5, "clarity": 5},
+            "issues": [],
+            "required_changes": [],
+        }
+    )
+    fake = FakeBrowserClient(
+        queue=[
+            "OK",
+            "OK",
+            json.dumps(valid_script_payload, ensure_ascii=False),
+            qa_pass,
+            json.dumps(valid_scenes_payload, ensure_ascii=False),
+            qa_pass,
+            json.dumps(valid_seo_payload, ensure_ascii=False),
+            qa_pass,
+        ]
+    )
+    app.dependency_overrides[get_browser_client] = lambda: fake
+
+    def fake_render(job_dir, channel_path):
+        out = job_dir / "video.mp4"
+        out.write_bytes(b"fake")
+        from video_agent.orchestrator.stages import _complete_stage
+
+        _complete_stage(job_dir, "render", out)
+        return out
+
+    def fake_review(job_dir):
+        out = job_dir / "operator_review.html"
+        out.write_text("<html/>", encoding="utf-8")
+        from video_agent.orchestrator.stages import _complete_stage
+
+        _complete_stage(job_dir, "review", out)
+        return out
+
+    def fake_whisper(job_dir):
+        out = job_dir / "whisper_timestamps.json"
+        out.write_text('{"scenes":[]}', encoding="utf-8")
+        from video_agent.orchestrator.stages import _complete_stage
+
+        _complete_stage(job_dir, "whisper_timestamps", out)
+        return out
+
+    async def fake_thumbnail(job_dir, channel_path, image_fn):
+        out = job_dir / "seo.json"
+        from video_agent.orchestrator.stages import _complete_stage
+
+        _complete_stage(job_dir, "thumbnail_image", out)
+        return out
+
+    async def _noop_sleep(_):
+        return
+
+    monkeypatch.setattr("video_agent.web.run_all_pipeline.run_render_stage", fake_render)
+    monkeypatch.setattr("video_agent.web.run_all_pipeline.run_review_stage", fake_review)
+    monkeypatch.setattr("video_agent.web.run_all_pipeline.run_whisper_timestamps_stage", fake_whisper)
+    monkeypatch.setattr("video_agent.web.run_all_pipeline.auto_thumbnail_image_stage", fake_thumbnail)
+    import asyncio as _asyncio
+
+    monkeypatch.setattr(_asyncio, "sleep", _noop_sleep)
+
+    try:
+        first = http_client.post("/jobs/job-auto/run-all")
+        assert first.status_code == 409
+        detail = first.json()["detail"]
+        assert detail["approval_required"] == "idea_research"
+        assert detail["stopped_at"] == "script"
+
+        confirm = http_client.post("/jobs/job-auto/approvals/idea_research/confirm")
+        assert confirm.status_code == 200
+
+        second = http_client.post("/jobs/job-auto/run-all")
+    finally:
+        app.dependency_overrides.pop(get_browser_client, None)
+
+    assert second.status_code == 409
+    detail2 = second.json()["detail"]
+    assert detail2["approval_required"] == "script_promote"
+
+
+def test_http_regenerate_idea_research_resets_stage(
+    http_client: TestClient,
+    tmp_path: Path,
+):
+    _create_job(http_client)
+    job_dir = tmp_path / "job-auto"
+    _fake_pass_stage(job_dir, "idea_research")
+
+    r = http_client.post("/jobs/job-auto/stages/idea_research/regenerate")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["state"]["current_stage"] == "idea_research"
+
+    approvals = http_client.get("/jobs/job-auto/approvals")
+    assert approvals.status_code == 200
+    assert approvals.json()["approvals"]["idea_research"] is False
 
 
 def test_http_run_all_resumes_from_current_pending_stage(
@@ -699,18 +951,26 @@ def test_http_run_all_resumes_from_current_pending_stage(
         _complete_stage(job_dir, "whisper_timestamps", out)
         return out
 
+    async def fake_thumbnail(job_dir, channel_path, image_fn):
+        out = job_dir / "seo.json"
+        from video_agent.orchestrator.stages import _complete_stage
+
+        _complete_stage(job_dir, "thumbnail_image", out)
+        return out
+
     async def _noop_sleep(_):
         return
 
-    monkeypatch.setattr("video_agent.web.app.run_render_stage", fake_render)
-    monkeypatch.setattr("video_agent.web.app.run_review_stage", fake_review)
-    monkeypatch.setattr("video_agent.web.app.run_whisper_timestamps_stage", fake_whisper)
+    monkeypatch.setattr("video_agent.web.run_all_pipeline.run_render_stage", fake_render)
+    monkeypatch.setattr("video_agent.web.run_all_pipeline.run_review_stage", fake_review)
+    monkeypatch.setattr("video_agent.web.run_all_pipeline.run_whisper_timestamps_stage", fake_whisper)
+    monkeypatch.setattr("video_agent.web.run_all_pipeline.auto_thumbnail_image_stage", fake_thumbnail)
     import asyncio as _asyncio
 
     monkeypatch.setattr(_asyncio, "sleep", _noop_sleep)
 
     try:
-        r = http_client.post("/jobs/job-auto/run-all")
+        r = http_client.post("/jobs/job-auto/run-all?enforce_approvals=false")
     finally:
         app.dependency_overrides.pop(get_browser_client, None)
 
@@ -722,6 +982,7 @@ def test_http_run_all_resumes_from_current_pending_stage(
         "seo_promote",
         "seo_qa",
         "seo_vidiq",
+        "thumbnail_image",
         "whisper_timestamps",
         "render",
         "review",
@@ -743,7 +1004,7 @@ def test_http_run_all_stops_on_worker_error(
     app.dependency_overrides[get_browser_client] = lambda: fake
 
     try:
-        r = http_client.post("/jobs/job-auto/run-all")
+        r = http_client.post("/jobs/job-auto/run-all?enforce_approvals=false")
     finally:
         app.dependency_overrides.pop(get_browser_client, None)
 
@@ -1285,7 +1546,7 @@ def test_seo_vidiq_swaps_weak_tag(tmp_path, channel_path):
     assert "dormir mejor" not in seo["tags"]
 
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
-    assert state["current_stage"] == "whisper_timestamps"
+    assert state["current_stage"] == "thumbnail_image"
 
 
 def test_seo_vidiq_soft_fails_on_vidiq_error(tmp_path, channel_path):
@@ -1304,4 +1565,4 @@ def test_seo_vidiq_soft_fails_on_vidiq_error(tmp_path, channel_path):
     assert seo["tags"] == _SEO_PAYLOAD["tags"]
     # stage still completes
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
-    assert state["current_stage"] == "whisper_timestamps"
+    assert state["current_stage"] == "thumbnail_image"

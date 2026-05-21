@@ -95,7 +95,7 @@ tts:
 visuals:
   strategy: "auto"
   source_dir: "inputs/image-library/vida-plena-45"
-  providers: ["pexels", "pixabay"]
+  providers: ["pexels_video", "pexels", "pixabay"]
   query_cache_ttl_hours: 24
   orientation: "landscape"
   per_page: 10

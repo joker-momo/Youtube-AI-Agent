@@ -69,10 +69,48 @@ def normalize_pixabay_response(response: dict[str, Any]) -> list[dict[str, Any]]
     return [item for item in results if item["download_url"]]
 
 
+def normalize_pexels_video_response(response: dict[str, Any]) -> list[dict[str, Any]]:
+    results = []
+    for video in response.get("videos", []):
+        user = video.get("user", {})
+        # Pick best HD file: prefer 1920-wide mp4, fallback to largest available
+        video_files = [
+            f for f in video.get("video_files", [])
+            if f.get("file_type") == "video/mp4" and f.get("link")
+        ]
+        video_files.sort(key=lambda f: (f.get("width") or 0), reverse=True)
+        best = video_files[0] if video_files else None
+        if not best:
+            continue
+        photographer = user.get("name") if user else None
+        results.append(
+            {
+                "provider": "pexels",
+                "provider_asset_id": str(video["id"]),
+                "media_type": "video",
+                "download_url": best["link"],
+                "source_url": video.get("url"),
+                "width": best.get("width"),
+                "height": best.get("height"),
+                "duration_sec": video.get("duration"),
+                "fps": best.get("fps"),
+                "tags": [],
+                "photographer": photographer,
+                "photographer_url": user.get("url") if user else None,
+                "attribution": f"Video by {photographer} on Pexels" if photographer else "Video from Pexels",
+                "quality": "hd",
+                "license": "Pexels License",
+            }
+        )
+    return [item for item in results if item["download_url"]]
+
+
 class StockPhotoClient:
     def search(self, provider: str, query: str, filters: dict[str, Any]) -> dict[str, Any]:
         if provider == "pexels":
             return self._search_pexels(query, filters)
+        if provider == "pexels_video":
+            return self._search_pexels_video(query, filters)
         if provider == "pixabay":
             return self._search_pixabay(query, filters)
         raise ValueError(f"Unsupported stock photo provider: {provider}")
@@ -80,6 +118,8 @@ class StockPhotoClient:
     def normalize(self, provider: str, response: dict[str, Any]) -> list[dict[str, Any]]:
         if provider == "pexels":
             return normalize_pexels_response(response)
+        if provider == "pexels_video":
+            return normalize_pexels_video_response(response)
         if provider == "pixabay":
             return normalize_pixabay_response(response)
         raise ValueError(f"Unsupported stock photo provider: {provider}")
@@ -96,6 +136,21 @@ class StockPhotoClient:
             }
         )
         return _read_json(f"https://api.pexels.com/v1/search?{params}", {"Authorization": api_key})
+
+    def _search_pexels_video(self, query: str, filters: dict[str, Any]) -> dict[str, Any]:
+        api_key = os.environ.get("PEXELS_API_KEY")
+        if not api_key:
+            raise RuntimeError("PEXELS_API_KEY is required for provider=pexels_video")
+        min_dur = int(filters.get("min_duration_sec", 10))
+        params = urlencode(
+            {
+                "query": query,
+                "orientation": filters.get("orientation", "landscape"),
+                "per_page": filters.get("per_page", 10),
+                "min_duration": min_dur,
+            }
+        )
+        return _read_json(f"https://api.pexels.com/videos/search?{params}", {"Authorization": api_key})
 
     def _search_pixabay(self, query: str, filters: dict[str, Any]) -> dict[str, Any]:
         api_key = os.environ.get("PIXABAY_API_KEY")

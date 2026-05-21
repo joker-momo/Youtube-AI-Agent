@@ -177,6 +177,68 @@ class AssetLibrary:
             )
         return self.get_by_asset_id(values["asset_id"]) or values
 
+    def store_video(self, candidate: dict[str, Any], downloaded_path: Path, original_query: str) -> dict[str, Any]:
+        """Store a video asset (MP4) in the library without PIL processing."""
+        provider = candidate["provider"].replace("_video", "")  # pexels_video → pexels
+        provider_asset_id = str(candidate["provider_asset_id"])
+        existing = self.get_by_provider_id(provider, provider_asset_id)
+        quality = candidate.get("quality") or "hd"
+        relative_dir = Path("videos") / provider / _now_iso()[:4] / _now_iso()[5:7]
+        relative_path = relative_dir / f"{provider}_{provider_asset_id}_{quality}.mp4"
+        absolute_path = self.root / (existing["file_path"] if existing else relative_path)
+        absolute_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if existing and self.is_file_valid(existing):
+            return existing
+
+        shutil.copy2(downloaded_path, absolute_path)
+        file_hash = _sha256(absolute_path)
+        width = int(candidate.get("width") or 1920)
+        height = int(candidate.get("height") or 1080)
+        values = {
+            "asset_id": existing["asset_id"] if existing else str(uuid.uuid4()),
+            "provider": provider,
+            "provider_asset_id": provider_asset_id,
+            "media_type": "video",
+            "file_path": str(absolute_path.relative_to(self.root)),
+            "file_size_bytes": absolute_path.stat().st_size,
+            "file_hash": file_hash,
+            "perceptual_hash": None,
+            "width": width,
+            "height": height,
+            "aspect_ratio": _aspect_ratio(width, height),
+            "original_url": candidate.get("source_url"),
+            "original_query": original_query,
+            "provider_tags_json": json.dumps(candidate.get("tags", [])),
+            "photographer": candidate.get("photographer"),
+            "photographer_url": candidate.get("photographer_url"),
+            "attribution": candidate.get("attribution"),
+            "license": candidate.get("license"),
+            "downloaded_at": existing["downloaded_at"] if existing else _now_iso(),
+            "last_used_at": existing["last_used_at"] if existing else None,
+            "use_count": existing["use_count"] if existing else 0,
+            "is_banned": existing["is_banned"] if existing else 0,
+            "banned_reason": existing["banned_reason"] if existing else None,
+        }
+        with self._connect() as db:
+            db.execute(
+                """
+                INSERT OR REPLACE INTO assets (
+                    asset_id, provider, provider_asset_id, media_type, file_path, file_size_bytes,
+                    file_hash, perceptual_hash, width, height, aspect_ratio, original_url,
+                    original_query, provider_tags_json, photographer, photographer_url,
+                    attribution, license, downloaded_at, last_used_at, use_count, is_banned, banned_reason
+                ) VALUES (
+                    :asset_id, :provider, :provider_asset_id, :media_type, :file_path, :file_size_bytes,
+                    :file_hash, :perceptual_hash, :width, :height, :aspect_ratio, :original_url,
+                    :original_query, :provider_tags_json, :photographer, :photographer_url,
+                    :attribution, :license, :downloaded_at, :last_used_at, :use_count, :is_banned, :banned_reason
+                )
+                """,
+                values,
+            )
+        return self.get_by_asset_id(values["asset_id"]) or values
+
     def record_usage(
         self,
         asset_id: str,

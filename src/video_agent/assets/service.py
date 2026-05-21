@@ -32,14 +32,18 @@ def _resolve_project_path(value: str | None, default: str) -> Path:
     return path
 
 
-def _stock_filters(visual_config: dict[str, Any]) -> dict[str, Any]:
+def _stock_filters(visual_config: dict[str, Any], scene_duration_sec: int | None = None) -> dict[str, Any]:
     orientation = visual_config.get("orientation", "landscape")
     if orientation == "horizontal":
         orientation = "landscape"
-    return {
+    filters: dict[str, Any] = {
         "orientation": orientation,
         "per_page": int(visual_config.get("per_page", 10)),
     }
+    if scene_duration_sec is not None:
+        # Request clips at least as long as the scene so we don't need to loop
+        filters["min_duration_sec"] = max(10, scene_duration_sec)
+    return filters
 
 
 STOPWORDS = {
@@ -167,7 +171,8 @@ class StockAssetService:
 
     def get_scene_asset(self, scene: dict[str, Any], channel_id: str, job_id: str) -> dict[str, Any] | None:
         query = scene.get("visual_prompt") or scene.get("on_screen_text") or ""
-        filters = _stock_filters(self.visual_config)
+        scene_dur = int(scene.get("duration_sec") or 30)
+        filters = _stock_filters(self.visual_config, scene_duration_sec=scene_dur)
         ttl_hours = int(self.visual_config.get("query_cache_ttl_hours", 24))
         ranked_candidates = []
         self.last_errors = []
@@ -244,11 +249,17 @@ class StockAssetService:
         return ranked
 
     def _ensure_asset(self, candidate: dict[str, Any], query: str) -> dict[str, Any]:
-        existing = self.library.get_by_provider_id(candidate["provider"], str(candidate["provider_asset_id"]))
+        # Use normalized provider id (strip _video suffix for library lookup)
+        lookup_provider = candidate["provider"].replace("_video", "")
+        existing = self.library.get_by_provider_id(lookup_provider, str(candidate["provider_asset_id"]))
         if existing and self.library.is_file_valid(existing):
             return existing
 
+        is_video = candidate.get("media_type") == "video"
+        ext = ".mp4" if is_video else ".jpg"
         with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir) / "download.jpg"
+            temp_path = Path(temp_dir) / f"download{ext}"
             self.download_client.download(candidate["download_url"], temp_path)
+            if is_video:
+                return self.library.store_video(candidate, temp_path, original_query=query)
             return self.library.store_photo(candidate, temp_path, original_query=query)

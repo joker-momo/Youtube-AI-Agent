@@ -622,7 +622,6 @@ def test_http_run_all_success(
         "seo_promote",
         "seo_qa",
         "seo_vidiq",
-        "assets_chatgpt",
         "whisper_timestamps",
         "render",
         "review",
@@ -723,7 +722,6 @@ def test_http_run_all_resumes_from_current_pending_stage(
         "seo_promote",
         "seo_qa",
         "seo_vidiq",
-        "assets_chatgpt",
         "whisper_timestamps",
         "render",
         "review",
@@ -980,15 +978,22 @@ def _seed_at_assets_chatgpt(job_dir: Path, scenes_doc: dict) -> None:
 
     ts = _now()
     stages = []
-    found = False
     for name in DEFAULT_STAGES:
-        if name == "assets_chatgpt":
+        if name == "whisper_timestamps":
+            # inject assets_chatgpt (removed from DEFAULT_STAGES) as current stage
+            stages.append(StageStatus(name="assets_chatgpt", status="pending"))
             stages.append(StageStatus(name=name, status="pending"))
-            found = True
-        elif not found:
-            stages.append(StageStatus(name=name, status="completed", started_at=ts, completed_at=ts))
         else:
-            stages.append(StageStatus(name=name, status="pending"))
+            # all stages before assets_chatgpt are completed; whisper_timestamps+ remain pending
+            before_assets = True
+            for s in stages:
+                if s.name == "assets_chatgpt":
+                    before_assets = False
+                    break
+            if before_assets:
+                stages.append(StageStatus(name=name, status="completed", started_at=ts, completed_at=ts))
+            else:
+                stages.append(StageStatus(name=name, status="pending"))
 
     state = JobState(
         job_id="job-assets",
@@ -1280,7 +1285,7 @@ def test_seo_vidiq_swaps_weak_tag(tmp_path, channel_path):
     assert "dormir mejor" not in seo["tags"]
 
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
-    assert state["current_stage"] == "assets_chatgpt"
+    assert state["current_stage"] == "whisper_timestamps"
 
 
 def test_seo_vidiq_soft_fails_on_vidiq_error(tmp_path, channel_path):
@@ -1299,4 +1304,4 @@ def test_seo_vidiq_soft_fails_on_vidiq_error(tmp_path, channel_path):
     assert seo["tags"] == _SEO_PAYLOAD["tags"]
     # stage still completes
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
-    assert state["current_stage"] == "assets_chatgpt"
+    assert state["current_stage"] == "whisper_timestamps"

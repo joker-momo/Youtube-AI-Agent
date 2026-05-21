@@ -28,6 +28,7 @@ from video_agent.orchestrator.orchestrator import StageError
 from video_agent.orchestrator.stages import (
     IDEA_FILE,
     StageInputMissingError,
+    _idea_keywords,
     auto_idea_research_stage,
     auto_seo_vidiq_stage,
     auto_scenes_qa_stage,
@@ -421,6 +422,16 @@ _DASHBOARD_HTML = """<!doctype html>
   .ideas-empty { font-size:13px; color:var(--muted); padding:16px 0; text-align:center; }
   .spinner-inline { display:inline-block; width:14px; height:14px; border:2px solid #d1d5db; border-top-color:#374151; border-radius:50%; animation:spin .7s linear infinite; vertical-align:middle; margin-right:4px; }
   @keyframes spin { to { transform:rotate(360deg); } }
+  .idea-score-row { display:flex; align-items:center; gap:8px; margin-top:4px; }
+  .idea-score-badge { font-size:12px; font-weight:700; padding:2px 10px; border-radius:12px; }
+  .idea-score-badge.high { background:#d1fae5; color:#065f46; }
+  .idea-score-badge.mid { background:#fef3c7; color:#92400e; }
+  .idea-score-badge.low { background:#fee2e2; color:#991b1b; }
+  .idea-score-badge.none { background:#f3f4f6; color:#6b7280; }
+  .idea-comp-badge { font-size:11px; padding:2px 8px; border-radius:10px; background:#f3f4f6; color:#374151; }
+  .idea-related { font-size:11px; color:var(--muted); margin-top:3px; line-height:1.6; }
+  .idea-score-bar { flex:1; height:6px; border-radius:3px; background:#e5e7eb; overflow:hidden; }
+  .idea-score-bar-fill { height:100%; border-radius:3px; transition:width .4s; }
   /* ---- end Idea Generator ---- */
   .kpis {
     display: grid;
@@ -875,6 +886,7 @@ _DASHBOARD_HTML = """<!doctype html>
             <div class="gen-actions">
               <button class="action-btn primary" id="gen-btn" onclick="generateIdeas()">✨ Generate</button>
               <button class="action-btn" onclick="loadSavedIdeas()">📂 Load saved</button>
+              <button class="action-btn" id="score-btn" onclick="scoreCurrentIdeas()" style="display:none">📊 Score with vidIQ</button>
             </div>
           </div>
           <div id="ideas-status" style="font-size:12px;color:var(--muted);margin-bottom:6px"></div>
@@ -2178,14 +2190,115 @@ async function generateIdeas() {
   }
 }
 
+let _CURRENT_IDEAS = [];
+let _CURRENT_PATHS = [];
+
 function renderIdeaCards(ideas, paths) {
+  _CURRENT_IDEAS = ideas;
+  _CURRENT_PATHS = paths;
   const grid = document.getElementById('ideas-grid');
   grid.innerHTML = '';
   ideas.forEach((idea, i) => {
     const el = document.createElement('div');
     el.innerHTML = renderIdeaCard(idea, paths[i] || '');
+    el.firstElementChild.id = 'idea-card-' + i;
     grid.appendChild(el.firstElementChild);
   });
+  // Show score button when there are ideas
+  document.getElementById('score-btn').style.display = ideas.length ? '' : 'none';
+}
+
+async function scoreCurrentIdeas() {
+  if (_CURRENT_IDEAS.length === 0) return;
+  const channelId = document.getElementById('idea-channel').value;
+  const btn = document.getElementById('score-btn');
+  const status = document.getElementById('ideas-status');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-inline"></span>Scoring…';
+  status.textContent = 'Querying vidIQ for ' + _CURRENT_IDEAS.length + ' ideas — may take 1–2 min…';
+
+  try {
+    const r = await fetch('/channels/' + encodeURIComponent(channelId) + '/ideas/score', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ideas: _CURRENT_IDEAS}),
+    });
+    const d = await r.json();
+    if (!r.ok) { status.textContent = '❌ Score failed: ' + (d.detail || r.status); return; }
+
+    // Patch each idea card with score data
+    (d.results || []).forEach((res, i) => {
+      const card = document.getElementById('idea-card-' + i);
+      if (!card) return;
+      const mount = card.querySelector('.idea-score-mount');
+      if (!mount) return;
+      mount.innerHTML = renderIdeaScoreBlock(res);
+    });
+    status.textContent = '✅ vidIQ scores loaded.';
+  } catch (e) {
+    status.textContent = '❌ ' + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '📊 Score with vidIQ';
+  }
+}
+
+function _scoreClass(n) {
+  if (n == null) return 'none';
+  if (n >= 50) return 'high';
+  if (n >= 25) return 'mid';
+  return 'low';
+}
+
+function _scoreColor(n) {
+  if (n == null) return '#9ca3af';
+  if (n >= 50) return '#10b981';
+  if (n >= 25) return '#f59e0b';
+  return '#ef4444';
+}
+
+async function scoreOneIdea(btn, idea) {
+  const card = btn.closest('.idea-card');
+  const mount = card ? card.querySelector('.idea-score-mount') : null;
+  if (!mount) return;
+  const channelId = document.getElementById('idea-channel').value;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-inline"></span>';
+  try {
+    const r = await fetch('/channels/' + encodeURIComponent(channelId) + '/ideas/score', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ideas: [idea]}),
+    });
+    const d = await r.json();
+    const res = (d.results || [])[0];
+    mount.innerHTML = res ? renderIdeaScoreBlock(res) : '<div style="font-size:11px;color:var(--muted)">No data</div>';
+  } catch (e) {
+    mount.innerHTML = '<div style="font-size:11px;color:var(--red)">' + escapeHtml(e.message) + '</div>';
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '📊';
+  }
+}
+
+function renderIdeaScoreBlock(res) {
+  if (!res) return '';
+  const n = res.best_score;
+  const cls = _scoreClass(n);
+  const color = _scoreColor(n);
+  const pct = n != null ? Math.min(n, 100) : 0;
+  const comp = res.competition ? `<span class="idea-comp-badge">⚔️ ${escapeHtml(res.competition)}</span>` : '';
+  const related = (res.related || []).slice(0, 6).map(r => `<span style="background:#f3f4f6;border-radius:4px;padding:1px 7px;font-size:11px">${escapeHtml(r)}</span>`).join(' ');
+  const err = res.error ? `<div style="font-size:11px;color:var(--muted)">vidIQ unavailable</div>` : '';
+  return `
+    <div class="idea-score-row">
+      <span class="idea-score-badge ${cls}">${n != null ? n + '/100' : 'N/A'}</span>
+      <div class="idea-score-bar"><div class="idea-score-bar-fill" style="width:${pct}%;background:${color}"></div></div>
+      ${comp}
+    </div>
+    ${related ? `<div class="idea-related">Related: ${related}</div>` : ''}
+    ${err}
+  `;
 }
 
 function renderIdeaCard(idea, savedPath) {
@@ -2202,9 +2315,12 @@ function renderIdeaCard(idea, savedPath) {
         <span class="idea-card-dur">${escapeHtml(idea.topic || '')}</span>
       </div>
       ${points ? `<ul class="idea-card-points">${points}</ul>` : ''}
+      <div class="idea-score-mount"></div>
       <div class="idea-card-actions">
         <button class="action-btn primary"
           onclick='createJobFromIdea(${safeIdea}, "${safePath}")'>+ Create Job</button>
+        <button class="action-btn" title="Score this idea with vidIQ"
+          onclick='scoreOneIdea(this, ${safeIdea})'>📊</button>
       </div>
     </div>`;
 }
@@ -2733,6 +2849,10 @@ class GenerateIdeasRequest(BaseModel):
     count: int = 10
 
 
+class ScoreIdeasRequest(BaseModel):
+    ideas: list[dict]
+
+
 @app.get("/channels")
 def list_channels() -> dict:
     """List available channel configs."""
@@ -2786,6 +2906,76 @@ def list_saved_ideas(
         except Exception:
             pass
     return {"channel_id": channel_id, "ideas": ideas, "paths": paths}
+
+
+@app.post("/channels/{channel_id}/ideas/score")
+async def post_score_ideas(
+    channel_id: str,
+    req: ScoreIdeasRequest,
+    client: BrowserClient = Depends(get_browser_client),
+) -> dict:
+    """Score a list of ideas via vidIQ in a single browser session.
+
+    Returns per-idea: keywords scored, best_score, competition, related keywords.
+    Scoring is best-effort — if vidIQ is unavailable all scores are null.
+    """
+    # Collect all keywords from all ideas in one flat list, track ranges
+    all_keywords: list[str] = []
+    ranges: list[tuple[int, int]] = []
+    for idea in req.ideas:
+        kws = _idea_keywords(idea)
+        ranges.append((len(all_keywords), len(all_keywords) + len(kws)))
+        all_keywords.extend(kws)
+
+    all_scores: list[dict] = []
+    score_error: str | None = None
+    if all_keywords:
+        try:
+            all_scores = await client.run_vidiq_scores(all_keywords)
+        except Exception as exc:
+            score_error = str(exc)
+            all_scores = [{}] * len(all_keywords)
+
+    results = []
+    for i, idea in enumerate(req.ideas):
+        start, end = ranges[i]
+        idea_scores = all_scores[start:end]
+        valid = [s for s in idea_scores if isinstance(s.get("score"), (int, float))]
+        best = int(max(s["score"] for s in valid)) if valid else None
+        # collect related keywords from all keyword results for this idea
+        related: list[str] = []
+        for s in idea_scores:
+            raw_rel = s.get("related", []) or []
+            for r in raw_rel:
+                # vidIQ returns related as strings or {keyword, score} dicts
+                if isinstance(r, str):
+                    related.append(r)
+                elif isinstance(r, dict):
+                    kw = r.get("keyword") or r.get("term") or ""
+                    if kw:
+                        related.append(str(kw))
+        # deduplicate while preserving order
+        seen_set: set[str] = set()
+        related_unique = [r for r in related if r not in seen_set and not seen_set.add(r)]  # type: ignore[func-returns-value]
+        # pick best competition label
+        competition = None
+        for s in valid:
+            comp = (s.get("competition") or "").strip()
+            if comp:
+                competition = comp
+                break
+        results.append({
+            "topic": idea.get("topic", ""),
+            "title_seed": idea.get("title_seed", ""),
+            "keywords": all_keywords[start:end],
+            "scores": idea_scores,
+            "best_score": best,
+            "competition": competition,
+            "related": related_unique[:10],
+            "error": score_error if score_error else None,
+        })
+
+    return {"results": results, "error": score_error}
 
 
 @app.post("/channels/{channel_id}/ideas/generate", status_code=201)

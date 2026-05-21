@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -126,6 +127,10 @@ def list_jobs(jobs_root: Path = Depends(get_jobs_root)) -> dict:
 # wants to see, so the UI can show "what went into" and "what came out
 # of" each step without per-stage hardcoding in JS.
 _STAGE_ARTIFACTS = {
+    "idea_research": {
+        "input": ["idea.json"],
+        "output": ["research.json"],
+    },
     "script": {
         "input": ["idea.json"],
         "output": ["operator/chatgpt/script_prompt.md"],
@@ -162,6 +167,14 @@ _STAGE_ARTIFACTS = {
         "input": ["seo.json"],
         "output": ["operator/gemini/seo_qa.json"],
     },
+    "seo_vidiq": {
+        "input": ["seo.json"],
+        "output": ["seo_vidiq_report.json"],
+    },
+    "assets_chatgpt": {
+        "input": ["scenes.json"],
+        "output": ["scenes.json"],
+    },
     "whisper_timestamps": {
         "input": ["assets/narration.wav"],
         "output": ["whisper_timestamps.json"],
@@ -187,6 +200,7 @@ _STAGE_ARTIFACTS = {
 # with the target_duration_sec of the idea so we compute it from
 # scenes.json or idea.json instead of a constant.
 _STAGE_ETA_SECONDS = {
+    "idea_research": 60,
     "script": 60,
     "script_promote": 60,
     "script_qa": 90,
@@ -196,6 +210,8 @@ _STAGE_ETA_SECONDS = {
     "seo": 60,
     "seo_promote": 30,
     "seo_qa": 90,
+    "seo_vidiq": 45,
+    "assets_chatgpt": 420,
     "whisper_timestamps": 30,
     "render": 600,     # overridden when target_duration_sec known
     "review": 5,
@@ -239,6 +255,13 @@ def _effective_stage_status(stage: dict, current_stage: str | None) -> str:
     if status == "pending" and stage.get("name") == current_stage:
         return "in_progress"
     return status
+
+
+def _job_has_in_progress_stage(payload: dict) -> bool:
+    for raw_stage in payload.get("stages", []):
+        if str(raw_stage.get("status") or "pending") == "in_progress":
+            return True
+    return False
 
 
 @app.get("/jobs/{job_id}/timeline")
@@ -527,6 +550,22 @@ _DASHBOARD_HTML = """<!doctype html>
   .job-card:hover { border-color: #c9cdd3; transform: translateY(-1px); }
   .job-card.active { border-color: var(--red); background: #fffbfb; box-shadow: inset 3px 0 0 var(--red); }
   .job-row { display: flex; justify-content: space-between; gap: 10px; align-items: start; }
+  .job-main { min-width: 0; flex: 1 1 auto; }
+  .job-tools { display: inline-flex; align-items: center; gap: 8px; }
+  .job-del {
+    height: 24px;
+    min-width: 24px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: #fff;
+    color: var(--muted-2);
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0 6px;
+  }
+  .job-del:hover { border-color: #e0b7b7; color: var(--red); background: #fff6f6; }
+  .job-del:disabled { opacity: .5; cursor: not-allowed; color: var(--muted-2); }
   .job-id { font-size: 12px; font-weight: 750; line-height: 1.35; word-break: break-word; }
   .job-count { color: var(--muted); font-size: 12px; white-space: nowrap; }
   .job-stage { margin-top: 8px; color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 7px; }
@@ -573,7 +612,7 @@ _DASHBOARD_HTML = """<!doctype html>
   .sum-bar div { height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--blue), #3ea6ff); transition: width 240ms; }
   .sum-bar.completed div { background: var(--green); }
   .sum-bar.failed div { background: var(--red); }
-  .stage-strip { margin-top: 16px; display: grid; grid-template-columns: repeat(11, minmax(16px, 1fr)); gap: 6px; }
+  .stage-strip { margin-top: 16px; display: grid; gap: 6px; }
   .stage-seg { height: 7px; background: #edf0f3; border-radius: 999px; position: relative; }
   .stage-seg.completed { background: var(--green); }
   .stage-seg.in_progress { background: #3ea6ff; }
@@ -817,6 +856,7 @@ let WS_RETRY_TIMER = null;
 let WS_RETRY_MS = 1000;
 
 const STAGE_LABEL = {
+  idea_research: 'Idea research',
   script: 'Script prompt',
   script_promote: 'Script JSON',
   script_qa: 'Script QA',
@@ -826,6 +866,9 @@ const STAGE_LABEL = {
   seo: 'SEO prompt',
   seo_promote: 'SEO JSON',
   seo_qa: 'SEO QA',
+  seo_vidiq: 'SEO vidIQ',
+  assets_chatgpt: 'Asset generation',
+  whisper_timestamps: 'Whisper timestamps',
   render: 'Render video',
   review: 'Review page',
 };
@@ -912,12 +955,19 @@ function renderJobsList(jobs) {
     const pct = j.stages_total ? (100 * j.stages_done / j.stages_total) : 0;
     const state = jobState(j);
     const fillCls = state === 'completed' ? 'completed' : (state === 'failed' ? 'failed' : '');
+    const deleteDisabled = state === 'in_progress' ? 'disabled' : '';
+    const deleteTitle = state === 'in_progress'
+      ? 'Cannot delete while running'
+      : 'Delete job';
     const card = document.createElement('div');
     card.className = 'job-card' + (SELECTED_ID === j.job_id ? ' active' : '');
     card.innerHTML = `
       <div class="job-row">
-        <div class="job-id">${escapeHtml(j.job_id)}</div>
-        <div class="job-count"><b>${j.stages_done}</b>/${j.stages_total}</div>
+        <div class="job-main"><div class="job-id">${escapeHtml(j.job_id)}</div></div>
+        <div class="job-tools">
+          <div class="job-count"><b>${j.stages_done}</b>/${j.stages_total}</div>
+          <button class="job-del" data-action="delete-job" data-job="${escapeHtml(j.job_id)}" ${deleteDisabled} title="${escapeHtml(deleteTitle)}">×</button>
+        </div>
       </div>
       <div class="job-stage">
         <span class="state-dot ${state}"></span>
@@ -929,10 +979,43 @@ function renderJobsList(jobs) {
       </div>
       <div class="job-bar ${fillCls}"><div style="width:${pct}%"></div></div>
     `;
+    const delBtn = card.querySelector('button[data-action="delete-job"]');
+    if (delBtn) {
+      delBtn.onclick = (ev) => {
+        ev.stopPropagation();
+        if (state === 'in_progress') return;
+        deleteJob(j.job_id);
+      };
+    }
     card.onclick = () => selectJob(j.job_id);
     root.appendChild(card);
   }
   if (!jobs.length) root.innerHTML = '<div class="empty" style="min-height:320px">Chưa có job nào.</div>';
+}
+
+async function deleteJob(jobId) {
+  if (!jobId) return;
+  if (!confirm(`Delete job "${jobId}"?`)) return;
+  try {
+    const r = await fetch('/jobs/' + encodeURIComponent(jobId), { method: 'DELETE' });
+    if (!r.ok) {
+      let msg = 'Delete failed';
+      try {
+        const body = await r.json();
+        msg = body.detail || msg;
+      } catch (e) {}
+      showToast(msg);
+      return;
+    }
+    if (SELECTED_ID === jobId) {
+      SELECTED_ID = null;
+      LAST_TIMELINE_JSON = '';
+    }
+    showToast('Job deleted');
+    fetchJobs();
+  } catch (e) {
+    showToast('Delete failed');
+  }
 }
 
 function selectJob(jobId) {
@@ -1009,7 +1092,7 @@ function renderTimeline(t) {
         </div>
       </div>
       <div class="sum-bar ${barClass}"><div style="width:${t.percent}%"></div></div>
-      <div class="stage-strip">${stageStrip}</div>
+      <div class="stage-strip" style="grid-template-columns: repeat(${Math.max(1, t.stages.length)}, minmax(16px, 1fr));">${stageStrip}</div>
       <div class="sum-stagerow">
         <span>Current: <b>${escapeHtml(STAGE_LABEL[t.current_stage] || t.current_stage || '-')}</b></span>
         <span>${t.stages_done}/${t.stages_total} stages</span>
@@ -1370,6 +1453,25 @@ def get_job(
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     return load_job(job_dir).to_dict()
+
+
+@app.delete("/jobs/{job_id}", status_code=204)
+def delete_job(
+    job_id: str,
+    jobs_root: Path = Depends(get_jobs_root),
+) -> None:
+    job_dir = jobs_root / job_id
+    job_file = job_dir / "job.json"
+    if not job_file.exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+
+    payload = json.loads(job_file.read_text(encoding="utf-8"))
+    if _job_has_in_progress_stage(payload):
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot delete a running job. Wait until it finishes or fails.",
+        )
+    shutil.rmtree(job_dir)
 
 
 @app.post("/jobs/{job_id}/advance")

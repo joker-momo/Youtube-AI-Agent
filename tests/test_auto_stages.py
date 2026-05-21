@@ -582,6 +582,14 @@ def test_http_run_all_success(
         _complete_stage(job_dir, "review", out)
         return out
 
+    def fake_whisper(job_dir):
+        out = job_dir / "whisper_timestamps.json"
+        out.write_text('{"scenes":[]}', encoding="utf-8")
+        from video_agent.orchestrator.stages import _complete_stage
+
+        _complete_stage(job_dir, "whisper_timestamps", out)
+        return out
+
     async def _noop_sleep(_):
         return
 
@@ -590,6 +598,9 @@ def test_http_run_all_success(
     )
     monkeypatch.setattr(
         "video_agent.web.app.run_review_stage", fake_review
+    )
+    monkeypatch.setattr(
+        "video_agent.web.app.run_whisper_timestamps_stage", fake_whisper
     )
     import asyncio as _asyncio
     monkeypatch.setattr(_asyncio, "sleep", _noop_sleep)
@@ -612,6 +623,7 @@ def test_http_run_all_success(
         "seo_qa",
         "seo_vidiq",
         "assets_chatgpt",
+        "whisper_timestamps",
         "render",
         "review",
     ]
@@ -619,6 +631,104 @@ def test_http_run_all_success(
     # 2 briefing sends + 3 ChatGPT task sends + 3 Gemini task sends = 8
     # idea_research + seo_vidiq use run_vidiq_scores (not session queue)
     assert len(fake.calls) == 8
+
+
+def test_http_run_all_resumes_from_current_pending_stage(
+    http_client: TestClient,
+    tmp_path: Path,
+    monkeypatch,
+    idea_payload: dict,
+    valid_script_payload: dict,
+    valid_scenes_payload: dict,
+    valid_seo_payload: dict,
+):
+    _create_job(http_client)
+    http_client.post("/jobs/job-auto/idea", json=idea_payload)
+    job_dir = tmp_path / "job-auto"
+
+    # Pre-complete until scenes stage so /run-all must resume there.
+    _fake_pass_stage(job_dir, "idea_research")
+    run_script_stage(job_dir, repo_root() / "configs/vida-plena-45/channel.yaml")
+    promote_script_stage(
+        job_dir,
+        repo_root() / "configs/vida-plena-45/channel.yaml",
+        raw_response=json.dumps(valid_script_payload, ensure_ascii=False),
+    )
+    _fake_pass_qa(job_dir, "script")
+
+    qa_pass = json.dumps(
+        {
+            "verdict": "PASS",
+            "scores": {"schema_fit": 5, "channel_fit": 5, "safety": 5, "clarity": 5},
+            "issues": [],
+            "required_changes": [],
+        }
+    )
+    fake = FakeBrowserClient(
+        queue=[
+            "OK",  # chatgpt briefing ack
+            "OK",  # qa briefing ack
+            json.dumps(valid_scenes_payload, ensure_ascii=False),
+            qa_pass,
+            json.dumps(valid_seo_payload, ensure_ascii=False),
+            qa_pass,
+        ]
+    )
+    app.dependency_overrides[get_browser_client] = lambda: fake
+
+    def fake_render(job_dir, channel_path):
+        out = job_dir / "video.mp4"
+        out.write_bytes(b"fake")
+        from video_agent.orchestrator.stages import _complete_stage
+
+        _complete_stage(job_dir, "render", out)
+        return out
+
+    def fake_review(job_dir):
+        out = job_dir / "operator_review.html"
+        out.write_text("<html/>", encoding="utf-8")
+        from video_agent.orchestrator.stages import _complete_stage
+
+        _complete_stage(job_dir, "review", out)
+        return out
+
+    def fake_whisper(job_dir):
+        out = job_dir / "whisper_timestamps.json"
+        out.write_text('{"scenes":[]}', encoding="utf-8")
+        from video_agent.orchestrator.stages import _complete_stage
+
+        _complete_stage(job_dir, "whisper_timestamps", out)
+        return out
+
+    async def _noop_sleep(_):
+        return
+
+    monkeypatch.setattr("video_agent.web.app.run_render_stage", fake_render)
+    monkeypatch.setattr("video_agent.web.app.run_review_stage", fake_review)
+    monkeypatch.setattr("video_agent.web.app.run_whisper_timestamps_stage", fake_whisper)
+    import asyncio as _asyncio
+
+    monkeypatch.setattr(_asyncio, "sleep", _noop_sleep)
+
+    try:
+        r = http_client.post("/jobs/job-auto/run-all")
+    finally:
+        app.dependency_overrides.pop(get_browser_client, None)
+
+    assert r.status_code == 200, r.text
+    stages = [c["stage"] for c in r.json()["completed"]]
+    assert stages == [
+        "scenes_promote",
+        "scenes_qa",
+        "seo_promote",
+        "seo_qa",
+        "seo_vidiq",
+        "assets_chatgpt",
+        "whisper_timestamps",
+        "render",
+        "review",
+    ]
+    assert len(fake.calls) == 6
 
 
 def test_http_run_all_stops_on_worker_error(
@@ -957,7 +1067,7 @@ def test_auto_assets_chatgpt_gen_all_scenes(tmp_path, channel_path):
         refs = scene.get("asset_refs", {})
         assert refs.get("primary", "").endswith(".png"), f"scene {scene['id']} missing primary"
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
-    assert state["current_stage"] == "render"
+    assert state["current_stage"] == "whisper_timestamps"
     assert any(s["name"] == "assets_chatgpt" and s["status"] == "completed" for s in state["stages"])
 
 
@@ -980,7 +1090,7 @@ def test_auto_assets_chatgpt_continues_on_scene_failure(tmp_path, channel_path):
 
     assert output == job_dir / "scenes.json"
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
-    assert state["current_stage"] == "render"
+    assert state["current_stage"] == "whisper_timestamps"
 
     events_text = (job_dir / EVENT_LOG).read_text(encoding="utf-8")
     assert events_text.count("SCENE_ASSET_FAILED") == 2

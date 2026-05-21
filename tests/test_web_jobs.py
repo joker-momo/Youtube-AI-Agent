@@ -85,6 +85,32 @@ def test_advance_unknown_job_returns_404(client: TestClient):
     assert response.status_code == 404
 
 
+def test_delete_job_removes_completed_job(client: TestClient):
+    _create(client, "job-del")
+
+    # Mark the first stage complete so the job is not "running".
+    client.post("/jobs/job-del/advance")
+    client.post("/jobs/job-del/advance")
+
+    response = client.delete("/jobs/job-del")
+    assert response.status_code == 204
+
+    response = client.get("/jobs/job-del")
+    assert response.status_code == 404
+
+
+def test_delete_job_rejects_running_job(client: TestClient):
+    _create(client, "job-running")
+
+    # First advance marks current stage as in_progress.
+    response = client.post("/jobs/job-running/advance")
+    assert response.status_code == 200
+
+    response = client.delete("/jobs/job-running")
+    assert response.status_code == 409
+    assert "running job" in response.json()["detail"].lower()
+
+
 def test_ws_events_replays_existing_entries(client: TestClient, monkeypatch):
     monkeypatch.setenv("EVENTS_POLL_SECONDS", "0.05")
     _create(client, "job-ws")

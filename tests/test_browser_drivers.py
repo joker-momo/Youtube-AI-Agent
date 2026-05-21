@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from video_agent.browser_worker.drivers.base import (
     BrowserDriverError,
     LoginRequiredError,
@@ -73,3 +75,37 @@ def test_humanize_defaults():
     assert h_mod.TYPING_MAX_MS > h_mod.TYPING_MIN_MS
     assert h_mod.PAUSE_MIN_MS > 0
     assert h_mod.PAUSE_MAX_MS > h_mod.PAUSE_MIN_MS
+
+
+def test_chatgpt_open_falls_back_when_temporary_url_fails(monkeypatch):
+    from video_agent.browser_worker.drivers import chatgpt as mod
+
+    async def _noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(mod, "_dismiss_modals", _noop)
+    monkeypatch.setattr(mod, "human_pause", _noop)
+
+    class _FakePage:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+            self.url = "about:blank"
+            self._remaining_failures = 2
+
+        async def goto(self, url: str, **kwargs):
+            self.calls.append(url)
+            if url == mod.CHATGPT_URL and self._remaining_failures > 0:
+                self._remaining_failures -= 1
+                raise RuntimeError("net::ERR_HTTP_RESPONSE_CODE_FAILURE")
+            self.url = url
+            return None
+
+        async def wait_for_timeout(self, _ms: int):
+            return None
+
+    page = _FakePage()
+    driver = mod.ChatGPTDriver(page)
+    asyncio.run(driver.open())
+
+    assert page.calls[:2] == [mod.CHATGPT_URL, mod.CHATGPT_URL]
+    assert mod.CHATGPT_FALLBACK_URL in page.calls

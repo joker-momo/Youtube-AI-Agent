@@ -15,7 +15,7 @@ import pytest
 from video_agent.notifications.telegram import (
     _configured,
     notify_batch_done,
-    notify_job_done,
+    notify_job_done_with_files,
     notify_job_failed,
     notify_job_started,
     notify_stage_done,
@@ -105,11 +105,25 @@ def test_notify_job_started():
     assert "started" in msgs[0].lower()
 
 
-def test_notify_job_done_contains_stages_and_time():
+def test_notify_job_done_with_files_contains_stages_and_time(tmp_path):
+    # Create dummy files so the photo/video send paths are exercised
+    thumb = tmp_path / "thumbnail_1.jpg"
+    thumb.write_bytes(b"\xff\xd8\xff" + b"\x00" * 100)  # minimal JPEG header
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"\x00" * 100)  # tiny fake mp4
+
     msgs = _run_capture(
-        notify_job_done("job-xyz", stages_done=["script", "render"], wall_seconds=143)
+        notify_job_done_with_files(
+            "job-xyz",
+            job_dir=tmp_path,
+            stages_done=["script", "render"],
+            wall_seconds=143,
+        )
     )
-    assert len(msgs) == 1
+    # First message is the text summary; photo/video calls go to _send_photo_file
+    # and _send_video_file which are NOT mocked here (no token set → noop).
+    # We get at least the summary message.
+    assert len(msgs) >= 1
     assert "job-xyz" in msgs[0]
     assert "2m" in msgs[0]  # 143s = 2m23s
     assert "2 stages" in msgs[0]

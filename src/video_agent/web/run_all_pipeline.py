@@ -28,7 +28,7 @@ from video_agent.orchestrator.stages import (
     run_whisper_timestamps_stage,
 )
 from video_agent.notifications.telegram import (
-    notify_job_done,
+    notify_job_done_with_files,
     notify_job_failed,
     notify_job_started,
     notify_stage_done,
@@ -378,8 +378,9 @@ async def execute_run_all(
 
     state = load_job(job_dir)
     wall = time.monotonic() - _start_time
-    await notify_job_done(
+    await notify_job_done_with_files(
         job_dir.name,
+        job_dir=job_dir,
         stages_done=[c["stage"] for c in completed],
         wall_seconds=wall,
     )

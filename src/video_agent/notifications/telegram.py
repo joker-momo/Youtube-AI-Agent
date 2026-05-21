@@ -20,9 +20,12 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from pathlib import Path
 from typing import Any
 
 import httpx
+
+_TELEGRAM_FILE_LIMIT = 50 * 1024 * 1024  # 50 MB — Bot API hard cap
 
 _API_BASE = "https://api.telegram.org"
 
@@ -66,6 +69,56 @@ async def _send_message(text: str, *, parse_mode: str = "HTML") -> None:
 async def send(text: str) -> None:
     """Send a plain-text (HTML-formatted) message. Never raises."""
     await _send_message(text)
+
+
+async def _send_photo_file(path: Path, caption: str = "") -> None:
+    """Send an image file via sendPhoto. Swallows all errors."""
+    token = _bot_token()
+    chat_id = _chat_id()
+    if not token or not chat_id or not path.exists():
+        return
+    url = f"{_API_BASE}/bot{token}/sendPhoto"
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            with path.open("rb") as fh:
+                resp = await client.post(
+                    url,
+                    data={"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"},
+                    files={"photo": (path.name, fh, "image/jpeg")},
+                )
+            if not resp.is_success:
+                print(f"[telegram] sendPhoto HTTP {resp.status_code}: {resp.text[:200]}", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[telegram] sendPhoto failed: {exc}", file=sys.stderr)
+
+
+async def _send_video_file(path: Path, caption: str = "") -> None:
+    """Send a video file via sendDocument if ≤50 MB, else send a text fallback."""
+    token = _bot_token()
+    chat_id = _chat_id()
+    if not token or not chat_id or not path.exists():
+        return
+    size = path.stat().st_size
+    if size > _TELEGRAM_FILE_LIMIT:
+        mb = size / (1024 * 1024)
+        await _send_message(
+            f"🎬 <b>Video ready</b> ({mb:.0f} MB)\n"
+            f"Too large for Telegram (limit 50 MB). Download from dashboard."
+        )
+        return
+    url = f"{_API_BASE}/bot{token}/sendDocument"
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            with path.open("rb") as fh:
+                resp = await client.post(
+                    url,
+                    data={"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"},
+                    files={"document": (path.name, fh, "video/mp4")},
+                )
+            if not resp.is_success:
+                print(f"[telegram] sendDocument HTTP {resp.status_code}: {resp.text[:200]}", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[telegram] sendDocument failed: {exc}", file=sys.stderr)
 
 
 def notify_sync(text: str) -> None:
@@ -149,6 +202,35 @@ async def notify_job_failed(
         parts.append(f"Error: <code>{err_short}</code>")
     parts.append(f'<a href="{_job_url(job_id)}">Open dashboard →</a>')
     await send("\n".join(parts))
+
+
+async def notify_job_done_with_files(
+    job_id: str,
+    *,
+    job_dir: Path,
+    stages_done: list[str] | None = None,
+    wall_seconds: float | None = None,
+) -> None:
+    """Send job-done message, then thumbnail image, then video file."""
+    # 1. Text summary (same as notify_job_done)
+    parts = [f"✅ <b>Job complete</b>", f"<code>{job_id}</code>"]
+    if stages_done:
+        parts.append(f"{len(stages_done)} stages completed")
+    if wall_seconds is not None:
+        mins, secs = divmod(int(wall_seconds), 60)
+        parts.append(f"⏱ {mins}m{secs:02d}s")
+    parts.append(f'<a href="{_job_url(job_id)}">Open dashboard →</a>')
+    await send("\n".join(parts))
+
+    # 2. Thumbnail — try thumbnail_1.jpg first, fall back to thumbnail.jpg
+    thumb = job_dir / "thumbnail_1.jpg"
+    if not thumb.exists():
+        thumb = job_dir / "thumbnail.jpg"
+    await _send_photo_file(thumb, caption=f"🖼 Thumbnail — {job_id}")
+
+    # 3. Video
+    video = job_dir / "video.mp4"
+    await _send_video_file(video, caption=f"🎬 {job_id}")
 
 
 async def notify_batch_done(

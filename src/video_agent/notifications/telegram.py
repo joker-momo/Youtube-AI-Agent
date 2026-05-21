@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -92,24 +94,99 @@ async def _send_photo_file(path: Path, caption: str = "") -> None:
         print(f"[telegram] sendPhoto failed: {exc}", file=sys.stderr)
 
 
+def _compress_video(src: Path, dst: Path, target_mb: float = 45.0) -> bool:
+    """Re-encode src → dst targeting ~target_mb using ffmpeg 2-pass CRF.
+
+    Returns True on success. Original file is never modified.
+    Strategy: calculate bitrate from target size and duration, use libx264 CRF
+    with constrained bitrate. Falls back to a single-pass CRF=28 if ffprobe
+    fails to read duration.
+    """
+    try:
+        # Get duration via ffprobe
+        probe = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(src),
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        duration = float(probe.stdout.strip()) if probe.returncode == 0 else 0.0
+    except Exception:
+        duration = 0.0
+
+    if duration > 0:
+        # target_mb → kbps (reserve ~64 kbps for audio)
+        target_kbps = int((target_mb * 1024 * 8) / duration) - 64
+        target_kbps = max(200, target_kbps)
+        cmd = [
+            "ffmpeg", "-y", "-i", str(src),
+            "-c:v", "libx264", "-b:v", f"{target_kbps}k",
+            "-c:a", "aac", "-b:a", "64k",
+            "-movflags", "+faststart",
+            str(dst),
+        ]
+    else:
+        # Fallback: fixed CRF (no duration info)
+        cmd = [
+            "ffmpeg", "-y", "-i", str(src),
+            "-c:v", "libx264", "-crf", "28",
+            "-c:a", "aac", "-b:a", "64k",
+            "-movflags", "+faststart",
+            str(dst),
+        ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=600)
+        if result.returncode != 0:
+            print(f"[telegram] ffmpeg compress failed:\n{result.stderr[-500:]}", file=sys.stderr)
+            return False
+        return dst.exists() and dst.stat().st_size > 0
+    except Exception as exc:  # noqa: BLE001
+        print(f"[telegram] ffmpeg compress error: {exc}", file=sys.stderr)
+        return False
+
+
 async def _send_video_file(path: Path, caption: str = "") -> None:
-    """Send a video file via sendDocument if ≤50 MB, else send a text fallback."""
+    """Send video via sendDocument.
+
+    If file > 50 MB: compress to temp file with ffmpeg, send compressed version,
+    then delete the temp file. Original is never touched.
+    """
     token = _bot_token()
     chat_id = _chat_id()
     if not token or not chat_id or not path.exists():
         return
+
+    send_path = path
+    tmp_file: tempfile.NamedTemporaryFile | None = None
+
     size = path.stat().st_size
     if size > _TELEGRAM_FILE_LIMIT:
         mb = size / (1024 * 1024)
-        await _send_message(
-            f"🎬 <b>Video ready</b> ({mb:.0f} MB)\n"
-            f"Too large for Telegram (limit 50 MB). Download from dashboard."
+        print(f"[telegram] video {mb:.0f} MB > 50 MB — compressing for Telegram…", file=sys.stderr)
+        # Run blocking ffmpeg in a thread so we don't block the event loop
+        tmp = tempfile.NamedTemporaryFile(suffix="_tg.mp4", delete=False)
+        tmp.close()
+        tmp_path = Path(tmp.name)
+        ok = await asyncio.get_event_loop().run_in_executor(
+            None, _compress_video, path, tmp_path
         )
-        return
+        if ok and tmp_path.stat().st_size <= _TELEGRAM_FILE_LIMIT:
+            send_path = tmp_path
+            print(f"[telegram] compressed to {tmp_path.stat().st_size / 1024 / 1024:.1f} MB", file=sys.stderr)
+        else:
+            # Compression didn't get it small enough — give up silently
+            print("[telegram] compressed file still > 50 MB or failed, skipping video send", file=sys.stderr)
+            tmp_path.unlink(missing_ok=True)
+            return
+
     url = f"{_API_BASE}/bot{token}/sendDocument"
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            with path.open("rb") as fh:
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            with send_path.open("rb") as fh:
                 resp = await client.post(
                     url,
                     data={"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"},
@@ -119,6 +196,9 @@ async def _send_video_file(path: Path, caption: str = "") -> None:
                 print(f"[telegram] sendDocument HTTP {resp.status_code}: {resp.text[:200]}", file=sys.stderr)
     except Exception as exc:  # noqa: BLE001
         print(f"[telegram] sendDocument failed: {exc}", file=sys.stderr)
+    finally:
+        if send_path != path:
+            send_path.unlink(missing_ok=True)  # delete temp, keep original
 
 
 def notify_sync(text: str) -> None:

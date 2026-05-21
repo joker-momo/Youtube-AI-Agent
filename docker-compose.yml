@@ -42,6 +42,7 @@ services:
       - ./asset_library:/app/asset_library
       - ./configs:/app/configs
       - ./src:/app/src
+      - ./tests:/app/tests
       - ./remotion/src:/app/remotion/src
     networks:
       - appliance_net

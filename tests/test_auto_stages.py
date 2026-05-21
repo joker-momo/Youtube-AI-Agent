@@ -1566,3 +1566,155 @@ def test_seo_vidiq_soft_fails_on_vidiq_error(tmp_path, channel_path):
     # stage still completes
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
     assert state["current_stage"] == "thumbnail_image"
+
+
+# ---------------------------------------------------------------------------
+# HTTP route tests: seo_vidiq/auto + run-batch
+# ---------------------------------------------------------------------------
+
+
+def test_http_auto_seo_vidiq_success(
+    http_client: TestClient,
+    tmp_path: Path,
+):
+    """POST /stages/seo_vidiq/auto — scores tags, advances stage."""
+    job_dir = tmp_path / "job-auto"
+    _create_job(http_client)
+    _set_current_stage(job_dir, "seo_vidiq")
+    (job_dir / "seo.json").write_text(
+        json.dumps(_SEO_PAYLOAD, ensure_ascii=False), encoding="utf-8"
+    )
+    # FakeBrowserClient.run_vidiq_scores returns score=55 for all (above threshold)
+    app.dependency_overrides[get_browser_client] = lambda: FakeBrowserClient()
+    try:
+        r = http_client.post("/jobs/job-auto/stages/seo_vidiq/auto")
+    finally:
+        app.dependency_overrides.pop(get_browser_client, None)
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "seo_vidiq_report.json" in body["output"]
+    assert body["state"]["current_stage"] != "seo_vidiq"
+
+
+def test_http_auto_seo_vidiq_wrong_stage_returns_409(
+    http_client: TestClient,
+    tmp_path: Path,
+):
+    _create_job(http_client)
+    # Job starts at idea_research — running seo_vidiq is wrong
+    app.dependency_overrides[get_browser_client] = lambda: FakeBrowserClient()
+    try:
+        r = http_client.post("/jobs/job-auto/stages/seo_vidiq/auto")
+    finally:
+        app.dependency_overrides.pop(get_browser_client, None)
+    assert r.status_code == 409
+
+
+def test_http_auto_seo_vidiq_unknown_job(http_client: TestClient):
+    app.dependency_overrides[get_browser_client] = lambda: FakeBrowserClient()
+    try:
+        r = http_client.post("/jobs/no-such-job/stages/seo_vidiq/auto")
+    finally:
+        app.dependency_overrides.pop(get_browser_client, None)
+    assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# run-batch endpoint tests
+# ---------------------------------------------------------------------------
+
+
+def _make_completed_job(job_dir: Path, job_id: str) -> None:
+    """Seed a fully-completed job so run-all returns immediately."""
+    from video_agent.orchestrator.job_state import (
+        DEFAULT_STAGES,
+        JobState,
+        StageStatus,
+        save_job,
+    )
+    from video_agent.orchestrator.orchestrator import _now
+
+    ts = _now()
+    stages = [
+        StageStatus(name=name, status="completed", started_at=ts, completed_at=ts)
+        for name in DEFAULT_STAGES
+    ]
+    state = JobState(
+        job_id=job_id,
+        channel_id="vida-plena-45",
+        idea_path="idea.json",
+        created_at=ts,
+        updated_at=ts,
+        current_stage="review",
+        stages=stages,
+    )
+    job_dir.mkdir(parents=True, exist_ok=True)
+    save_job(job_dir, state)
+
+
+def test_http_run_batch_all_succeed(
+    http_client: TestClient,
+    tmp_path: Path,
+):
+    """POST /run-batch with 2 fully-completed jobs returns succeeded=2."""
+    for jid in ("batch-1", "batch-2"):
+        _make_completed_job(tmp_path / jid, jid)
+
+    app.dependency_overrides[get_browser_client] = lambda: FakeBrowserClient()
+    try:
+        r = http_client.post(
+            "/run-batch",
+            json={"job_ids": ["batch-1", "batch-2"], "enforce_approvals": False},
+        )
+    finally:
+        app.dependency_overrides.pop(get_browser_client, None)
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["total"] == 2
+    assert body["succeeded"] == 2
+    assert body["failed"] == 0
+    job_ids_in_results = [entry["job_id"] for entry in body["results"]]
+    assert "batch-1" in job_ids_in_results
+    assert "batch-2" in job_ids_in_results
+
+
+def test_http_run_batch_unknown_job_is_soft_failure(
+    http_client: TestClient,
+    tmp_path: Path,
+):
+    """Unknown job_id is recorded as error; run-batch still returns 200."""
+    _make_completed_job(tmp_path / "batch-ok", "batch-ok")
+
+    app.dependency_overrides[get_browser_client] = lambda: FakeBrowserClient()
+    try:
+        r = http_client.post(
+            "/run-batch",
+            json={"job_ids": ["batch-ok", "no-such-job"], "enforce_approvals": False},
+        )
+    finally:
+        app.dependency_overrides.pop(get_browser_client, None)
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["total"] == 2
+    assert body["succeeded"] == 1
+    assert body["failed"] == 1
+    errors = {e["job_id"]: e.get("error") for e in body["results"]}
+    assert errors["no-such-job"] is not None
+
+
+def test_http_run_batch_empty_list(http_client: TestClient):
+    """Empty job_ids list returns total=0."""
+    app.dependency_overrides[get_browser_client] = lambda: FakeBrowserClient()
+    try:
+        r = http_client.post("/run-batch", json={"job_ids": []})
+    finally:
+        app.dependency_overrides.pop(get_browser_client, None)
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["total"] == 0
+    assert body["succeeded"] == 0
+    assert body["failed"] == 0

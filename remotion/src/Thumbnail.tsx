@@ -6,8 +6,11 @@ import {fitHeadline} from './styles';
 export const Thumbnail: React.FC<RenderProps> = (props) => {
   const palette = props.style.palette;
   const leadScene = props.scenes[0];
-  const bg = leadScene?.asset_refs?.background ?? '';
-  const isVideo = bg.endsWith('.mp4');
+  const seoBg = (props.seo.thumbnail_path ?? '').trim();
+  const sceneBg = leadScene?.asset_refs?.background ?? '';
+  const bg = seoBg || sceneBg;
+  const bgPathForType = bg.split('?')[0].toLowerCase();
+  const isVideo = bgPathForType.endsWith('.mp4');
 
   // thumbnail_text: short ALL-CAPS hook from SEO (e.g. "DUERME MEJOR HOY")
   // Fallback: use title up to first colon or first 5 words.
@@ -24,7 +27,7 @@ export const Thumbnail: React.FC<RenderProps> = (props) => {
   return (
     <AbsoluteFill style={{overflow: 'hidden', fontFamily: 'Inter, Arial, sans-serif'}}>
 
-      {/* Background: scene-01 image or video still */}
+      {/* Background priority: seo.thumbnail_path -> scene-01 background -> gradient fallback */}
       {bg ? (
         isVideo ? (
           <OffthreadVideo

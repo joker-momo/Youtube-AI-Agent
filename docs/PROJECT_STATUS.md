@@ -807,18 +807,56 @@ Docker verification: ``143 passed in 18.48s``.
 - 4 existing render/review tests updated (`_fake_pass_assets_chatgpt`).
 - 150 tests green.
 
+### V3 Phase 1 Step 23 A/B Title + Thumbnail system
+
+YouTube allows 3 thumbnails + 3 titles for A/B testing. Full A/B
+system added:
+
+- **Title scorer** (`src/video_agent/seo/title_scorer.py`): scores
+  each `{title, thumbnail_text}` variant 0-100 (title 0-50 +
+  thumbnail_text 0-50) based on CTR criteria (word count, digits,
+  power words, emotion, ALL-CAPS hook).
+- **`title_variants` in SEO**: `operator.py` now asks ChatGPT for
+  EXACTLY 3 `{title, thumbnail_text}` variants in the SEO prompt.
+  `promote_operator_artifact` scores + sorts them; top variant becomes
+  `seo.title` + `seo.thumbnail_text`. `schemas/seo.schema.json` adds
+  `title_variants` (not in `required` — backward compat).
+- **3-thumbnail render**: `stages/render.py` `build_thumbnail_commands()`
+  returns 3 Remotion `still` commands (one per variant), outputting
+  `thumbnail_1.jpg`, `thumbnail_2.jpg`, `thumbnail_3.jpg`. Backward
+  compat: `thumbnail.jpg` is a copy of `thumbnail_1.jpg`.
+- **`thumbnail_image` DALL-E stage**: `auto_thumbnail_image_stage()`
+  generates a photorealistic background (rule of thirds, emotional
+  face, empty right third for text overlay, no text/watermark) via
+  ChatGPT image gen. Saves to `assets/thumbnail_bg.png`, writes
+  `seo.json → thumbnail_path`. `Thumbnail.tsx` uses `thumbnail_path`
+  as primary bg (falls back to scene bg → gradient).
+- **Webapp A/B grid**: dashboard `renderFinal()` shows 3-card AB grid;
+  gold border + ⭐ badge on winner (highest score); score badge on
+  each card.
+- **`POST /jobs/{id}/stages/seo_vidiq/auto`**: standalone route to
+  run seo_vidiq outside of `/run-all`.
+- **`POST /run-batch`**: queue multiple `/run-all` calls back-to-back
+  for overnight batch production. Soft-fails individual jobs; returns
+  `{total, succeeded, failed, results}`.
+- 217 tests pass (`docker compose exec app python -m pytest -q`).
+
 ### Current operational state
 
-- 150 tests pass (`docker compose run --rm app pytest -q`).
+- **217 tests pass** (`docker compose exec app python -m pytest -q`).
 - Pipeline produces 20-30 min long-form videos end-to-end with
   ChatGPT writing + Claude QA + ChatGPT image gen + Remotion render,
   all through the Browser Appliance (host noVNC for manual login once).
-- Full pipeline stage order: `script → script_promote → script_qa →
-  scenes → scenes_promote → scenes_qa → seo → seo_promote → seo_qa →
-  assets_chatgpt → render → review`.
+- Full pipeline stage order: `idea_research → script → script_promote →
+  script_qa → scenes → scenes_promote → scenes_qa → seo → seo_promote →
+  seo_qa → seo_vidiq → thumbnail_image → assets_chatgpt →
+  whisper_timestamps → render → review`.
 - Dashboard at `http://127.0.0.1:8000/` gives step-by-step progress
   + ETA + final video / metadata / thumbnail ready to copy into
   YouTube Studio.
+- Batch production: `POST /run-batch` queues multiple jobs overnight.
+- A/B testing: 3 title+thumbnail variants auto-scored; winner shown
+  first in dashboard + upload.
 - Channel target: Vida Plena 45+ (Spanish wellness 45+), 3 videos
   per week Mon/Wed/Fri 19:00 Mexico time.
 
@@ -969,35 +1007,22 @@ The command will either:
 
 ## Not Yet Done
 
-- `idea_research` stage with vidIQ topic gate (score keyword + scrape top-10 competitors) is not wired into the pipeline yet — driver exists but no stage / route.
-- `seo_vidiq` stage that scores final tags + title via vidIQ and swaps weak tags is not built.
-- Idea generation is still manual (user writes `idea.json`); no auto idea-batch generator from channel niche + trends.
-- ChatGPT image generation per scene is integrated (`assets_chatgpt` stage in pipeline); stock/placeholder fallback still fires when image gen fails for a scene.
 - Long-form pipeline has been smoke-tested manually but no automated test asserts the 20-30 min config end-to-end (would require ~30-40 min wall to run).
 - YouTube upload is still manual (operator copies title/desc/tags from dashboard, drags video.mp4 into Studio); no Playwright auto-upload driver.
 - Analytics ingestion (retention curve / CTR feedback into next prompt) is deferred.
-- Persona injection, A/B variants, multi-channel scaling are deferred until 10-20 published videos give a baseline.
+- Persona injection, multi-channel scaling are deferred until 10-20 published videos give a baseline.
+- ChatGPT image generation per scene (`assets_chatgpt`): stock/placeholder fallback still fires when image gen fails for a scene.
 
 ## Next Recommended Work
 
-1. **`idea_research` stage** — wire the vidIQ driver into a new
-   pre-`script` stage. Score the topic + 3-5 keyword variations,
-   scrape top-10 YouTube search results, store the report under
-   `jobs/<id>/research.json`, halt the pipeline (HTTP 409) when
-   score < 40 or competition > 60 so the operator picks a better
-   idea.
-2. **`seo_vidiq` stage** — after `seo_qa`, score each tag via vidIQ
-   and swap any with score < 30 for related-keyword suggestions
-   (already returned by the driver). Re-write `seo.json`.
-3. **Idea generator** — small ChatGPT-driven batch that turns the
-   channel niche + a few seed topics into 10-20 idea JSON files
-   queued under `inputs/ideas/<channel>/`.
-4. **First production run** — kick off 3 videos for the Vida Plena
-   45+ channel (`Mon/Wed/Fri` cadence) through `/run-all`, capture
-   retention + CTR after upload, feed observations back into the
-   briefing.
-5. **`run-batch` endpoint** — queue multiple `/run-all` runs back
-   to back so a single overnight session produces a week of videos.
-6. **First production run** — 3 videos for Vida Plena 45+ Mon/Wed/Fri
-   cadence through `/run-all` with ChatGPT image gen active; capture
-   retention + CTR to feed back into briefing.
+1. **First production run** — kick off 3 videos for Vida Plena 45+
+   (`Mon/Wed/Fri` cadence) through `/run-all` or `/run-batch` with
+   ChatGPT image gen + thumbnail_image active. Upload via YouTube
+   Studio. Capture retention + CTR after 48 h.
+2. **Idea batch via `/channels/{id}/ideas/generate`** — generate 10-20
+   ideas at once from seed topics so the pipeline queue is always full.
+3. **YouTube upload automation** — Playwright driver for YouTube Studio
+   upload page: fill title/description/tags from `seo.json`, attach
+   `video.mp4` + `thumbnail_1.jpg`, publish.
+4. **Analytics feedback loop** — after 10-20 published videos, pull
+   CTR + retention data and feed back into briefing / scoring.

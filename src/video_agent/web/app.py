@@ -28,9 +28,7 @@ from video_agent.orchestrator.orchestrator import StageError
 from video_agent.orchestrator.stages import (
     IDEA_FILE,
     StageInputMissingError,
-    auto_assets_chatgpt_stage,
     auto_idea_research_stage,
-    auto_qa_with_rework,
     auto_seo_vidiq_stage,
     auto_scenes_qa_stage,
     auto_scenes_stage,
@@ -38,8 +36,8 @@ from video_agent.orchestrator.stages import (
     auto_script_stage,
     auto_seo_qa_stage,
     auto_seo_stage,
+    auto_thumbnail_image_stage,
     generate_scene_asset,
-    promote_qa_stage,
     promote_scenes_stage,
     promote_seo_stage,
     promote_script_stage,
@@ -49,6 +47,22 @@ from video_agent.orchestrator.stages import (
     run_seo_stage,
     run_script_stage,
     run_whisper_timestamps_stage,
+)
+from video_agent.web.approval_flow import (
+    APPROVAL_REQUIRED_STAGES,
+    approval_block_for_current_stage,
+    load_approvals,
+    reset_stage_for_regen,
+    set_approval,
+)
+from video_agent.web.run_all_pipeline import execute_run_all
+from video_agent.web.timeline_helpers import (
+    STAGE_ARTIFACTS,
+    STAGE_ETA_SECONDS,
+    effective_stage_status,
+    job_has_in_progress_stage,
+    resolve_inside,
+    stage_duration_seconds,
 )
 
 app = FastAPI(title="video-agent-web", version="0.1.0")
@@ -95,7 +109,7 @@ def list_jobs(jobs_root: Path = Depends(get_jobs_root)) -> dict:
             stages = []
             for raw_stage in payload.get("stages", []):
                 stage = dict(raw_stage)
-                stage["status"] = _effective_stage_status(stage, current_stage)
+                stage["status"] = effective_stage_status(stage, current_stage)
                 stages.append(stage)
             done = sum(1 for s in stages if s.get("status") == "completed")
             total = len(stages)
@@ -122,151 +136,6 @@ def list_jobs(jobs_root: Path = Depends(get_jobs_root)) -> dict:
 # Dashboard timeline / artifact endpoints.
 # ---------------------------------------------------------------------------
 
-# Per-stage input + output file plumbing for the dashboard. Each stage
-# entry lists the artifact relative paths (input + output) the operator
-# wants to see, so the UI can show "what went into" and "what came out
-# of" each step without per-stage hardcoding in JS.
-_STAGE_ARTIFACTS = {
-    "idea_research": {
-        "input": ["idea.json"],
-        "output": ["research.json"],
-    },
-    "script": {
-        "input": ["idea.json"],
-        "output": ["operator/chatgpt/script_prompt.md"],
-    },
-    "script_promote": {
-        "input": ["operator/chatgpt/script.raw.txt"],
-        "output": ["script.json"],
-    },
-    "script_qa": {
-        "input": ["script.json"],
-        "output": ["operator/gemini/script_qa.json"],
-    },
-    "scenes": {
-        "input": ["script.json"],
-        "output": ["operator/chatgpt/scenes_prompt.md"],
-    },
-    "scenes_promote": {
-        "input": ["operator/chatgpt/scenes.raw.txt"],
-        "output": ["scenes.json"],
-    },
-    "scenes_qa": {
-        "input": ["scenes.json"],
-        "output": ["operator/gemini/scenes_qa.json"],
-    },
-    "seo": {
-        "input": ["scenes.json"],
-        "output": ["operator/chatgpt/seo_prompt.md"],
-    },
-    "seo_promote": {
-        "input": ["operator/chatgpt/seo.raw.txt"],
-        "output": ["seo.json"],
-    },
-    "seo_qa": {
-        "input": ["seo.json"],
-        "output": ["operator/gemini/seo_qa.json"],
-    },
-    "seo_vidiq": {
-        "input": ["seo.json"],
-        "output": ["seo_vidiq_report.json"],
-    },
-    "assets_chatgpt": {
-        "input": ["scenes.json"],
-        "output": ["scenes.json"],
-    },
-    "whisper_timestamps": {
-        "input": ["assets/narration.wav"],
-        "output": ["whisper_timestamps.json"],
-    },
-    "render": {
-        "input": ["script.json", "scenes.json", "seo.json"],
-        "output": [
-            "render_props.json",
-            "video.mp4",
-            "thumbnail.jpg",
-            "thumbnail_1.jpg",
-            "thumbnail_2.jpg",
-            "thumbnail_3.jpg",
-            "visual_review.json",
-            "report.md",
-        ],
-    },
-    "review": {
-        "input": ["video.mp4"],
-        "output": ["operator_review.html"],
-    },
-}
-
-# Empirical seconds per stage when long-form 20-30 min config is in
-# play. Used for an ETA when the stage hasn't run yet. Render scales
-# with the target_duration_sec of the idea so we compute it from
-# scenes.json or idea.json instead of a constant.
-_STAGE_ETA_SECONDS = {
-    "idea_research": 60,
-    "script": 60,
-    "script_promote": 60,
-    "script_qa": 90,
-    "scenes": 90,
-    "scenes_promote": 60,
-    "scenes_qa": 120,
-    "seo": 60,
-    "seo_promote": 30,
-    "seo_qa": 90,
-    "seo_vidiq": 45,
-    "assets_chatgpt": 420,
-    "whisper_timestamps": 30,
-    "render": 600,     # overridden when target_duration_sec known
-    "review": 5,
-}
-
-
-def _resolve_inside(job_dir: Path, rel: str) -> Path | None:
-    """Return ``job_dir / rel`` if it stays inside ``job_dir``, else None.
-
-    Defends the artifact endpoint against ``..`` path traversal.
-    """
-    try:
-        candidate = (job_dir / rel).resolve()
-        if str(candidate).startswith(str(job_dir.resolve())):
-            return candidate
-    except Exception:
-        pass
-    return None
-
-
-def _isoformat_to_epoch(ts: str | None) -> float | None:
-    if not ts:
-        return None
-    try:
-        from datetime import datetime
-        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
-    except Exception:
-        return None
-
-
-def _stage_duration_seconds(stage: dict) -> float | None:
-    start = _isoformat_to_epoch(stage.get("started_at"))
-    end = _isoformat_to_epoch(stage.get("completed_at"))
-    if start is None or end is None:
-        return None
-    return max(0.0, end - start)
-
-
-def _effective_stage_status(stage: dict, current_stage: str | None) -> str:
-    status = str(stage.get("status") or "pending")
-    if status == "pending" and stage.get("name") == current_stage:
-        return "in_progress"
-    return status
-
-
-def _job_has_in_progress_stage(payload: dict) -> bool:
-    for raw_stage in payload.get("stages", []):
-        if str(raw_stage.get("status") or "pending") == "in_progress":
-            return True
-    return False
-
-
 @app.get("/jobs/{job_id}/timeline")
 def job_timeline(
     job_id: str,
@@ -286,7 +155,7 @@ def job_timeline(
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
 
     # Render ETA scales with target_duration_sec when known.
-    render_eta = _STAGE_ETA_SECONDS["render"]
+    render_eta = STAGE_ETA_SECONDS["render"]
     try:
         scenes_path = job_dir / "scenes.json"
         if scenes_path.exists():
@@ -311,23 +180,23 @@ def job_timeline(
     current_stage = state.get("current_stage")
     for raw_stage in state.get("stages", []):
         stage = dict(raw_stage)
-        stage["status"] = _effective_stage_status(stage, current_stage)
+        stage["status"] = effective_stage_status(stage, current_stage)
         name = stage.get("name")
-        cfg = _STAGE_ARTIFACTS.get(name, {})
+        cfg = STAGE_ARTIFACTS.get(name, {})
         inputs = []
         for rel in cfg.get("input", []):
-            p = _resolve_inside(job_dir, rel)
+            p = resolve_inside(job_dir, rel)
             inputs.append(
                 {"path": rel, "exists": bool(p and p.exists()), "size": (p.stat().st_size if p and p.exists() else 0)}
             )
         outputs = []
         for rel in cfg.get("output", []):
-            p = _resolve_inside(job_dir, rel)
+            p = resolve_inside(job_dir, rel)
             outputs.append(
                 {"path": rel, "exists": bool(p and p.exists()), "size": (p.stat().st_size if p and p.exists() else 0)}
             )
-        actual = _stage_duration_seconds(stage)
-        eta = render_eta if name == "render" else _STAGE_ETA_SECONDS.get(name, 30)
+        actual = stage_duration_seconds(stage)
+        eta = render_eta if name == "render" else STAGE_ETA_SECONDS.get(name, 30)
         if stage.get("status") == "completed":
             completed_so_far += 1
         elif stage.get("status") != "completed":
@@ -343,6 +212,7 @@ def job_timeline(
         )
 
     pct = (100.0 * completed_so_far / total_stages) if total_stages else 0
+    approvals = load_approvals(job_dir)
     return {
         "job_id": job_id,
         "channel_id": state.get("channel_id"),
@@ -354,6 +224,11 @@ def job_timeline(
         "percent": round(pct, 1),
         "remaining_eta_seconds": int(remaining_eta),
         "stages": items,
+        "approvals": approvals,
+        "required_approvals": list(APPROVAL_REQUIRED_STAGES),
+        "approval_blocked_by": approval_block_for_current_stage(
+            state.get("current_stage"), approvals
+        ),
     }
 
 
@@ -371,7 +246,7 @@ def job_artifact(
     job_dir = jobs_root / job_id
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
-    target = _resolve_inside(job_dir, path)
+    target = resolve_inside(job_dir, path)
     if target is None or not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail=f"Artifact not found: {path}")
     # FastAPI guesses media type from the path; this is enough for our
@@ -690,6 +565,27 @@ _DASHBOARD_HTML = """<!doctype html>
   .io-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .io-box { border: 1px solid var(--line); border-radius: 8px; background: #fafafa; padding: 10px; min-height: 68px; }
   .io-title { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; font-weight: 750; margin-bottom: 7px; }
+  .stage-actions { margin: 10px 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .action-btn {
+    border: 1px solid var(--line-strong);
+    background: #fff;
+    border-radius: 6px;
+    height: 28px;
+    padding: 0 10px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .action-btn.primary { border-color: #b6d8c2; background: #f0fbf4; color: #1d6b3b; }
+  .action-btn.warn { border-color: #e9cfb0; background: #fff9f0; color: #8a5a12; }
+  .gate-note { font-size: 12px; color: #8a5a12; background: #fff7eb; border: 1px solid #f1d6af; border-radius: 6px; padding: 6px 8px; }
+  .insight { margin-top: 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; padding: 10px; }
+  .insight-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .insight-kv { font-size: 12px; color: #222; }
+  .insight-kv b { color: var(--muted); font-weight: 650; margin-right: 6px; }
+  .insight-list { margin: 8px 0 0; padding-left: 18px; font-size: 12px; color: #333; }
+  .insight-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
+  .insight-table th, .insight-table td { border-bottom: 1px solid var(--line); text-align: left; padding: 6px 4px; vertical-align: top; }
+  .insight-table th { color: var(--muted); font-weight: 650; }
   .file-row {
     height: 30px;
     border-radius: 6px;
@@ -881,6 +777,7 @@ const STAGE_LABEL = {
   seo_promote: 'SEO JSON',
   seo_qa: 'SEO QA',
   seo_vidiq: 'SEO vidIQ',
+  thumbnail_image: 'Thumbnail image',
   assets_chatgpt: 'Asset generation',
   whisper_timestamps: 'Whisper timestamps',
   render: 'Render video',
@@ -1199,6 +1096,8 @@ function renderStep(jobId, s, idx) {
     </div>
     <div class="step-body">
       ${renderProgressHtml}
+      <div class="stage-actions" id="actions-${s.name}"></div>
+      <div class="insight-mount" id="insight-${s.name}"></div>
       <div class="io-grid">
         <div class="io-box">
           <div class="io-title">Input</div>
@@ -1226,6 +1125,7 @@ function renderStep(jobId, s, idx) {
   } else if (s.name === 'render' && s.status !== 'in_progress') {
     stopRenderProgressPolling();
   }
+  renderStageExtras(jobId, s);
   return el;
 }
 
@@ -1300,6 +1200,311 @@ function statusText(status) {
   if (status === 'in_progress') return 'running';
   if (status === 'failed') return 'failed';
   return 'waiting';
+}
+
+function requiredApprovalStages() {
+  const t = LAST_TIMELINE || {};
+  return Array.isArray(t.required_approvals) ? t.required_approvals : [];
+}
+
+function isStageApprovalRequired(stageName) {
+  return requiredApprovalStages().includes(stageName);
+}
+
+function isStageApproved(stageName) {
+  const t = LAST_TIMELINE || {};
+  return !!(t.approvals && t.approvals[stageName]);
+}
+
+function approvalBlockedBy() {
+  const t = LAST_TIMELINE || {};
+  return t.approval_blocked_by || null;
+}
+
+function stageIndex(stageName) {
+  const t = LAST_TIMELINE || {};
+  const stages = Array.isArray(t.stages) ? t.stages : [];
+  for (let i = 0; i < stages.length; i++) {
+    if (stages[i].name === stageName) return i;
+  }
+  return -1;
+}
+
+function isBlockedByApproval(stageName) {
+  const blocked = approvalBlockedBy();
+  if (!blocked) return false;
+  const blockedIdx = stageIndex(blocked);
+  const targetIdx = stageIndex(stageName);
+  if (blockedIdx < 0 || targetIdx < 0) return false;
+  return targetIdx > blockedIdx;
+}
+
+function executionStageFor(stageName) {
+  const map = {
+    script_promote: 'script',
+    scenes_promote: 'scenes',
+    seo_promote: 'seo',
+  };
+  return map[stageName] || stageName;
+}
+
+async function fetchArtifactJson(jobId, path) {
+  const url = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(path);
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('Artifact not found: ' + path);
+  return await r.json();
+}
+
+async function confirmApproval(jobId, stageName) {
+  const r = await fetch(
+    '/jobs/' + encodeURIComponent(jobId) + '/approvals/' + encodeURIComponent(stageName) + '/confirm',
+    { method: 'POST' },
+  );
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    throw new Error(d.detail || 'Approval failed');
+  }
+}
+
+async function clearApproval(jobId, stageName) {
+  const r = await fetch(
+    '/jobs/' + encodeURIComponent(jobId) + '/approvals/' + encodeURIComponent(stageName) + '/clear',
+    { method: 'POST' },
+  );
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    throw new Error(d.detail || 'Clear approval failed');
+  }
+}
+
+async function regenerateStage(jobId, stageName) {
+  const r = await fetch(
+    '/jobs/' + encodeURIComponent(jobId) + '/stages/' + encodeURIComponent(stageName) + '/regenerate',
+    { method: 'POST' },
+  );
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    throw new Error(d.detail || 'Regenerate failed');
+  }
+}
+
+function renderResearchInsight(data) {
+  const scores = Array.isArray(data.scores) ? data.scores : [];
+  const rows = scores.slice(0, 8).map(s => `
+    <tr>
+      <td>${escapeHtml(s.keyword || '')}</td>
+      <td>${escapeHtml(String(s.score ?? '-'))}</td>
+      <td>${escapeHtml(s.volume || '-')}</td>
+      <td>${escapeHtml(s.competition || '-')}</td>
+    </tr>
+  `).join('');
+  return `
+    <div class="insight">
+      <div class="insight-grid">
+        <div class="insight-kv"><b>Verdict:</b>${escapeHtml(data.verdict || '-')}</div>
+        <div class="insight-kv"><b>Best score:</b>${escapeHtml(String(data.best_score ?? '-'))}</div>
+      </div>
+      ${data.block_reason ? `<div class="gate-note" style="margin-top:8px">${escapeHtml(data.block_reason)}</div>` : ''}
+      ${rows ? `<table class="insight-table"><thead><tr><th>Keyword</th><th>Score</th><th>Volume</th><th>Competition</th></tr></thead><tbody>${rows}</tbody></table>` : ''}
+    </div>
+  `;
+}
+
+function renderScriptInsight(data) {
+  const sections = Array.isArray(data.sections) ? data.sections : [];
+  return `
+    <div class="insight">
+      <div class="insight-grid">
+        <div class="insight-kv"><b>Hook:</b>${escapeHtml(data.hook || '-')}</div>
+        <div class="insight-kv"><b>CTA:</b>${escapeHtml(data.cta || '-')}</div>
+        <div class="insight-kv"><b>Sections:</b>${sections.length}</div>
+        <div class="insight-kv"><b>Narration:</b>${escapeHtml(String((data.narration || '').length))} chars</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderScenesInsight(data) {
+  const scenes = Array.isArray(data.scenes) ? data.scenes : [];
+  const rows = scenes.slice(0, 8).map(s => `
+    <tr>
+      <td>${escapeHtml(s.id || '')}</td>
+      <td>${escapeHtml(String(s.duration_sec || '-'))}s</td>
+      <td>${escapeHtml((s.caption || '').slice(0, 80))}</td>
+    </tr>
+  `).join('');
+  return `
+    <div class="insight">
+      <div class="insight-grid">
+        <div class="insight-kv"><b>Total duration:</b>${escapeHtml(String(data.total_duration_sec || '-'))}s</div>
+        <div class="insight-kv"><b>Scenes:</b>${scenes.length}</div>
+      </div>
+      ${rows ? `<table class="insight-table"><thead><tr><th>Scene</th><th>Duration</th><th>Caption</th></tr></thead><tbody>${rows}</tbody></table>` : ''}
+    </div>
+  `;
+}
+
+function renderSeoInsight(data) {
+  const tags = Array.isArray(data.tags) ? data.tags.slice(0, 8) : [];
+  return `
+    <div class="insight">
+      <div class="insight-grid">
+        <div class="insight-kv"><b>Title:</b>${escapeHtml(data.title || '-')}</div>
+        <div class="insight-kv"><b>Language:</b>${escapeHtml(data.language || '-')}</div>
+      </div>
+      <div class="insight-kv" style="margin-top:8px"><b>Thumbnail text:</b>${escapeHtml(data.thumbnail_text || '-')}</div>
+      ${tags.length ? `<ul class="insight-list">${tags.map(t => `<li>${escapeHtml(t)}</li>`).join('')}</ul>` : ''}
+    </div>
+  `;
+}
+
+function renderQaInsight(data) {
+  const issues = Array.isArray(data.issues) ? data.issues : [];
+  return `
+    <div class="insight">
+      <div class="insight-grid">
+        <div class="insight-kv"><b>Verdict:</b>${escapeHtml(data.verdict || '-')}</div>
+        <div class="insight-kv"><b>Issues:</b>${issues.length}</div>
+      </div>
+      ${issues.length ? `<ul class="insight-list">${issues.slice(0, 6).map(i => `<li>${escapeHtml(i)}</li>`).join('')}</ul>` : ''}
+    </div>
+  `;
+}
+
+function renderSeoVidiqInsight(data) {
+  const swaps = Array.isArray(data.swaps) ? data.swaps : [];
+  const rows = swaps.slice(0, 8).map(s => `
+    <tr>
+      <td>${escapeHtml(s.original || '')}</td>
+      <td>${escapeHtml(String(s.score ?? '-'))}</td>
+      <td>${escapeHtml(s.replacement || '')}</td>
+    </tr>
+  `).join('');
+  return `
+    <div class="insight">
+      <div class="insight-grid">
+        <div class="insight-kv"><b>Min score:</b>${escapeHtml(String(data.min_score ?? '-'))}</div>
+        <div class="insight-kv"><b>Swaps:</b>${swaps.length}</div>
+      </div>
+      ${rows ? `<table class="insight-table"><thead><tr><th>Original</th><th>Score</th><th>Replacement</th></tr></thead><tbody>${rows}</tbody></table>` : ''}
+    </div>
+  `;
+}
+
+function toShortText(v) {
+  if (v === null || v === undefined) return '-';
+  if (typeof v === 'boolean') return v ? 'yes' : 'no';
+  if (typeof v === 'number') return String(v);
+  if (typeof v === 'string') return v.length > 140 ? (v.slice(0, 140) + '…') : v;
+  if (Array.isArray(v)) return v.length + ' items';
+  if (typeof v === 'object') return Object.keys(v).length + ' fields';
+  return String(v);
+}
+
+function renderGenericJsonInsight(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return '';
+  const rows = Object.entries(data).slice(0, 10).map(([k, v]) => `
+    <div class="insight-kv"><b>${escapeHtml(k)}:</b>${escapeHtml(toShortText(v))}</div>
+  `).join('');
+  if (!rows) return '';
+  return `
+    <div class="insight">
+      <div class="insight-grid">${rows}</div>
+    </div>
+  `;
+}
+
+async function renderStageExtras(jobId, s) {
+  const actions = document.getElementById('actions-' + s.name);
+  const insight = document.getElementById('insight-' + s.name);
+  if (!actions || !insight) return;
+
+  if (isStageApprovalRequired(s.name) && s.status === 'completed') {
+    const approved = isStageApproved(s.name);
+    const stageLabel = STAGE_LABEL[s.name] || s.name;
+    actions.innerHTML = `
+      ${approved ? '<span class="gate-note">Confirmed. You can continue.</span>' : `<span class="gate-note">Confirm ${escapeHtml(stageLabel)} before running next stages.</span>`}
+      <button class="action-btn primary" onclick="confirmStageAndMaybeContinue('${escapeJs(jobId)}','${escapeJs(s.name)}')">Confirm</button>
+      <button class="action-btn warn" onclick="regenerateStageAndRun('${escapeJs(jobId)}','${escapeJs(s.name)}')">Regenerate</button>
+      ${approved ? `<button class="action-btn" onclick="clearStageApprovalOnly('${escapeJs(jobId)}','${escapeJs(s.name)}')">Clear confirm</button>` : ''}
+    `;
+  }
+
+  try {
+    let rendered = false;
+    if (s.name === 'idea_research') {
+      insight.innerHTML = renderResearchInsight(await fetchArtifactJson(jobId, 'research.json'));
+      rendered = true;
+    } else if (s.name === 'script_promote') {
+      insight.innerHTML = renderScriptInsight(await fetchArtifactJson(jobId, 'script.json'));
+      rendered = true;
+    } else if (s.name === 'scenes_promote') {
+      insight.innerHTML = renderScenesInsight(await fetchArtifactJson(jobId, 'scenes.json'));
+      rendered = true;
+    } else if (s.name === 'seo_promote') {
+      insight.innerHTML = renderSeoInsight(await fetchArtifactJson(jobId, 'seo.json'));
+      rendered = true;
+    } else if (s.name === 'script_qa') {
+      insight.innerHTML = renderQaInsight(await fetchArtifactJson(jobId, 'operator/gemini/script_qa.json'));
+      rendered = true;
+    } else if (s.name === 'scenes_qa') {
+      insight.innerHTML = renderQaInsight(await fetchArtifactJson(jobId, 'operator/gemini/scenes_qa.json'));
+      rendered = true;
+    } else if (s.name === 'seo_qa') {
+      insight.innerHTML = renderQaInsight(await fetchArtifactJson(jobId, 'operator/gemini/seo_qa.json'));
+      rendered = true;
+    } else if (s.name === 'seo_vidiq') {
+      insight.innerHTML = renderSeoVidiqInsight(await fetchArtifactJson(jobId, 'seo_vidiq_report.json'));
+      rendered = true;
+    }
+    if (!rendered && Array.isArray(s.outputs)) {
+      const jsonOutput = s.outputs.find(o => o.exists && /\.json$/i.test(o.path));
+      if (jsonOutput) {
+        const generic = renderGenericJsonInsight(await fetchArtifactJson(jobId, jsonOutput.path));
+        if (generic) insight.innerHTML = generic;
+      }
+    }
+  } catch (e) {
+    // If artifact not ready, skip insight quietly.
+  }
+}
+
+async function confirmStageAndMaybeContinue(jobId, stageName) {
+  try {
+    await confirmApproval(jobId, stageName);
+    showToast((STAGE_LABEL[stageName] || stageName) + ' confirmed');
+    LAST_TIMELINE_JSON = '';
+    if (SELECTED_ID) {
+      await fetchTimeline(SELECTED_ID);
+      const nextStage = (LAST_TIMELINE && LAST_TIMELINE.current_stage) ? LAST_TIMELINE.current_stage : null;
+      if (nextStage && nextStage !== stageName) {
+        await runStage({stopPropagation: () => {}}, jobId, nextStage);
+      }
+    }
+  } catch (e) {
+    showToast(e.message || 'Confirm failed');
+  }
+}
+
+async function clearStageApprovalOnly(jobId, stageName) {
+  try {
+    await clearApproval(jobId, stageName);
+    showToast('Confirmation cleared');
+    LAST_TIMELINE_JSON = '';
+    if (SELECTED_ID) fetchTimeline(SELECTED_ID);
+  } catch (e) {
+    showToast(e.message || 'Clear failed');
+  }
+}
+
+async function regenerateStageAndRun(jobId, stageName) {
+  try {
+    await regenerateStage(jobId, stageName);
+    showToast((STAGE_LABEL[stageName] || stageName) + ' reset. Running again…');
+    await runStage({stopPropagation: () => {}}, jobId, executionStageFor(stageName));
+  } catch (e) {
+    showToast(e.message || 'Regenerate failed');
+  }
 }
 
 async function renderFinal(t) {
@@ -1455,11 +1660,29 @@ function showToast(msg) {
 
 async function runStage(evt, jobId, stageName) {
   evt.stopPropagation(); // don't toggle the step accordion
+  if (isBlockedByApproval(stageName)) {
+    const blocked = approvalBlockedBy();
+    const blockedLabel = STAGE_LABEL[blocked] || blocked || 'required stage';
+    showToast('Please confirm ' + blockedLabel + ' before running next stages.');
+    return;
+  }
+  const executeStage = executionStageFor(stageName);
   const btn = document.getElementById('run-btn-' + stageName);
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Running…'; }
   try {
+    const autoStages = new Set([
+      'idea_research',
+      'script',
+      'script_qa',
+      'scenes',
+      'scenes_qa',
+      'seo',
+      'seo_qa',
+      'thumbnail_image',
+    ]);
+    const suffix = autoStages.has(executeStage) ? '/auto' : '/run';
     const r = await fetch(
-      '/jobs/' + encodeURIComponent(jobId) + '/stages/' + encodeURIComponent(stageName) + '/run',
+      '/jobs/' + encodeURIComponent(jobId) + '/stages/' + encodeURIComponent(executeStage) + suffix,
       { method: 'POST' }
     );
     const d = await r.json();
@@ -1527,7 +1750,7 @@ def delete_job(
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
 
     payload = json.loads(job_file.read_text(encoding="utf-8"))
-    if _job_has_in_progress_stage(payload):
+    if job_has_in_progress_stage(payload):
         raise HTTPException(
             status_code=409,
             detail="Cannot delete a running job. Wait until it finishes or fails.",
@@ -1630,6 +1853,7 @@ def post_promote_script(
         output = promote_script_stage(job_dir, channel_path, payload.raw_response)
     except StageInputMissingError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    set_approval(job_dir, "script_promote", False)
     state = load_job(job_dir)
     return {"output": str(output.relative_to(job_dir)), "state": state.to_dict()}
 
@@ -1665,6 +1889,7 @@ def post_promote_scenes(
         output = promote_scenes_stage(job_dir, channel_path, payload.raw_response)
     except StageInputMissingError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    set_approval(job_dir, "scenes_promote", False)
     state = load_job(job_dir)
     return {"output": str(output.relative_to(job_dir)), "state": state.to_dict()}
 
@@ -1700,6 +1925,7 @@ def post_promote_seo(
         output = promote_seo_stage(job_dir, channel_path, payload.raw_response)
     except StageInputMissingError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    set_approval(job_dir, "seo_promote", False)
     state = load_job(job_dir)
     return {"output": str(output.relative_to(job_dir)), "state": state.to_dict()}
 
@@ -1832,6 +2058,126 @@ def _handle_browser_client_error(exc: BrowserClientError) -> HTTPException:
     )
 
 
+@app.get("/jobs/{job_id}/approvals")
+def get_approvals(
+    job_id: str,
+    jobs_root: Path = Depends(get_jobs_root),
+) -> dict:
+    job_dir = jobs_root / job_id
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    approvals = load_approvals(job_dir)
+    state = load_job(job_dir)
+    return {
+        "job_id": job_id,
+        "approvals": approvals,
+        "required_approvals": list(APPROVAL_REQUIRED_STAGES),
+        "approval_blocked_by": approval_block_for_current_stage(
+            state.current_stage, approvals
+        ),
+    }
+
+
+@app.post("/jobs/{job_id}/approvals/{stage_name}/confirm")
+def post_confirm_approval(
+    job_id: str,
+    stage_name: str,
+    jobs_root: Path = Depends(get_jobs_root),
+) -> dict:
+    job_dir = jobs_root / job_id
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    if stage_name not in APPROVAL_REQUIRED_STAGES:
+        raise HTTPException(status_code=404, detail=f"Unknown approval stage: {stage_name}")
+    set_approval(job_dir, stage_name, True)
+    return {"job_id": job_id, "stage": stage_name, "approved": True}
+
+
+@app.post("/jobs/{job_id}/approvals/{stage_name}/clear")
+def post_clear_approval(
+    job_id: str,
+    stage_name: str,
+    jobs_root: Path = Depends(get_jobs_root),
+) -> dict:
+    job_dir = jobs_root / job_id
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    if stage_name not in APPROVAL_REQUIRED_STAGES:
+        raise HTTPException(status_code=404, detail=f"Unknown approval stage: {stage_name}")
+    set_approval(job_dir, stage_name, False)
+    return {"job_id": job_id, "stage": stage_name, "approved": False}
+
+
+@app.post("/jobs/{job_id}/stages/idea_research/auto")
+async def post_auto_idea_research(
+    job_id: str,
+    jobs_root: Path = Depends(get_jobs_root),
+    channel_path: Path = Depends(get_channel_path),
+    client: BrowserClient = Depends(get_browser_client),
+) -> dict:
+    job_dir = jobs_root / job_id
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    try:
+        output = await auto_idea_research_stage(
+            job_dir,
+            channel_path,
+            client.run_vidiq_scores,
+        )
+    except StageInputMissingError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except BrowserClientError as exc:
+        raise _handle_browser_client_error(exc) from exc
+    # Fresh research run invalidates prior manual confirmation.
+    set_approval(job_dir, "idea_research", False)
+    state = load_job(job_dir)
+    return {"output": str(output.relative_to(job_dir)), "state": state.to_dict()}
+
+
+@app.post("/jobs/{job_id}/stages/seo_vidiq/auto")
+async def post_auto_seo_vidiq(
+    job_id: str,
+    jobs_root: Path = Depends(get_jobs_root),
+    channel_path: Path = Depends(get_channel_path),
+    client: BrowserClient = Depends(get_browser_client),
+) -> dict:
+    job_dir = jobs_root / job_id
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    try:
+        output = await auto_seo_vidiq_stage(
+            job_dir,
+            channel_path,
+            client.run_vidiq_scores,
+        )
+    except StageInputMissingError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except BrowserClientError as exc:
+        raise _handle_browser_client_error(exc) from exc
+    state = load_job(job_dir)
+    return {"output": str(output.relative_to(job_dir)), "state": state.to_dict()}
+
+
+@app.post("/jobs/{job_id}/stages/{stage_name}/regenerate")
+def post_regenerate_stage(
+    job_id: str,
+    stage_name: str,
+    jobs_root: Path = Depends(get_jobs_root),
+) -> dict:
+    job_dir = jobs_root / job_id
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    if stage_name not in APPROVAL_REQUIRED_STAGES:
+        raise HTTPException(status_code=404, detail=f"Unknown regeneratable stage: {stage_name}")
+    try:
+        reset_stage_for_regen(job_dir, stage_name)
+    except StageInputMissingError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    set_approval(job_dir, stage_name, False)
+    state = load_job(job_dir)
+    return {"state": state.to_dict()}
+
+
 class GenerateIdeasRequest(BaseModel):
     seed_topics: list[str] = []
     count: int = 10
@@ -1894,6 +2240,7 @@ async def post_auto_script(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except BrowserClientError as exc:
         raise _handle_browser_client_error(exc) from exc
+    set_approval(job_dir, "script_promote", False)
     state = load_job(job_dir)
     return {"output": str(output.relative_to(job_dir)), "state": state.to_dict()}
 
@@ -1914,6 +2261,7 @@ async def post_auto_scenes(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except BrowserClientError as exc:
         raise _handle_browser_client_error(exc) from exc
+    set_approval(job_dir, "scenes_promote", False)
     state = load_job(job_dir)
     return {"output": str(output.relative_to(job_dir)), "state": state.to_dict()}
 
@@ -1934,6 +2282,7 @@ async def post_auto_seo(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except BrowserClientError as exc:
         raise _handle_browser_client_error(exc) from exc
+    set_approval(job_dir, "seo_promote", False)
     state = load_job(job_dir)
     return {"output": str(output.relative_to(job_dir)), "state": state.to_dict()}
 
@@ -2007,6 +2356,31 @@ async def post_auto_seo_qa(
     return {"output": str(output.relative_to(job_dir)), "state": state.to_dict()}
 
 
+@app.post("/jobs/{job_id}/stages/thumbnail_image/auto")
+async def post_auto_thumbnail_image(
+    job_id: str,
+    jobs_root: Path = Depends(get_jobs_root),
+    channel_path: Path = Depends(get_channel_path),
+    client: BrowserClient = Depends(get_browser_client),
+) -> dict:
+    job_dir = jobs_root / job_id
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    try:
+        output = await auto_thumbnail_image_stage(
+            job_dir,
+            channel_path,
+            client.generate_image,
+        )
+    except StageInputMissingError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except BrowserClientError as exc:
+        raise _handle_browser_client_error(exc) from exc
+    set_approval(job_dir, "thumbnail_image", False)
+    state = load_job(job_dir)
+    return {"output": str(output.relative_to(job_dir)), "state": state.to_dict()}
+
+
 @app.post("/jobs/{job_id}/scenes/{scene_id}/generate_asset")
 async def post_generate_scene_asset(
     job_id: str,
@@ -2043,264 +2417,66 @@ async def post_generate_scene_asset(
 @app.post("/jobs/{job_id}/run-all")
 async def post_run_all(
     job_id: str,
+    enforce_approvals: bool = True,
     jobs_root: Path = Depends(get_jobs_root),
     channel_path: Path = Depends(get_channel_path),
     client: BrowserClient = Depends(get_browser_client),
 ) -> dict:
-    """End-to-end pipeline: script -> scenes -> seo -> render -> review.
-
-    Runs the three auto stages (which hit browser-worker) followed by
-    the render and review stages (pure local). Returns the list of
-    completed stages on success. On partial failure returns HTTP 502
-    (browser worker) or 409 (stage misuse) with the completed-so-far
-    list in ``detail`` so the caller can resume from the same job.
-    """
     job_dir = jobs_root / job_id
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
-
-    completed: list[dict] = []
-
-    async def _record(stage_label: str, output_path: Path) -> None:
-        completed.append(
-            {"stage": stage_label, "output": str(output_path.relative_to(job_dir))}
-        )
-
-    # Resume from the current stage instead of always restarting from
-    # script/script_promote. This lets callers continue a partially
-    # completed pipeline by re-hitting /run-all.
-    state = load_job(job_dir)
-    stage_order = [s.name for s in state.stages]
-    pending_stage = next((s.name for s in state.stages if s.status != "completed"), None)
-    if pending_stage is None:
-        return {"completed": completed, "state": state.to_dict()}
-    if pending_stage not in stage_order:
-        raise HTTPException(
-            status_code=409,
-            detail={"error": f"Unknown pending stage: {pending_stage}"},
-        )
-
-    # idea_research uses run_vidiq_scores (not the session tab API) so
-    # run it BEFORE opening persistent tabs. This way a browser-worker
-    # error on the ChatGPT/Claude briefing doesn't hide a gate block.
-    start_idx = stage_order.index(pending_stage)
-    remaining = set(stage_order[start_idx:])
-
-    if "idea_research" in remaining:
-        try:
-            await _record(
-                "idea_research",
-                await auto_idea_research_stage(
-                    job_dir, channel_path, client.run_vidiq_scores
-                ),
-            )
-        except StageInputMissingError as exc:
-            state = load_job(job_dir)
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "error": str(exc),
-                    "completed": completed,
-                    "stopped_at": state.current_stage,
-                    "state": state.to_dict(),
-                },
-            ) from exc
-        # Reload remaining from updated state.
-        state = load_job(job_dir)
-        new_pending = next((s.name for s in state.stages if s.status != "completed"), None)
-        if new_pending is None:
-            return {"completed": completed, "state": state.to_dict()}
-        remaining = set(stage_order[stage_order.index(new_pending):])
-
-    # Open ONE ChatGPT temp chat for the whole writing pipeline
-    # (script_promote, scenes_promote, seo_promote) and ONE Claude
-    # temp chat for the whole QA pipeline (script_qa, scenes_qa,
-    # seo_qa). The tabs stay open across stages so the model carries
-    # context, and we only close them when /run-all finishes.
-    # Send the role+context+constraints briefing ONCE per tab; each
-    # stage then only sends its short task message.
-    from video_agent.orchestrator.briefing import build_initial_briefing
-    from video_agent.utils.json_io import read_yaml as _read_yaml
-
-    channel_config = _read_yaml(channel_path)
-    async def _noop_close() -> None:
-        return None
-
-    chatgpt_sender = None
-    qa_sender = None
-    chatgpt_close = _noop_close
-    qa_close = _noop_close
-
-    async def _open_with_retry(site: str, attempts: int = 3):
-        last_exc: BrowserClientError | None = None
-        for idx in range(attempts):
-            try:
-                return await client.open_persistent_session(site)
-            except BrowserClientError as exc:
-                last_exc = exc
-                # Retry only for transient 5xx worker failures.
-                if exc.status_code < 500 or idx == attempts - 1:
-                    raise
-                await asyncio.sleep(1.0 + idx * 0.5)
-        assert last_exc is not None
-        raise last_exc
-
-    async def _send_with_retry(sender, messages, attempts: int = 3) -> str:
-        last_exc: BrowserClientError | None = None
-        for idx in range(attempts):
-            try:
-                return await sender(list(messages))
-            except BrowserClientError as exc:
-                last_exc = exc
-                if exc.status_code < 500 or idx == attempts - 1:
-                    raise
-                await asyncio.sleep(1.0 + idx * 0.5)
-        assert last_exc is not None
-        raise last_exc
-
-    need_writing_tab = any(
-        s in remaining for s in ("script", "script_promote", "scenes", "scenes_promote", "seo", "seo_promote")
+    return await execute_run_all(
+        job_dir=job_dir,
+        channel_path=channel_path,
+        client=client,
+        enforce_approvals=enforce_approvals,
     )
-    need_qa_tab = any(s in remaining for s in ("script_qa", "scenes_qa", "seo_qa"))
 
-    try:
-        if need_writing_tab:
-            chatgpt_sender, chatgpt_close = await _open_with_retry("chatgpt")
-        if need_qa_tab:
-            qa_sender, qa_close = await _open_with_retry("claude")
 
-        async def chatgpt_fn(msgs):
-            if chatgpt_sender is None:
-                raise StageInputMissingError(
-                    "ChatGPT session not available for writing stage."
-                )
-            return await _send_with_retry(chatgpt_sender, msgs)
+class RunBatchRequest(BaseModel):
+    job_ids: list[str]
+    enforce_approvals: bool = False
 
-        async def qa_fn(msgs):
-            if qa_sender is None:
-                raise StageInputMissingError(
-                    "Claude session not available for QA stage."
-                )
-            return await _send_with_retry(qa_sender, msgs)
 
-        # Brief each tab once before any task message.
-        if need_writing_tab:
-            await _send_with_retry(
-                chatgpt_sender,
-                [
-                    build_initial_briefing(
-                        channel_config,
-                        kind="writing",
-                        job_id=state.job_id,
-                        channel_id=state.channel_id,
-                    )
-                ],
-            )
-        if need_qa_tab:
-            await _send_with_retry(
-                qa_sender,
-                [
-                    build_initial_briefing(
-                        channel_config,
-                        kind="qa",
-                        job_id=state.job_id,
-                        channel_id=state.channel_id,
-                    )
-                ],
-            )
+@app.post("/run-batch")
+async def post_run_batch(
+    req: RunBatchRequest,
+    jobs_root: Path = Depends(get_jobs_root),
+    channel_path: Path = Depends(get_channel_path),
+    client: BrowserClient = Depends(get_browser_client),
+) -> dict:
+    """Run /run-all on each job sequentially.
 
-        if "script" in remaining or "script_promote" in remaining:
-            await _record(
-                "script_promote",
-                await auto_script_stage(job_dir, channel_path, chatgpt_fn),
-            )
-        if "script_qa" in remaining:
-            await _record(
-                "script_qa",
-                await auto_qa_with_rework(
-                    "script", job_dir, channel_path, chatgpt_fn, qa_fn
-                ),
-            )
-        if "scenes" in remaining or "scenes_promote" in remaining:
-            await _record(
-                "scenes_promote",
-                await auto_scenes_stage(job_dir, channel_path, chatgpt_fn),
-            )
-        if "scenes_qa" in remaining:
-            await _record(
-                "scenes_qa",
-                await auto_qa_with_rework(
-                    "scenes", job_dir, channel_path, chatgpt_fn, qa_fn
-                ),
-            )
-        if "seo" in remaining or "seo_promote" in remaining:
-            await _record(
-                "seo_promote",
-                await auto_seo_stage(job_dir, channel_path, chatgpt_fn),
-            )
-        if "seo_qa" in remaining:
-            await _record(
-                "seo_qa",
-                await auto_qa_with_rework(
-                    "seo", job_dir, channel_path, chatgpt_fn, qa_fn
-                ),
-            )
-        if "seo_vidiq" in remaining:
-            await _record(
-                "seo_vidiq",
-                await auto_seo_vidiq_stage(
-                    job_dir, channel_path, client.run_vidiq_scores
-                ),
-            )
-        if "assets_chatgpt" in remaining:
-            await _record(
-                "assets_chatgpt",
-                await auto_assets_chatgpt_stage(
-                    job_dir, channel_path, client.generate_image
-                ),
-            )
-        if "whisper_timestamps" in remaining:
-            await _record("whisper_timestamps", run_whisper_timestamps_stage(job_dir))
-        if "render" in remaining:
-            await _record("render", run_render_stage(job_dir, channel_path))
-        if "review" in remaining:
-            await _record("review", run_review_stage(job_dir))
-    except StageInputMissingError as exc:
-        state = load_job(job_dir)
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "error": str(exc),
-                "completed": completed,
-                "stopped_at": state.current_stage,
-                "state": state.to_dict(),
-            },
-        ) from exc
-    except BrowserClientError as exc:
-        state = load_job(job_dir)
-        http_exc = _handle_browser_client_error(exc)
-        # Re-pack the detail to include progress.
-        detail = (
-            http_exc.detail if isinstance(http_exc.detail, dict) else {"error": http_exc.detail}
-        )
-        detail["completed"] = completed
-        detail["stopped_at"] = state.current_stage
-        detail["state"] = state.to_dict()
-        raise HTTPException(status_code=http_exc.status_code, detail=detail) from exc
-    finally:
-        # Always close the persistent tabs so a failure never leaks
-        # browser-runtime pages.
+    Continues to the next job even if one fails — partial failure is
+    recorded in the ``results`` list entry's ``error`` field so the
+    operator can inspect and retry individual jobs. Returns HTTP 200
+    with a summary of every job's outcome.
+    """
+    results: list[dict] = []
+    for job_id in req.job_ids:
+        job_dir = jobs_root / job_id
+        if not (job_dir / "job.json").exists():
+            results.append({"job_id": job_id, "error": f"Unknown job: {job_id}"})
+            continue
         try:
-            await chatgpt_close()
-        except Exception:
-            pass
-        try:
-            await qa_close()
-        except Exception:
-            pass
-
-    state = load_job(job_dir)
-    return {"completed": completed, "state": state.to_dict()}
+            outcome = await execute_run_all(
+                job_dir=job_dir,
+                channel_path=channel_path,
+                client=client,
+                enforce_approvals=req.enforce_approvals,
+            )
+            results.append({"job_id": job_id, "result": outcome})
+        except HTTPException as exc:
+            results.append({"job_id": job_id, "error": exc.detail})
+        except Exception as exc:
+            results.append({"job_id": job_id, "error": str(exc)})
+    failed = [r for r in results if "error" in r]
+    return {
+        "total": len(req.job_ids),
+        "succeeded": len(results) - len(failed),
+        "failed": len(failed),
+        "results": results,
+    }
 
 
 EVENTS_POLL_SECONDS = float(os.environ.get("EVENTS_POLL_SECONDS", "0.2"))

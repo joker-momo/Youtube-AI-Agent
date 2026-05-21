@@ -165,6 +165,11 @@ def _fake_pass_assets_chatgpt(job_dir: Path) -> None:
     _fake_pass_stage(job_dir, "assets_chatgpt")
 
 
+def _fake_pass_thumbnail_image(job_dir: Path) -> None:
+    """Mark thumbnail_image as completed and advance to whisper stage."""
+    _fake_pass_stage(job_dir, "thumbnail_image")
+
+
 def _fake_pass_whisper_timestamps(job_dir: Path) -> None:
     """Mark whisper_timestamps as completed and advance to render."""
     _fake_pass_stage(job_dir, "whisper_timestamps")
@@ -487,6 +492,7 @@ def test_run_render_stage_uses_operator_render_without_qa_gate(
     _fake_pass_qa(job_dir, "seo")
     _fake_pass_seo_vidiq(job_dir)
     _fake_pass_assets_chatgpt(job_dir)
+    _fake_pass_thumbnail_image(job_dir)
     _fake_pass_whisper_timestamps(job_dir)
     calls = []
 
@@ -536,6 +542,7 @@ def test_run_review_stage_writes_review_and_completes_job(
     _fake_pass_qa(job_dir, "seo")
     _fake_pass_seo_vidiq(job_dir)
     _fake_pass_assets_chatgpt(job_dir)
+    _fake_pass_thumbnail_image(job_dir)
     _fake_pass_whisper_timestamps(job_dir)
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
     next(s for s in state["stages"] if s["name"] == "render")["status"] = "completed"
@@ -845,6 +852,7 @@ def test_post_run_render_via_http(
     _fake_pass_qa(tmp_path / "job-s1", "seo")
     _fake_pass_seo_vidiq(tmp_path / "job-s1")
     _fake_pass_assets_chatgpt(tmp_path / "job-s1")
+    _fake_pass_thumbnail_image(tmp_path / "job-s1")
     _fake_pass_whisper_timestamps(tmp_path / "job-s1")
 
     def fake_render_operator_job(options):
@@ -903,6 +911,7 @@ def test_post_run_review_via_http(
     _fake_pass_qa(tmp_path / "job-s1", "seo")
     _fake_pass_seo_vidiq(tmp_path / "job-s1")
     _fake_pass_assets_chatgpt(tmp_path / "job-s1")
+    _fake_pass_thumbnail_image(tmp_path / "job-s1")
     _fake_pass_whisper_timestamps(tmp_path / "job-s1")
 
     def fake_render_operator_job(options):

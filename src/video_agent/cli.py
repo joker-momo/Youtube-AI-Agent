@@ -313,7 +313,11 @@ def _run_auto(args: argparse.Namespace) -> int:
     print("Idea uploaded. Starting /run-all (browser session may take minutes)...")
 
     start = time.time()
-    status, body = _post(f"{base}/jobs/{job_id}/run-all", None, timeout=args.timeout)
+    status, body = _post(
+        f"{base}/jobs/{job_id}/run-all?enforce_approvals=false",
+        None,
+        timeout=args.timeout,
+    )
     elapsed = time.time() - start
     print(f"/run-all returned HTTP {status} in {elapsed:.1f}s")
     if status == 200:

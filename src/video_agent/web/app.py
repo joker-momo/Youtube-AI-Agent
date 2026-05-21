@@ -884,9 +884,8 @@ _DASHBOARD_HTML = """<!doctype html>
             <label>Seed topics</label>
             <textarea id="seed-topics" placeholder="One topic per line (optional)…" rows="1"></textarea>
             <div class="gen-actions">
-              <button class="action-btn primary" id="gen-btn" onclick="generateIdeas()">✨ Generate</button>
+              <button class="action-btn primary" id="gen-btn" onclick="generateAndScore()">✨ Generate + Score</button>
               <button class="action-btn" onclick="loadSavedIdeas()">📂 Load saved</button>
-              <button class="action-btn" id="score-btn" onclick="scoreCurrentIdeas()" style="display:none">📊 Score with vidIQ</button>
             </div>
           </div>
           <div id="ideas-status" style="font-size:12px;color:var(--muted);margin-bottom:6px"></div>
@@ -2156,7 +2155,10 @@ async function loadSavedIdeas() {
   }
 }
 
-async function generateIdeas() {
+let _CURRENT_IDEAS = [];
+let _CURRENT_PATHS = [];
+
+async function generateAndScore() {
   const channelId = document.getElementById('idea-channel').value;
   const count = parseInt(document.getElementById('idea-count').value, 10) || 5;
   const seedRaw = document.getElementById('seed-topics').value.trim();
@@ -2165,10 +2167,13 @@ async function generateIdeas() {
   const status = document.getElementById('ideas-status');
 
   btn.disabled = true;
-  btn.innerHTML = '<span class="spinner-inline"></span>Generating…';
-  status.textContent = 'Asking ChatGPT for ' + count + ' ideas — this may take 30–60 s…';
   document.getElementById('ideas-grid').innerHTML = '';
 
+  // ── Step 1: Generate ────────────────────────────────────────────────
+  btn.innerHTML = '<span class="spinner-inline"></span>Generating… (1/2)';
+  status.textContent = 'Asking ChatGPT for ' + count + ' ideas — 30–60 s…';
+
+  let ideas = [], savedPaths = [];
   try {
     const r = await fetch('/channels/' + encodeURIComponent(channelId) + '/ideas/generate', {
       method: 'POST',
@@ -2177,21 +2182,49 @@ async function generateIdeas() {
     });
     const d = await r.json();
     if (!r.ok) {
-      status.textContent = '❌ ' + (d.detail || 'Generation failed');
+      status.textContent = '❌ Generate failed: ' + (d.detail?.error || d.detail || r.status);
       return;
     }
-    renderIdeaCards(d.ideas, d.saved.map(p => 'ideas/' + p.split('ideas/').pop()));
-    status.textContent = '✅ ' + d.count + ' ideas generated and saved.';
+    ideas = d.ideas || [];
+    savedPaths = (d.saved || []).map(p => 'ideas/' + p.split('ideas/').pop());
+    renderIdeaCards(ideas, savedPaths);
+    status.textContent = '✅ ' + ideas.length + ' ideas generated. Scoring with vidIQ…';
   } catch (e) {
-    status.textContent = '❌ Network error: ' + e.message;
+    status.textContent = '❌ Generate error: ' + e.message;
+    return;
+  }
+
+  if (!ideas.length) { btn.disabled = false; btn.innerHTML = '✨ Generate + Score'; return; }
+
+  // ── Step 2: Score ────────────────────────────────────────────────────
+  btn.innerHTML = '<span class="spinner-inline"></span>Scoring vidIQ… (2/2)';
+  status.textContent = 'Querying vidIQ for ' + ideas.length + ' ideas — 1–2 min…';
+
+  try {
+    const r = await fetch('/channels/' + encodeURIComponent(channelId) + '/ideas/score', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ideas}),
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      status.textContent = '⚠️ Ideas saved but vidIQ scoring failed: ' + (d.detail || r.status);
+      return;
+    }
+    (d.results || []).forEach((res, i) => {
+      const card = document.getElementById('idea-card-' + i);
+      if (!card) return;
+      const mount = card.querySelector('.idea-score-mount');
+      if (mount) mount.innerHTML = renderIdeaScoreBlock(res);
+    });
+    status.textContent = '✅ ' + ideas.length + ' ideas generated and scored.';
+  } catch (e) {
+    status.textContent = '⚠️ Ideas saved but scoring error: ' + e.message;
   } finally {
     btn.disabled = false;
-    btn.innerHTML = '✨ Generate';
+    btn.innerHTML = '✨ Generate + Score';
   }
 }
-
-let _CURRENT_IDEAS = [];
-let _CURRENT_PATHS = [];
 
 function renderIdeaCards(ideas, paths) {
   _CURRENT_IDEAS = ideas;
@@ -2204,43 +2237,6 @@ function renderIdeaCards(ideas, paths) {
     el.firstElementChild.id = 'idea-card-' + i;
     grid.appendChild(el.firstElementChild);
   });
-  // Show score button when there are ideas
-  document.getElementById('score-btn').style.display = ideas.length ? '' : 'none';
-}
-
-async function scoreCurrentIdeas() {
-  if (_CURRENT_IDEAS.length === 0) return;
-  const channelId = document.getElementById('idea-channel').value;
-  const btn = document.getElementById('score-btn');
-  const status = document.getElementById('ideas-status');
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner-inline"></span>Scoring…';
-  status.textContent = 'Querying vidIQ for ' + _CURRENT_IDEAS.length + ' ideas — may take 1–2 min…';
-
-  try {
-    const r = await fetch('/channels/' + encodeURIComponent(channelId) + '/ideas/score', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ideas: _CURRENT_IDEAS}),
-    });
-    const d = await r.json();
-    if (!r.ok) { status.textContent = '❌ Score failed: ' + (d.detail || r.status); return; }
-
-    // Patch each idea card with score data
-    (d.results || []).forEach((res, i) => {
-      const card = document.getElementById('idea-card-' + i);
-      if (!card) return;
-      const mount = card.querySelector('.idea-score-mount');
-      if (!mount) return;
-      mount.innerHTML = renderIdeaScoreBlock(res);
-    });
-    status.textContent = '✅ vidIQ scores loaded.';
-  } catch (e) {
-    status.textContent = '❌ ' + e.message;
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = '📊 Score with vidIQ';
-  }
 }
 
 function _scoreClass(n) {
@@ -2319,8 +2315,6 @@ function renderIdeaCard(idea, savedPath) {
       <div class="idea-card-actions">
         <button class="action-btn primary"
           onclick='createJobFromIdea(${safeIdea}, "${safePath}")'>+ Create Job</button>
-        <button class="action-btn" title="Score this idea with vidIQ"
-          onclick='scoreOneIdea(this, ${safeIdea})'>📊</button>
       </div>
     </div>`;
 }

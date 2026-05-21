@@ -607,6 +607,53 @@ async def claude_send(payload: SendPromptRequest) -> dict:
     return await _drive("claude", payload.prompt, payload.response_timeout_ms)
 
 
+_SITE_DOMAINS = {
+    "chatgpt": "chatgpt.com",
+    "gemini": "google.com",
+    "claude": "claude.ai",
+    "vidiq": "vidiq.com",
+}
+
+
+@app.delete("/auth/{site}/cookies", status_code=200)
+async def auth_clear_cookies(site: str) -> dict:
+    """Clear all cookies for the given site domain in the persistent browser context.
+
+    Useful when HTTP 431 (Request Header Fields Too Large) breaks navigation
+    because accumulated cookies bloat the request headers.
+    """
+    from playwright.async_api import async_playwright
+
+    domain = _SITE_DOMAINS.get(site)
+    if not domain:
+        raise HTTPException(status_code=404, detail=f"Unsupported site: {site}")
+
+    cdp_url = _cdp_url()
+    try:
+        ws_endpoint = await _resolve_browser_ws(cdp_url)
+        async with async_playwright() as pw:
+            browser = await pw.chromium.connect_over_cdp(ws_endpoint)
+            try:
+                context = browser.contexts[0] if browser.contexts else await browser.new_context()
+                before = await context.cookies()
+                before_count = sum(1 for c in before if domain in c.get("domain", ""))
+                await context.clear_cookies(domain=f".{domain}")
+                await context.clear_cookies(domain=domain)
+                after = await context.cookies()
+                after_count = sum(1 for c in after if domain in c.get("domain", ""))
+                return {
+                    "ok": True,
+                    "site": site,
+                    "domain": domain,
+                    "cleared": before_count - after_count,
+                    "remaining": after_count,
+                }
+            finally:
+                await browser.close()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail={"cdp_url": cdp_url, "error": str(exc)}) from exc
+
+
 @app.get("/auth/{site}/status")
 async def auth_status(site: str) -> dict:
     from playwright.async_api import async_playwright

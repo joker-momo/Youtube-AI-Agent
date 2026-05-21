@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["job_id", "title", "description", "tags", "language", "ai_disclosure", "thumbnail_path"],
+  "required": ["job_id", "title", "description", "tags", "language", "ai_disclosure", "thumbnail_path", "thumbnail_text"],
   "properties": {
     "job_id": { "type": "string" },
     "title": { "type": "string" },
@@ -9,6 +9,10 @@
     "tags": { "type": "array", "items": { "type": "string" } },
     "language": { "type": "string" },
     "ai_disclosure": { "type": "boolean" },
-    "thumbnail_path": { "type": "string" }
+    "thumbnail_path": { "type": "string" },
+    "thumbnail_text": {
+      "type": "string",
+      "description": "3-5 word ALL-CAPS Spanish hook for YouTube thumbnail overlay. Short, high-emotion, readable at thumbnail size. Example: 'DUERME MEJOR HOY'"
+    }
   }
 }

@@ -32,7 +32,7 @@ Phase 1 is manual YouTube upload. Do not build YouTube upload, Telegram, Hermes,
 | App shape | Standalone Python web app |
 | UI | Local FastAPI web UI with WebSocket progress |
 | Hermes | Dropped |
-| LLM access | Browser web UI only: ChatGPT Plus and Gemini |
+| LLM access | Browser web UI only: ChatGPT Plus and Claude |
 | Browser control | Playwright CDP attach to host Chrome |
 | Chrome | Dedicated host profile on port `9222` |
 | Browser container | Separate `browser-worker` service |
@@ -49,11 +49,11 @@ Phase 1 is manual YouTube upload. Do not build YouTube upload, Telegram, Hermes,
 trend/data intake
 -> idea selection
 -> ChatGPT script
--> Gemini script QA
+-> Claude script QA
 -> ChatGPT scenes
--> Gemini scenes QA
+-> Claude scenes QA
 -> ChatGPT SEO
--> Gemini SEO QA
+-> Claude SEO QA
 -> images/assets
 -> TTS
 -> Remotion render
@@ -75,7 +75,7 @@ User browser
       -> host Chrome dedicated profile
 ```
 
-The app owns orchestration and state. The browser worker owns all ChatGPT, Gemini, vidIQ, and ChatGPT image-generation browser actions.
+The app owns orchestration and state. The browser worker owns all ChatGPT, Claude, vidIQ, and ChatGPT image-generation browser actions.
 
 ## Services
 
@@ -95,7 +95,7 @@ Future FastAPI service:
 Future FastAPI service:
 
 - `POST /chatgpt/run`
-- `POST /gemini/run`
+- `POST /claude/run`
 - `POST /vidiq/scrape`
 - `POST /chatgpt/images`
 - `GET /health`
@@ -126,7 +126,7 @@ jobs/<job_id>/
 │   │   ├── seo_prompt.txt
 │   │   ├── seo_raw.json
 │   │   └── image_prompts/
-│   └── gemini/
+│   └── gemini/  # legacy folder name; stores Claude QA artifacts
 │       ├── script_qa_prompt.txt
 │       ├── script_qa_raw.json
 │       ├── script_qa.json
@@ -155,7 +155,7 @@ jobs/<job_id>/
 2. Browser worker MVP
    - CDP attach to host Chrome.
    - ChatGPT driver: new chat, send prompt, wait complete, extract JSON/text/images.
-   - Gemini driver with send/submit handling.
+   - Claude driver with send/submit handling.
    - Centralized selectors.
    - Trace screenshots and request metadata.
 

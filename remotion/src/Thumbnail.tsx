@@ -1,36 +1,94 @@
 import React from 'react';
-import {AbsoluteFill} from 'remotion';
-import {RenderProps} from './render-props';
-import {fitHeadline, softShadow} from './styles';
+import {AbsoluteFill, Img, OffthreadVideo} from 'remotion';
+import {mediaSrc, RenderProps} from './render-props';
+import {fitHeadline} from './styles';
 
 export const Thumbnail: React.FC<RenderProps> = (props) => {
   const palette = props.style.palette;
   const leadScene = props.scenes[0];
-  const title = props.seo.title.toUpperCase();
-  const supportText = (leadScene?.on_screen_text || props.channel.description).toUpperCase();
-  const headlineSize = fitHeadline(title, 78, 48);
-  const supportSize = fitHeadline(supportText, 54, 36);
+  const bg = leadScene?.asset_refs?.background ?? '';
+  const isVideo = bg.endsWith('.mp4');
+
+  // thumbnail_text: short ALL-CAPS hook from SEO (e.g. "DUERME MEJOR HOY")
+  // Fallback: use title up to first colon or first 5 words.
+  const rawHook = props.seo.thumbnail_text
+    ?? (props.seo.title.includes(':')
+        ? props.seo.title.split(':')[0]
+        : props.seo.title.split(' ').slice(0, 5).join(' '));
+  const hook = rawHook.toUpperCase();
+
+  const channelName = props.channel.name;
+  // Cap at 96px — keeps text within bottom third even for 4-5 word hooks.
+  const hookSize = fitHeadline(hook, 96, 60);
 
   return (
-    <AbsoluteFill style={{backgroundColor: palette.primary, fontFamily: 'Inter, Arial, sans-serif', overflow: 'hidden'}}>
-      <div style={{position: 'absolute', inset: 0, background: `linear-gradient(135deg, ${palette.primary} 0%, ${palette.secondary} 74%)`}} />
-      <div style={{position: 'absolute', right: -80, top: 0, width: 420, height: 820, backgroundColor: 'rgba(246,241,232,0.16)', transform: 'rotate(14deg)'}} />
-      <div style={{position: 'absolute', right: 108, top: -80, width: 86, height: 900, backgroundColor: palette.accent, transform: 'rotate(14deg)', opacity: 0.72}} />
-      <div style={{position: 'absolute', left: 70, right: 70, top: 58, color: palette.background}}>
-        <div style={{display: 'inline-flex', alignItems: 'center', gap: 18, padding: '14px 20px', backgroundColor: 'rgba(38,51,47,0.44)', boxShadow: softShadow}}>
-          <span style={{width: 18, height: 18, borderRadius: 9, backgroundColor: palette.accent}} />
-          <span style={{fontSize: 32, fontWeight: 800}}>{props.channel.name}</span>
-        </div>
-        <div style={{fontSize: headlineSize, lineHeight: 1.01, fontWeight: 950, marginTop: 54, width: 900, textTransform: 'uppercase'}}>
-          {title}
-        </div>
-        <div style={{fontSize: supportSize, lineHeight: 1.04, fontWeight: 850, marginTop: 22, width: 760, color: palette.accent}}>
-          {supportText}
+    <AbsoluteFill style={{overflow: 'hidden', fontFamily: 'Inter, Arial, sans-serif'}}>
+
+      {/* Background: scene-01 image or video still */}
+      {bg ? (
+        isVideo ? (
+          <OffthreadVideo
+            src={mediaSrc(bg)}
+            muted
+            style={{position: 'absolute', width: '100%', height: '100%', objectFit: 'cover'}}
+          />
+        ) : (
+          <Img
+            src={mediaSrc(bg)}
+            style={{position: 'absolute', width: '100%', height: '100%', objectFit: 'cover'}}
+          />
+        )
+      ) : (
+        <div style={{position: 'absolute', inset: 0, background: `linear-gradient(135deg, ${palette.primary} 0%, ${palette.secondary} 100%)`}} />
+      )}
+
+      {/* Dark gradient overlay — bottom heavy for text readability */}
+      <div style={{
+        position: 'absolute', inset: 0,
+        background: 'linear-gradient(to top, rgba(0,0,0,0.88) 0%, rgba(0,0,0,0.55) 45%, rgba(0,0,0,0.18) 100%)',
+      }} />
+
+      {/* Left vertical accent bar */}
+      <div style={{
+        position: 'absolute', left: 0, top: 0, bottom: 0,
+        width: 14, backgroundColor: palette.accent,
+      }} />
+
+      {/* Channel name — top left */}
+      <div style={{
+        position: 'absolute', top: 38, left: 42,
+        display: 'flex', alignItems: 'center', gap: 12,
+        backgroundColor: 'rgba(0,0,0,0.52)',
+        padding: '10px 18px',
+        borderRadius: 4,
+      }}>
+        <div style={{width: 14, height: 14, borderRadius: 7, backgroundColor: palette.accent, flexShrink: 0}} />
+        <span style={{fontSize: 26, fontWeight: 800, color: '#fff', letterSpacing: 1.5, textTransform: 'uppercase'}}>
+          {channelName}
+        </span>
+      </div>
+
+      {/* Main hook text — bottom area, left-aligned, large */}
+      <div style={{
+        position: 'absolute', left: 42, right: 42, bottom: 52,
+      }}>
+        {/* Accent top line */}
+        <div style={{width: 60, height: 7, backgroundColor: palette.accent, borderRadius: 4, marginBottom: 20}} />
+
+        {/* Hook — the big clickbait text */}
+        <div style={{
+          fontSize: hookSize,
+          fontWeight: 950,
+          lineHeight: 1.0,
+          color: '#FFFFFF',
+          textShadow: '0 2px 24px rgba(0,0,0,0.95), 0 1px 6px rgba(0,0,0,0.9)',
+          letterSpacing: -1,
+          maxWidth: 980,
+        }}>
+          {hook}
         </div>
       </div>
-      <div style={{position: 'absolute', left: 70, bottom: 50, padding: '18px 28px', backgroundColor: palette.background, color: palette.text, fontSize: 31, fontWeight: 850, boxShadow: softShadow}}>
-        {props.scenes.length} escenas practicas
-      </div>
+
     </AbsoluteFill>
   );
 };

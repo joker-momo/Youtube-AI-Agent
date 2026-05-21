@@ -21,7 +21,7 @@ Primary docs:
 trend/data intake
 -> idea selection
 -> ChatGPT script/scenes/SEO
--> Gemini QA
+-> Claude QA
 -> images/assets
 -> TTS
 -> Remotion render
@@ -54,7 +54,7 @@ User browser
       -> host Chrome dedicated profile on port 9222
 ```
 
-Browser access uses the user's logged-in ChatGPT Plus, Gemini, and vidIQ sessions through a dedicated Chrome profile. The system must not auto-login or inspect browser secrets.
+Browser access uses the user's logged-in ChatGPT Plus, Claude, and vidIQ sessions through a dedicated Chrome profile. The system must not auto-login or inspect browser secrets.
 
 ## Requirements
 
@@ -114,7 +114,7 @@ docker compose run --rm video-agent python -m video_agent.cli run \
 
 ## Operator-Approved Content
 
-During the v3 transition, the existing semi-automated browser flow still works through `operator-*` commands. Place the ChatGPT/Gemini-approved artifacts in a job directory:
+During the v3 transition, the existing semi-automated browser flow still works through `operator-*` commands. Place the ChatGPT/Claude-approved artifacts in a job directory:
 
 ```text
 jobs/<job_id>/script.json
@@ -131,7 +131,7 @@ docker compose run --rm video-agent python -m video_agent.cli operator-next \
   --job-dir jobs/<job_id>
 ```
 
-`operator-next` looks at the current job folder, creates the next prompt file when needed, and prints the exact command to run after saving the ChatGPT or Gemini raw response.
+`operator-next` looks at the current job folder, creates the next prompt file when needed, and prints the exact command to run after saving the ChatGPT or Claude raw response.
 
 ```bash
 docker compose run --rm video-agent python -m video_agent.cli operator-prompts \
@@ -151,7 +151,7 @@ docker compose run --rm video-agent python -m video_agent.cli operator-promote \
   --channel configs/vida-plena-45/channel.yaml
 ```
 
-After Gemini reviews that artifact, promote the raw QA response:
+After Claude reviews that artifact, promote the raw QA response (the path keeps `operator/gemini` for backward compatibility):
 
 ```bash
 docker compose run --rm video-agent python -m video_agent.cli operator-promote-qa \
@@ -180,7 +180,7 @@ docker compose run --rm video-agent python -m video_agent.cli operator-review \
   --job-dir jobs/<job_id>
 ```
 
-This creates `jobs/<job_id>/operator_review.html` with artifact status, Gemini QA verdicts, video, thumbnail, contact sheet, and scene notes. `operator-render` also refreshes this page automatically.
+This creates `jobs/<job_id>/operator_review.html` with artifact status, QA verdicts, video, thumbnail, contact sheet, and scene notes. `operator-render` also refreshes this page automatically.
 
 ## Kokoro TTS
 

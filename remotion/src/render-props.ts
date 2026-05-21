@@ -30,7 +30,7 @@ export type RenderProps = {
   render: {fps: number; resolution: string; duration_sec: number};
   scenes: Scene[];
   audio: {narration: string | null; music: string | null};
-  seo: {title: string; description: string; thumbnail_path: string};
+  seo: {title: string; description: string; thumbnail_path: string; thumbnail_text?: string};
 };
 
 export const mediaSrc = (path: string): string => {

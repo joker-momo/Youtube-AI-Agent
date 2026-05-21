@@ -13,6 +13,22 @@
     "thumbnail_text": {
       "type": "string",
       "description": "3-5 word ALL-CAPS Spanish hook for YouTube thumbnail overlay. Short, high-emotion, readable at thumbnail size. Example: 'DUERME MEJOR HOY'"
+    },
+    "title_variants": {
+      "type": "array",
+      "description": "3 scored title+thumbnail_text variants, sorted best-first",
+      "items": {
+        "type": "object",
+        "required": ["title", "thumbnail_text", "score"],
+        "properties": {
+          "title": { "type": "string" },
+          "thumbnail_text": { "type": "string" },
+          "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+          "score_breakdown": { "type": "object" }
+        }
+      },
+      "minItems": 1,
+      "maxItems": 3
     }
   }
 }

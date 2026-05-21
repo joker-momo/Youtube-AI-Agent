@@ -18,7 +18,7 @@ _EMOTION_WORDS = {
 
 def _title_score(variant: dict) -> dict:
     """Return scoring breakdown for the title field. Includes a 'total' key (0-50)."""
-    title: str = variant.get("title", "")
+    title = str(variant.get("title") or "")
     words = title.split()
     word_count = len(words)
     length = len(title)
@@ -62,7 +62,7 @@ def _title_score(variant: dict) -> dict:
 
 def _thumbnail_score(variant: dict) -> dict:
     """Return scoring breakdown for the thumbnail_text field. Includes 'total' and 'all_caps' keys."""
-    text: str = variant.get("thumbnail_text", "")
+    text = str(variant.get("thumbnail_text") or "")
     words = text.split()
     word_count = len(words)
     length = len(text)

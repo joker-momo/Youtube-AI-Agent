@@ -1058,7 +1058,10 @@ function renderTimeline(t) {
     </div>
   `;
   const tl = document.getElementById('timeline');
-  t.stages.forEach((s, idx) => tl.appendChild(renderStep(t.job_id, s, idx)));
+  t.stages.forEach((s, idx) => {
+    tl.appendChild(renderStep(t.job_id, s, idx));
+    renderStageExtras(t.job_id, s);  // must be called after appendChild so getElementById finds the element
+  });
   if (videoReady) renderFinal(t);
 }
 
@@ -1168,7 +1171,6 @@ function renderStep(jobId, s, idx) {
     el.classList.add('open');
     OPEN_STAGES.add(s.name);
   }
-  renderStageExtras(jobId, s);
   return el;
 }
 
@@ -1580,15 +1582,44 @@ async function renderStageExtras(jobId, s) {
       insight.innerHTML = renderSeoVidiqInsight(await fetchArtifactJson(jobId, 'seo_vidiq_report.json'));
       rendered = true;
     } else if (s.name === 'thumbnail_image') {
-      // Show generated thumbnail as image preview
-      const jobBase = `/jobs/${encodeURIComponent(jobId)}/artifacts/thumbnail_bg.png`;
+      // Show generated thumbnail background
+      const bgUrl = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=thumbnail_bg.png';
       insight.innerHTML = `
         <div class="insight">
           <div class="insight-section">Generated thumbnail background</div>
-          <img class="thumb-preview" src="${jobBase}" alt="thumbnail"
+          <img class="thumb-preview" src="${bgUrl}" alt="thumbnail background"
                onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
           <div style="display:none;color:var(--muted);font-size:12px;padding:8px">Image not ready yet</div>
         </div>`;
+      rendered = true;
+    } else if (s.name === 'render') {
+      // Show all 3 rendered thumbnails + title variants from seo.json
+      let seo = {};
+      try { seo = await fetchArtifactJson(jobId, 'seo.json'); } catch(e) {}
+      const variants = Array.isArray(seo.title_variants) && seo.title_variants.length
+        ? seo.title_variants
+        : [{title: seo.title || '', thumbnail_text: seo.thumbnail_text || '', score: null}];
+      function thumbUrl(idx) {
+        return '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent('thumbnail_' + (idx+1) + '.jpg');
+      }
+      function fallbackThumb(idx) {
+        return '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=thumbnail.jpg';
+      }
+      const cards = variants.slice(0,3).map((v, i) => {
+        const isWinner = i === 0;
+        const score = v.score != null ? ` · ${v.score}pt` : '';
+        const badge = isWinner ? `⭐ Best${score}` : `Variant ${i+1}${score}`;
+        return `
+          <div class="ab-card${isWinner?' ab-winner':''}">
+            <div class="ab-badge${isWinner?' winner':''}">${badge}</div>
+            <img class="thumb-img" src="${thumbUrl(i)}" alt="thumbnail ${i+1}"
+                 onerror="this.src='${fallbackThumb(i)}';this.onerror=null">
+            <div class="ab-title">${escapeHtml(v.title || '')}</div>
+            ${v.thumbnail_text ? `<div class="ab-hook">${escapeHtml(v.thumbnail_text)}</div>` : ''}
+            <button class="copy-btn" data-clip="${escapeHtml(v.title||'')}" onclick="copyText(this,this.dataset.clip)">copy title</button>
+          </div>`;
+      }).join('');
+      insight.innerHTML = `<div class="insight"><div class="ab-grid">${cards}</div></div>`;
       rendered = true;
     }
     if (!rendered && Array.isArray(s.outputs)) {
@@ -1652,9 +1683,10 @@ async function renderFinal(t) {
     if (sr.ok) seo = await sr.json();
   } catch (e) {}
 
-  const variants = (seo.title_variants && seo.title_variants.length >= 2) ? seo.title_variants : null;
+  const variants = (seo.title_variants && seo.title_variants.length >= 1) ? seo.title_variants : [{title: seo.title || '', thumbnail_text: seo.thumbnail_text || '', score: null}];
   const tags = (seo.tags || []).map(tag => `<span class="tag-chip">${escapeHtml(tag)}</span>`).join('');
 
+  const fallbackThumbUrl = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=thumbnail.jpg';
   function variantCard(v, idx) {
     const thumbPath = 'thumbnail_' + (idx + 1) + '.jpg';
     const thumbUrl = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(thumbPath);
@@ -1666,16 +1698,15 @@ async function renderFinal(t) {
     return `
       <div class="ab-card${isWinner ? ' ab-winner' : ''}">
         <div class="ab-badge${isWinner ? ' winner' : ''}">${badgeLabel}</div>
-        <img class="thumb-img" src="${thumbUrl}" alt="thumbnail ${idx + 1}" onerror="this.style.opacity='0.2'">
+        <img class="thumb-img" src="${thumbUrl}" alt="thumbnail ${idx + 1}"
+             onerror="this.src='${fallbackThumbUrl}';this.onerror=null">
         <div class="ab-title">${escapeHtml(v.title || '')}</div>
         <div class="ab-hook">${escapeHtml(v.thumbnail_text || '')}</div>
         <button class="copy-btn" data-clip="${escapeHtml(v.title || '')}" onclick="copyText(this, this.dataset.clip)">copy title</button>
       </div>`;
   }
 
-  const abSection = variants
-    ? `<div class="ab-grid">${variants.slice(0, 3).map((v, i) => variantCard(v, i)).join('')}</div>`
-    : variantCard({title: seo.title || '', thumbnail_text: seo.thumbnail_text || '', score: null}, 0).replace('ab-card', 'ab-card ab-winner');
+  const abSection = `<div class="ab-grid">${variants.slice(0, 3).map((v, i) => variantCard(v, i)).join('')}</div>`;
 
   mount.innerHTML = `
     <div class="final">

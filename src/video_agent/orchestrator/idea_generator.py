@@ -26,6 +26,8 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+import urllib.request
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Awaitable, Callable
@@ -33,6 +35,120 @@ from typing import Awaitable, Callable
 from video_agent.utils.json_io import read_yaml
 
 IDEAS_SUBDIR = "ideas"
+
+# ---------------------------------------------------------------------------
+# Niche → Spanish keyword expansion
+# ---------------------------------------------------------------------------
+
+_NICHE_KW_MAP: dict[str, list[str]] = {
+    "health_wellness":      ["salud", "bienestar", "cuerpo", "mente", "vida"],
+    "nutrition_45plus":     ["nutrición", "alimentación", "dieta", "comer", "nutricion"],
+    "exercise_low_impact":  ["ejercicio", "caminar", "yoga", "movimiento", "actividad", "estiramiento"],
+    "sleep_quality":        ["sueño", "dormir", "descanso", "insomnio", "sueno"],
+    "mental_health":        ["estrés", "ansiedad", "depresión", "mental", "emocional", "estres"],
+    "hormonal_health":      ["menopausia", "hormonas", "tiroides", "climaterio"],
+    "cardiovascular":       ["corazón", "presión", "colesterol", "circulación", "corazon"],
+    "diabetes":             ["diabetes", "glucosa", "azúcar", "insulina"],
+    "weight_management":    ["peso", "adelgazar", "grasa", "metabolismo", "obesidad"],
+}
+
+_CATEGORY_KW_MAP: dict[str, list[str]] = {
+    "health_wellness":   ["salud", "bienestar", "médico", "cuerpo", "medico"],
+    "fitness":           ["ejercicio", "fitness", "deporte", "gym"],
+    "food":              ["comida", "receta", "cocina", "alimento"],
+    "beauty":            ["belleza", "piel", "cabello", "antiedad"],
+}
+
+
+def _niche_keywords(channel_config: dict) -> set[str]:
+    """Build a set of Spanish trigger words from channel niche config."""
+    category = channel_config.get("niche", {}).get("category", "")
+    sub_niches = channel_config.get("niche", {}).get("sub_niches", [])
+    description = channel_config.get("channel", {}).get("description", "").lower()
+
+    kws: set[str] = set()
+    for w in _CATEGORY_KW_MAP.get(category, []):
+        kws.add(w)
+    for sn in sub_niches:
+        for w in _NICHE_KW_MAP.get(sn, []):
+            kws.add(w)
+    # Also add raw words from channel description (≥4 chars, alpha)
+    for word in re.findall(r"[a-záéíóúüñ]{4,}", description):
+        kws.add(word)
+    return kws
+
+
+def _trend_matches_niche(trend_title: str, niche_kws: set[str]) -> bool:
+    """True if any niche keyword appears in the trend title (case-insensitive)."""
+    title_lower = trend_title.lower()
+    # Normalise accents for comparison
+    title_norm = unicodedata.normalize("NFKD", title_lower).encode("ascii", "ignore").decode()
+    for kw in niche_kws:
+        kw_norm = unicodedata.normalize("NFKD", kw).encode("ascii", "ignore").decode()
+        if kw_norm in title_norm or kw in title_lower:
+            return True
+    return False
+
+
+def _fetch_google_trends(geo: str, language: str = "es") -> list[str]:
+    """Fetch daily trending searches from Google Trends RSS for the given geo.
+
+    Returns a list of trend title strings. Never raises — returns [] on error.
+    Geo examples: "MX", "CO", "ES", "AR"
+    """
+    url = f"https://trends.google.com/trending/rss?geo={geo}&hl={language}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            raw = resp.read()
+        root = ET.fromstring(raw)
+        ns = {"ht": "https://trends.google.com/trends/trendingsearches/daily"}
+        titles: list[str] = []
+        for item in root.iter("item"):
+            title_el = item.find("title")
+            if title_el is not None and title_el.text:
+                titles.append(title_el.text.strip())
+        return titles
+    except Exception as exc:
+        import sys
+        print(f"[idea_generator] Google Trends fetch failed ({geo}): {exc}", file=sys.stderr)
+        return []
+
+
+def _auto_seeds_from_trends(channel_config: dict, max_seeds: int = 10) -> list[str]:
+    """Derive seed keywords from Google Trends filtered by channel niche.
+
+    Tries each primary_market geo in order. Falls back to sub_niches as seeds
+    if no trending topic matches the channel niche.
+    """
+    markets = channel_config.get("audience", {}).get("primary_markets", ["MX"])
+    language = channel_config.get("audience", {}).get("language", "es").split("-")[0]
+    niche_kws = _niche_keywords(channel_config)
+    sub_niches_raw = channel_config.get("niche", {}).get("sub_niches", [])
+
+    all_trends: list[str] = []
+    for geo in markets[:2]:  # try first 2 markets max
+        trends = _fetch_google_trends(geo, language)
+        all_trends.extend(trends)
+        if len(all_trends) >= 30:
+            break
+
+    # Filter by niche relevance
+    matched = [t for t in all_trends if _trend_matches_niche(t, niche_kws)]
+
+    if matched:
+        # Deduplicate while preserving order
+        seen: set[str] = set()
+        unique = [t for t in matched if t not in seen and not seen.add(t)]  # type: ignore[func-returns-value]
+        return unique[:max_seeds]
+
+    # Fallback: use sub_niches expanded to Spanish keywords as seeds
+    fallback: list[str] = []
+    for sn in sub_niches_raw:
+        kws = _NICHE_KW_MAP.get(sn, [])
+        if kws:
+            fallback.append(kws[0])  # take first representative keyword
+    return fallback[:max_seeds] if fallback else ["salud", "bienestar"]
 
 _REQUIRED_FIELDS = {"topic", "angle", "target_duration_sec", "key_points", "title_seed"}
 
@@ -321,14 +437,27 @@ async def generate_ideas(
     vidiq_fn: Callable[[list[str]], Awaitable[list[dict]]] | None = None,
     seed_topics: list[str] | None = None,
     count: int = 10,
-) -> tuple[list[dict], list[dict]]:
+) -> tuple[list[dict], list[dict], str]:
     """Discover top keywords via vidIQ, then ask ChatGPT to flesh out ideas.
 
-    Returns (ideas, top_keywords) so the caller can attach scores to the response.
-    ``vidiq_fn`` is optional — if None, falls back to ChatGPT-only generation with seeds.
+    Returns (ideas, top_keywords, seed_source) where seed_source is one of:
+      "user"    — caller provided seed_topics
+      "trend"   — auto-discovered from Google Trends matching channel niche
+      "fallback" — trends didn't match niche; used channel sub_niches as seeds
     """
+    import sys
     channel_config = read_yaml(channel_path)
-    seeds = seed_topics or []
+    seeds = list(seed_topics) if seed_topics else []
+    seed_source = "user"
+
+    # If no seeds provided, auto-discover from Google Trends filtered by channel niche
+    if not seeds:
+        print("[idea_generator] No seeds given — fetching from Google Trends…", file=sys.stderr)
+        seeds = _auto_seeds_from_trends(channel_config)
+        # Detect whether we got real trends or fell back to sub_niches
+        niche_kws = _niche_keywords(channel_config)
+        seed_source = "trend" if any(_trend_matches_niche(s, niche_kws) for s in seeds) else "fallback"
+        print(f"[idea_generator] Seed source={seed_source}, seeds={seeds}", file=sys.stderr)
 
     if vidiq_fn is not None:
         top_keywords = await _discover_top_keywords(seeds, vidiq_fn)
@@ -345,4 +474,4 @@ async def generate_ideas(
     if not ideas:
         raise ValueError(f"ChatGPT returned no parseable ideas. Raw:\n{raw[:500]}")
 
-    return ideas, top_keywords
+    return ideas, top_keywords, seed_source

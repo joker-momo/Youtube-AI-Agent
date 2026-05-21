@@ -2204,8 +2204,9 @@ async function generateAndScore() {
     renderIdeaCards(ideas, savedPaths);
 
     const topKws = d.top_keywords || [];
-    const best = topKws.length ? ' (best keyword score: ' + (topKws[0].score ?? '?') + '/100)' : '';
-    status.textContent = '✅ ' + ideas.length + ' ideas from top vidIQ keywords' + best + '.';
+    const best = topKws.length ? ' (best: ' + (topKws[0].score ?? '?') + '/100)' : '';
+    const srcLabel = {'trend': '📈 từ Google Trends', 'fallback': '📂 từ channel niche', 'user': '✏️ từ seeds bạn nhập'}[d.seed_source] || '';
+    status.textContent = '✅ ' + ideas.length + ' ideas — ' + srcLabel + best + '.';
   } catch (e) {
     status.textContent = '❌ Error: ' + e.message;
   } finally {
@@ -3005,7 +3006,7 @@ async def post_generate_ideas(
         raise HTTPException(status_code=422, detail="count must be between 1 and 50")
 
     try:
-        ideas, top_keywords = await generate_ideas(
+        ideas, top_keywords, seed_source = await generate_ideas(
             channel_path=channel_path,
             chatgpt_fn=lambda msgs: client.run_session("chatgpt", msgs),
             vidiq_fn=client.run_vidiq_scores,
@@ -3038,6 +3039,7 @@ async def post_generate_ideas(
         "count": len(ideas_with_scores),
         "ideas": ideas_with_scores,
         "top_keywords": top_keywords,
+        "seed_source": seed_source,  # "user" | "trend" | "fallback"
         "saved": rel_paths,
     }
 

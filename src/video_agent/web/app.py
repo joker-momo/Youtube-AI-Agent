@@ -185,6 +185,9 @@ _STAGE_ARTIFACTS = {
             "render_props.json",
             "video.mp4",
             "thumbnail.jpg",
+            "thumbnail_1.jpg",
+            "thumbnail_2.jpg",
+            "thumbnail_3.jpg",
             "visual_review.json",
             "report.md",
         ],
@@ -747,6 +750,14 @@ _DASHBOARD_HTML = """<!doctype html>
   .tag-chip { border-radius: 999px; background: #f1f6fd; color: var(--blue); padding: 4px 8px; font-size: 12px; }
   .download-link { display: inline-flex; align-items: center; gap: 8px; color: var(--blue); font-size: 12px; text-decoration: none; margin-top: 3px; font-weight: 650; }
   .download-link:hover { text-decoration: underline; }
+  .ab-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 16px 0; }
+  .ab-card { border: 2px solid var(--line); border-radius: 10px; padding: 12px; position: relative; background: #fff; }
+  .ab-winner { border-color: #F2C94C; box-shadow: 0 0 0 3px rgba(242,201,76,0.18); }
+  .ab-badge { display: inline-block; font-size: 11px; font-weight: 750; padding: 3px 8px; border-radius: 4px; background: var(--border, #e5e5e5); color: var(--muted); margin-bottom: 8px; }
+  .ab-badge.winner { background: #F2C94C; color: #1a1a1a; }
+  .ab-card .thumb-img { width: 100%; border-radius: 6px; display: block; margin-bottom: 8px; aspect-ratio: 16/9; object-fit: cover; background: #111; }
+  .ab-title { font-size: 12px; font-weight: 700; line-height: 1.4; margin-bottom: 4px; color: #222; }
+  .ab-hook { font-size: 11px; color: var(--muted); font-family: monospace; margin-bottom: 8px; letter-spacing: 0.03em; }
   .events { margin-top: 22px; border: 1px solid var(--line); border-radius: 8px; background: #fff; overflow: hidden; }
   .events-head { min-height: 42px; padding: 0 14px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); cursor: pointer; }
   .events-head h3 { margin: 0; font-size: 13px; }
@@ -1296,27 +1307,47 @@ async function renderFinal(t) {
   if (!mount) return;
   const jobId = t.job_id;
   const videoUrl = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=video.mp4';
-  const thumbUrl = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=thumbnail.jpg';
   let seo = {};
   try {
     const sr = await fetch('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=seo.json');
     if (sr.ok) seo = await sr.json();
   } catch (e) {}
-  const tags = (seo.tags || []).map(t => `<span class="tag-chip">${escapeHtml(t)}</span>`).join('');
+
+  const variants = (seo.title_variants && seo.title_variants.length >= 2) ? seo.title_variants : null;
+  const tags = (seo.tags || []).map(tag => `<span class="tag-chip">${escapeHtml(tag)}</span>`).join('');
+
+  function variantCard(v, idx) {
+    const thumbPath = 'thumbnail_' + (idx + 1) + '.jpg';
+    const thumbUrl = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(thumbPath);
+    const isWinner = idx === 0;
+    const score = (v.score !== undefined && v.score !== null) ? v.score + 'pt' : '';
+    const badgeLabel = isWinner
+      ? ('⭐ Best' + (score ? ' · ' + score : ''))
+      : ('Variant ' + (idx + 1) + (score ? ' · ' + score : ''));
+    return `
+      <div class="ab-card${isWinner ? ' ab-winner' : ''}">
+        <div class="ab-badge${isWinner ? ' winner' : ''}">${badgeLabel}</div>
+        <img class="thumb-img" src="${thumbUrl}" alt="thumbnail ${idx + 1}" onerror="this.style.opacity='0.2'">
+        <div class="ab-title">${escapeHtml(v.title || '')}</div>
+        <div class="ab-hook">${escapeHtml(v.thumbnail_text || '')}</div>
+        <button class="copy-btn" data-clip="${escapeHtml(v.title || '')}" onclick="copyText(this, this.dataset.clip)">copy title</button>
+      </div>`;
+  }
+
+  const abSection = variants
+    ? `<div class="ab-grid">${variants.slice(0, 3).map((v, i) => variantCard(v, i)).join('')}</div>`
+    : variantCard({title: seo.title || '', thumbnail_text: seo.thumbnail_text || '', score: null}, 0).replace('ab-card', 'ab-card ab-winner');
+
   mount.innerHTML = `
     <div class="final">
       <div class="final-title"><span>Final output</span><span class="badge">ready</span></div>
       <video src="${videoUrl}" controls></video>
+      ${abSection}
       <div class="final-cols">
         <div>
-          <img class="thumb-img" src="${thumbUrl}" alt="thumbnail">
-          <a class="download-link" href="${videoUrl}" download>Download video.mp4</a>
+          <a class="download-link" href="${videoUrl}" download>⬇ Download video.mp4</a>
         </div>
         <div>
-          <div class="copy-row">
-            <div class="crh"><div class="cr-label">Title <span class="count">${(seo.title || '').length}/100</span></div><button class="copy-btn" data-clip="${escapeHtml((seo.title||'').replace(/\\n/g,' '))}" onclick="copyText(this, this.dataset.clip)">copy</button></div>
-            <div class="copy-content">${escapeHtml(seo.title || '(missing)')}</div>
-          </div>
           <div class="copy-row">
             <div class="crh"><div class="cr-label">Description <span class="count">${(seo.description || '').length} chars</span></div><button class="copy-btn" onclick="copyText(this, document.getElementById('seo-desc').innerText)">copy</button></div>
             <div class="copy-content scroll" id="seo-desc">${escapeHtml(seo.description || '(missing)')}</div>

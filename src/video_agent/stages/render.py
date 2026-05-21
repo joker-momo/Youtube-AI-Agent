@@ -77,21 +77,23 @@ def _run_with_progress(cmd: list[str], progress_path: Path | None = None) -> Non
     progress: dict = {"percent": 0, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""}
     for line in proc.stdout:  # type: ignore[union-attr]
         print(line, end="", flush=True)
-        # Remotion progress line: "Rendering (42%) 18800/44400 frames, 12.3 fps, ETA 0:05:22"
-        # Also catches: "Rendered frame 1234 of 44400" variants.
+        # Remotion progress line: "Rendered 18800/44400, time remaining: 5m 22s"
+        # Also catches generic "N/M" variants with optional fps/ETA.
         m_frame = re.search(r"(\d+)\s*/\s*(\d+)", line)
         if m_frame and progress_path:
             frame = int(m_frame.group(1))
             total = int(m_frame.group(2))
             pct = round(frame / max(total, 1) * 100, 1)
             fps_m = re.search(r"([\d.]+)\s*fps", line, re.IGNORECASE)
-            eta_m = re.search(r"ETA\s*([\d:]+)", line, re.IGNORECASE)
+            # "time remaining: 5m 22s" or "ETA 0:05:22"
+            eta_m = re.search(r"time remaining:\s*([\dm\s]+\d+s)", line, re.IGNORECASE) \
+                 or re.search(r"ETA\s*([\d:]+)", line, re.IGNORECASE)
             progress = {
                 "percent": pct,
                 "frame": frame,
                 "total_frames": total,
                 "fps": float(fps_m.group(1)) if fps_m else progress.get("fps", 0.0),
-                "eta": eta_m.group(1) if eta_m else "",
+                "eta": eta_m.group(1).strip() if eta_m else "",
             }
             try:
                 progress_path.write_text(json.dumps(progress))

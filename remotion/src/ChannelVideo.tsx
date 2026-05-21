@@ -38,25 +38,37 @@ const SceneView: React.FC<{
   const {fps} = useVideoConfig();
   const progress = frame / Math.max(totalFrames - 1, 1);
 
-  // Animated caption: find active word segment by audio time
-  const audioTimeSec = (scene.audio_offset_sec ?? 0) + frame / fps;
+  // Animated caption: find active word segment by local scene time.
+  // word_segments are rebased to scene-local time (start=0), so compare
+  // against frame/fps directly — NOT audio_offset_sec + frame/fps.
+  const localTimeSec = frame / fps;
   const segments = scene.word_segments ?? [];
-  const activeSegmentIdx = segments.findIndex(s => audioTimeSec >= s.start && audioTimeSec < s.end);
+  const activeSegmentIdx = segments.findIndex(s => localTimeSec >= s.start && localTimeSec < s.end);
   const activeSegment: WordSegment | null = activeSegmentIdx >= 0 ? segments[activeSegmentIdx] : null;
-  const captionText = activeSegment ? activeSegment.text : scene.caption;
 
-  // Caption chunk fade: fade in at chunk start, hold, fade out at chunk end
+  // Between chunks: show last-passed segment text instead of falling back to
+  // scene.caption to prevent abrupt text flicker on gap frames.
+  const prevSegment: WordSegment | null = activeSegment
+    ? null
+    : ([...segments].reverse().find(s => localTimeSec >= s.end) ?? null);
+  const displaySegment = activeSegment ?? prevSegment;
+  const captionText = displaySegment ? displaySegment.text : scene.caption;
+
+  // Caption chunk fade: fade in at chunk start, hold, fade out at chunk end.
   const CHUNK_FADE = 5; // frames
   let captionChunkAlpha = 1;
   if (activeSegment) {
-    const chunkStartFrame = Math.round((activeSegment.start - (scene.audio_offset_sec ?? 0)) * fps);
-    const chunkEndFrame   = Math.round((activeSegment.end   - (scene.audio_offset_sec ?? 0)) * fps);
+    const chunkStartFrame = Math.round(activeSegment.start * fps);
+    const chunkEndFrame   = Math.round(activeSegment.end   * fps);
     captionChunkAlpha = interpolate(
       frame,
       [chunkStartFrame, chunkStartFrame + CHUNK_FADE, chunkEndFrame - CHUNK_FADE, chunkEndFrame],
       [0, 1, 1, 0],
       {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'},
     );
+  } else if (prevSegment) {
+    // Between chunks: dim slightly to signal "gap" without jarring text switch.
+    captionChunkAlpha = 0.65;
   }
 
   const opacity       = interpolate(frame, [0, FADE_IN], [0, 1], {extrapolateRight: 'clamp'});
@@ -135,7 +147,7 @@ const SceneView: React.FC<{
       <div style={{
         position: 'absolute', left: 56, right: 80, bottom: 58,
         display: 'flex', alignItems: 'flex-start', gap: 18,
-        opacity: captionAlpha * (activeSegment ? captionChunkAlpha : 1),
+        opacity: captionAlpha * (displaySegment ? captionChunkAlpha : 1),
       }}>
         <div style={{width: 5, minHeight: 44, backgroundColor: palette.accent, borderRadius: 3, flexShrink: 0, marginTop: 4}} />
         <div style={{

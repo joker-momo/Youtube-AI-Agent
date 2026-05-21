@@ -999,6 +999,45 @@ function renderTimeline(t) {
   if (videoReady) renderFinal(t);
 }
 
+// Render progress polling state
+let RENDER_POLL_TIMER = null;
+
+function startRenderProgressPolling(jobId) {
+  if (RENDER_POLL_TIMER) return;
+  RENDER_POLL_TIMER = setInterval(async () => {
+    try {
+      const r = await fetch('/jobs/' + encodeURIComponent(jobId) + '/stages/render/progress');
+      if (!r.ok) return;
+      const p = await r.json();
+      const bar = document.getElementById('render-progress-bar');
+      const pct = document.getElementById('render-progress-pct');
+      const meta = document.getElementById('render-progress-meta');
+      if (bar) bar.style.width = p.percent + '%';
+      if (pct) pct.textContent = Math.round(p.percent) + '%';
+      if (meta) {
+        const parts = [];
+        if (p.frame && p.total_frames) parts.push(p.frame + '/' + p.total_frames + ' frames');
+        if (p.fps) parts.push(p.fps.toFixed(1) + ' fps');
+        if (p.eta) parts.push('ETA ' + p.eta);
+        meta.textContent = parts.join(' · ');
+      }
+      // Stop polling when render completes (step is no longer in_progress)
+      const lastTl = LAST_TIMELINE;
+      if (lastTl) {
+        const rs = (lastTl.stages || []).find(s => s.name === 'render');
+        if (rs && rs.status !== 'in_progress') {
+          clearInterval(RENDER_POLL_TIMER);
+          RENDER_POLL_TIMER = null;
+        }
+      }
+    } catch(e) {}
+  }, 2000);
+}
+
+function stopRenderProgressPolling() {
+  if (RENDER_POLL_TIMER) { clearInterval(RENDER_POLL_TIMER); RENDER_POLL_TIMER = null; }
+}
+
 function renderStep(jobId, s, idx) {
   const el = document.createElement('div');
   el.className = 'step ' + s.status + (OPEN_STAGES.has(s.name) ? ' open' : '');
@@ -1006,6 +1045,20 @@ function renderStep(jobId, s, idx) {
   const durTxt = s.actual_seconds !== null && s.actual_seconds !== undefined
     ? fmtSec(s.actual_seconds)
     : (s.status === 'completed' ? '' : '~' + fmtSec(s.eta_seconds));
+
+  // Render-specific progress bar (shown when in_progress)
+  const renderProgressHtml = (s.name === 'render' && s.status === 'in_progress') ? `
+    <div style="margin:10px 0 4px;padding:0 2px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
+        <span style="font-size:12px;color:var(--muted);font-weight:600">Rendering…</span>
+        <span id="render-progress-pct" style="font-size:13px;font-weight:700;color:var(--blue)">0%</span>
+      </div>
+      <div style="height:6px;border-radius:4px;background:var(--line-strong);overflow:hidden">
+        <div id="render-progress-bar" style="height:100%;width:0%;background:var(--blue);border-radius:4px;transition:width 1s linear"></div>
+      </div>
+      <div id="render-progress-meta" style="margin-top:4px;font-size:11px;color:var(--muted-2)"></div>
+    </div>` : '';
+
   el.innerHTML = `
     <div class="step-head">
       <span class="step-num">${s.status === 'completed' ? checkIcon() : s.status === 'failed' ? xIcon() : idx + 1}</span>
@@ -1013,6 +1066,7 @@ function renderStep(jobId, s, idx) {
       <span class="step-meta"><span class="pill ${s.status}">${statusText(s.status)}</span><span class="step-dur">${durTxt}</span><span class="caret">›</span></span>
     </div>
     <div class="step-body">
+      ${renderProgressHtml}
       <div class="io-grid">
         <div class="io-box">
           <div class="io-title">Input</div>
@@ -1031,6 +1085,15 @@ function renderStep(jobId, s, idx) {
     if (el.classList.contains('open')) OPEN_STAGES.add(s.name);
     else OPEN_STAGES.delete(s.name);
   };
+  // Start/stop render progress polling based on stage status
+  if (s.name === 'render' && s.status === 'in_progress') {
+    startRenderProgressPolling(jobId);
+    // Auto-open render step so progress bar is visible
+    el.classList.add('open');
+    OPEN_STAGES.add('render');
+  } else if (s.name === 'render' && s.status !== 'in_progress') {
+    stopRenderProgressPolling();
+  }
   return el;
 }
 
@@ -1477,6 +1540,23 @@ def post_run_render(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     state = load_job(job_dir)
     return {"output": str(output.relative_to(job_dir)), "state": state.to_dict()}
+
+
+@app.get("/jobs/{job_id}/stages/render/progress")
+def get_render_progress(
+    job_id: str,
+    jobs_root: Path = Depends(get_jobs_root),
+) -> dict:
+    """Return current Remotion render progress. Polling-friendly — always 200."""
+    job_dir = jobs_root / job_id
+    progress_path = job_dir / "render_progress.json"
+    if not progress_path.exists():
+        return {"percent": 0, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""}
+    try:
+        import json as _json
+        return _json.loads(progress_path.read_text())
+    except Exception:
+        return {"percent": 0, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""}
 
 
 @app.post("/jobs/{job_id}/stages/review/run")

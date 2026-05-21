@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,7 +65,50 @@ def build_remotion_commands(render_props_path: Path, video_path: Path, thumbnail
     )
 
 
+def _run_with_progress(cmd: list[str], progress_path: Path | None = None) -> None:
+    """Run a subprocess, streaming stdout and writing Remotion progress to a JSON file."""
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        cwd=repo_root(),
+    )
+    progress: dict = {"percent": 0, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""}
+    for line in proc.stdout:  # type: ignore[union-attr]
+        print(line, end="", flush=True)
+        # Remotion progress line: "Rendering (42%) 18800/44400 frames, 12.3 fps, ETA 0:05:22"
+        # Also catches: "Rendered frame 1234 of 44400" variants.
+        m_frame = re.search(r"(\d+)\s*/\s*(\d+)", line)
+        if m_frame and progress_path:
+            frame = int(m_frame.group(1))
+            total = int(m_frame.group(2))
+            pct = round(frame / max(total, 1) * 100, 1)
+            fps_m = re.search(r"([\d.]+)\s*fps", line, re.IGNORECASE)
+            eta_m = re.search(r"ETA\s*([\d:]+)", line, re.IGNORECASE)
+            progress = {
+                "percent": pct,
+                "frame": frame,
+                "total_frames": total,
+                "fps": float(fps_m.group(1)) if fps_m else progress.get("fps", 0.0),
+                "eta": eta_m.group(1) if eta_m else "",
+            }
+            try:
+                progress_path.write_text(json.dumps(progress))
+            except OSError:
+                pass
+    proc.wait()
+    if proc.returncode != 0:
+        raise subprocess.CalledProcessError(proc.returncode, cmd)
+
+
 def render_with_remotion(render_props_path: Path, video_path: Path, thumbnail_path: Path) -> None:
     commands = build_remotion_commands(render_props_path, video_path, thumbnail_path)
-    subprocess.run(commands.video, cwd=repo_root(), check=True)
+    progress_path = render_props_path.parent / "render_progress.json"
+    _run_with_progress(commands.video, progress_path)
+    # Mark 100% on completion.
+    try:
+        progress_path.write_text(json.dumps({"percent": 100, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""}))
+    except OSError:
+        pass
     subprocess.run(commands.thumbnail, cwd=repo_root(), check=True)

@@ -980,7 +980,11 @@ function renderTimeline(t) {
   const allDone = t.stages_total > 0 && t.stages_done === t.stages_total;
   const failed = (t.stages || []).some(s => s.status === 'failed');
   const renderStage = t.stages.find(s => s.name === 'render');
-  const videoReady = renderStage && (renderStage.outputs || []).some(o => o.path === 'video.mp4' && o.exists);
+  // Only show final output when render stage is fully completed — not when
+  // video.mp4 happens to exist from a previous run while render is in_progress.
+  const videoReady = renderStage &&
+    renderStage.status === 'completed' &&
+    (renderStage.outputs || []).some(o => o.path === 'video.mp4' && o.exists);
   const channelInitials = (t.channel_id || 'VA').split('-').slice(0, 2).map(s => s[0] || '').join('').toUpperCase();
   const stageStrip = t.stages.map((s, i) => {
     const cls = s.status === 'completed' ? 'completed' : s.status === 'in_progress' ? 'in_progress' : s.status === 'failed' ? 'failed' : '';

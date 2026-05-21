@@ -2471,12 +2471,20 @@ async def post_run_batch(
         except Exception as exc:
             results.append({"job_id": job_id, "error": str(exc)})
     failed = [r for r in results if "error" in r]
-    return {
+    summary = {
         "total": len(req.job_ids),
         "succeeded": len(results) - len(failed),
         "failed": len(failed),
         "results": results,
     }
+    from video_agent.notifications.telegram import notify_batch_done
+    await notify_batch_done(
+        total=summary["total"],
+        succeeded=summary["succeeded"],
+        failed=summary["failed"],
+        failed_jobs=[r["job_id"] for r in failed],
+    )
+    return summary
 
 
 EVENTS_POLL_SECONDS = float(os.environ.get("EVENTS_POLL_SECONDS", "0.2"))

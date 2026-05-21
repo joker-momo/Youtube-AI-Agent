@@ -810,6 +810,8 @@ let WS = null;
 let OPEN_STAGES = new Set();
 let EVENTS_OPEN = false;
 let LAST_TIMELINE = null;
+let LAST_TIMELINE_JSON = '';
+let LAST_JOBS_JSON = '';
 let TIMELINE_POLL_TIMER = null;
 let WS_RETRY_TIMER = null;
 let WS_RETRY_MS = 1000;
@@ -861,8 +863,13 @@ async function fetchJobs() {
     const jobs = d.jobs || [];
     document.getElementById('job-count').textContent = d.count + ' jobs';
     document.getElementById('panel-count').textContent = d.count + ' jobs';
-    renderKpis(jobs);
-    renderJobsList(jobs);
+    // Only re-render jobs list when data actually changed — prevents flicker from polling.
+    const jobsJson = JSON.stringify(jobs);
+    if (jobsJson !== LAST_JOBS_JSON) {
+      LAST_JOBS_JSON = jobsJson;
+      renderKpis(jobs);
+      renderJobsList(jobs);
+    }
 
     // If the selected job was deleted, automatically switch to the
     // newest available job so timeline + websocket stay live.
@@ -932,6 +939,7 @@ function selectJob(jobId) {
   if (!jobId) return;
   SELECTED_ID = jobId;
   OPEN_STAGES = new Set();
+  LAST_TIMELINE_JSON = ''; // force re-render on job switch
   document.querySelectorAll('.job-card').forEach(c => c.classList.remove('active'));
   fetchTimeline(jobId);
   reopenWs(jobId);
@@ -942,8 +950,14 @@ async function fetchTimeline(jobId) {
     const r = await fetch('/jobs/' + encodeURIComponent(jobId) + '/timeline');
     if (!r.ok) return;
     const t = await r.json();
+    // Only re-render detail panel when data actually changed — prevents flicker from 2s polling.
+    // render_progress polling already does targeted DOM updates so it's unaffected.
+    const tlJson = JSON.stringify(t);
     LAST_TIMELINE = t;
-    renderTimeline(t);
+    if (tlJson !== LAST_TIMELINE_JSON) {
+      LAST_TIMELINE_JSON = tlJson;
+      renderTimeline(t);
+    }
   } catch (e) { console.error(e); }
 }
 

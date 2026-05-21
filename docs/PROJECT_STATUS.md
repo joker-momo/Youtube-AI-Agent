@@ -1,6 +1,6 @@
 # Youtube AI Agent Project Status
 
-Last updated: 2026-05-20 (Phase B: batch `assets_chatgpt` stage + full pipeline image gen)
+Last updated: 2026-05-21 (First full production video complete: prod-insomnio-v2, Kokoro TTS enabled)
 
 This file is the living project tracker. Update it whenever a meaningful system capability is added, changed, verified, or deferred so a new reader can quickly understand what the system does, what is being built now, and what remains.
 
@@ -68,7 +68,14 @@ Decisions already chosen:
 ### TTS
 
 - `mock-local` silent placeholder TTS for fast tests.
-- Kokoro local TTS option runs inside Docker.
+- Kokoro local TTS enabled for production. Voice: `ef_dora` (Spanish female), `lang_code="e"`, `speed=0.95` (~145 wpm). Configured in `configs/vida-plena-45/channel.yaml`.
+- First production narration: 92MB WAV, 40 scenes, Kokoro-82M from HuggingFace.
+
+### First Production Video
+
+- `prod-insomnio-v2`: "Insomnio despues de los 45" — all 14 stages completed 2026-05-21.
+- Artifacts: `video.mp4` (5.5MB), `narration.wav` (92MB Kokoro TTS), `thumbnail.jpg` (52KB).
+- Ready for manual YouTube upload.
 
 ### Semi-Automated Operator Flow
 

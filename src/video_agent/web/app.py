@@ -18,7 +18,13 @@ from video_agent.orchestrator import (
     create_job,
     load_job,
 )
-from video_agent.orchestrator.idea_generator import generate_ideas, save_ideas
+from video_agent.orchestrator.idea_generator import (
+    find_duplicate,
+    generate_ideas,
+    load_published_videos,
+    save_ideas,
+    sync_published_videos,
+)
 from video_agent.orchestrator.browser_client import (
     BrowserClient,
     BrowserClientError,
@@ -422,6 +428,7 @@ _DASHBOARD_HTML = """<!doctype html>
   .ideas-empty { font-size:13px; color:var(--muted); padding:16px 0; text-align:center; }
   .spinner-inline { display:inline-block; width:14px; height:14px; border:2px solid #d1d5db; border-top-color:#374151; border-radius:50%; animation:spin .7s linear infinite; vertical-align:middle; margin-right:4px; }
   @keyframes spin { to { transform:rotate(360deg); } }
+  .idea-duplicate-badge { font-size:11px; font-weight:600; padding:2px 8px; border-radius:10px; background:#fef2f2; color:#b91c1c; border:1px solid #fca5a5; margin-bottom:4px; display:inline-block; }
   .idea-score-row { display:flex; align-items:center; gap:8px; margin-top:4px; }
   .idea-score-badge { font-size:12px; font-weight:700; padding:2px 10px; border-radius:12px; }
   .idea-score-badge.high { background:#d1fae5; color:#065f46; }
@@ -886,6 +893,7 @@ _DASHBOARD_HTML = """<!doctype html>
             <div class="gen-actions">
               <button class="action-btn primary" id="gen-btn" onclick="generateAndScore()">✨ Generate + Score</button>
               <button class="action-btn" onclick="loadSavedIdeas()">📂 Load saved</button>
+              <button class="action-btn" id="sync-btn" onclick="syncChannelVideos()" title="Sync published videos from YouTube to check for duplicates">🔄 Sync channel</button>
             </div>
           </div>
           <div id="ideas-status" style="font-size:12px;color:var(--muted);margin-bottom:6px"></div>
@@ -2215,6 +2223,25 @@ async function generateAndScore() {
   }
 }
 
+async function syncChannelVideos() {
+  const channelId = document.getElementById('idea-channel').value;
+  const btn = document.getElementById('sync-btn');
+  const status = document.getElementById('ideas-status');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-inline"></span>Syncing…';
+  try {
+    const r = await fetch('/channels/' + encodeURIComponent(channelId) + '/sync-videos');
+    const d = await r.json();
+    if (!r.ok) { status.textContent = '❌ Sync failed: ' + (d.detail || r.status); return; }
+    status.textContent = '✅ Synced ' + d.count + ' published videos from YouTube.';
+  } catch (e) {
+    status.textContent = '❌ Sync error: ' + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '🔄 Sync channel';
+  }
+}
+
 function renderIdeaCards(ideas, paths) {
   _CURRENT_IDEAS = ideas;
   _CURRENT_PATHS = paths;
@@ -2312,9 +2339,14 @@ function renderIdeaCard(idea, savedPath) {
       ${kw ? `<div class="idea-related" style="margin-top:4px">🔑 <b>${escapeHtml(kw)}</b></div>` : ''}`;
   }
 
+  const dupHtml = idea.is_duplicate
+    ? `<div class="idea-duplicate-badge">⚠️ Trùng nội dung: "${escapeHtml((idea.duplicate_of || '').slice(0, 60))}"</div>`
+    : '';
+
   return `
-    <div class="idea-card">
+    <div class="idea-card${idea.is_duplicate ? ' opacity-60' : ''}">
       <div class="idea-card-title">${escapeHtml(idea.title_seed || idea.topic || '-')}</div>
+      ${dupHtml}
       ${scoreHtml}
       <div class="idea-card-angle">${escapeHtml(idea.angle || '')}</div>
       <div class="idea-card-meta">
@@ -2982,6 +3014,23 @@ async def post_score_ideas(
     return {"results": results, "error": score_error}
 
 
+@app.get("/channels/{channel_id}/sync-videos")
+async def get_sync_channel_videos(
+    channel_id: str,
+) -> dict:
+    """Fetch published videos from YouTube RSS and cache to published_videos.json."""
+    channel_path = repo_root() / "configs" / channel_id / "channel.yaml"
+    if not channel_path.exists():
+        raise HTTPException(status_code=404, detail=f"No config for channel: {channel_id}")
+    from video_agent.utils.json_io import read_yaml as _read_yaml
+    channel_config = _read_yaml(channel_path)
+    try:
+        videos = sync_published_videos(channel_config, repo_root() / "configs")
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"channel_id": channel_id, "count": len(videos), "videos": videos}
+
+
 @app.post("/channels/{channel_id}/ideas/generate", status_code=201)
 async def post_generate_ideas(
     channel_id: str,
@@ -3019,6 +3068,9 @@ async def post_generate_ideas(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     # Attach keyword score to each idea by matching target_keyword field
+    # Load cached published videos for duplicate detection
+    published = load_published_videos(_read_yaml(channel_path), repo_root() / "configs")
+
     kw_score_map = {kw["keyword"].lower(): kw for kw in top_keywords}
     ideas_with_scores = []
     for idea in ideas:
@@ -3029,6 +3081,10 @@ async def post_generate_ideas(
             enriched["vidiq_score"] = kw_data.get("score")
             enriched["vidiq_volume"] = kw_data.get("volume", "")
             enriched["vidiq_competition"] = kw_data.get("competition", "")
+        # Duplicate check against published channel videos
+        dup = find_duplicate(enriched, published)
+        enriched["is_duplicate"] = dup is not None
+        enriched["duplicate_of"] = dup
         ideas_with_scores.append(enriched)
 
     paths = save_ideas(ideas_with_scores, channel_id=channel_id, out_dir=inputs_root)
@@ -3039,7 +3095,8 @@ async def post_generate_ideas(
         "count": len(ideas_with_scores),
         "ideas": ideas_with_scores,
         "top_keywords": top_keywords,
-        "seed_source": seed_source,  # "user" | "trend" | "fallback"
+        "seed_source": seed_source,
+        "published_videos_checked": len(published),
         "saved": rel_paths,
     }
 

@@ -35,6 +35,96 @@ from typing import Awaitable, Callable
 from video_agent.utils.json_io import read_yaml
 
 IDEAS_SUBDIR = "ideas"
+PUBLISHED_VIDEOS_FILE = "published_videos.json"
+
+
+# ---------------------------------------------------------------------------
+# YouTube channel sync + duplicate detection
+# ---------------------------------------------------------------------------
+
+def _yt_rss_url(channel_id: str) -> str:
+    return f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+
+
+def sync_published_videos(channel_config: dict, configs_dir: Path) -> list[dict]:
+    """Fetch published videos from YouTube RSS and save to published_videos.json.
+
+    Returns list of video dicts: [{id, title, published}].
+    Raises ValueError if youtube_channel_id not set in channel config.
+    """
+    channel_id = channel_config.get("channel", {}).get("youtube_channel_id")
+    ch_id = channel_config.get("channel", {}).get("id", "")
+    if not channel_id:
+        raise ValueError(f"youtube_channel_id not set in channel config for {ch_id}")
+
+    url = _yt_rss_url(channel_id)
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            raw = resp.read()
+    except Exception as exc:
+        raise ValueError(f"Failed to fetch YouTube RSS for {channel_id}: {exc}") from exc
+
+    root = ET.fromstring(raw)
+    ns = {
+        "atom": "http://www.w3.org/2005/Atom",
+        "yt": "http://www.youtube.com/xml/schemas/2015",
+        "media": "http://search.yahoo.com/mrss/",
+    }
+    videos: list[dict] = []
+    for entry in root.findall("atom:entry", ns):
+        vid_id = entry.findtext("yt:videoId", namespaces=ns) or ""
+        title = entry.findtext("atom:title", namespaces=ns) or ""
+        published = entry.findtext("atom:published", namespaces=ns) or ""
+        if vid_id and title:
+            videos.append({"id": vid_id, "title": title, "published": published})
+
+    out_path = configs_dir / ch_id / PUBLISHED_VIDEOS_FILE
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(
+        json.dumps({"channel_id": channel_id, "videos": videos, "synced_at": datetime.now(timezone.utc).isoformat()},
+                   ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return videos
+
+
+def load_published_videos(channel_config: dict, configs_dir: Path) -> list[dict]:
+    """Load cached published_videos.json. Returns [] if file missing or empty."""
+    ch_id = channel_config.get("channel", {}).get("id", "")
+    path = configs_dir / ch_id / PUBLISHED_VIDEOS_FILE
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data.get("videos", [])
+    except Exception:
+        return []
+
+
+def _title_tokens(text: str) -> set[str]:
+    """Lowercase, accent-strip, split to ≥4-char alpha tokens."""
+    norm = unicodedata.normalize("NFKD", text.lower()).encode("ascii", "ignore").decode()
+    return {w for w in re.findall(r"[a-z]{4,}", norm)}
+
+
+def find_duplicate(idea: dict, published: list[dict], overlap_threshold: int = 2) -> str | None:
+    """Return matching published video title if idea overlaps, else None.
+
+    overlap_threshold: min number of shared significant tokens to flag as duplicate.
+    """
+    idea_text = " ".join([
+        idea.get("title_seed", ""),
+        idea.get("topic", ""),
+        idea.get("target_keyword", ""),
+    ])
+    idea_tokens = _title_tokens(idea_text)
+    for vid in published:
+        pub_tokens = _title_tokens(vid.get("title", ""))
+        shared = idea_tokens & pub_tokens
+        if len(shared) >= overlap_threshold:
+            return vid["title"]
+    return None
 
 # ---------------------------------------------------------------------------
 # Niche → Spanish keyword expansion

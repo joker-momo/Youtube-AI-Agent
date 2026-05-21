@@ -2,7 +2,7 @@ schema_version: "3.0-mvp"
 channel:
   id: "vida-plena-45"
   name: "Vida Plena 45+"
-  youtube_channel_id: null
+  youtube_channel_id: "UCKUswqsAaLsEkcsgzTuKAmw"
   description: "Salud y bienestar practico para personas de mas de 45 anos."
 audience:
   language: "es-419"

@@ -240,6 +240,102 @@ def promote_seo_stage(job_dir: Path, channel_path: Path, raw_response: str) -> P
     return result.output_path
 
 
+def run_whisper_timestamps_stage(job_dir: Path) -> Path:
+    """Run Whisper on narration.wav and write per-scene word segments.
+
+    Reads ``jobs/<id>/assets/narration.wav`` (produced by assets_chatgpt),
+    runs Whisper tiny model with word_timestamps=True, groups words into
+    ~7-word chunks, maps chunks to scenes by cumulative duration offset,
+    and writes ``jobs/<id>/whisper_timestamps.json``.
+    """
+    state = load_job(job_dir)
+    if state.current_stage != "whisper_timestamps":
+        raise StageInputMissingError(
+            f"Cannot run whisper_timestamps stage from current_stage={state.current_stage!r}"
+        )
+
+    narration_path = job_dir / "assets" / "narration.wav"
+    if not narration_path.exists():
+        raise StageInputMissingError(f"Missing narration audio: {narration_path}")
+
+    scenes_path = job_dir / "scenes.json"
+    if not scenes_path.exists():
+        raise StageInputMissingError(f"Missing {scenes_path}")
+
+    import whisper  # lazy import — heavy dep
+    from video_agent.utils.json_io import read_json
+
+    scene_doc = read_json(scenes_path)
+    scenes = scene_doc["scenes"]
+
+    model = whisper.load_model("tiny")
+    result = model.transcribe(
+        str(narration_path),
+        word_timestamps=True,
+        language="es",
+        fp16=False,
+    )
+
+    # Flatten all words from all segments (cast np.float64 → float for JSON)
+    all_words: list[dict] = []
+    for seg in result.get("segments") or []:
+        for w in seg.get("words") or []:
+            all_words.append({"word": w["word"].strip(), "start": float(w["start"]), "end": float(w["end"])})
+
+    # Group words into ~7-word chunks with text+start+end
+    CHUNK_SIZE = 7
+
+    def _group_chunks(words: list[dict]) -> list[dict]:
+        chunks = []
+        for i in range(0, len(words), CHUNK_SIZE):
+            group = words[i : i + CHUNK_SIZE]
+            text = " ".join(w["word"] for w in group).strip()
+            if text:
+                chunks.append({
+                    "text": text,
+                    "start": group[0]["start"],
+                    "end": group[-1]["end"],
+                })
+        return chunks
+
+    all_chunks = _group_chunks(all_words)
+
+    # Map chunks to scenes by cumulative audio offset
+    scene_data = []
+    offset = 0.0
+    for scene in scenes:
+        dur = float(scene.get("duration_sec") or 15)
+        scene_end = offset + dur
+        # Chunks whose midpoint falls within [offset, scene_end)
+        scene_chunks = [
+            c for c in all_chunks
+            if offset <= (c["start"] + c["end"]) / 2 < scene_end
+        ]
+        # Rebase timestamps relative to this scene's audio offset
+        rebased = [
+            {
+                "text": c["text"],
+                "start": round(c["start"] - offset, 4),
+                "end": round(c["end"] - offset, 4),
+            }
+            for c in scene_chunks
+        ]
+        scene_data.append({
+            "scene_id": scene["id"],
+            "audio_offset_sec": round(offset, 4),
+            "word_segments": rebased,
+        })
+        offset = scene_end
+
+    output = {"scenes": scene_data}
+    output_path = job_dir / "whisper_timestamps.json"
+    from video_agent.utils.json_io import write_json
+    write_json(output_path, output)
+
+    _complete_stage(job_dir, "whisper_timestamps", output_path)
+    return output_path
+
+
 def run_render_stage(job_dir: Path, channel_path: Path) -> Path:
     state = load_job(job_dir)
     if state.current_stage != "render":

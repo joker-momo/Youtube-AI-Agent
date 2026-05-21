@@ -47,6 +47,7 @@ from video_agent.orchestrator.stages import (
     run_scenes_stage,
     run_seo_stage,
     run_script_stage,
+    run_whisper_timestamps_stage,
 )
 
 app = FastAPI(title="video-agent-web", version="0.1.0")
@@ -161,6 +162,10 @@ _STAGE_ARTIFACTS = {
         "input": ["seo.json"],
         "output": ["operator/gemini/seo_qa.json"],
     },
+    "whisper_timestamps": {
+        "input": ["assets/narration.wav"],
+        "output": ["whisper_timestamps.json"],
+    },
     "render": {
         "input": ["script.json", "scenes.json", "seo.json"],
         "output": [
@@ -191,6 +196,7 @@ _STAGE_ETA_SECONDS = {
     "seo": 60,
     "seo_promote": 30,
     "seo_qa": 90,
+    "whisper_timestamps": 30,
     "render": 600,     # overridden when target_duration_sec known
     "review": 5,
 }
@@ -1440,6 +1446,22 @@ def post_promote_seo(
     return {"output": str(output.relative_to(job_dir)), "state": state.to_dict()}
 
 
+@app.post("/jobs/{job_id}/stages/whisper_timestamps/run")
+def post_run_whisper_timestamps(
+    job_id: str,
+    jobs_root: Path = Depends(get_jobs_root),
+) -> dict:
+    job_dir = jobs_root / job_id
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    try:
+        output = run_whisper_timestamps_stage(job_dir)
+    except StageInputMissingError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    state = load_job(job_dir)
+    return {"output": str(output.relative_to(job_dir)), "state": state.to_dict()}
+
+
 @app.post("/jobs/{job_id}/stages/render/run")
 def post_run_render(
     job_id: str,
@@ -1962,6 +1984,8 @@ async def post_run_all(
                     job_dir, channel_path, client.generate_image
                 ),
             )
+        if "whisper_timestamps" in remaining:
+            await _record("whisper_timestamps", run_whisper_timestamps_stage(job_dir))
         if "render" in remaining:
             await _record("render", run_render_stage(job_dir, channel_path))
         if "review" in remaining:

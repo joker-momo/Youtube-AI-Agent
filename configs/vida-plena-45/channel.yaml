@@ -109,7 +109,7 @@ render:
   fps: 30
   codec: "h264"
   crf: 18
-  concurrency: 1
+  concurrency: 4
 upload:
   ai_disclosure: true
   default_privacy: "manual_upload_only"

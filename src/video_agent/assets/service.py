@@ -167,13 +167,60 @@ class StockAssetService:
         self.stock_client = stock_client or StockPhotoClient()
         self.download_client = download_client or UrlDownloadClient()
         self.used_provider_ids: set[tuple[str, str]] = set()
+        self.used_asset_ids: set[tuple[str, str]] = set()  # (provider, asset_id)
         self.last_errors: list[dict[str, str]] = []
+
+    def _try_library_cache(
+        self, query: str, media_type: str | None, channel_id: str, job_id: str, scene: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Return a cached library asset matching query, skipping already-used ones."""
+        used_asset_ids = {aid for _, aid in self.used_asset_ids}
+        candidates = self.library.search_by_query(
+            query, media_type=media_type, exclude_asset_ids=used_asset_ids, limit=10
+        )
+        for asset in candidates:
+            key = (asset["provider"], str(asset["provider_asset_id"]))
+            if key in self.used_provider_ids:
+                continue
+            if not self.library.is_file_valid(asset):
+                continue
+            self.used_provider_ids.add(key)
+            self.used_asset_ids.add((asset["provider"], asset["asset_id"]))
+            self.library.record_usage(
+                asset["asset_id"],
+                channel_id=channel_id,
+                job_id=job_id,
+                scene_id=scene["id"],
+                scene_intent=scene.get("motion"),
+            )
+            asset["asset_selection"] = {
+                "query": query,
+                "source": "library_cache",
+                "candidate_rank": 1,
+                "searched_providers": [],
+                "candidate_count": len(candidates),
+                "score": 0,
+                "reasons": ["library_cache_hit"],
+                "matched_terms": [],
+            }
+            return asset
+        return None
 
     def get_scene_asset(self, scene: dict[str, Any], channel_id: str, job_id: str) -> dict[str, Any] | None:
         query = scene.get("visual_prompt") or scene.get("on_screen_text") or ""
         scene_dur = int(scene.get("duration_sec") or 30)
         filters = _stock_filters(self.visual_config, scene_duration_sec=scene_dur)
         ttl_hours = int(self.visual_config.get("query_cache_ttl_hours", 24))
+
+        # Determine preferred media type from provider list
+        prefers_video = any("video" in p for p in self.providers)
+        media_type_hint = "video" if prefers_video else "photo"
+
+        # --- Library cache hit: skip API + download entirely ---
+        cached = self._try_library_cache(query, media_type_hint, channel_id, job_id, scene)
+        if cached is not None:
+            return cached
+
         ranked_candidates = []
         self.last_errors = []
         for provider_order, provider in enumerate(self.providers, start=1):
@@ -211,6 +258,7 @@ class StockAssetService:
             except Exception:
                 continue
             self.used_provider_ids.add(key)
+            self.used_asset_ids.add((asset["provider"], asset["asset_id"]))
             self.library.record_usage(
                 asset["asset_id"],
                 channel_id=channel_id,

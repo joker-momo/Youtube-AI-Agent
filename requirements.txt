@@ -8,6 +8,7 @@ Pillow>=10.4
 playwright>=1.40
 pytest>=8.2
 soundfile>=0.12.1
+openai-whisper>=20240930
 torch==2.5.1
 uvicorn>=0.30
 websockets>=12.0

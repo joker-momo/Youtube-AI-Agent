@@ -321,6 +321,18 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
         assert_operator_qa_passed(job_dir)
 
     logger.log("OPERATOR_RENDER_STARTED", {"job_id": job_id, "channel_id": channel_config["channel"]["id"]})
+
+    # Merge Whisper word timestamps into scene_doc if available
+    whisper_path = job_dir / "whisper_timestamps.json"
+    if whisper_path.exists():
+        whisper_data = read_json(whisper_path)
+        whisper_by_id = {s["scene_id"]: s for s in whisper_data.get("scenes") or []}
+        for scene in scene_doc["scenes"]:
+            ws = whisper_by_id.get(scene["id"])
+            if ws:
+                scene["audio_offset_sec"] = ws["audio_offset_sec"]
+                scene["word_segments"] = ws["word_segments"]
+
     assets = prepare_assets(
         job_dir,
         style,

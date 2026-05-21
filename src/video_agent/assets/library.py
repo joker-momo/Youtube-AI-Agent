@@ -116,6 +116,60 @@ class AssetLibrary:
         path = self.root / asset["file_path"]
         return path.exists() and _sha256(path) == asset["file_hash"]
 
+    def search_by_query(
+        self,
+        query: str,
+        media_type: str | None = None,
+        exclude_asset_ids: set[str] | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Return cached assets whose original_query or tags overlap with query terms.
+
+        Used to avoid re-downloading when a suitable asset already exists in the library.
+        Scored by term overlap; caller picks the best match.
+        """
+        import re
+
+        def _tokens(text: str) -> set[str]:
+            return {t for t in re.findall(r"[a-zA-ZáéíóúñÁÉÍÓÚÑ0-9]+", text.lower()) if len(t) > 2}
+
+        query_terms = _tokens(query)
+        if not query_terms:
+            return []
+
+        clause = "is_banned = 0"
+        params: list[Any] = []
+        if media_type:
+            clause += " AND media_type = ?"
+            params.append(media_type)
+
+        with self._connect() as db:
+            rows = db.execute(
+                f"SELECT * FROM assets WHERE {clause} ORDER BY use_count ASC",
+                params,
+            ).fetchall()
+
+        exclude = exclude_asset_ids or set()
+        scored: list[tuple[int, dict[str, Any]]] = []
+        for row in rows:
+            asset = dict(row)
+            if asset["asset_id"] in exclude:
+                continue
+            if not self.is_file_valid(asset):
+                continue
+            # Score: overlap between query terms and stored query + tags
+            stored_text = " ".join(filter(None, [
+                asset.get("original_query") or "",
+                asset.get("provider_tags_json") or "",
+            ]))
+            stored_terms = _tokens(stored_text)
+            overlap = len(query_terms & stored_terms)
+            if overlap > 0:
+                scored.append((overlap, asset))
+
+        scored.sort(key=lambda x: (-x[0], x[1]["use_count"]))
+        return [asset for _, asset in scored[:limit]]
+
     def store_photo(self, candidate: dict[str, Any], downloaded_path: Path, original_query: str) -> dict[str, Any]:
         provider = candidate["provider"]
         provider_asset_id = str(candidate["provider_asset_id"])

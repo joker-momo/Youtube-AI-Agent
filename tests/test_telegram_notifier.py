@@ -105,12 +105,14 @@ def test_notify_job_started():
     assert "started" in msgs[0].lower()
 
 
-def test_notify_job_done_with_files_contains_stages_and_time(tmp_path):
-    # Create dummy files so the photo/video send paths are exercised
+def test_notify_job_done_with_files_sends_no_text(tmp_path):
+    # notify_job_done_with_files sends ONLY photo + video (no text message).
+    # _send_photo_file / _send_video_file are NOT intercepted by _run_capture
+    # (they don't call _send_message), so msgs should be empty.
     thumb = tmp_path / "thumbnail_1.jpg"
-    thumb.write_bytes(b"\xff\xd8\xff" + b"\x00" * 100)  # minimal JPEG header
+    thumb.write_bytes(b"\xff\xd8\xff" + b"\x00" * 100)
     video = tmp_path / "video.mp4"
-    video.write_bytes(b"\x00" * 100)  # tiny fake mp4
+    video.write_bytes(b"\x00" * 100)
 
     msgs = _run_capture(
         notify_job_done_with_files(
@@ -120,13 +122,8 @@ def test_notify_job_done_with_files_contains_stages_and_time(tmp_path):
             wall_seconds=143,
         )
     )
-    # First message is the text summary; photo/video calls go to _send_photo_file
-    # and _send_video_file which are NOT mocked here (no token set → noop).
-    # We get at least the summary message.
-    assert len(msgs) >= 1
-    assert "job-xyz" in msgs[0]
-    assert "2m" in msgs[0]  # 143s = 2m23s
-    assert "2 stages" in msgs[0]
+    # No text messages — only file uploads (not captured by _send_message mock)
+    assert msgs == []
 
 
 def test_notify_job_failed_contains_error():

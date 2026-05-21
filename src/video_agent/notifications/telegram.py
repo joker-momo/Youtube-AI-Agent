@@ -211,24 +211,14 @@ async def notify_job_done_with_files(
     stages_done: list[str] | None = None,
     wall_seconds: float | None = None,
 ) -> None:
-    """Send job-done message, then thumbnail image, then video file."""
-    # 1. Text summary (same as notify_job_done)
-    parts = [f"✅ <b>Job complete</b>", f"<code>{job_id}</code>"]
-    if stages_done:
-        parts.append(f"{len(stages_done)} stages completed")
-    if wall_seconds is not None:
-        mins, secs = divmod(int(wall_seconds), 60)
-        parts.append(f"⏱ {mins}m{secs:02d}s")
-    parts.append(f'<a href="{_job_url(job_id)}">Open dashboard →</a>')
-    await send("\n".join(parts))
-
-    # 2. Thumbnail — try thumbnail_1.jpg first, fall back to thumbnail.jpg
+    """Send thumbnail image then video file. No text message — files only."""
+    # Thumbnail — try thumbnail_1.jpg first, fall back to thumbnail.jpg
     thumb = job_dir / "thumbnail_1.jpg"
     if not thumb.exists():
         thumb = job_dir / "thumbnail.jpg"
-    await _send_photo_file(thumb, caption=f"🖼 Thumbnail — {job_id}")
+    await _send_photo_file(thumb, caption=f"🖼 {job_id}")
 
-    # 3. Video
+    # Video
     video = job_dir / "video.mp4"
     await _send_video_file(video, caption=f"🎬 {job_id}")
 

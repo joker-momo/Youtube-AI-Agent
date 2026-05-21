@@ -27,12 +27,7 @@ from video_agent.orchestrator.stages import (
     run_review_stage,
     run_whisper_timestamps_stage,
 )
-from video_agent.notifications.telegram import (
-    notify_job_done_with_files,
-    notify_job_failed,
-    notify_job_started,
-    notify_stage_done,
-)
+from video_agent.notifications.telegram import notify_job_done_with_files
 from video_agent.utils.json_io import read_yaml
 from video_agent.web.approval_flow import (
     APPROVAL_REQUIRED_STAGES,
@@ -78,7 +73,6 @@ async def execute_run_all(
         completed.append(
             {"stage": stage_label, "output": str(output_path.relative_to(job_dir))}
         )
-        await notify_stage_done(job_dir.name, stage_label, str(output_path.name))
 
     def _approval_stop_payload(stage_name: str, state) -> dict:
         approvals = load_approvals(job_dir)
@@ -135,8 +129,6 @@ async def execute_run_all(
     # error on the ChatGPT/Claude briefing doesn't hide a gate block.
     start_idx = stage_order.index(pending_stage)
     remaining = set(stage_order[start_idx:])
-
-    await notify_job_started(job_dir.name)
 
     if "idea_research" in remaining:
         try:
@@ -332,11 +324,6 @@ async def execute_run_all(
             await _record("review", run_review_stage(job_dir))
     except StageInputMissingError as exc:
         state = load_job(job_dir)
-        await notify_job_failed(
-            job_dir.name,
-            stopped_at=state.current_stage,
-            error=str(exc),
-        )
         raise HTTPException(
             status_code=409,
             detail={
@@ -348,11 +335,6 @@ async def execute_run_all(
         ) from exc
     except BrowserClientError as exc:
         state = load_job(job_dir)
-        await notify_job_failed(
-            job_dir.name,
-            stopped_at=state.current_stage,
-            error=str(exc),
-        )
         http_exc = _browser_http_exception(exc)
         # Re-pack the detail to include progress.
         detail = (

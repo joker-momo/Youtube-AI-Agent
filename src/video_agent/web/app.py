@@ -677,6 +677,9 @@ _DASHBOARD_HTML = """<!doctype html>
   .pill.completed { background: var(--green-soft); color: var(--green); }
   .pill.in_progress { background: var(--blue-soft); color: var(--blue); }
   .pill.failed { background: #ffe8e8; color: var(--red); }
+  .run-btn { border: none; border-radius: 6px; background: var(--blue); color: #fff; font-size: 11px; font-weight: 700; padding: 4px 10px; cursor: pointer; transition: opacity 150ms; }
+  .run-btn:hover { opacity: 0.85; }
+  .run-btn:disabled { opacity: 0.5; cursor: not-allowed; }
   .caret { color: var(--muted-2); font-size: 20px; line-height: 1; transition: transform 150ms; }
   .step.open .caret { transform: rotate(90deg); }
   .step-body { display: none; padding: 0 14px 14px 55px; }
@@ -1178,7 +1181,10 @@ function renderStep(jobId, s, idx) {
     <div class="step-head">
       <span class="step-num">${s.status === 'completed' ? checkIcon() : s.status === 'failed' ? xIcon() : idx + 1}</span>
       <span class="step-label"><span class="name">${escapeHtml(label)}</span><span class="code">${escapeHtml(s.name)}</span></span>
-      <span class="step-meta"><span class="pill ${s.status}">${statusText(s.status)}</span><span class="step-dur">${durTxt}</span><span class="caret">›</span></span>
+      <span class="step-meta">
+        ${s.status === 'in_progress' ? `<button class="run-btn" id="run-btn-${escapeHtml(s.name)}" onclick="runStage(event,'${escapeJs(jobId)}','${escapeJs(s.name)}')">▶ Run</button>` : ''}
+        <span class="pill ${s.status}">${statusText(s.status)}</span><span class="step-dur">${durTxt}</span><span class="caret">›</span>
+      </span>
     </div>
     <div class="step-body">
       ${renderProgressHtml}
@@ -1414,6 +1420,30 @@ function showToast(msg) {
   t.classList.add('show');
   clearTimeout(showToast._t);
   showToast._t = setTimeout(() => t.classList.remove('show'), 1600);
+}
+
+async function runStage(evt, jobId, stageName) {
+  evt.stopPropagation(); // don't toggle the step accordion
+  const btn = document.getElementById('run-btn-' + stageName);
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Running…'; }
+  try {
+    const r = await fetch(
+      '/jobs/' + encodeURIComponent(jobId) + '/stages/' + encodeURIComponent(stageName) + '/run',
+      { method: 'POST' }
+    );
+    const d = await r.json();
+    if (!r.ok) {
+      showToast('Error: ' + (d.detail || r.status));
+      if (btn) { btn.disabled = false; btn.textContent = '▶ Run'; }
+    } else {
+      showToast(stageName + ' completed');
+      LAST_TIMELINE_JSON = ''; // force re-render to reflect new state
+      if (SELECTED_ID) fetchTimeline(SELECTED_ID);
+    }
+  } catch (e) {
+    showToast('Network error');
+    if (btn) { btn.disabled = false; btn.textContent = '▶ Run'; }
+  }
 }
 
 document.getElementById('refresh-btn').onclick = fetchJobs;

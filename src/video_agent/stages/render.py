@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,6 +66,38 @@ def build_remotion_commands(render_props_path: Path, video_path: Path, thumbnail
     )
 
 
+def build_thumbnail_commands(render_props_path: Path, out_dir: Path) -> list[list[str]]:
+    """Build Remotion still commands for each title_variant (up to 3).
+
+    Each command overrides seo.thumbnail_text with the variant's value.
+    Falls back to a single command using props as-is if no variants present.
+    Outputs: thumbnail_1.jpg, thumbnail_2.jpg, thumbnail_3.jpg
+    """
+    remotion_root = repo_root() / "remotion"
+    entry = remotion_root / "src/index.ts"
+    public_dir = remotion_root / "public"
+    base = ["npx", "--prefix", str(remotion_root), "remotion"]
+    props_base = read_json(render_props_path)
+    props_base["_render_props_path"] = str(render_props_path)
+
+    variants = (props_base.get("seo") or {}).get("title_variants") or []
+    if not variants:
+        # Fallback: single thumbnail using props as-is
+        variants = [{"thumbnail_text": (props_base.get("seo") or {}).get("thumbnail_text", "")}]
+
+    cmds = []
+    for i, variant in enumerate(variants[:3]):
+        props = json.loads(json.dumps(props_base))  # deep copy
+        props["seo"] = {**(props.get("seo") or {}), "thumbnail_text": variant.get("thumbnail_text", "")}
+        out_path = out_dir / f"thumbnail_{i + 1}.jpg"
+        cmds.append([
+            *base, "still", str(entry), "ThumbnailStandard", str(out_path),
+            "--props", json.dumps(props, ensure_ascii=False),
+            "--public-dir", str(public_dir),
+        ])
+    return cmds
+
+
 def _run_with_progress(cmd: list[str], progress_path: Path | None = None) -> None:
     """Run a subprocess, streaming stdout and writing Remotion progress to a JSON file."""
     proc = subprocess.Popen(
@@ -113,4 +146,11 @@ def render_with_remotion(render_props_path: Path, video_path: Path, thumbnail_pa
         progress_path.write_text(json.dumps({"percent": 100, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""}))
     except OSError:
         pass
-    subprocess.run(commands.thumbnail, cwd=repo_root(), check=True)
+    thumb_dir = render_props_path.parent
+    thumb_cmds = build_thumbnail_commands(render_props_path, thumb_dir)
+    for cmd in thumb_cmds:
+        subprocess.run(cmd, cwd=repo_root(), check=True)
+    # Keep thumbnail.jpg as alias of thumbnail_1.jpg for backward compat
+    t1 = thumb_dir / "thumbnail_1.jpg"
+    if t1.exists():
+        shutil.copy2(t1, thumb_dir / "thumbnail.jpg")

@@ -156,6 +156,13 @@ def prepare_assets(
     audio_metadata = {"provider": "mock-local", "source": "silent_placeholder", "sample_rate": 44100}
     if tts_provider == "mock-local":
         _write_silent_wav(narration_path, int(scene_doc["total_duration_sec"]))
+    elif narration_path.exists() and narration_path.stat().st_size > 0:
+        # Narration already synthesized (e.g., by assets_chatgpt stage) — skip re-synthesis.
+        audio_metadata = {
+            "provider": tts_provider,
+            "source": "tts_cached",
+            "sample_rate": tts_config.get("sample_rate", 24000),
+        }
     else:
         client = tts_client or build_tts_client(tts_config)
         audio_metadata = synthesize_scene_track(scene_doc, narration_path, tts_config, client) | {"source": "tts"}

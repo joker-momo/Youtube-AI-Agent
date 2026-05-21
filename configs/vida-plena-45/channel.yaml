@@ -86,8 +86,11 @@ domain_plugins:
 models:
   default: "mock-local"
 tts:
-  provider: "mock-local"
-  voice_id: "vida-plena-calm"
+  provider: "kokoro"
+  voice_id: "ef_dora"
+  lang_code: "e"
+  speed: 0.95
+  sample_rate: 24000
   pace_wpm: 145
 visuals:
   strategy: "auto"

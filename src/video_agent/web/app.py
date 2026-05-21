@@ -945,17 +945,31 @@ function selectJob(jobId) {
   reopenWs(jobId);
 }
 
+function stableTimelineKey(t) {
+  // Strip file sizes from in_progress stage outputs — they grow continuously
+  // (e.g. video.mp4 written by ffmpeg) and would cause spurious re-renders
+  // every poll tick even though nothing meaningful has changed.
+  const copy = JSON.parse(JSON.stringify(t));
+  for (const s of copy.stages || []) {
+    if (s.status === 'in_progress') {
+      for (const o of s.outputs || []) o.size = 0;
+    }
+  }
+  return JSON.stringify(copy);
+}
+
 async function fetchTimeline(jobId) {
   try {
     const r = await fetch('/jobs/' + encodeURIComponent(jobId) + '/timeline');
     if (!r.ok) return;
     const t = await r.json();
     // Only re-render detail panel when data actually changed — prevents flicker from 2s polling.
+    // Use stableTimelineKey to ignore growing output file sizes during active renders.
     // render_progress polling already does targeted DOM updates so it's unaffected.
-    const tlJson = JSON.stringify(t);
+    const tlKey = stableTimelineKey(t);
     LAST_TIMELINE = t;
-    if (tlJson !== LAST_TIMELINE_JSON) {
-      LAST_TIMELINE_JSON = tlJson;
+    if (tlKey !== LAST_TIMELINE_JSON) {
+      LAST_TIMELINE_JSON = tlKey;
       renderTimeline(t);
     }
   } catch (e) { console.error(e); }

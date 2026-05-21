@@ -381,6 +381,30 @@ _DASHBOARD_HTML = """<!doctype html>
     font-weight: 650;
     box-shadow: 0 8px 18px rgba(204,0,0,.18);
   }
+  /* ---- Idea Generator ---- */
+  .ideas-section { background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); margin-bottom:18px; overflow:hidden; }
+  .ideas-section .panel-head { cursor:pointer; user-select:none; display:flex; justify-content:space-between; align-items:center; padding:14px 18px; }
+  .ideas-section .panel-head:hover { background:var(--hover,#f7f8fa); }
+  .ideas-body { padding:14px 18px 18px; border-top:1px solid var(--line); }
+  .gen-form { display:flex; gap:10px; align-items:flex-start; flex-wrap:wrap; margin-bottom:14px; }
+  .gen-form label { font-size:12px; color:var(--muted); font-weight:600; white-space:nowrap; align-self:center; }
+  .gen-form input[type=number] { width:72px; padding:7px 10px; border:1px solid var(--line); border-radius:6px; font-size:13px; }
+  .gen-form select { padding:7px 10px; border:1px solid var(--line); border-radius:6px; font-size:13px; background:#fff; }
+  .gen-form textarea { flex:1; min-width:200px; padding:7px 10px; border:1px solid var(--line); border-radius:6px; font-size:12px; font-family:inherit; resize:vertical; min-height:40px; }
+  .gen-form .gen-actions { display:flex; gap:8px; flex-shrink:0; }
+  .ideas-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px; margin-top:4px; }
+  .idea-card { border:1px solid var(--line); border-radius:8px; padding:14px; background:#fff; display:flex; flex-direction:column; gap:6px; }
+  .idea-card-title { font-size:14px; font-weight:700; color:#1a1a1a; line-height:1.4; }
+  .idea-card-angle { font-size:12px; color:var(--muted); line-height:1.5; }
+  .idea-card-meta { display:flex; gap:8px; flex-wrap:wrap; }
+  .idea-card-dur { font-size:11px; background:#f3f4f6; border-radius:4px; padding:2px 8px; color:#374151; }
+  .idea-card-points { font-size:12px; color:#374151; padding-left:16px; margin:0; }
+  .idea-card-points li { margin-bottom:2px; line-height:1.4; }
+  .idea-card-actions { display:flex; gap:8px; margin-top:4px; }
+  .ideas-empty { font-size:13px; color:var(--muted); padding:16px 0; text-align:center; }
+  .spinner-inline { display:inline-block; width:14px; height:14px; border:2px solid #d1d5db; border-top-color:#374151; border-radius:50%; animation:spin .7s linear infinite; vertical-align:middle; margin-right:4px; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  /* ---- end Idea Generator ---- */
   .kpis {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -774,6 +798,30 @@ _DASHBOARD_HTML = """<!doctype html>
         <button class="primary-action" type="button" onclick="fetchJobs()">Refresh jobs</button>
       </div>
       <section class="kpis" id="kpis"></section>
+      <section class="ideas-section" id="ideas-section">
+        <div class="panel-head" onclick="toggleIdeasPanel()">
+          <div class="panel-title">💡 Idea Generator</div>
+          <span style="font-size:12px;color:var(--muted)" id="ideas-caret">› expand</span>
+        </div>
+        <div class="ideas-body" id="ideas-body" style="display:none">
+          <div class="gen-form">
+            <label>Channel</label>
+            <select id="idea-channel" onchange="loadSavedIdeas()">
+              <option value="vida-plena-45">vida-plena-45</option>
+            </select>
+            <label>Count</label>
+            <input type="number" id="idea-count" value="5" min="1" max="20">
+            <label>Seed topics</label>
+            <textarea id="seed-topics" placeholder="One topic per line (optional)…" rows="1"></textarea>
+            <div class="gen-actions">
+              <button class="action-btn primary" id="gen-btn" onclick="generateIdeas()">✨ Generate</button>
+              <button class="action-btn" onclick="loadSavedIdeas()">📂 Load saved</button>
+            </div>
+          </div>
+          <div id="ideas-status" style="font-size:12px;color:var(--muted);margin-bottom:6px"></div>
+          <div class="ideas-grid" id="ideas-grid"></div>
+        </div>
+      </section>
       <section class="content-grid">
         <div class="panel jobs-panel">
           <div class="panel-head">
@@ -1869,6 +1917,161 @@ document.getElementById('refresh-btn').onclick = fetchJobs;
 fetchJobs();
 setInterval(fetchJobs, 4000);
 startTimelinePolling();
+
+// ---- Idea Generator ----
+let IDEAS_PANEL_OPEN = false;
+
+async function loadChannels() {
+  try {
+    const r = await fetch('/channels');
+    const d = await r.json();
+    const sel = document.getElementById('idea-channel');
+    const cur = sel.value;
+    sel.innerHTML = (d.channels || []).map(c =>
+      `<option value="${escapeHtml(c)}"${c === cur ? ' selected' : ''}>${escapeHtml(c)}</option>`
+    ).join('') || '<option value="">no channels</option>';
+  } catch (e) {}
+}
+loadChannels();
+
+function toggleIdeasPanel() {
+  IDEAS_PANEL_OPEN = !IDEAS_PANEL_OPEN;
+  document.getElementById('ideas-body').style.display = IDEAS_PANEL_OPEN ? '' : 'none';
+  document.getElementById('ideas-caret').textContent = IDEAS_PANEL_OPEN ? '‹ collapse' : '› expand';
+  if (IDEAS_PANEL_OPEN && document.getElementById('ideas-grid').children.length === 0) {
+    loadSavedIdeas();
+  }
+}
+
+async function loadSavedIdeas() {
+  const channelId = document.getElementById('idea-channel').value;
+  const status = document.getElementById('ideas-status');
+  status.textContent = 'Loading saved ideas…';
+  try {
+    const r = await fetch('/channels/' + encodeURIComponent(channelId) + '/ideas');
+    const d = await r.json();
+    if (!d.ideas || d.ideas.length === 0) {
+      document.getElementById('ideas-grid').innerHTML = '<div class="ideas-empty">No saved ideas for this channel yet. Click ✨ Generate to create some.</div>';
+      status.textContent = '';
+      return;
+    }
+    renderIdeaCards(d.ideas, d.paths);
+    status.textContent = d.ideas.length + ' saved idea' + (d.ideas.length !== 1 ? 's' : '') + ' (most recent first)';
+  } catch (e) {
+    status.textContent = 'Failed to load saved ideas.';
+  }
+}
+
+async function generateIdeas() {
+  const channelId = document.getElementById('idea-channel').value;
+  const count = parseInt(document.getElementById('idea-count').value, 10) || 5;
+  const seedRaw = document.getElementById('seed-topics').value.trim();
+  const seedTopics = seedRaw ? seedRaw.split('\\n').map(s => s.trim()).filter(Boolean) : [];
+  const btn = document.getElementById('gen-btn');
+  const status = document.getElementById('ideas-status');
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-inline"></span>Generating…';
+  status.textContent = 'Asking ChatGPT for ' + count + ' ideas — this may take 30–60 s…';
+  document.getElementById('ideas-grid').innerHTML = '';
+
+  try {
+    const r = await fetch('/channels/' + encodeURIComponent(channelId) + '/ideas/generate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({count, seed_topics: seedTopics}),
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      status.textContent = '❌ ' + (d.detail || 'Generation failed');
+      return;
+    }
+    renderIdeaCards(d.ideas, d.saved.map(p => 'ideas/' + p.split('ideas/').pop()));
+    status.textContent = '✅ ' + d.count + ' ideas generated and saved.';
+  } catch (e) {
+    status.textContent = '❌ Network error: ' + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '✨ Generate';
+  }
+}
+
+function renderIdeaCards(ideas, paths) {
+  const grid = document.getElementById('ideas-grid');
+  grid.innerHTML = '';
+  ideas.forEach((idea, i) => {
+    const el = document.createElement('div');
+    el.innerHTML = renderIdeaCard(idea, paths[i] || '');
+    grid.appendChild(el.firstElementChild);
+  });
+}
+
+function renderIdeaCard(idea, savedPath) {
+  const dur = idea.target_duration_sec ? Math.round(idea.target_duration_sec / 60) + ' min' : '';
+  const points = (idea.key_points || []).slice(0, 4).map(p => `<li>${escapeHtml(p)}</li>`).join('');
+  const safeIdea = escapeHtml(JSON.stringify(idea));
+  const safePath = escapeHtml(savedPath);
+  return `
+    <div class="idea-card">
+      <div class="idea-card-title">${escapeHtml(idea.title_seed || idea.topic || '-')}</div>
+      <div class="idea-card-angle">${escapeHtml(idea.angle || '')}</div>
+      <div class="idea-card-meta">
+        ${dur ? `<span class="idea-card-dur">⏱ ${dur}</span>` : ''}
+        <span class="idea-card-dur">${escapeHtml(idea.topic || '')}</span>
+      </div>
+      ${points ? `<ul class="idea-card-points">${points}</ul>` : ''}
+      <div class="idea-card-actions">
+        <button class="action-btn primary"
+          onclick='createJobFromIdea(${safeIdea}, "${safePath}")'>+ Create Job</button>
+      </div>
+    </div>`;
+}
+
+async function createJobFromIdea(idea, savedPath) {
+  const channelId = document.getElementById('idea-channel').value;
+  // Generate job ID: slug from title_seed + timestamp
+  const slug = (idea.title_seed || idea.topic || 'idea')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 30);
+  const jobId = slug + '-' + Math.floor(Date.now() / 1000);
+
+  try {
+    // 1. Create job
+    const r1 = await fetch('/jobs', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({job_id: jobId, channel_id: channelId, idea_path: savedPath}),
+    });
+    if (!r1.ok) {
+      const d = await r1.json();
+      showToast('Create job failed: ' + (d.detail || r1.status));
+      return;
+    }
+
+    // 2. Write idea.json into the job dir
+    const r2 = await fetch('/jobs/' + encodeURIComponent(jobId) + '/idea', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(idea),
+    });
+    if (!r2.ok) {
+      showToast('Idea upload failed');
+      return;
+    }
+
+    showToast('Job created: ' + jobId);
+    await fetchJobs();
+    // Select the new job
+    SELECTED_ID = jobId;
+    LAST_TIMELINE_JSON = '';
+    await fetchTimeline(jobId);
+  } catch (e) {
+    showToast('Error: ' + e.message);
+  }
+}
+// ---- end Idea Generator ----
 </script>
 </body>
 </html>
@@ -2346,6 +2549,40 @@ def post_regenerate_stage(
 class GenerateIdeasRequest(BaseModel):
     seed_topics: list[str] = []
     count: int = 10
+
+
+@app.get("/channels")
+def list_channels() -> dict:
+    """List available channel configs."""
+    configs_dir = repo_root() / "configs"
+    channels = []
+    if configs_dir.exists():
+        for p in sorted(configs_dir.iterdir()):
+            if p.is_dir() and (p / "channel.yaml").exists():
+                channels.append(p.name)
+    return {"channels": channels}
+
+
+@app.get("/channels/{channel_id}/ideas")
+def list_saved_ideas(
+    channel_id: str,
+    inputs_root: Path = Depends(get_inputs_root),
+) -> dict:
+    """List saved idea JSON files for a channel (most recent first)."""
+    ideas_dir = inputs_root / "ideas" / channel_id
+    if not ideas_dir.exists():
+        return {"channel_id": channel_id, "ideas": [], "paths": []}
+    files = sorted(ideas_dir.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+    ideas: list[dict] = []
+    paths: list[str] = []
+    for f in files[:50]:
+        try:
+            idea = json.loads(f.read_text(encoding="utf-8"))
+            ideas.append(idea)
+            paths.append("ideas/" + channel_id + "/" + f.name)
+        except Exception:
+            pass
+    return {"channel_id": channel_id, "ideas": ideas, "paths": paths}
 
 
 @app.post("/channels/{channel_id}/ideas/generate", status_code=201)

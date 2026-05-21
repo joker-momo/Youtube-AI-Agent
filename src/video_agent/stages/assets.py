@@ -112,7 +112,8 @@ def prepare_assets(
         image_suffix = local_image.suffix if local_image else ".jpg"
         image_path = assets_dir / f"{scene['id']}{image_suffix}"
         if local_image:
-            shutil.copy2(local_image, image_path)
+            if local_image.resolve() != image_path.resolve():
+                shutil.copy2(local_image, image_path)
             source = (
                 "asset_refs_primary" if primary_asset is not None else "local_directory"
             )

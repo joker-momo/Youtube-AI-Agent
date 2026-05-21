@@ -578,7 +578,7 @@ _DASHBOARD_HTML = """<!doctype html>
   .action-btn.primary { border-color: #b6d8c2; background: #f0fbf4; color: #1d6b3b; }
   .action-btn.warn { border-color: #e9cfb0; background: #fff9f0; color: #8a5a12; }
   .gate-note { font-size: 12px; color: #8a5a12; background: #fff7eb; border: 1px solid #f1d6af; border-radius: 6px; padding: 6px 8px; }
-  .insight { margin-top: 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; padding: 10px; }
+  .insight { margin-top: 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; padding: 14px; }
   .insight-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   .insight-kv { font-size: 12px; color: #222; }
   .insight-kv b { color: var(--muted); font-weight: 650; margin-right: 6px; }
@@ -586,6 +586,43 @@ _DASHBOARD_HTML = """<!doctype html>
   .insight-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
   .insight-table th, .insight-table td { border-bottom: 1px solid var(--line); text-align: left; padding: 6px 4px; vertical-align: top; }
   .insight-table th { color: var(--muted); font-weight: 650; }
+  .insight-section { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 14px 0 6px; }
+  .vb { display:inline-flex; align-items:center; gap:6px; padding:5px 14px; border-radius:20px; font-weight:700; font-size:13px; margin-bottom:10px; }
+  .vb-pass { background:#d1fae5; color:#065f46; }
+  .vb-fail,.vb-block { background:#fee2e2; color:#991b1b; }
+  .vb-skip { background:#f3f4f6; color:#6b7280; }
+  .score-row { display:flex; align-items:center; gap:8px; margin:5px 0; font-size:12px; }
+  .score-kw { min-width:140px; max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#374151; }
+  .score-bar-outer { flex:1; height:8px; border-radius:4px; background:#e5e7eb; overflow:hidden; }
+  .score-bar-inner { height:100%; border-radius:4px; transition:width .4s; }
+  .score-num { font-weight:700; min-width:28px; text-align:right; font-size:12px; }
+  .score-meta { font-size:11px; color:var(--muted-2); min-width:80px; }
+  .narration-box { background:#f9fafb; border:1px solid var(--line); border-radius:6px; padding:12px 14px; font-size:13px; line-height:1.7; margin-top:8px; max-height:220px; overflow-y:auto; white-space:pre-wrap; color:#374151; }
+  .hook-box { background:#fffbeb; border:1px solid #fcd34d; border-radius:6px; padding:12px 14px; font-size:16px; font-weight:700; color:#92400e; margin-bottom:10px; line-height:1.4; }
+  .cta-box { background:#eff6ff; border:1px solid #bfdbfe; border-radius:6px; padding:10px 14px; font-size:13px; font-weight:600; color:#1e40af; margin-top:8px; }
+  .tag-chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+  .tag-chip { padding:4px 12px; border-radius:14px; background:#f3f4f6; border:1px solid #e5e7eb; font-size:12px; color:#374151; }
+  .scene-card { border:1px solid var(--line); border-radius:8px; padding:10px 14px; margin-top:10px; }
+  .scene-card-head { font-size:11px; font-weight:700; color:var(--muted); display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; text-transform:uppercase; letter-spacing:.5px; }
+  .scene-dur-badge { background:#f3f4f6; border-radius:8px; padding:2px 8px; font-size:11px; font-weight:700; color:#374151; }
+  .scene-narration { font-size:13px; color:#374151; line-height:1.6; }
+  .scene-prompt { font-size:11px; color:var(--muted-2); margin-top:6px; font-style:italic; border-top:1px solid var(--line); padding-top:6px; }
+  .scene-text { font-size:12px; color:#6b7280; font-weight:600; margin-top:4px; }
+  .variant-card { border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-top:10px; position:relative; }
+  .variant-card.winner { border-color:#d97706; background:#fffbeb; }
+  .variant-score { position:absolute; top:10px; right:12px; font-size:11px; font-weight:700; background:#f59e0b; color:#fff; padding:2px 9px; border-radius:10px; }
+  .variant-winner-badge { position:absolute; top:10px; right:70px; font-size:11px; font-weight:700; background:#065f46; color:#fff; padding:2px 9px; border-radius:10px; }
+  .variant-title { font-size:15px; font-weight:700; margin-bottom:6px; color:#111; padding-right:80px; }
+  .variant-hook { font-size:13px; color:#d97706; font-weight:600; }
+  .description-box { background:#f9fafb; border:1px solid var(--line); border-radius:6px; padding:12px 14px; font-size:13px; line-height:1.7; margin-top:8px; max-height:160px; overflow-y:auto; color:#374151; }
+  .qa-scores { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; margin-top:10px; }
+  .qa-score-item { font-size:12px; }
+  .qa-score-label { color:var(--muted); font-weight:650; margin-bottom:3px; }
+  .thumb-preview { width:100%; max-height:200px; object-fit:cover; border-radius:6px; margin-top:8px; }
+  .section-item { border-bottom:1px solid var(--line); padding:8px 0; }
+  .section-item:last-child { border-bottom:none; }
+  .section-title { font-size:12px; font-weight:700; color:#374151; }
+  .section-text { font-size:12px; color:#6b7280; margin-top:3px; line-height:1.5; }
   .file-row {
     height: 30px;
     border-radius: 6px;
@@ -1125,6 +1162,12 @@ function renderStep(jobId, s, idx) {
   } else if (s.name === 'render' && s.status !== 'in_progress') {
     stopRenderProgressPolling();
   }
+  // Auto-expand approval-required stages that are completed but not confirmed
+  // so the user sees the insight + buttons without having to click
+  if (isStageApprovalRequired(s.name) && s.status === 'completed' && !isStageApproved(s.name)) {
+    el.classList.add('open');
+    OPEN_STAGES.add(s.name);
+  }
   renderStageExtras(jobId, s);
   return el;
 }
@@ -1288,105 +1331,185 @@ async function regenerateStage(jobId, stageName) {
   }
 }
 
+function scoreColor(n) {
+  if (n === null || n === undefined) return '#9ca3af';
+  if (n >= 60) return '#16a34a';
+  if (n >= 35) return '#d97706';
+  return '#dc2626';
+}
+
 function renderResearchInsight(data) {
   const scores = Array.isArray(data.scores) ? data.scores : [];
-  const rows = scores.slice(0, 8).map(s => `
-    <tr>
-      <td>${escapeHtml(s.keyword || '')}</td>
-      <td>${escapeHtml(String(s.score ?? '-'))}</td>
-      <td>${escapeHtml(s.volume || '-')}</td>
-      <td>${escapeHtml(s.competition || '-')}</td>
-    </tr>
-  `).join('');
+  const verdict = (data.verdict || '').toLowerCase();
+  const vbCls = verdict === 'pass' ? 'vb-pass' : verdict === 'skipped' ? 'vb-skip' : 'vb-block';
+  const vbIcon = verdict === 'pass' ? '✅' : verdict === 'skipped' ? '⏭' : '❌';
+  const vbLabel = verdict === 'pass' ? 'Approved — topic has demand' : verdict === 'skipped' ? 'Skipped (vidIQ unavailable)' : 'Blocked — demand too low';
+  const scoreRows = scores.slice(0, 8).map(s => {
+    const n = s.score ?? 0;
+    const pct = Math.min(100, Math.round((n / 100) * 100));
+    const related = Array.isArray(s.related) ? s.related.slice(0, 3).map(r => `<span class="tag-chip">${escapeHtml(r.keyword || '')}</span>`).join('') : '';
+    return `
+      <div class="score-row">
+        <span class="score-kw" title="${escapeHtml(s.keyword || '')}">${escapeHtml(s.keyword || '')}</span>
+        <div class="score-bar-outer"><div class="score-bar-inner" style="width:${pct}%;background:${scoreColor(n)}"></div></div>
+        <span class="score-num" style="color:${scoreColor(n)}">${n}</span>
+        <span class="score-meta">${escapeHtml(s.volume || '')} / ${escapeHtml(s.competition || '')}</span>
+      </div>
+      ${related ? `<div style="padding-left:148px;margin-bottom:2px">${related}</div>` : ''}
+    `;
+  }).join('');
+  const gateTxt = data.gate ? `Min: ${data.gate.min_score ?? '-'}` : '';
   return `
     <div class="insight">
+      <div class="vb ${vbCls}">${vbIcon} ${escapeHtml(vbLabel)}</div>
       <div class="insight-grid">
-        <div class="insight-kv"><b>Verdict:</b>${escapeHtml(data.verdict || '-')}</div>
-        <div class="insight-kv"><b>Best score:</b>${escapeHtml(String(data.best_score ?? '-'))}</div>
+        <div class="insight-kv"><b>Best keyword score:</b><span style="font-weight:700;color:${scoreColor(data.best_score)}">${data.best_score ?? '-'}/100</span></div>
+        <div class="insight-kv"><b>Gate threshold:</b>${escapeHtml(gateTxt || '-')}</div>
       </div>
-      ${data.block_reason ? `<div class="gate-note" style="margin-top:8px">${escapeHtml(data.block_reason)}</div>` : ''}
-      ${rows ? `<table class="insight-table"><thead><tr><th>Keyword</th><th>Score</th><th>Volume</th><th>Competition</th></tr></thead><tbody>${rows}</tbody></table>` : ''}
+      ${data.block_reason ? `<div class="gate-note" style="margin-top:8px">⚠️ ${escapeHtml(data.block_reason)}</div>` : ''}
+      ${scoreRows ? `<div class="insight-section">Keyword scores</div>${scoreRows}` : ''}
     </div>
   `;
 }
 
 function renderScriptInsight(data) {
   const sections = Array.isArray(data.sections) ? data.sections : [];
+  const narration = data.narration || '';
+  const wordCount = narration.trim() ? narration.trim().split(/\s+/).length : 0;
+  const estSec = Math.round(wordCount / 145 * 60);
+  const sectionItems = sections.map(s => `
+    <div class="section-item">
+      <div class="section-title">${escapeHtml(s.title || '')}</div>
+      <div class="section-text">${escapeHtml((s.text || '').slice(0, 200))}</div>
+    </div>
+  `).join('');
   return `
     <div class="insight">
-      <div class="insight-grid">
-        <div class="insight-kv"><b>Hook:</b>${escapeHtml(data.hook || '-')}</div>
-        <div class="insight-kv"><b>CTA:</b>${escapeHtml(data.cta || '-')}</div>
+      ${data.hook ? `<div class="insight-section">Hook</div><div class="hook-box">${escapeHtml(data.hook)}</div>` : ''}
+      <div class="insight-grid" style="margin-top:10px">
         <div class="insight-kv"><b>Sections:</b>${sections.length}</div>
-        <div class="insight-kv"><b>Narration:</b>${escapeHtml(String((data.narration || '').length))} chars</div>
+        <div class="insight-kv"><b>Words:</b>${wordCount} (~${estSec}s)</div>
       </div>
+      ${sectionItems ? `<div class="insight-section">Sections</div>${sectionItems}` : ''}
+      ${narration ? `<div class="insight-section">Full narration</div><div class="narration-box">${escapeHtml(narration)}</div>` : ''}
+      ${data.cta ? `<div class="insight-section">Call to action</div><div class="cta-box">📣 ${escapeHtml(data.cta)}</div>` : ''}
     </div>
   `;
 }
 
 function renderScenesInsight(data) {
   const scenes = Array.isArray(data.scenes) ? data.scenes : [];
-  const rows = scenes.slice(0, 8).map(s => `
-    <tr>
-      <td>${escapeHtml(s.id || '')}</td>
-      <td>${escapeHtml(String(s.duration_sec || '-'))}s</td>
-      <td>${escapeHtml((s.caption || '').slice(0, 80))}</td>
-    </tr>
+  const total = data.total_duration_sec;
+  const sceneCards = scenes.map(s => `
+    <div class="scene-card">
+      <div class="scene-card-head">
+        <span>${escapeHtml(s.id || '')}</span>
+        <span class="scene-dur-badge">⏱ ${s.duration_sec ?? '-'}s</span>
+      </div>
+      ${s.on_screen_text ? `<div class="scene-text">🖼 ${escapeHtml(s.on_screen_text)}</div>` : ''}
+      <div class="scene-narration">${escapeHtml((s.narration || '').slice(0, 220))}</div>
+      ${s.visual_prompt ? `<div class="scene-prompt">🎨 ${escapeHtml((s.visual_prompt || '').slice(0, 120))}</div>` : ''}
+    </div>
   `).join('');
   return `
     <div class="insight">
       <div class="insight-grid">
-        <div class="insight-kv"><b>Total duration:</b>${escapeHtml(String(data.total_duration_sec || '-'))}s</div>
+        <div class="insight-kv"><b>Total duration:</b><span style="font-weight:700">${total ?? '-'}s</span></div>
         <div class="insight-kv"><b>Scenes:</b>${scenes.length}</div>
       </div>
-      ${rows ? `<table class="insight-table"><thead><tr><th>Scene</th><th>Duration</th><th>Caption</th></tr></thead><tbody>${rows}</tbody></table>` : ''}
+      ${sceneCards}
     </div>
   `;
 }
 
 function renderSeoInsight(data) {
-  const tags = Array.isArray(data.tags) ? data.tags.slice(0, 8) : [];
+  const tags = Array.isArray(data.tags) ? data.tags : [];
+  const variants = Array.isArray(data.title_variants) ? data.title_variants : [];
+  const tagChips = tags.map(t => `<span class="tag-chip">#${escapeHtml(t)}</span>`).join('');
+  let variantHtml = '';
+  if (variants.length) {
+    variantHtml = `<div class="insight-section">Title & thumbnail variants (A/B)</div>` +
+      variants.map((v, i) => {
+        const isWinner = i === 0;
+        return `
+          <div class="variant-card${isWinner ? ' winner' : ''}">
+            ${isWinner ? '<span class="variant-winner-badge">⭐ Winner</span>' : ''}
+            <span class="variant-score">${v.score ?? '-'}</span>
+            <div class="variant-title">${escapeHtml(v.title || '-')}</div>
+            <div class="variant-hook">📌 ${escapeHtml(v.thumbnail_text || '-')}</div>
+          </div>
+        `;
+      }).join('');
+  }
   return `
     <div class="insight">
+      <div class="hook-box" style="font-size:17px">${escapeHtml(data.title || '-')}</div>
       <div class="insight-grid">
-        <div class="insight-kv"><b>Title:</b>${escapeHtml(data.title || '-')}</div>
         <div class="insight-kv"><b>Language:</b>${escapeHtml(data.language || '-')}</div>
+        <div class="insight-kv"><b>Thumbnail hook:</b>${escapeHtml(data.thumbnail_text || '-')}</div>
       </div>
-      <div class="insight-kv" style="margin-top:8px"><b>Thumbnail text:</b>${escapeHtml(data.thumbnail_text || '-')}</div>
-      ${tags.length ? `<ul class="insight-list">${tags.map(t => `<li>${escapeHtml(t)}</li>`).join('')}</ul>` : ''}
+      ${data.description ? `<div class="insight-section">Description</div><div class="description-box">${escapeHtml(data.description)}</div>` : ''}
+      ${tagChips ? `<div class="insight-section">Tags</div><div class="tag-chips">${tagChips}</div>` : ''}
+      ${variantHtml}
     </div>
   `;
 }
 
 function renderQaInsight(data) {
+  const verdict = (data.verdict || '').toUpperCase();
+  const isPass = verdict === 'PASS';
+  const vbCls = isPass ? 'vb-pass' : 'vb-fail';
+  const icon = isPass ? '✅' : '❌';
   const issues = Array.isArray(data.issues) ? data.issues : [];
+  const changes = Array.isArray(data.required_changes) ? data.required_changes : [];
+  const scores = data.scores && typeof data.scores === 'object' ? data.scores : {};
+  const scoreEntries = Object.entries(scores);
+  const scoreBars = scoreEntries.map(([k, v]) => {
+    const pct = Math.min(100, Math.round((Number(v) / 5) * 100));
+    return `
+      <div class="score-row">
+        <span class="score-kw">${escapeHtml(k.replace(/_/g,' '))}</span>
+        <div class="score-bar-outer"><div class="score-bar-inner" style="width:${pct}%;background:${scoreColor(Number(v)*20)}"></div></div>
+        <span class="score-num">${v}/5</span>
+      </div>
+    `;
+  }).join('');
   return `
     <div class="insight">
-      <div class="insight-grid">
-        <div class="insight-kv"><b>Verdict:</b>${escapeHtml(data.verdict || '-')}</div>
-        <div class="insight-kv"><b>Issues:</b>${issues.length}</div>
-      </div>
-      ${issues.length ? `<ul class="insight-list">${issues.slice(0, 6).map(i => `<li>${escapeHtml(i)}</li>`).join('')}</ul>` : ''}
+      <div class="vb ${vbCls}">${icon} ${escapeHtml(verdict)}</div>
+      ${scoreBars ? `<div class="insight-section">Scores</div>${scoreBars}` : ''}
+      ${issues.length ? `<div class="insight-section">Issues</div><ul class="insight-list">${issues.slice(0, 8).map(i => `<li>${escapeHtml(i)}</li>`).join('')}</ul>` : ''}
+      ${changes.length ? `<div class="insight-section">Required changes</div><ul class="insight-list">${changes.slice(0, 6).map(c => `<li>${escapeHtml(c)}</li>`).join('')}</ul>` : ''}
     </div>
   `;
 }
 
 function renderSeoVidiqInsight(data) {
   const swaps = Array.isArray(data.swaps) ? data.swaps : [];
-  const rows = swaps.slice(0, 8).map(s => `
-    <tr>
-      <td>${escapeHtml(s.original || '')}</td>
-      <td>${escapeHtml(String(s.score ?? '-'))}</td>
-      <td>${escapeHtml(s.replacement || '')}</td>
-    </tr>
+  const finalTags = Array.isArray(data.final_tags) ? data.final_tags : [];
+  const origTags = Array.isArray(data.original_tags) ? data.original_tags : [];
+  const swappedSet = new Set(swaps.map(s => s.replacement));
+  const tagChips = finalTags.map(t =>
+    `<span class="tag-chip" style="${swappedSet.has(t) ? 'background:#d1fae5;border-color:#6ee7b7;color:#065f46' : ''}">#${escapeHtml(t)}</span>`
+  ).join('');
+  const swapRows = swaps.map(s => `
+    <div class="score-row">
+      <span class="score-kw" style="text-decoration:line-through;color:#9ca3af">${escapeHtml(s.original || '')}</span>
+      <span style="font-size:13px;color:#6b7280">→</span>
+      <span style="font-weight:600;color:#065f46">${escapeHtml(s.replacement || '')}</span>
+      <span class="score-meta">was ${s.score ?? '-'}</span>
+    </div>
   `).join('');
   return `
     <div class="insight">
       <div class="insight-grid">
-        <div class="insight-kv"><b>Min score:</b>${escapeHtml(String(data.min_score ?? '-'))}</div>
-        <div class="insight-kv"><b>Swaps:</b>${swaps.length}</div>
+        <div class="insight-kv"><b>Tags scored:</b>${origTags.length}</div>
+        <div class="insight-kv"><b>Swaps made:</b>${swaps.length}</div>
+        <div class="insight-kv"><b>Min score threshold:</b>${data.min_score ?? '-'}</div>
+        ${data.vidiq_error ? `<div class="insight-kv"><b>⚠ Error:</b>${escapeHtml(data.vidiq_error.slice(0,80))}</div>` : ''}
       </div>
-      ${rows ? `<table class="insight-table"><thead><tr><th>Original</th><th>Score</th><th>Replacement</th></tr></thead><tbody>${rows}</tbody></table>` : ''}
+      ${swapRows ? `<div class="insight-section">Tags swapped</div>${swapRows}` : '<div style="margin-top:8px;font-size:12px;color:#16a34a">✅ All tags above threshold — no swaps needed</div>'}
+      ${tagChips ? `<div class="insight-section">Final tags <span style="font-size:11px;color:var(--muted)">(green = replaced)</span></div><div class="tag-chips">${tagChips}</div>` : ''}
     </div>
   `;
 }
@@ -1455,6 +1578,17 @@ async function renderStageExtras(jobId, s) {
       rendered = true;
     } else if (s.name === 'seo_vidiq') {
       insight.innerHTML = renderSeoVidiqInsight(await fetchArtifactJson(jobId, 'seo_vidiq_report.json'));
+      rendered = true;
+    } else if (s.name === 'thumbnail_image') {
+      // Show generated thumbnail as image preview
+      const jobBase = `/jobs/${encodeURIComponent(jobId)}/artifacts/thumbnail_bg.png`;
+      insight.innerHTML = `
+        <div class="insight">
+          <div class="insight-section">Generated thumbnail background</div>
+          <img class="thumb-preview" src="${jobBase}" alt="thumbnail"
+               onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
+          <div style="display:none;color:var(--muted);font-size:12px;padding:8px">Image not ready yet</div>
+        </div>`;
       rendered = true;
     }
     if (!rendered && Array.isArray(s.outputs)) {

@@ -1,5 +1,5 @@
 import React from 'react';
-import {AbsoluteFill, Audio, Img, interpolate, Sequence, useCurrentFrame, useVideoConfig, Video} from 'remotion';
+import {AbsoluteFill, Audio, Img, interpolate, OffthreadVideo, Sequence, useCurrentFrame, useVideoConfig} from 'remotion';
 import {WordSegment} from './render-props';
 import {mediaSrc, RenderProps, Scene} from './render-props';
 import {fitHeadline, fullFrame} from './styles';
@@ -83,9 +83,13 @@ const SceneView: React.FC<{
 
       {/* Full-bleed background — video clip or photo */}
       {scene.asset_refs.background.endsWith('.mp4') ? (
-        <Video
+        // OffthreadVideo is preferred over Video for server-side rendering (faster, frame-accurate).
+        // loop: short Pexels clips (3-30s) repeat to fill the full scene duration.
+        // No pan/zoom transform — the video itself has natural motion.
+        <OffthreadVideo
           src={mediaSrc(scene.asset_refs.background)}
           muted
+          loop
           style={{
             position: 'absolute', width: '100%', height: '100%',
             objectFit: 'cover',

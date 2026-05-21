@@ -109,8 +109,15 @@ def prepare_assets(
         stock_asset = None
         if not local_image and stock_service:
             stock_asset = stock_service.get_scene_asset(scene, channel_id, job_dir.name)
-        image_suffix = local_image.suffix if local_image else ".jpg"
-        image_path = assets_dir / f"{scene['id']}{image_suffix}"
+        # Determine suffix: local image uses its own suffix; stock asset uses library
+        # file extension (may be .mp4 for video); fallback .jpg for placeholder.
+        if local_image:
+            asset_suffix = local_image.suffix
+        elif stock_asset:
+            asset_suffix = Path(stock_asset["file_path"]).suffix or ".mp4"
+        else:
+            asset_suffix = ".jpg"
+        image_path = assets_dir / f"{scene['id']}{asset_suffix}"
         if local_image:
             if local_image.resolve() != image_path.resolve():
                 shutil.copy2(local_image, image_path)

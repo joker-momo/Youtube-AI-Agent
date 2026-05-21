@@ -73,13 +73,16 @@ def normalize_pexels_video_response(response: dict[str, Any]) -> list[dict[str, 
     results = []
     for video in response.get("videos", []):
         user = video.get("user", {})
-        # Pick best HD file: prefer 1920-wide mp4, fallback to largest available
+        # Pick best HD file: prefer highest resolution ≤1920px wide (1080p for render).
+        # Avoids downloading huge 4K files that slow the pipeline.
         video_files = [
             f for f in video.get("video_files", [])
             if f.get("file_type") == "video/mp4" and f.get("link")
         ]
-        video_files.sort(key=lambda f: (f.get("width") or 0), reverse=True)
-        best = video_files[0] if video_files else None
+        hd = [f for f in video_files if (f.get("width") or 0) <= 1920]
+        candidates = hd if hd else video_files
+        candidates.sort(key=lambda f: (f.get("width") or 0), reverse=True)
+        best = candidates[0] if candidates else None
         if not best:
             continue
         photographer = user.get("name") if user else None

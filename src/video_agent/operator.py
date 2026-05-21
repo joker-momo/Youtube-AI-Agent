@@ -241,6 +241,11 @@ def _normalize_scenes_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
 
 
 def _chatgpt_script_prompt(channel_config: dict[str, Any], idea: dict[str, Any]) -> str:
+    cf = channel_config.get("content_format", {})
+    target_sec = cf.get("target_duration_sec", 840)
+    target_min = round(target_sec / 60)
+    pace_wpm = channel_config.get("tts", {}).get("pace_wpm", 145)
+    total_words = round(target_sec / 60 * pace_wpm)
     return "\n".join(
         [
             "You are creating the SCRIPT artifact for this YouTube channel.",
@@ -248,8 +253,12 @@ def _chatgpt_script_prompt(channel_config: dict[str, Any], idea: dict[str, Any])
             "",
             "Required schema summary:",
             "- channel_id, job_id, hook, sections, narration, cta, qa",
-            "- sections must be an array of short structured section objects",
-            "- narration must be natural Spanish for a 45-60 second video",
+            "- sections must be an array of 6-10 structured section objects covering the full topic depth",
+            f"- narration must be natural Spanish for a {target_min}-minute video (~{total_words} words total)",
+            f"- hook: opening sentence ≤28 words that states a relatable problem in the first 7 seconds.",
+            "  The hook must follow this pattern: [relatable symptom/problem] + [implicit promise of solution].",
+            "  Example: 'Si después de los 45 te cuesta conciliar el sueño o despiertas a las 3 de la mañana, esto es exactamente para ti.'",
+            "- each section must have: title, key_points (list), and narration_text",
             "- qa.verdict should be PASS when you believe the artifact is ready for Gemini QA",
             "",
             "Channel config:",
@@ -262,6 +271,11 @@ def _chatgpt_script_prompt(channel_config: dict[str, Any], idea: dict[str, Any])
 
 
 def _chatgpt_scenes_prompt(channel_config: dict[str, Any], script: dict[str, Any]) -> str:
+    cf = channel_config.get("content_format", {})
+    target_sec = cf.get("target_duration_sec", 840)
+    scenes_min = cf.get("scenes_count_min", 40)
+    scenes_max = cf.get("scenes_count_max", 55)
+    scene_dur_target = round(target_sec / ((scenes_min + scenes_max) / 2))
     return "\n".join(
         [
             "You are creating the SCENES artifact from an approved script.",
@@ -270,10 +284,14 @@ def _chatgpt_scenes_prompt(channel_config: dict[str, Any], script: dict[str, Any
             "Required schema summary:",
             "- channel_id, job_id, scenes, total_duration_sec, qa",
             "- scenes must include id, duration_sec, narration, on_screen_text, caption, visual_prompt, motion, asset_refs",
-            "- use 4-6 scenes and make total_duration_sec match the sum of scene durations",
+            f"- create {scenes_min}-{scenes_max} scenes; each scene duration_sec should be {scene_dur_target-3}–{scene_dur_target+3} seconds",
+            f"- total_duration_sec must be approximately {target_sec} seconds (sum of all scene durations)",
             "- scene ids must be sequential scene-01, scene-02, etc.",
+            "- HOOK RULE: scene-01 narration must match the script hook word-for-word. on_screen_text for scene-01 must be",
+            "  a bold 3-6 word question or statement that creates immediate curiosity (e.g. '¿Por qué no puedes dormir?').",
             "- asset_refs must be an object, not an array; use {} when no assets are selected yet",
-            "- visual_prompt must be English, stock-search friendly, and specific",
+            "- visual_prompt must be English, stock-search friendly, and specific (person, setting, action)",
+            "- motion: use 'slow_zoom' for calm scenes, 'pan_right' or 'pan_left' for variety, never repeat same motion 3x in a row",
             "- qa.verdict must remain PENDING_GEMINI_QA; do not mark your own output as PASS",
             "",
             "Channel config:",

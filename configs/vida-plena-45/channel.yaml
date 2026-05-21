@@ -35,11 +35,11 @@ personas:
     weight: 1.0
 content_format:
   type: "long_form"
-  target_duration_sec: 1500       # 25 min sweet spot for 20-30 min long-form
-  duration_sec_min: 1200          # 20 min hard floor
-  duration_sec_max: 1800          # 30 min hard ceiling
-  scenes_count_min: 24
-  scenes_count_max: 40
+  target_duration_sec: 840        # 14 min sweet spot — top Spanish health channel benchmark
+  duration_sec_min: 720           # 12 min hard floor
+  duration_sec_max: 900           # 15 min hard ceiling
+  scenes_count_min: 40            # 40-55 scenes × 15-20s = 10-18 min, high visual variety
+  scenes_count_max: 55
   publish_schedule:
     cadence: "3 per week"
     days: ["Monday", "Wednesday", "Friday"]

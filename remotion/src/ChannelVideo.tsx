@@ -1,5 +1,6 @@
 import React from 'react';
 import {AbsoluteFill, Audio, Img, interpolate, Sequence, useCurrentFrame, useVideoConfig, Video} from 'remotion';
+import {WordSegment} from './render-props';
 import {mediaSrc, RenderProps, Scene} from './render-props';
 import {fitHeadline, fullFrame} from './styles';
 
@@ -34,7 +35,29 @@ const SceneView: React.FC<{
   channelName: string;
 }> = ({scene, totalFrames, sceneIndex, totalScenes, palette, channelName}) => {
   const frame = useCurrentFrame();
+  const {fps} = useVideoConfig();
   const progress = frame / Math.max(totalFrames - 1, 1);
+
+  // Animated caption: find active word segment by audio time
+  const audioTimeSec = (scene.audio_offset_sec ?? 0) + frame / fps;
+  const segments = scene.word_segments ?? [];
+  const activeSegmentIdx = segments.findIndex(s => audioTimeSec >= s.start && audioTimeSec < s.end);
+  const activeSegment: WordSegment | null = activeSegmentIdx >= 0 ? segments[activeSegmentIdx] : null;
+  const captionText = activeSegment ? activeSegment.text : scene.caption;
+
+  // Caption chunk fade: fade in at chunk start, hold, fade out at chunk end
+  const CHUNK_FADE = 5; // frames
+  let captionChunkAlpha = 1;
+  if (activeSegment) {
+    const chunkStartFrame = Math.round((activeSegment.start - (scene.audio_offset_sec ?? 0)) * fps);
+    const chunkEndFrame   = Math.round((activeSegment.end   - (scene.audio_offset_sec ?? 0)) * fps);
+    captionChunkAlpha = interpolate(
+      frame,
+      [chunkStartFrame, chunkStartFrame + CHUNK_FADE, chunkEndFrame - CHUNK_FADE, chunkEndFrame],
+      [0, 1, 1, 0],
+      {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'},
+    );
+  }
 
   const opacity       = interpolate(frame, [0, FADE_IN], [0, 1], {extrapolateRight: 'clamp'});
   const headlineY     = interpolate(frame, [4, FADE_IN + 8], [20, 0], {extrapolateRight: 'clamp'});
@@ -112,7 +135,7 @@ const SceneView: React.FC<{
       <div style={{
         position: 'absolute', left: 56, right: 80, bottom: 58,
         display: 'flex', alignItems: 'flex-start', gap: 18,
-        opacity: captionAlpha,
+        opacity: captionAlpha * (activeSegment ? captionChunkAlpha : 1),
       }}>
         <div style={{width: 5, minHeight: 44, backgroundColor: palette.accent, borderRadius: 3, flexShrink: 0, marginTop: 4}} />
         <div style={{
@@ -120,7 +143,7 @@ const SceneView: React.FC<{
           textShadow: '0 1px 14px rgba(0,0,0,0.95)',
           maxWidth: 1080,
         }}>
-          {scene.caption}
+          {captionText}
         </div>
       </div>
 

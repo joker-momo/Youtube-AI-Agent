@@ -1,5 +1,7 @@
 import {staticFile} from 'remotion';
 
+export type WordSegment = {text: string; start: number; end: number};
+
 export type Scene = {
   id: string;
   duration_sec: number;
@@ -10,6 +12,8 @@ export type Scene = {
   caption: string;
   motion: string;
   asset_refs: {background: string};
+  audio_offset_sec?: number;
+  word_segments?: WordSegment[];
 };
 
 export type RenderProps = {

@@ -240,6 +240,19 @@ def _normalize_scenes_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
     return parsed
 
 
+def _score_and_sort_seo_variants(seo: dict[str, Any]) -> dict[str, Any]:
+    """Score title_variants, sort best-first, backfill top-level title + thumbnail_text."""
+    from video_agent.seo.title_scorer import score_variants
+    variants = seo.get("title_variants") or []
+    if not variants:
+        return seo
+    scored = score_variants(variants)
+    seo = {**seo, "title_variants": scored}
+    seo["title"] = scored[0]["title"]
+    seo["thumbnail_text"] = scored[0]["thumbnail_text"]
+    return seo
+
+
 def _chatgpt_script_prompt(channel_config: dict[str, Any], idea: dict[str, Any]) -> str:
     cf = channel_config.get("content_format", {})
     target_sec = cf.get("target_duration_sec", 840)
@@ -311,10 +324,13 @@ def _chatgpt_seo_prompt(channel_config: dict[str, Any], script: dict[str, Any], 
             "",
             "Required schema summary:",
             "- job_id, title, description, tags, language, ai_disclosure, thumbnail_path, thumbnail_text",
-            "- title: clear Spanish, searchable, not clickbait (8-12 words)",
-            "- thumbnail_text: 3-5 words ALL-CAPS Spanish hook for YouTube thumbnail overlay.",
-            "  Must be emotionally compelling and readable at thumbnail size (e.g. 'DUERME MEJOR HOY',",
-            "  '¿POR QUÉ NO DUERMES?', 'TU SUEÑO EMPIEZA AQUÍ'). Different from title.",
+            "- title: copy from the best title_variants entry",
+            "- thumbnail_text: copy from the best title_variants entry",
+            "- title_variants: array of EXACTLY 3 objects, each: {title, thumbnail_text}.",
+            "  Each title: clear Spanish, searchable, 6-10 words, may include numbers or questions.",
+            "  Each thumbnail_text: 3-5 words ALL-CAPS Spanish emotional hook (e.g. 'DUERME MEJOR HOY').",
+            "  Make 3 variants MEANINGFULLY DIFFERENT — vary angle, emotion, or specificity.",
+            "  Do NOT repeat the same hook with minor word swaps.",
             "- language must be es-419",
             "- tags should be 5-8 concise Spanish/LatAm wellness search terms",
             "- ai_disclosure must be true",
@@ -422,6 +438,8 @@ def promote_operator_artifact(
             candidate = _normalize_script_candidate(candidate)
         elif artifact == "scenes":
             candidate = _normalize_scenes_candidate(candidate)
+        elif artifact == "seo":
+            candidate = _score_and_sort_seo_variants(candidate)
         try:
             validate_json(candidate, schema_path)
             parsed = candidate

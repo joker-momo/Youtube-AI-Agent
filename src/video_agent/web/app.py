@@ -381,6 +381,23 @@ _DASHBOARD_HTML = """<!doctype html>
     font-weight: 650;
     box-shadow: 0 8px 18px rgba(204,0,0,.18);
   }
+  /* ---- New Job Modal ---- */
+  .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:1000; display:flex; align-items:center; justify-content:center; }
+  .modal-overlay.hidden { display:none; }
+  .modal { background:#fff; border-radius:12px; padding:28px 30px; width:500px; max-width:95vw; box-shadow:0 24px 64px rgba(0,0,0,.28); }
+  .modal-title { font-size:16px; font-weight:750; margin:0 0 20px; }
+  .modal-field { margin-bottom:14px; }
+  .modal-field label { display:block; font-size:12px; font-weight:600; color:var(--muted); margin-bottom:5px; text-transform:uppercase; letter-spacing:.04em; }
+  .modal-field input, .modal-field select, .modal-field textarea { width:100%; padding:9px 12px; border:1px solid var(--line); border-radius:7px; font-size:13px; box-sizing:border-box; font-family:inherit; }
+  .modal-field textarea { font-family:ui-monospace,monospace; min-height:120px; resize:vertical; font-size:11px; }
+  .modal-field select { background:#fff; }
+  .modal-radio-row { display:flex; gap:16px; }
+  .modal-radio-row label { display:flex; align-items:center; gap:6px; font-size:13px; font-weight:500; text-transform:none; letter-spacing:0; color:#333; cursor:pointer; }
+  .modal-actions { display:flex; gap:10px; justify-content:flex-end; margin-top:22px; }
+  .modal-cancel { padding:9px 18px; border:1px solid var(--line); border-radius:7px; background:#fff; font-size:13px; cursor:pointer; }
+  .modal-submit { padding:9px 20px; border:0; border-radius:7px; background:var(--red); color:#fff; font-size:13px; font-weight:700; cursor:pointer; }
+  .modal-submit:disabled { opacity:.5; cursor:default; }
+  /* ---- end New Job Modal ---- */
   /* ---- Idea Generator ---- */
   .ideas-section { background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); margin-bottom:18px; overflow:hidden; }
   .ideas-section .panel-head { cursor:pointer; user-select:none; display:flex; justify-content:space-between; align-items:center; padding:14px 18px; }
@@ -795,7 +812,49 @@ _DASHBOARD_HTML = """<!doctype html>
           <h2>Production Jobs</h2>
           <p>Track generation, QA, render artifacts, and final YouTube metadata.</p>
         </div>
-        <button class="primary-action" type="button" onclick="fetchJobs()">Refresh jobs</button>
+        <div style="display:flex;gap:10px;align-items:center">
+          <button class="primary-action" type="button" onclick="openNewJobModal()">＋ New Job</button>
+          <button style="padding:0 14px;height:36px;border:1px solid var(--line);border-radius:8px;background:#fff;font-size:13px;cursor:pointer" type="button" onclick="fetchJobs()">Refresh</button>
+        </div>
+      </div>
+      <!-- New Job Modal -->
+      <div class="modal-overlay hidden" id="new-job-overlay" onclick="if(event.target===this)closeNewJobModal()">
+        <div class="modal">
+          <div class="modal-title">＋ New Job</div>
+          <div class="modal-field">
+            <label>Job ID</label>
+            <input type="text" id="nj-job-id" placeholder="auto-generated">
+          </div>
+          <div class="modal-field">
+            <label>Channel</label>
+            <select id="nj-channel" onchange="loadModalIdeas()">
+              <option value="vida-plena-45">vida-plena-45</option>
+            </select>
+          </div>
+          <div class="modal-field">
+            <label>Idea source</label>
+            <div class="modal-radio-row">
+              <label><input type="radio" name="nj-src" value="saved" checked onchange="njSourceChange()"> Saved idea</label>
+              <label><input type="radio" name="nj-src" value="paste" onchange="njSourceChange()"> Paste JSON</label>
+              <label><input type="radio" name="nj-src" value="none" onchange="njSourceChange()"> No idea yet</label>
+            </div>
+          </div>
+          <div class="modal-field" id="nj-saved-wrap">
+            <label>Select idea</label>
+            <select id="nj-idea-select" style="max-width:100%">
+              <option value="">Loading…</option>
+            </select>
+          </div>
+          <div class="modal-field hidden" id="nj-paste-wrap">
+            <label>Idea JSON</label>
+            <textarea id="nj-idea-json" placeholder='{"topic":"...","angle":"...","title_seed":"...","key_points":[],"target_duration_sec":1500}'></textarea>
+          </div>
+          <div id="nj-error" style="font-size:12px;color:var(--red);margin-top:-6px;display:none"></div>
+          <div class="modal-actions">
+            <button class="modal-cancel" onclick="closeNewJobModal()">Cancel</button>
+            <button class="modal-submit" id="nj-submit" onclick="submitNewJob()">Create Job</button>
+          </div>
+        </div>
       </div>
       <section class="kpis" id="kpis"></section>
       <section class="ideas-section" id="ideas-section">
@@ -1918,6 +1977,129 @@ fetchJobs();
 setInterval(fetchJobs, 4000);
 startTimelinePolling();
 
+// ---- New Job Modal ----
+let _NJ_SAVED_IDEAS = [];   // [{idea, path}]
+let _NJ_SAVED_LOADED = '';  // last channel loaded
+
+function _njGenId() {
+  return 'job-' + Math.floor(Date.now() / 1000);
+}
+
+function openNewJobModal() {
+  document.getElementById('nj-job-id').value = _njGenId();
+  document.getElementById('new-job-overlay').classList.remove('hidden');
+  document.getElementById('nj-error').style.display = 'none';
+  // sync channel options from idea-channel select if available
+  const ideaCh = document.getElementById('idea-channel');
+  const njCh = document.getElementById('nj-channel');
+  if (ideaCh && njCh) njCh.innerHTML = ideaCh.innerHTML;
+  loadModalIdeas();
+}
+
+function closeNewJobModal() {
+  document.getElementById('new-job-overlay').classList.add('hidden');
+}
+
+function njSourceChange() {
+  const src = document.querySelector('input[name="nj-src"]:checked').value;
+  document.getElementById('nj-saved-wrap').classList.toggle('hidden', src !== 'saved');
+  document.getElementById('nj-paste-wrap').classList.toggle('hidden', src !== 'paste');
+}
+
+async function loadModalIdeas() {
+  const ch = document.getElementById('nj-channel').value;
+  const sel = document.getElementById('nj-idea-select');
+  if (_NJ_SAVED_LOADED === ch && _NJ_SAVED_IDEAS.length > 0) return; // cached
+  sel.innerHTML = '<option value="">Loading…</option>';
+  try {
+    const r = await fetch('/channels/' + encodeURIComponent(ch) + '/ideas');
+    const d = await r.json();
+    _NJ_SAVED_IDEAS = (d.ideas || []).map((idea, i) => ({idea, path: (d.paths || [])[i] || ''}));
+    _NJ_SAVED_LOADED = ch;
+    if (_NJ_SAVED_IDEAS.length === 0) {
+      sel.innerHTML = '<option value="">No saved ideas — use Paste JSON or Idea Generator</option>';
+    } else {
+      sel.innerHTML = _NJ_SAVED_IDEAS.map((item, i) =>
+        `<option value="${i}">${escapeHtml(item.idea.title_seed || item.idea.topic || 'Idea ' + (i+1))}</option>`
+      ).join('');
+    }
+  } catch (e) {
+    sel.innerHTML = '<option value="">Failed to load</option>';
+  }
+}
+
+async function submitNewJob() {
+  const errEl = document.getElementById('nj-error');
+  errEl.style.display = 'none';
+  const jobId = document.getElementById('nj-job-id').value.trim() || _njGenId();
+  const channelId = document.getElementById('nj-channel').value;
+  const src = document.querySelector('input[name="nj-src"]:checked').value;
+  const btn = document.getElementById('nj-submit');
+
+  let idea = null;
+  let savedPath = '';
+
+  if (src === 'saved') {
+    const idx = parseInt(document.getElementById('nj-idea-select').value, 10);
+    if (isNaN(idx) || !_NJ_SAVED_IDEAS[idx]) {
+      errEl.textContent = 'Select a saved idea or switch source.';
+      errEl.style.display = '';
+      return;
+    }
+    idea = _NJ_SAVED_IDEAS[idx].idea;
+    savedPath = _NJ_SAVED_IDEAS[idx].path;
+  } else if (src === 'paste') {
+    const raw = document.getElementById('nj-idea-json').value.trim();
+    if (!raw) { errEl.textContent = 'Paste idea JSON.'; errEl.style.display = ''; return; }
+    try { idea = JSON.parse(raw); } catch (e) { errEl.textContent = 'Invalid JSON: ' + e.message; errEl.style.display = ''; return; }
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Creating…';
+
+  try {
+    // 1. Create job
+    const r1 = await fetch('/jobs', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({job_id: jobId, channel_id: channelId, idea_path: savedPath || ''}),
+    });
+    const d1 = await r1.json();
+    if (!r1.ok) {
+      errEl.textContent = d1.detail || ('Create failed: ' + r1.status);
+      errEl.style.display = '';
+      return;
+    }
+
+    // 2. Upload idea if we have one
+    if (idea) {
+      const r2 = await fetch('/jobs/' + encodeURIComponent(jobId) + '/idea', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(idea),
+      });
+      if (!r2.ok) {
+        errEl.textContent = 'Job created but idea upload failed.';
+        errEl.style.display = '';
+      }
+    }
+
+    closeNewJobModal();
+    showToast('Job created: ' + jobId);
+    await fetchJobs();
+    SELECTED_ID = jobId;
+    LAST_TIMELINE_JSON = '';
+    await fetchTimeline(jobId);
+  } catch (e) {
+    errEl.textContent = 'Error: ' + e.message;
+    errEl.style.display = '';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Create Job';
+  }
+}
+// ---- end New Job Modal ----
+
 // ---- Idea Generator ----
 let IDEAS_PANEL_OPEN = false;
 
@@ -1925,11 +2107,11 @@ async function loadChannels() {
   try {
     const r = await fetch('/channels');
     const d = await r.json();
-    const sel = document.getElementById('idea-channel');
-    const cur = sel.value;
-    sel.innerHTML = (d.channels || []).map(c =>
-      `<option value="${escapeHtml(c)}"${c === cur ? ' selected' : ''}>${escapeHtml(c)}</option>`
+    const opts = (d.channels || []).map(c =>
+      `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`
     ).join('') || '<option value="">no channels</option>';
+    document.getElementById('idea-channel').innerHTML = opts;
+    document.getElementById('nj-channel').innerHTML = opts;
   } catch (e) {}
 }
 loadChannels();
@@ -2568,18 +2750,39 @@ def list_saved_ideas(
     channel_id: str,
     inputs_root: Path = Depends(get_inputs_root),
 ) -> dict:
-    """List saved idea JSON files for a channel (most recent first)."""
-    ideas_dir = inputs_root / "ideas" / channel_id
-    if not ideas_dir.exists():
-        return {"channel_id": channel_id, "ideas": [], "paths": []}
-    files = sorted(ideas_dir.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+    """List saved idea JSON files for a channel (most recent first).
+
+    Scans both inputs/ideas/{channel_id}/ (new generated ideas) and
+    inputs/*.json root files (legacy batch ideas), returning all that
+    look like valid idea objects (have at least a 'topic' field).
+    """
+    _IDEA_FIELDS = {"topic", "angle", "title_seed", "key_points"}
     ideas: list[dict] = []
     paths: list[str] = []
-    for f in files[:50]:
+
+    # 1. ideas/{channel_id}/ subdirectory (generated by idea_generator)
+    ideas_dir = inputs_root / "ideas" / channel_id
+    subdir_files: list[Path] = []
+    if ideas_dir.exists():
+        subdir_files = sorted(ideas_dir.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+
+    # 2. root inputs/*.json fallback (legacy batch files)
+    root_files = sorted(
+        (f for f in inputs_root.glob("*.json") if f.is_file()),
+        key=lambda f: f.stat().st_mtime,
+        reverse=True,
+    )
+
+    for f, rel_prefix in [*((f, f"ideas/{channel_id}/{f.name}") for f in subdir_files),
+                           *((f, f.name) for f in root_files)]:
+        if len(ideas) >= 50:
+            break
         try:
-            idea = json.loads(f.read_text(encoding="utf-8"))
-            ideas.append(idea)
-            paths.append("ideas/" + channel_id + "/" + f.name)
+            data = json.loads(f.read_text(encoding="utf-8"))
+            if not isinstance(data, dict) or not (_IDEA_FIELDS & data.keys()):
+                continue
+            ideas.append(data)
+            paths.append(rel_prefix)
         except Exception:
             pass
     return {"channel_id": channel_id, "ideas": ideas, "paths": paths}

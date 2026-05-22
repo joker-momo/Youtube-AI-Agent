@@ -1302,7 +1302,7 @@ let VNC_MOUNTED_JOB_ID = null;
 let VNC_FIT_MODE = true;
 const VNC_IDLE_SENTINEL = '__idle__';
 // Cache for render progress — survives DOM rebuilds on each fetchTimeline poll
-let RENDER_PROGRESS_CACHE = { pct: 0, meta: '' };
+let RENDER_PROGRESS_CACHE = { pct: 0, meta: '', eta: '' };
 
 const STAGE_LABEL = {
   idea_research: 'Idea research',
@@ -1909,15 +1909,17 @@ function startRenderProgressPolling(jobId) {
       const metaStr = parts.join(' · ');
 
       // Save into global cache FIRST — so DOM rebuild in fetchTimeline reads this value
-      RENDER_PROGRESS_CACHE = { pct: p.percent || 0, meta: metaStr };
+      RENDER_PROGRESS_CACHE = { pct: p.percent || 0, meta: metaStr, eta: p.eta || '' };
 
       // Then update existing DOM elements (targeted update, no flicker)
       const bar = document.getElementById('render-progress-bar');
       const pct = document.getElementById('render-progress-pct');
       const meta = document.getElementById('render-progress-meta');
+      const eta = document.getElementById('render-progress-eta');
       if (bar) bar.style.width = p.percent + '%';
       if (pct) pct.textContent = Math.round(p.percent) + '%';
       if (meta) meta.textContent = metaStr;
+      if (eta) eta.textContent = p.eta ? p.eta : 'Calculating...';
 
       // Stop polling when render completes (step is no longer in_progress)
       const lastTl = LAST_TIMELINE;
@@ -1926,7 +1928,7 @@ function startRenderProgressPolling(jobId) {
         if (rs && rs.status !== 'in_progress') {
           clearInterval(RENDER_POLL_TIMER);
           RENDER_POLL_TIMER = null;
-          RENDER_PROGRESS_CACHE = { pct: 0, meta: '' };
+          RENDER_PROGRESS_CACHE = { pct: 0, meta: '', eta: '' };
         }
       }
     } catch(e) {}
@@ -1967,7 +1969,11 @@ function renderStep(jobId, s, idx, fallbackStartedAt = null) {
       <div style="height:6px;border-radius:4px;background:var(--line-strong);overflow:hidden">
         <div id="render-progress-bar" style="height:100%;width:${_rpc.pct}%;background:var(--blue);border-radius:4px;transition:width 1s linear"></div>
       </div>
-      <div id="render-progress-meta" style="margin-top:4px;font-size:11px;color:var(--muted-2)">${_rpc.meta}</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;font-size:12px">
+        <span style="color:var(--muted);font-weight:500">⏰ Time remaining:</span>
+        <span id="render-progress-eta" style="font-weight:700;color:#f5841f">${_rpc.eta ? _rpc.eta : 'Calculating...'}</span>
+      </div>
+      <div id="render-progress-meta" style="margin-top:5px;font-size:11px;color:var(--muted-2)">${_rpc.meta}</div>
     </div>` : '';
 
   el.innerHTML = `

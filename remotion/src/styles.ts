@@ -6,7 +6,7 @@ export const fullFrame: CSSProperties = {
   height: '100%',
   position: 'relative',
   overflow: 'hidden',
-  fontFamily: 'Inter, Arial, sans-serif',
+  fontFamily: 'Manrope, "Plus Jakarta Sans", "Segoe UI", Arial, sans-serif',
 };
 
 export const softShadow = '0 22px 80px rgba(18, 29, 25, 0.28)';

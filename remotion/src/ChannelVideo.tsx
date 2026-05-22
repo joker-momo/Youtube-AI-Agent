@@ -106,7 +106,14 @@ const SceneView: React.FC<{
   // word_segments are rebased to scene-local time (start=0), so compare
   // against frame/fps directly — NOT audio_offset_sec + frame/fps.
   const localTimeSec = frame / fps;
-  const segments = scene.word_segments ?? [];
+  const segments = (scene.word_segments ?? [])
+    .filter((s) => Number.isFinite(s.start) && Number.isFinite(s.end) && s.end > s.start)
+    .map((s) => ({
+      ...s,
+      start: Math.max(0, s.start),
+      end: Math.max(0.001, s.end),
+    }))
+    .sort((a, b) => a.start - b.start);
   const activeSegmentIdx = segments.findIndex(s => localTimeSec >= s.start && localTimeSec < s.end);
   const activeSegment: WordSegment | null = activeSegmentIdx >= 0 ? segments[activeSegmentIdx] : null;
 
@@ -124,16 +131,23 @@ const SceneView: React.FC<{
   if (activeSegment) {
     const chunkStartFrame = Math.round(activeSegment.start * fps);
     const chunkEndFrame   = Math.round(activeSegment.end   * fps);
-    const chunkFrames = Math.max(1, chunkEndFrame - chunkStartFrame);
+    const safeStart = Math.max(0, chunkStartFrame);
+    const safeEnd = Math.max(safeStart + 1, chunkEndFrame);
+    const chunkFrames = Math.max(1, safeEnd - safeStart);
     const fadeFrames = Math.min(CHUNK_FADE, Math.max(1, Math.floor(chunkFrames / 2)));
-    const fadeInEnd = chunkStartFrame + fadeFrames;
-    const fadeOutStart = Math.max(fadeInEnd, chunkEndFrame - fadeFrames);
-    captionChunkAlpha = interpolate(
-      frame,
-      [chunkStartFrame, fadeInEnd, fadeOutStart, chunkEndFrame],
-      [0, 1, 1, 0],
-      {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'},
-    );
+    const fadeInEnd = safeStart + fadeFrames;
+    const fadeOutStart = Math.max(fadeInEnd, safeEnd - fadeFrames);
+    if (frame <= safeStart) {
+      captionChunkAlpha = 0;
+    } else if (frame < fadeInEnd) {
+      captionChunkAlpha = (frame - safeStart) / Math.max(1, fadeInEnd - safeStart);
+    } else if (frame <= fadeOutStart) {
+      captionChunkAlpha = 1;
+    } else if (frame < safeEnd) {
+      captionChunkAlpha = 1 - (frame - fadeOutStart) / Math.max(1, safeEnd - fadeOutStart);
+    } else {
+      captionChunkAlpha = 0;
+    }
   } else if (prevSegment) {
     // Between chunks: dim slightly to signal "gap" without jarring text switch.
     captionChunkAlpha = 0.65;
@@ -144,7 +158,13 @@ const SceneView: React.FC<{
   const headlineAlpha = interpolate(frame, [4, FADE_IN + 8], [0, 1], {extrapolateRight: 'clamp'});
   const captionAlpha  = interpolate(frame, [FADE_IN, FADE_IN + 14], [0, 1], {extrapolateRight: 'clamp'});
 
-  const headlineSize = fitHeadline(scene.on_screen_text, 84, 52);
+  const layoutVariant = sceneIndex % 3;
+  const headlineLeft = layoutVariant === 2 ? undefined : 56;
+  const headlineRight = layoutVariant === 2 ? 56 : undefined;
+  const headlineCenter = layoutVariant === 1;
+  const headlineBottom = layoutVariant === 1 ? 200 : 190;
+  const captionLeft = layoutVariant === 2 ? 80 : 56;
+  const captionRight = layoutVariant === 2 ? 56 : 80;
 
   return (
     <AbsoluteFill style={{...fullFrame, opacity}}>
@@ -192,10 +212,10 @@ const SceneView: React.FC<{
       {/* Channel name — small, top-left */}
       <div style={{
         position: 'absolute', top: 24, left: 56,
-        fontSize: 21, fontWeight: 800, letterSpacing: 2.2, textTransform: 'uppercase',
-        color: palette.accent,
-        textShadow: '0 1px 8px rgba(0,0,0,0.7)',
-        opacity: headlineAlpha,
+        fontSize: 14, fontWeight: 700, letterSpacing: 1.8, textTransform: 'uppercase',
+        color: '#F2F4EF',
+        textShadow: '0 1px 6px rgba(0,0,0,0.55)',
+        opacity: headlineAlpha * 0.55,
       }}>
         {channelName}
       </div>
@@ -204,13 +224,28 @@ const SceneView: React.FC<{
 
       {/* Headline block — bottom-left, above caption */}
       <div style={{
-        position: 'absolute', left: 56, bottom: 190, width: 920,
+        position: 'absolute',
+        left: headlineLeft,
+        right: headlineRight,
+        bottom: headlineBottom,
+        width: headlineCenter ? 980 : 920,
+        marginLeft: headlineCenter ? 'auto' : undefined,
+        marginRight: headlineCenter ? 'auto' : undefined,
+        textAlign: headlineCenter ? 'center' : (layoutVariant === 2 ? 'right' : 'left'),
         opacity: headlineAlpha, transform: `translateY(${headlineY}px)`,
       }}>
-        <div style={{width: 48, height: 5, backgroundColor: palette.accent, borderRadius: 3, marginBottom: 18}} />
         <div style={{
-          fontSize: headlineSize, fontWeight: 900, lineHeight: 1.06, color: '#FFFFFF',
-          textShadow: '0 2px 24px rgba(0,0,0,0.85), 0 1px 6px rgba(0,0,0,0.95)',
+          width: 48,
+          height: 5,
+          backgroundColor: palette.accent,
+          borderRadius: 3,
+          marginBottom: 18,
+          marginLeft: headlineCenter ? 'auto' : (layoutVariant === 2 ? 'auto' : 0),
+          marginRight: layoutVariant === 2 ? 0 : undefined,
+        }} />
+        <div style={{
+          fontSize: fitHeadline(scene.on_screen_text, 72, 56), fontWeight: 800, lineHeight: 1.08, color: '#FFFFFF',
+          textShadow: '0 2px 12px rgba(0,0,0,0.7), 0 1px 5px rgba(0,0,0,0.85)',
           letterSpacing: -0.5,
         }}>
           {scene.on_screen_text}
@@ -219,13 +254,13 @@ const SceneView: React.FC<{
 
       {/* Caption — lower-third, no box, text + left accent bar */}
       <div style={{
-        position: 'absolute', left: 56, right: 80, bottom: 58,
+        position: 'absolute', left: captionLeft, right: captionRight, bottom: 58,
         display: 'flex', alignItems: 'flex-start', gap: 18,
         opacity: captionAlpha * (displaySegment ? captionChunkAlpha : 1),
       }}>
         <div style={{width: 5, minHeight: 44, backgroundColor: palette.accent, borderRadius: 3, flexShrink: 0, marginTop: 4}} />
         <div style={{
-          fontSize: 31, fontWeight: 500, lineHeight: 1.35, color: 'rgba(255,255,255,0.93)',
+          fontSize: 38, fontWeight: 600, lineHeight: 1.34, color: 'rgba(255,255,255,0.93)',
           textShadow: '0 1px 14px rgba(0,0,0,0.95)',
           maxWidth: 1080,
         }}>

@@ -66,32 +66,73 @@ No host Python or Node setup is required.
 
 ## Fresh Setup On A New Machine
 
-If you move this repository to another machine, run this once:
+If you are setting up the project on a new/fresh machine, we provide **one-click automated installers** that automatically install Docker and all other system prerequisites, configure credentials, build the containers, and launch the entire suite in the background.
+
+### 🍎 macOS & 🐧 Linux
+
+To install everything on macOS or Linux, simply navigate to the repository directory and run:
 
 ```bash
-cp .env.example .env
-docker compose build
-docker compose up -d app browser-runtime browser-worker
+bash install.sh
 ```
 
-Open:
+- **macOS**: Automatically installs Homebrew, git, Docker Desktop, starts the Docker daemon, and boots the project.
+- **Ubuntu / Debian**: Automatically installs prerequisites, registers Docker keys/repositories, installs Docker Engine + Compose plugin, configures groups for running without `sudo`, and boots the project.
+- **CentOS / RHEL / Rocky Linux**: Automatically configures repository lists, installs Docker Engine + Compose plugin, and launches all services.
+- **WSL (Windows Subsystem for Linux)**: If you prefer running via WSL Ubuntu, run: `bash installers/install_ubuntu.sh`.
 
-- Web app: `http://127.0.0.1:8000`
-- Browser runtime (KasmVNC): `http://127.0.0.1:7900/`
+### windows 🪟 Windows (Native PowerShell)
 
-In KasmVNC, sign in manually to the sites used by the pipeline
-(ChatGPT, Claude, vidIQ). The profile is persisted in
-`browser_profiles/default`, so you should not need to log in every run.
-Set `KASMVNC_USERNAME` and `KASMVNC_PASSWORD` in `.env` if you want fixed
-KasmVNC login credentials (otherwise runtime generates a password on boot).
+Open PowerShell as **Administrator**, navigate to the repository folder, and run:
+
+```powershell
+Set-ExecutionPolicy Bypass -Scope Process -Force; .\install.ps1
+```
+
+- **Windows Native**: Automatically installs Git and Docker Desktop (via `winget`), starts the Docker application daemon, handles environment bootstrap, builds all required containers, and launches the services.
+
+Once the installer finishes, the dashboard will be live!
+
+### Manual Setup (Alternative):
+If you prefer to configure everything manually:
+1. Ensure you have Docker Desktop or a running Docker daemon.
+2. Bootstrap environment file:
+   - On macOS/Linux: `cp .env.example .env`
+   - On Windows: `Copy-Item .env.example .env`
+3. Build and launch:
+   ```bash
+   docker compose build
+   ```
+
+---
+
+## Run
+
+To start the dashboard and background services, run:
+
+### macOS / Linux:
+```bash
+bash run.sh
+```
+
+### Windows (Native PowerShell):
+```powershell
+.\run.ps1
+```
+
+This runner automatically verifies that Docker is running (and launches it if not), configures environments, and boots all necessary background processes.
+
+Open in your browser:
+- **Web Dashboard**: `http://localhost:8000` (To manage jobs, generate ideas, and trigger renders)
+- **Browser Runtime (VNC)**: `http://localhost:7900` (Manual sign-ins for ChatGPT, Claude, vidIQ)
+
+In KasmVNC, sign in manually to the sites used by the pipeline. The profile is persisted in `browser_profiles/default`, so you will not need to login repeatedly.
 
 Optional quick verification:
 
 ```bash
 docker compose run --rm video-agent pytest -v
 ```
-
-## Run
 
 ```bash
 docker compose run --rm video-agent
@@ -211,9 +252,13 @@ docker compose run --rm video-agent python -m video_agent.cli operator-review \
 
 This creates `jobs/<job_id>/operator_review.html` with artifact status, QA verdicts, video, thumbnail, contact sheet, and scene notes. `operator-render` also refreshes this page automatically.
 
-## Kokoro TTS
+## Kokoro TTS (Local In Docker)
 
-The default channel keeps `tts.provider: "mock-local"` for fast tests and silent placeholder audio. To generate real local narration with Kokoro:
+The current channel config uses local Kokoro TTS in Docker. The image now
+attempts to warm up Whisper tiny + Kokoro model cache at build time so first
+pipeline runs are less likely to stall on model download.
+
+You can still override voice/speed at runtime:
 
 ```bash
 docker compose run --rm video-agent python -m video_agent.cli run \
@@ -225,7 +270,35 @@ docker compose run --rm video-agent python -m video_agent.cli run \
   --tts-speed 0.92
 ```
 
-Kokoro runs inside Docker. The first run may download model files from Hugging Face; setting `HF_TOKEN` is optional and only helps with Hub rate limits.
+Kokoro runs inside Docker. If model warmup is skipped during build (network
+restricted), runtime will download on demand and keep cache under `./caches/`.
+
+## Resume After Restart (No Need To Re-run From Start)
+
+Yes, you can restart and continue from the stuck stage:
+
+1. If a run appears stuck, click `Stop Job` (optional but recommended).
+2. Restart services:
+
+```bash
+docker compose restart app worker browser-worker browser-runtime
+```
+
+3. In webapp, run the same job again (`Run All`).
+
+The pipeline resumes from the first non-completed stage (for example
+`whisper_timestamps`) and keeps completed outputs from earlier stages.
+
+### Anti-stuck timeout for Whisper/TTS
+
+`whisper_timestamps` now has hard timeouts so it fails with a clear reason
+instead of hanging forever:
+
+- `WHISPER_SYNTH_TIMEOUT_SEC` (default `900`)
+- `WHISPER_MODEL_LOAD_TIMEOUT_SEC` (default `300`)
+- `WHISPER_TRANSCRIBE_TIMEOUT_SEC` (default `1800`)
+
+Set them in `.env` when needed.
 
 ## Batch Runs And Audit
 

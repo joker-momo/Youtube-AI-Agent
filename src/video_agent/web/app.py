@@ -1282,10 +1282,15 @@ let SELECTED_ID = null;
 let WS = null;
 let OPEN_STAGES = new Set();
 let EVENTS_OPEN = false;
+let EVENTS_PAUSED = false;
+let EVENT_ROWS_CACHE = [];
+const EVENT_ROWS_LIMIT = 400;
 let LAST_TIMELINE = null;
 let LAST_TIMELINE_JSON = '';
 let LAST_JOBS_JSON = '';
 let TIMELINE_POLL_TIMER = null;
+let TIMELINE_REFRESH_TIMER = null;
+let LAST_TIMELINE_REFRESH_AT = 0;
 let LOGS_POLL_TIMER = null;
 let WS_RETRY_TIMER = null;
 let WS_RETRY_MS = 1000;
@@ -1514,10 +1519,31 @@ async function deleteJob(jobId) {
   }
 }
 
+async function resumeJob(jobId) {
+  if (!jobId) return;
+  try {
+    const r = await fetch('/jobs/' + encodeURIComponent(jobId) + '/run-all?enforce_approvals=false', { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const msg = (d && (d.error || d.detail?.error || d.detail)) || ('HTTP ' + r.status);
+      showToast('Resume failed: ' + String(msg));
+      return;
+    }
+    showToast('Resume started');
+    LAST_TIMELINE_JSON = '';
+    if (SELECTED_ID === jobId) fetchTimeline(jobId);
+    fetchJobs();
+  } catch (e) {
+    showToast('Resume failed');
+  }
+}
+
 function selectJob(jobId) {
   if (!jobId) return;
   SELECTED_ID = jobId;
   OPEN_STAGES = new Set();
+  EVENT_ROWS_CACHE = [];
+  EVENTS_PAUSED = false;
   LAST_TIMELINE_JSON = ''; // force re-render on job switch
   LAST_LOGS_PAYLOAD = null;
   document.querySelectorAll('.job-card').forEach(c => c.classList.remove('active'));
@@ -1580,7 +1606,31 @@ function stableTimelineKey(t) {
       for (const o of s.outputs || []) o.size = 0;
     }
   }
+  // updated_at churn causes unnecessary full re-renders and event panel flicker.
+  delete copy.updated_at;
   return JSON.stringify(copy);
+}
+
+function scheduleTimelineRefresh(jobId, minIntervalMs = 1200) {
+  const now = Date.now();
+  const elapsed = now - LAST_TIMELINE_REFRESH_AT;
+  const run = () => {
+    LAST_TIMELINE_REFRESH_AT = Date.now();
+    fetchTimeline(jobId);
+  };
+  if (elapsed >= minIntervalMs) {
+    if (TIMELINE_REFRESH_TIMER) {
+      clearTimeout(TIMELINE_REFRESH_TIMER);
+      TIMELINE_REFRESH_TIMER = null;
+    }
+    run();
+    return;
+  }
+  if (TIMELINE_REFRESH_TIMER) return;
+  TIMELINE_REFRESH_TIMER = setTimeout(() => {
+    TIMELINE_REFRESH_TIMER = null;
+    run();
+  }, Math.max(120, minIntervalMs - elapsed));
 }
 
 async function fetchTimeline(jobId) {
@@ -1604,6 +1654,8 @@ function renderTimeline(t) {
   const root = document.getElementById('detail-panel');
   const allDone = t.stages_total > 0 && t.stages_done === t.stages_total;
   const failed = (t.stages || []).some(s => s.status === 'failed');
+  const anyRunning = (t.stages || []).some(s => s.status === 'in_progress');
+  const hasPending = (t.stages || []).some(s => s.status !== 'completed');
   const stopped = !!t.stop_requested;
   const renderStage = t.stages.find(s => s.name === 'render');
   // Only show final output when render stage is fully completed — not when
@@ -1629,13 +1681,14 @@ function renderTimeline(t) {
             <span>created ${fmtTime(t.created_at)}</span>
           </div>
           <div class="sum-actions">
+            <button class="action-btn primary" type="button" onclick="resumeJob('${escapeJs(t.job_id)}')" ${(anyRunning || !hasPending) ? 'disabled' : ''}>Resume</button>
             <button class="action-btn warn" type="button" onclick="stopJob('${escapeJs(t.job_id)}')" ${t.stages.some(s => s.status === 'in_progress') ? '' : 'disabled'}>Stop Job</button>
             <button class="action-btn" type="button" onclick="deleteJob('${escapeJs(t.job_id)}')" ${t.stages.some(s => s.status === 'in_progress') ? 'disabled' : ''}>Delete Job</button>
           </div>
         </div>
         <div class="sum-right">
           <div class="sum-pct">${Math.round(t.percent)}<span class="pct-unit">%</span></div>
-          <div class="sum-eta">${stopped ? '<b style="color:var(--amber)">Stopped by operator</b>' : failed ? '<b style="color:var(--red)">Failed</b>' : allDone ? '<b>Completed</b>' : 'ETA ~' + fmtSec(t.remaining_eta_seconds)}</div>
+          <div class="sum-eta">${stopped ? '<b style="color:var(--amber)">Stopped by operator</b>' : failed ? '<b style="color:var(--red)">Failed</b>' : allDone ? '<b>Completed</b>' : anyRunning ? 'Running…' : 'Waiting…'}</div>
         </div>
       </div>
       <div class="sum-bar ${barClass}"><div style="width:${t.percent}%"></div></div>
@@ -1656,7 +1709,11 @@ function renderTimeline(t) {
       <div class="events ${EVENTS_OPEN ? 'open' : ''}" id="events-panel">
         <div class="events-head" onclick="toggleEvents()">
           <h3>WebSocket events</h3>
-          <div><span class="events-count" id="events-count">live stream</span><span class="caret">›</span></div>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span class="events-count" id="events-count">live stream</span>
+            <button class="action-btn" style="height:22px;padding:0 8px;font-size:10px;" type="button" id="events-pause-btn" onclick="toggleEventsPause(event)">${EVENTS_PAUSED ? 'Resume' : 'Pause'}</button>
+            <span class="caret">›</span>
+          </div>
         </div>
         <div class="events-body" id="events"></div>
       </div>
@@ -1666,12 +1723,16 @@ function renderTimeline(t) {
   if (ACTIVE_DETAIL_TAB === 'timeline') {
     const tl = document.getElementById('timeline');
     t.stages.forEach((s, idx) => {
-      tl.appendChild(renderStep(t.job_id, s, idx));
+      tl.appendChild(renderStep(t.job_id, s, idx, t.updated_at));
       renderStageExtras(t.job_id, s);  // must be called after appendChild so getElementById finds the element
     });
+    if (anyRunning) startStageDurationTicker();
+    else stopStageDurationTicker();
     if (videoReady) renderFinal(t);
+    renderEventsCache();
     stopLogsPolling();
   } else {
+    stopStageDurationTicker();
     renderLogsTab(LAST_LOGS_PAYLOAD);
     if (SELECTED_ID) {
       fetchJobLogs(SELECTED_ID);
@@ -1803,6 +1864,34 @@ function renderLogsTab(payload) {
 
 // Render progress polling state
 let RENDER_POLL_TIMER = null;
+let STAGE_DUR_TIMER = null;
+
+function parseIsoToMs(iso) {
+  if (!iso) return null;
+  const ts = Date.parse(iso);
+  return Number.isNaN(ts) ? null : ts;
+}
+
+function startStageDurationTicker() {
+  if (STAGE_DUR_TIMER) return;
+  STAGE_DUR_TIMER = setInterval(() => {
+    const now = Date.now();
+    document.querySelectorAll('.step-dur-live[data-started-at]').forEach((el) => {
+      const startedAt = el.getAttribute('data-started-at');
+      const startMs = parseIsoToMs(startedAt);
+      if (startMs === null) return;
+      const elapsed = Math.max(0, Math.floor((now - startMs) / 1000));
+      el.textContent = fmtSec(elapsed);
+    });
+  }, 1000);
+}
+
+function stopStageDurationTicker() {
+  if (STAGE_DUR_TIMER) {
+    clearInterval(STAGE_DUR_TIMER);
+    STAGE_DUR_TIMER = null;
+  }
+}
 
 function startRenderProgressPolling(jobId) {
   if (RENDER_POLL_TIMER) return;
@@ -1848,13 +1937,21 @@ function stopRenderProgressPolling() {
   if (RENDER_POLL_TIMER) { clearInterval(RENDER_POLL_TIMER); RENDER_POLL_TIMER = null; }
 }
 
-function renderStep(jobId, s, idx) {
+function renderStep(jobId, s, idx, fallbackStartedAt = null) {
   const el = document.createElement('div');
   el.className = 'step ' + s.status + (OPEN_STAGES.has(s.name) ? ' open' : '');
   const label = STAGE_LABEL[s.name] || s.name;
-  const durTxt = s.actual_seconds !== null && s.actual_seconds !== undefined
-    ? fmtSec(s.actual_seconds)
-    : (s.status === 'completed' ? '' : '~' + fmtSec(s.eta_seconds));
+  const runningStartedAt = s.started_at || fallbackStartedAt || null;
+  const runningStartMs = parseIsoToMs(runningStartedAt);
+  const runningElapsed = runningStartMs === null ? null : Math.max(0, Math.floor((Date.now() - runningStartMs) / 1000));
+  let durHtml = '';
+  if (s.actual_seconds !== null && s.actual_seconds !== undefined) {
+    durHtml = `<span class="step-dur">${fmtSec(s.actual_seconds)}</span>`;
+  } else if (s.status === 'in_progress' && runningStartedAt) {
+    durHtml = `<span class="step-dur step-dur-live" data-started-at="${escapeHtml(runningStartedAt)}">${runningElapsed === null ? '' : fmtSec(runningElapsed)}</span>`;
+  } else {
+    durHtml = '<span class="step-dur"></span>';
+  }
 
   // Render-specific progress bar (shown when in_progress)
   // Read from RENDER_PROGRESS_CACHE — a global that survives DOM rebuilds.
@@ -1878,7 +1975,7 @@ function renderStep(jobId, s, idx) {
       <span class="step-num">${s.status === 'completed' ? checkIcon() : s.status === 'failed' ? xIcon() : idx + 1}</span>
       <span class="step-label"><span class="name">${escapeHtml(label)}</span><span class="code">${escapeHtml(s.name)}</span></span>
       <span class="step-meta">
-        <span class="pill ${s.status}">${statusText(s.status)}</span><span class="step-dur">${durTxt}</span><span class="caret">›</span>
+        <span class="pill ${s.status}">${statusText(s.status)}</span>${durHtml}<span class="caret">›</span>
       </span>
     </div>
     <div class="step-body">
@@ -2604,7 +2701,7 @@ function reopenWs(jobId) {
     try {
       const ev = JSON.parse(msg.data);
       appendEvent(ev);
-      setTimeout(() => fetchTimeline(jobId), 250);
+      scheduleTimelineRefresh(jobId, 1200);
     } catch (e) {}
   };
 }
@@ -2633,7 +2730,40 @@ function toggleEvents() {
   if (panel) panel.classList.toggle('open', EVENTS_OPEN);
 }
 
+function toggleEventsPause(evt) {
+  if (evt) evt.stopPropagation();
+  EVENTS_PAUSED = !EVENTS_PAUSED;
+  const btn = document.getElementById('events-pause-btn');
+  if (btn) btn.textContent = EVENTS_PAUSED ? 'Resume' : 'Pause';
+}
+
+function renderEventsCache() {
+  const root = document.getElementById('events');
+  if (!root) return;
+  root.innerHTML = '';
+  for (const row of EVENT_ROWS_CACHE) {
+    const div = document.createElement('div');
+    div.className = 'ev-row';
+    const ts = (row.ts || '').slice(11, 19);
+    const stage = row.stage || '';
+    div.innerHTML = `<span class="ts">${escapeHtml(ts)}</span><span class="ev-kind ${escapeHtml(row.event || '')}">${escapeHtml(row.event || '')}</span><span class="ev-stage">${escapeHtml(STAGE_LABEL[stage] || stage)}</span>`;
+    root.appendChild(div);
+  }
+  const count = document.getElementById('events-count');
+  if (count) count.textContent = root.children.length + ' events';
+  root.scrollTop = root.scrollHeight;
+}
+
 function appendEvent(ev) {
+  if (EVENTS_PAUSED) return;
+  EVENT_ROWS_CACHE.push({
+    ts: ev.ts || '',
+    event: ev.event || '',
+    stage: (ev.data && ev.data.stage) ? ev.data.stage : '',
+  });
+  if (EVENT_ROWS_CACHE.length > EVENT_ROWS_LIMIT) {
+    EVENT_ROWS_CACHE = EVENT_ROWS_CACHE.slice(EVENT_ROWS_CACHE.length - EVENT_ROWS_LIMIT);
+  }
   const root = document.getElementById('events');
   if (!root) return;
   const div = document.createElement('div');

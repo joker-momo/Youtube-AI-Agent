@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
+import os
 import re
 from pathlib import Path
 from typing import Awaitable, Callable, Sequence
@@ -40,6 +42,25 @@ SEO_QA_RAW_PATH = Path("operator/claude/seo_qa.raw.txt")
 
 class StageInputMissingError(Exception):
     pass
+
+
+def _run_blocking_with_timeout(
+    label: str,
+    timeout_sec: int,
+    fn: Callable,
+    *args,
+    **kwargs,
+):
+    """Run blocking work in a helper thread with a hard timeout."""
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(fn, *args, **kwargs)
+        try:
+            return future.result(timeout=timeout_sec)
+        except concurrent.futures.TimeoutError as exc:
+            raise RuntimeError(
+                f"{label} timed out after {timeout_sec}s. "
+                "Please restart worker and resume this stage."
+            ) from exc
 
 
 def _complete_stage(job_dir: Path, stage_name: str, output: Path) -> None:
@@ -262,8 +283,10 @@ def run_whisper_timestamps_stage(job_dir: Path) -> Path:
     logger.log("WHISPER_STAGE_PROGRESS", {"job_id": state.job_id, "step": "start"})
 
     narration_path = job_dir / "assets" / "narration.wav"
+    synth_timeout_sec = int(os.environ.get("WHISPER_SYNTH_TIMEOUT_SEC", "900"))
+    whisper_load_timeout_sec = int(os.environ.get("WHISPER_MODEL_LOAD_TIMEOUT_SEC", "300"))
+    whisper_transcribe_timeout_sec = int(os.environ.get("WHISPER_TRANSCRIBE_TIMEOUT_SEC", "1800"))
     if not narration_path.exists():
-        import os
         from video_agent.stages.assets import prepare_assets
 
         channel_config_path = Path(
@@ -289,12 +312,19 @@ def run_whisper_timestamps_stage(job_dir: Path) -> Path:
 
         logger.log(
             "WHISPER_STAGE_PROGRESS",
-            {"job_id": state.job_id, "step": "synthesizing_narration_audio"},
+            {
+                "job_id": state.job_id,
+                "step": "synthesizing_narration_audio",
+                "timeout_sec": synth_timeout_sec,
+            },
         )
-        prepare_assets(
-            job_dir,
-            style,
-            scene_doc,
+        _run_blocking_with_timeout(
+            label="Narration synthesis",
+            timeout_sec=synth_timeout_sec,
+            fn=prepare_assets,
+            job_dir=job_dir,
+            style_dna=style,
+            scene_doc=scene_doc,
             visual_config=channel_config.get("visuals"),
             tts_config=channel_config.get("tts"),
             channel_id=channel_config["channel"]["id"],
@@ -318,15 +348,31 @@ def run_whisper_timestamps_stage(job_dir: Path) -> Path:
 
     logger.log(
         "WHISPER_STAGE_PROGRESS",
-        {"job_id": state.job_id, "step": "loading_whisper_model_tiny"},
+        {
+            "job_id": state.job_id,
+            "step": "loading_whisper_model_tiny",
+            "timeout_sec": whisper_load_timeout_sec,
+        },
     )
-    model = whisper.load_model("tiny")
+    model = _run_blocking_with_timeout(
+        label="Whisper model load",
+        timeout_sec=whisper_load_timeout_sec,
+        fn=whisper.load_model,
+        name="tiny",
+    )
     logger.log(
         "WHISPER_STAGE_PROGRESS",
-        {"job_id": state.job_id, "step": "transcribing_audio"},
+        {
+            "job_id": state.job_id,
+            "step": "transcribing_audio",
+            "timeout_sec": whisper_transcribe_timeout_sec,
+        },
     )
-    result = model.transcribe(
-        str(narration_path),
+    result = _run_blocking_with_timeout(
+        label="Whisper transcription",
+        timeout_sec=whisper_transcribe_timeout_sec,
+        fn=model.transcribe,
+        audio=str(narration_path),
         word_timestamps=True,
         language="es",
         fp16=False,

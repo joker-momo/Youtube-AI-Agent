@@ -27,7 +27,11 @@ from video_agent.orchestrator.stages import (
     run_review_stage,
     run_whisper_timestamps_stage,
 )
-from video_agent.notifications.telegram import notify_job_done_with_files
+from video_agent.notifications.telegram import (
+    notify_job_done_with_files,
+    notify_job_failed,
+    notify_stage_done,
+)
 from video_agent.utils.json_io import read_yaml
 from video_agent.web.approval_flow import (
     APPROVAL_REQUIRED_STAGES,
@@ -149,6 +153,8 @@ async def execute_run_all(
                     "state": state.to_dict(),
                 },
             ) from exc
+        # Notify Telegram that idea research is done; pipeline continues automatically.
+        await notify_stage_done(load_job(job_dir).job_id, "idea_research")
         # Reload remaining from updated state.
         state = load_job(job_dir)
         new_pending = next((s.name for s in state.stages if s.status != "completed"), None)
@@ -324,6 +330,11 @@ async def execute_run_all(
             await _record("review", run_review_stage(job_dir))
     except StageInputMissingError as exc:
         state = load_job(job_dir)
+        await notify_job_failed(
+            state.job_id,
+            stopped_at=state.current_stage,
+            error=str(exc),
+        )
         raise HTTPException(
             status_code=409,
             detail={
@@ -345,6 +356,11 @@ async def execute_run_all(
         detail["completed"] = completed
         detail["stopped_at"] = state.current_stage
         detail["state"] = state.to_dict()
+        await notify_job_failed(
+            state.job_id,
+            stopped_at=state.current_stage,
+            error=str(exc),
+        )
         raise HTTPException(status_code=http_exc.status_code, detail=detail) from exc
     finally:
         # Always close the persistent tabs so a failure never leaks

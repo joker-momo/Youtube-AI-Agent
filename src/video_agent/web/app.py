@@ -1256,7 +1256,6 @@ function renderStep(jobId, s, idx) {
       <span class="step-num">${s.status === 'completed' ? checkIcon() : s.status === 'failed' ? xIcon() : idx + 1}</span>
       <span class="step-label"><span class="name">${escapeHtml(label)}</span><span class="code">${escapeHtml(s.name)}</span></span>
       <span class="step-meta">
-        ${s.status === 'in_progress' ? `<button class="run-btn" id="run-btn-${escapeHtml(s.name)}" onclick="runStage(event,'${escapeJs(jobId)}','${escapeJs(s.name)}')">▶ Run</button>` : ''}
         <span class="pill ${s.status}">${statusText(s.status)}</span><span class="step-dur">${durTxt}</span><span class="caret">›</span>
       </span>
     </div>
@@ -1592,19 +1591,44 @@ function renderQaInsight(data) {
   const changes = Array.isArray(data.required_changes) ? data.required_changes : [];
   const scores = data.scores && typeof data.scores === 'object' ? data.scores : {};
   const scoreEntries = Object.entries(scores);
+
+  // YouTube Policy block
+  const policy = data.youtube_policy && typeof data.youtube_policy === 'object' ? data.youtube_policy : null;
+  const policyCompliant = policy ? policy.compliant : null;
+  const policyRisk = policy ? (policy.risk_level || 'unknown') : 'unknown';
+  const policyViolations = policy && Array.isArray(policy.violations) ? policy.violations : [];
+  const policyIcon = policyCompliant === true ? '✅' : policyCompliant === false ? '🚫' : '⚠️';
+  const policyColor = policyCompliant === true ? '#16a34a' : policyCompliant === false ? '#dc2626' : '#d97706';
+  const policyBg = policyCompliant === true ? '#f0fdf4' : policyCompliant === false ? '#fef2f2' : '#fffbeb';
+  const riskBadgeColor = {none:'#16a34a',low:'#ca8a04',medium:'#ea580c',high:'#dc2626'}[policyRisk] || '#6b7280';
+  const policyBlock = `
+    <div style="border:2px solid ${policyColor};border-radius:8px;background:${policyBg};padding:10px 12px;margin-bottom:10px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:${policyViolations.length ? '8px' : '0'}">
+        <span style="font-size:15px">${policyIcon}</span>
+        <span style="font-weight:700;color:${policyColor};font-size:13px">YouTube Policy</span>
+        <span style="margin-left:auto;font-size:11px;font-weight:700;color:#fff;background:${riskBadgeColor};padding:2px 7px;border-radius:10px">${policyRisk.toUpperCase()} RISK</span>
+        ${policyCompliant === true ? '<span style="font-size:12px;color:#16a34a">Compliant ✓</span>' : policyCompliant === false ? '<span style="font-size:12px;color:#dc2626;font-weight:700">NOT COMPLIANT</span>' : ''}
+      </div>
+      ${policyViolations.length ? `<ul style="margin:0;padding-left:16px;font-size:12px;color:#dc2626">${policyViolations.map(v => `<li>${escapeHtml(v)}</li>`).join('')}</ul>` : ''}
+    </div>
+  `;
+
   const scoreBars = scoreEntries.map(([k, v]) => {
+    const isPolicy = k === 'youtube_policy';
     const pct = Math.min(100, Math.round((Number(v) / 5) * 100));
+    const barColor = isPolicy && Number(v) < 5 ? '#dc2626' : scoreColor(Number(v)*20);
     return `
       <div class="score-row">
-        <span class="score-kw">${escapeHtml(k.replace(/_/g,' '))}</span>
-        <div class="score-bar-outer"><div class="score-bar-inner" style="width:${pct}%;background:${scoreColor(Number(v)*20)}"></div></div>
-        <span class="score-num">${v}/5</span>
+        <span class="score-kw" style="${isPolicy ? 'font-weight:700' : ''}">${isPolicy ? '🔒 ' : ''}${escapeHtml(k.replace(/_/g,' '))}</span>
+        <div class="score-bar-outer"><div class="score-bar-inner" style="width:${pct}%;background:${barColor}"></div></div>
+        <span class="score-num" style="${isPolicy && Number(v) < 5 ? 'color:#dc2626;font-weight:700' : ''}">${v}/5</span>
       </div>
     `;
   }).join('');
   return `
     <div class="insight">
       <div class="vb ${vbCls}">${icon} ${escapeHtml(verdict)}</div>
+      ${policyBlock}
       ${scoreBars ? `<div class="insight-section">Scores</div>${scoreBars}` : ''}
       ${issues.length ? `<div class="insight-section">Issues</div><ul class="insight-list">${issues.slice(0, 8).map(i => `<li>${escapeHtml(i)}</li>`).join('')}</ul>` : ''}
       ${changes.length ? `<div class="insight-section">Required changes</div><ul class="insight-list">${changes.slice(0, 6).map(c => `<li>${escapeHtml(c)}</li>`).join('')}</ul>` : ''}
@@ -1809,6 +1833,47 @@ async function renderFinal(t) {
     if (sr.ok) seo = await sr.json();
   } catch (e) {}
 
+  // Fetch all 3 QA files to build YouTube Policy summary
+  async function fetchQa(name) {
+    try {
+      const r = await fetch('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent('operator/gemini/' + name + '_qa.json'));
+      return r.ok ? await r.json() : null;
+    } catch (e) { return null; }
+  }
+  const [scriptQa, scenesQa, seoQa] = await Promise.all([fetchQa('script'), fetchQa('scenes'), fetchQa('seo')]);
+  const qaAll = [{label:'Script', qa: scriptQa}, {label:'Scenes', qa: scenesQa}, {label:'SEO', qa: seoQa}];
+  const policyRows = qaAll.map(({label, qa}) => {
+    if (!qa) return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f3f4f6"><span style="width:60px;font-size:12px;font-weight:600;color:#6b7280">${label}</span><span style="font-size:12px;color:#9ca3af">No QA data</span></div>`;
+    const p = qa.youtube_policy || {};
+    const compliant = p.compliant;
+    const risk = (p.risk_level || 'unknown').toUpperCase();
+    const violations = Array.isArray(p.violations) ? p.violations : [];
+    const icon = compliant === true ? '✅' : compliant === false ? '🚫' : '⚠️';
+    const riskColor = {NONE:'#16a34a',LOW:'#ca8a04',MEDIUM:'#ea580c',HIGH:'#dc2626'}[risk] || '#6b7280';
+    const vlText = violations.length ? `<div style="font-size:11px;color:#dc2626;margin-top:3px">${violations.map(v => '• ' + escapeHtml(v)).join('<br>')}</div>` : '';
+    return `<div style="padding:6px 0;border-bottom:1px solid #f3f4f6">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="width:60px;font-size:12px;font-weight:700">${label}</span>
+        <span style="font-size:14px">${icon}</span>
+        <span style="font-size:11px;font-weight:700;color:#fff;background:${riskColor};padding:1px 7px;border-radius:10px">${risk} RISK</span>
+        ${compliant === false ? '<span style="font-size:12px;font-weight:700;color:#dc2626">NOT COMPLIANT</span>' : compliant === true ? '<span style="font-size:12px;color:#16a34a">Compliant</span>' : ''}
+      </div>
+      ${vlText}
+    </div>`;
+  }).join('');
+
+  const anyPolicyFail = qaAll.some(({qa}) => qa && qa.youtube_policy && qa.youtube_policy.compliant === false);
+  const policyBannerBg = anyPolicyFail ? '#fef2f2' : '#f0fdf4';
+  const policyBannerBorder = anyPolicyFail ? '#fca5a5' : '#86efac';
+  const policyBannerTitle = anyPolicyFail ? '🚫 YouTube Policy — Issues found' : '✅ YouTube Policy — All clear';
+  const policyBannerColor = anyPolicyFail ? '#dc2626' : '#16a34a';
+  const policyPanel = `
+    <div style="border:2px solid ${policyBannerBorder};border-radius:10px;background:${policyBannerBg};padding:12px 14px;margin-bottom:14px">
+      <div style="font-weight:700;font-size:13px;color:${policyBannerColor};margin-bottom:8px">${policyBannerTitle}</div>
+      ${policyRows}
+    </div>
+  `;
+
   const variants = (seo.title_variants && seo.title_variants.length >= 1) ? seo.title_variants : [{title: seo.title || '', thumbnail_text: seo.thumbnail_text || '', score: null}];
   const tags = (seo.tags || []).map(tag => `<span class="tag-chip">${escapeHtml(tag)}</span>`).join('');
 
@@ -1837,6 +1902,7 @@ async function renderFinal(t) {
   mount.innerHTML = `
     <div class="final">
       <div class="final-title"><span>Final output</span><span class="badge">ready</span></div>
+      ${policyPanel}
       <video src="${videoUrl}" controls></video>
       ${abSection}
       <div class="final-cols">
@@ -2104,11 +2170,21 @@ async function submitNewJob() {
     }
 
     closeNewJobModal();
-    showToast('Job created: ' + jobId);
+    showToast('Job created — pipeline starting…');
     await fetchJobs();
     SELECTED_ID = jobId;
     LAST_TIMELINE_JSON = '';
     await fetchTimeline(jobId);
+
+    // Auto-run full pipeline (fire-and-forget — UI polls for progress)
+    fetch('/jobs/' + encodeURIComponent(jobId) + '/run-all', { method: 'POST' })
+      .then(r => r.json())
+      .then(d => {
+        if (d && d.error) showToast('Pipeline error: ' + d.error);
+        LAST_TIMELINE_JSON = '';
+        if (SELECTED_ID === jobId) fetchTimeline(jobId);
+      })
+      .catch(e => showToast('Pipeline error: ' + e.message));
   } catch (e) {
     errEl.textContent = 'Error: ' + e.message;
     errEl.style.display = '';
@@ -2395,12 +2471,22 @@ async function createJobFromIdea(idea, savedPath) {
       return;
     }
 
-    showToast('Job created: ' + jobId);
+    showToast('Job created — pipeline starting…');
     await fetchJobs();
     // Select the new job
     SELECTED_ID = jobId;
     LAST_TIMELINE_JSON = '';
     await fetchTimeline(jobId);
+
+    // Auto-run full pipeline (fire-and-forget — UI polls for progress)
+    fetch('/jobs/' + encodeURIComponent(jobId) + '/run-all', { method: 'POST' })
+      .then(r => r.json())
+      .then(d => {
+        if (d && d.error) showToast('Pipeline error: ' + d.error);
+        LAST_TIMELINE_JSON = '';
+        if (SELECTED_ID === jobId) fetchTimeline(jobId);
+      })
+      .catch(e => showToast('Pipeline error: ' + e.message));
   } catch (e) {
     showToast('Error: ' + e.message);
   }
@@ -3069,6 +3155,7 @@ async def post_generate_ideas(
 
     # Attach keyword score to each idea by matching target_keyword field
     # Load cached published videos for duplicate detection
+    from video_agent.utils.json_io import read_yaml as _read_yaml
     published = load_published_videos(_read_yaml(channel_path), repo_root() / "configs")
 
     kw_score_map = {kw["keyword"].lower(): kw for kw in top_keywords}

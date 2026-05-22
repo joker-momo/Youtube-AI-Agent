@@ -12,6 +12,7 @@ from video_agent.operator import (
     _chatgpt_script_prompt,
     _gemini_qa_prompt,
     extract_json_object,
+    extract_json_objects,
     promote_operator_artifact,
     promote_operator_qa,
     write_operator_review,
@@ -431,7 +432,13 @@ def promote_qa_stage(job_dir: Path, artifact: str, raw_response: str) -> Path:
         try:
             parsed = extract_json_object(raw_response)
         except Exception:
-            raise StageInputMissingError(str(exc)) from exc
+            # extract_json_object failed (e.g. truncated prefix from Claude UI).
+            # Try extract_json_objects which tolerates corrupt leading chunks.
+            objects = extract_json_objects(raw_response)
+            if not objects:
+                raise StageInputMissingError(str(exc)) from exc
+            # Use the last complete object (most likely the full response).
+            parsed = objects[-1]
         qa_payload = {
             "artifact": artifact,
             "verdict": str(parsed.get("verdict", "")).upper() or "MISSING",
@@ -1283,8 +1290,17 @@ async def auto_qa_with_rework(
             last_exc = exc
             if attempt >= max_retries:
                 break
-            await auto_rework_artifact(
-                artifact, job_dir, channel_path, chatgpt_fn
-            )
+            # Only attempt rework if qa.json exists (QA ran but verdict=NEEDS_REWORK).
+            # If qa.json is missing, the QA response itself was empty/invalid — skip
+            # rework and retry qa_fn directly on the next iteration.
+            qa_path = job_dir / "operator" / "gemini" / f"{artifact}_qa.json"
+            if qa_path.exists():
+                try:
+                    await auto_rework_artifact(
+                        artifact, job_dir, channel_path, chatgpt_fn
+                    )
+                except StageInputMissingError:
+                    # Rework failed (e.g. qa.json vanished) — retry qa_fn directly.
+                    pass
     assert last_exc is not None
     raise last_exc

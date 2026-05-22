@@ -8,13 +8,7 @@ from video_agent.orchestrator import DEFAULT_STAGES, load_job, save_job
 from video_agent.orchestrator.stages import StageInputMissingError
 
 APPROVALS_FILE = "approvals.json"
-APPROVAL_REQUIRED_STAGES: tuple[str, ...] = (
-    "idea_research",
-    "script_promote",
-    "scenes_promote",
-    "seo_promote",
-    "thumbnail_image",
-)
+APPROVAL_REQUIRED_STAGES: tuple[str, ...] = ()
 
 
 def now_iso() -> str:

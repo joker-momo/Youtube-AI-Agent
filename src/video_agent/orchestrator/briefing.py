@@ -30,41 +30,73 @@ _ROLES_ES = {
         "usas clickbait ni afirmaciones médicas."
     ),
     "script_qa": (
-        "Eres revisor (QA) de guiones para videos cortos de bienestar. "
-        "Revisas el artefacto contra el esquema, el contrato de longitud, "
-        "el tono del canal, las frases prohibidas/preferidas y la seguridad "
-        "médica. Devuelves un JSON estricto con verdict, scores, issues y "
-        "required_changes. Eres riguroso: PASS solo si NO queda nada por "
-        "cambiar."
+        "Eres revisor (QA) de guiones para videos cortos de bienestar en YouTube. "
+        "Tu función tiene DOS pilares de igual importancia:\n"
+        "PILAR 1 — POLÍTICAS DE YOUTUBE (tolerancia cero): Antes de cualquier otra "
+        "revisión, evalúas si el contenido cumple con las Políticas de la comunidad "
+        "de YouTube. Cualquier indicio de desinformación médica, consejos de salud "
+        "peligrosos, clickbait engañoso, contenido sensacionalista, promoción de "
+        "suplementos, afirmaciones sin evidencia científica, o contenido que pueda "
+        "ser eliminado o demonetizado → verdict=NEEDS_REWORK inmediato. La duda "
+        "mínima equivale a incumplimiento.\n"
+        "PILAR 2 — CALIDAD TÉCNICA: Verificas esquema, contrato de longitud, tono "
+        "del canal, frases prohibidas/preferidas y seguridad médica general.\n"
+        "Devuelves UN SOLO JSON con verdict, youtube_policy, scores, issues y "
+        "required_changes. PASS solo si AMBOS pilares son perfectos."
     ),
     "scenes_qa": (
-        "Eres revisor (QA) de escenas. Verificas suma de duraciones, "
-        "formato de IDs, visual_prompt en inglés, asset_refs como objeto, "
-        "tono y seguridad. Devuelves un JSON estricto con verdict, scores, "
-        "issues y required_changes. PASS solo si NO queda nada por cambiar."
+        "Eres revisor (QA) de escenas para videos cortos de bienestar en YouTube. "
+        "Tu función tiene DOS pilares de igual importancia:\n"
+        "PILAR 1 — POLÍTICAS DE YOUTUBE (tolerancia cero): Evalúas si cada escena "
+        "(narración, on_screen_text, visual_prompt) cumple con las Políticas de la "
+        "comunidad de YouTube. Desinformación médica, afirmaciones engañosas, "
+        "imágenes sugestivas o inapropiadas, texto sensacionalista → "
+        "verdict=NEEDS_REWORK inmediato. La duda mínima equivale a incumplimiento.\n"
+        "PILAR 2 — CALIDAD TÉCNICA: Verificas suma de duraciones, formato de IDs "
+        "secuenciales, visual_prompt en inglés, asset_refs como objeto {}, tono y "
+        "seguridad médica general.\n"
+        "Devuelves UN SOLO JSON con verdict, youtube_policy, scores, issues y "
+        "required_changes. PASS solo si AMBOS pilares son perfectos."
     ),
     "seo_qa": (
-        "Eres revisor (QA) de SEO de YouTube. Verificas language=es-419, "
-        "rango de tags, ausencia de duplicados, ausencia de frases "
-        "prohibidas, longitud de title/description y ai_disclosure=true. "
-        "Devuelves un JSON estricto con verdict, scores, issues y "
-        "required_changes. PASS solo si NO queda nada por cambiar."
+        "Eres revisor (QA) de SEO de YouTube para un canal de bienestar. "
+        "Tu función tiene DOS pilares de igual importancia:\n"
+        "PILAR 1 — POLÍTICAS DE YOUTUBE (tolerancia cero): El título, la descripción "
+        "y las etiquetas deben cumplir estrictamente las Políticas de la comunidad de "
+        "YouTube. Títulos engañosos, thumbnails clickbait, descripciones con promesas "
+        "médicas, tags de spam o cualquier elemento que pueda causar demonetización o "
+        "eliminación → verdict=NEEDS_REWORK inmediato. La duda mínima equivale a "
+        "incumplimiento.\n"
+        "PILAR 2 — CALIDAD TÉCNICA: Verificas language=es-419, rango de tags, "
+        "ausencia de duplicados, ausencia de frases prohibidas, longitud de "
+        "title/description y ai_disclosure=true.\n"
+        "Devuelves UN SOLO JSON con verdict, youtube_policy, scores, issues y "
+        "required_changes. PASS solo si AMBOS pilares son perfectos."
     ),
 }
 
 _QA_SCHEMA = (
     "{\n"
     '  "verdict": "PASS" | "NEEDS_REWORK",\n'
+    '  "youtube_policy": {\n'
+    '    "compliant": true | false,\n'
+    '    "risk_level": "none" | "low" | "medium" | "high",\n'
+    '    "violations": array de strings (cita o descripción exacta del problema)\n'
+    "  },\n"
     '  "scores": {\n'
     '    "schema_fit": int (1-5),\n'
     '    "channel_fit": int (1-5),\n'
     '    "safety": int (1-5),\n'
-    '    "clarity": int (1-5)\n'
+    '    "clarity": int (1-5),\n'
+    '    "youtube_policy": int (1-5, donde 5=sin ninguna duda, 1=violación clara)\n'
     "  },\n"
     '  "issues": array de strings (descripciones cortas),\n'
     '  "required_changes": array de strings (acciones concretas)\n'
     "}\n"
-    "Usa verdict=PASS solo si issues y required_changes están vacíos."
+    "REGLA DE VERDICT:\n"
+    "- verdict=PASS SOLO SI: youtube_policy.compliant=true AND risk_level='none' "
+    "AND todos los scores >= 4 AND issues=[] AND required_changes=[].\n"
+    "- Cualquier duda sobre políticas de YouTube → compliant=false → NEEDS_REWORK."
 )
 
 
@@ -295,13 +327,28 @@ def build_initial_briefing(
     """
     if kind == "qa":
         role = (
-            "Eres revisor (QA) profesional de contenido de video corto de "
-            "bienestar para YouTube. Tu única función en esta conversación "
-            "es revisar artefactos contra el esquema, el contrato de "
-            "longitud, el tono del canal, las frases prohibidas/preferidas, "
-            "y la seguridad médica. Cada vez que te pase un artefacto, "
-            "devolverás UN solo JSON con verdict, scores, issues y "
-            "required_changes, y nada más."
+            "Eres revisor (QA) profesional de contenido de video de bienestar "
+            "para YouTube. Tu función en esta conversación tiene DOS PILARES "
+            "inseparables de igual peso:\n\n"
+            "PILAR 1 — POLÍTICAS DE YOUTUBE (tolerancia CERO):\n"
+            "Evalúas cada artefacto contra las Políticas de la Comunidad de YouTube "
+            "y los Lineamientos de monetización. Cualquier indicio — por pequeño "
+            "que sea — de los siguientes problemas OBLIGA a devolver NEEDS_REWORK:\n"
+            "• Desinformación médica o de salud (afirmaciones sin evidencia científica sólida)\n"
+            "• Consejos médicos específicos o diagnósticos implícitos\n"
+            "• Promesas de resultados garantizados ('cura', 'elimina', 'en X días')\n"
+            "• Promoción directa o indirecta de suplementos o productos\n"
+            "• Títulos, textos en pantalla o descripciones engañosas (clickbait)\n"
+            "• Contenido sensacionalista sobre enfermedades, muerte o miedo\n"
+            "• Cualquier elemento que pueda resultar en demonetización o eliminación\n"
+            "La duda mínima equivale a incumplimiento. No des el beneficio de la duda.\n\n"
+            "PILAR 2 — CALIDAD TÉCNICA:\n"
+            "Verificas esquema JSON, contrato de longitud y duraciones, tono del "
+            "canal, frases prohibidas/preferidas, idioma es-419 y seguridad médica "
+            "general.\n\n"
+            "Cada vez que te pase un artefacto, devolverás UN SOLO objeto JSON con: "
+            "verdict, youtube_policy (compliant, risk_level, violations[]), scores, "
+            "issues[] y required_changes[]. Nada más — ningún texto fuera del JSON."
         )
     else:
         role = (
@@ -342,6 +389,9 @@ def build_initial_briefing(
             "- Nunca des consejos médicos específicos; sugiere consultar a un "
             "profesional cuando aplique.",
             f"- Evita estas palabras manipulativas: {forbidden_tone}.",
+            "- POLÍTICAS DE YOUTUBE: Toda tu revisión debe reflejar las Políticas "
+            "de la Comunidad de YouTube vigentes. Ante la mínima duda de "
+            "incumplimiento, devuelve NEEDS_REWORK con youtube_policy.compliant=false.",
             "- Cuando te pida un artefacto, devuelve UN SOLO objeto JSON "
             "válido. Sin texto adicional. Sin bloques de código markdown. "
             "Si tu primera respuesta no fuera JSON puro, autocorrígete y "

@@ -1079,7 +1079,7 @@ def test_auto_script_qa_pass_advances_to_scenes(
         )
     )
 
-    assert output == job_dir / "operator" / "gemini" / "script_qa.json"
+    assert output == job_dir / "operator" / "claude" / "script_qa.json"
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
     assert state["current_stage"] == "scenes"
     assert any(s["name"] == "script_qa" and s["status"] == "completed" for s in state["stages"])
@@ -1145,10 +1145,10 @@ def test_auto_qa_with_rework_passes_after_one_retry(
             job_dir,
             channel_path,
             chatgpt_fn=lambda msgs: fake.run_session("chatgpt", msgs),
-            gemini_fn=lambda msgs: fake.run_session("gemini", msgs),
+            qa_session_fn=lambda msgs: fake.run_session("gemini", msgs),
         )
     )
-    assert output == job_dir / "operator" / "gemini" / "script_qa.json"
+    assert output == job_dir / "operator" / "claude" / "script_qa.json"
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
     script_qa = next(s for s in state["stages"] if s["name"] == "script_qa")
     assert script_qa["status"] == "completed"
@@ -1192,7 +1192,7 @@ def test_auto_qa_with_rework_gives_up_after_max_retries(
                 job_dir,
                 channel_path,
                 chatgpt_fn=lambda msgs: fake.run_session("chatgpt", msgs),
-                gemini_fn=lambda msgs: fake.run_session("gemini", msgs),
+                qa_session_fn=lambda msgs: fake.run_session("gemini", msgs),
             )
         )
     assert len(fake.calls) == 7

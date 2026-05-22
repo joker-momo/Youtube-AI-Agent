@@ -91,7 +91,7 @@ def _login_required_message(site: str) -> str:
     label = {"chatgpt": "ChatGPT", "gemini": "Gemini", "claude": "Claude"}.get(site, site)
     return (
         f"Login required for {label} in the browser-runtime profile. "
-        "Open http://localhost:7900 (noVNC), sign in once, then retry."
+        "Open http://localhost:7900 (KasmVNC), sign in once, then retry."
     )
 
 
@@ -152,10 +152,10 @@ async def runtime() -> dict:
     not reachable (typically because ``docker compose up browser-runtime``
     has not been started or Chromium is still booting).
     """
-    from playwright.async_api import async_playwright
-
     url = _cdp_url()
     try:
+        from playwright.async_api import async_playwright
+
         async with async_playwright() as pw:
             ws_endpoint = await _resolve_browser_ws(url)
             browser = await pw.chromium.connect_over_cdp(ws_endpoint)

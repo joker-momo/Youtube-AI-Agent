@@ -118,9 +118,10 @@ def test_operator_render_writes_review_page_without_render(tmp_path, monkeypatch
                 "title": "Dormir mejor despues de los 45",
                 "description": "Una rutina simple para descansar mejor.",
                 "tags": ["sueño", "bienestar"],
-                "language": "es",
+                "language": "es-419",
                 "ai_disclosure": True,
                 "thumbnail_path": "thumbnail.jpg",
+                "thumbnail_text": "DUERME MEJOR HOY",
             }
         ),
         encoding="utf-8",

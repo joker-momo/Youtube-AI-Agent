@@ -181,12 +181,60 @@ async def _dismiss_modals(page: "Page") -> None:
         await human_pause(page, min_ms=300, max_ms=700)
 
 
+async def _recover_interrupted_response(page: "Page") -> bool:
+    """Best-effort recovery when ChatGPT reports interrupted generation.
+
+    Returns True if an interruption marker is visible and we attempted a
+    resume action (click retry/continue or press Enter).
+    """
+    interruption_markers = (
+        "text=/Connection interrupted/i",
+        "text=/waiting for the complete answer/i",
+        "text=/network error/i",
+        "text=/something went wrong/i",
+    )
+    resume_selectors = (
+        "button:has-text('Try again')",
+        "button:has-text('Continue generating')",
+        "button:has-text('Regenerate')",
+        "button[aria-label*='Try again']",
+        "button[aria-label*='Continue']",
+        "button[aria-label*='Regenerate']",
+    )
+
+    interrupted = False
+    for marker in interruption_markers:
+        try:
+            if await page.locator(marker).first.is_visible(timeout=300):
+                interrupted = True
+                break
+        except Exception:
+            continue
+    if not interrupted:
+        return False
+
+    for selector in resume_selectors:
+        button = page.locator(selector).first
+        try:
+            if await button.is_visible(timeout=500):
+                await human_click(button)
+                return True
+        except Exception:
+            continue
+
+    try:
+        await page.keyboard.press("Enter")
+    except Exception:
+        pass
+    return True
+
+
 class ChatGPTDriver:
     """Single-shot ChatGPT driver: open temporary chat, send, scrape.
 
     The driver does **not** log the user in. If the dedicated profile is
     signed out it raises ``LoginRequiredError`` with the path to a debug
-    screenshot so the operator can sign in via noVNC.
+    screenshot so the operator can sign in via KasmVNC.
     """
 
     def __init__(self, page: "Page") -> None:
@@ -310,13 +358,27 @@ class ChatGPTDriver:
         # Wait until the response (a) differs from prior AND (b) stops
         # growing for 2 s. Without the stability check we sometimes
         # scrape mid-stream and get a truncated JSON.
-        text = await _wait_for_stable_response(
-            self.page,
-            scrape_js,
-            prior_text,
-            response_timeout_ms=response_timeout_ms,
-            log_tag="chatgpt",
-        )
+        # If ChatGPT reports an interrupted connection, try one quick
+        # self-recovery action and continue waiting.
+        attempts = 0
+        text = None
+        max_recoveries = 2
+        while attempts <= max_recoveries:
+            text = await _wait_for_stable_response(
+                self.page,
+                scrape_js,
+                prior_text,
+                response_timeout_ms=response_timeout_ms,
+                log_tag="chatgpt",
+            )
+            if text:
+                break
+            recovered = await _recover_interrupted_response(self.page)
+            if not recovered:
+                break
+            attempts += 1
+            await human_pause(self.page, min_ms=600, max_ms=1200)
+
         if text is None:
             shot = await save_trace_screenshot(self.page, prefix="chatgpt-no-response")
             raise BrowserDriverError(

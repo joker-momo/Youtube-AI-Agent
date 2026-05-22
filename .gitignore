@@ -26,3 +26,6 @@ browser_trace/
 /.cursor
 /.wolf
 /docs/superpowers
+/.cache
+/.remotion
+/logs

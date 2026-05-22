@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 from typing import Sequence
 
@@ -14,6 +15,7 @@ from video_agent.operator import (
     write_operator_review,
 )
 from video_agent.pipeline import OperatorRenderOptions, PipelineOptions, render_operator_job, run_pipeline
+from video_agent.utils.incident import RunIncidentMonitor
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -36,13 +38,13 @@ def build_parser() -> argparse.ArgumentParser:
     operator_render_parser.add_argument(
         "--skip-operator-qa",
         action="store_true",
-        help="Render without requiring promoted Gemini QA JSON files for script, scenes, and SEO.",
+        help="Render without requiring promoted Claude QA JSON files for script, scenes, and SEO.",
     )
     _add_tts_override_args(operator_render_parser)
 
     operator_prompts_parser = subparsers.add_parser(
         "operator-prompts",
-        help="Write ChatGPT/Gemini prompt files for the semi-automated content workflow.",
+        help="Write ChatGPT/Claude prompt files for the semi-automated content workflow.",
     )
     operator_prompts_parser.add_argument("--channel", required=True, type=Path)
     operator_prompts_parser.add_argument("--idea", required=True, type=Path)
@@ -60,7 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     operator_promote_qa_parser = subparsers.add_parser(
         "operator-promote-qa",
-        help="Extract, normalize, and promote a raw Gemini QA response for an operator artifact.",
+        help="Extract, normalize, and promote a raw Claude QA response for an operator artifact.",
     )
     operator_promote_qa_parser.add_argument("--job-dir", required=True, type=Path)
     operator_promote_qa_parser.add_argument("--artifact", choices=["script", "scenes", "seo"], required=True)
@@ -124,6 +126,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=1800,
         help="HTTP read timeout in seconds. Default 1800 (30 min).",
     )
+
+    worker_parser = subparsers.add_parser(
+        "worker",
+        help="Run the background worker to poll and execute jobs from the queue.",
+    )
+    worker_parser.add_argument("--db-path", default=Path("jobs/queue.db"), type=Path)
+
     return parser
 
 
@@ -155,9 +164,7 @@ def _print_run_result(result) -> None:
     print(f"video.mp4: {result.video_path if result.video_path else 'skipped'}")
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
+def _dispatch(args: argparse.Namespace) -> int:
     if args.command == "run":
         result = run_pipeline(
             PipelineOptions(
@@ -253,8 +260,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "auto":
         return _run_auto(args)
-    parser.error("Unknown command")
-    return 2
+    if args.command == "worker":
+        from video_agent.orchestrator.worker import run_worker_loop
+        run_worker_loop(args.db_path)
+        return 0
+    raise ValueError(f"Unknown command: {args.command}")
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    jobs_root = getattr(args, "jobs_dir", Path("jobs"))
+    monitor = RunIncidentMonitor(
+        command=args.command,
+        argv=list(argv) if argv is not None else list(sys.argv[1:]),
+        jobs_root=Path(jobs_root),
+    )
+    monitor.start()
+    try:
+        code = _dispatch(args)
+    except Exception as exc:
+        incident_path = monitor.finish(ok=False, error=exc)
+        print(f"[incident] Run failed. Incident log: {incident_path}")
+        print(f"[incident] Heartbeat: {monitor.heartbeat_path}")
+        raise
+    monitor.finish(ok=(code == 0))
+    return code
 
 
 def _run_auto(args: argparse.Namespace) -> int:

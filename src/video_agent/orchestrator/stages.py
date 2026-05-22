@@ -11,9 +11,10 @@ from video_agent.operator import (
     _chatgpt_scenes_prompt,
     _chatgpt_seo_prompt,
     _chatgpt_script_prompt,
-    _gemini_qa_prompt,
+    _claude_qa_prompt,
     extract_json_object,
     extract_json_objects,
+    get_scenes_qa_feedback,
     promote_operator_artifact,
     promote_operator_qa,
     write_operator_review,
@@ -32,9 +33,9 @@ SCENES_PROMPT_PATH = Path("operator/chatgpt/scenes_prompt.md")
 SCENES_RAW_PATH = Path("operator/chatgpt/scenes.raw.txt")
 SEO_PROMPT_PATH = Path("operator/chatgpt/seo_prompt.md")
 SEO_RAW_PATH = Path("operator/chatgpt/seo.raw.txt")
-SCRIPT_QA_RAW_PATH = Path("operator/gemini/script_qa.raw.txt")
-SCENES_QA_RAW_PATH = Path("operator/gemini/scenes_qa.raw.txt")
-SEO_QA_RAW_PATH = Path("operator/gemini/seo_qa.raw.txt")
+SCRIPT_QA_RAW_PATH = Path("operator/claude/script_qa.raw.txt")
+SCENES_QA_RAW_PATH = Path("operator/claude/scenes_qa.raw.txt")
+SEO_QA_RAW_PATH = Path("operator/claude/seo_qa.raw.txt")
 
 
 class StageInputMissingError(Exception):
@@ -145,7 +146,8 @@ def run_scenes_stage(job_dir: Path, channel_path: Path) -> Path:
 
     script = read_json(script_path)
     channel_config = read_yaml(channel_path)
-    prompt_text = _chatgpt_scenes_prompt(channel_config, script)
+    qa_feedback = get_scenes_qa_feedback(job_dir)
+    prompt_text = _chatgpt_scenes_prompt(channel_config, script, qa_feedback=qa_feedback)
 
     output_path = job_dir / SCENES_PROMPT_PATH
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -256,7 +258,52 @@ def run_whisper_timestamps_stage(job_dir: Path) -> Path:
             f"Cannot run whisper_timestamps stage from current_stage={state.current_stage!r}"
         )
 
+    logger = EventLogger(job_dir / EVENT_LOG)
+    logger.log("WHISPER_STAGE_PROGRESS", {"job_id": state.job_id, "step": "start"})
+
     narration_path = job_dir / "assets" / "narration.wav"
+    if not narration_path.exists():
+        import os
+        from video_agent.stages.assets import prepare_assets
+
+        channel_config_path = Path(
+            os.environ.get(
+                "CHANNEL_CONFIG",
+                "/app/configs/vida-plena-45/channel.yaml",
+            )
+        )
+        if not channel_config_path.exists():
+            channel_config_path = repo_root() / "configs/vida-plena-45/channel.yaml"
+
+        if not channel_config_path.exists():
+            raise StageInputMissingError(
+                f"Missing narration audio: {narration_path} and cannot auto-synthesize because channel config was not found."
+            )
+
+        channel_config = read_yaml(channel_config_path)
+        style = read_json(repo_root() / channel_config["style_dna"]["path"])
+        scenes_path = job_dir / "scenes.json"
+        if not scenes_path.exists():
+            raise StageInputMissingError(f"Missing {scenes_path}")
+        scene_doc = read_json(scenes_path)
+
+        logger.log(
+            "WHISPER_STAGE_PROGRESS",
+            {"job_id": state.job_id, "step": "synthesizing_narration_audio"},
+        )
+        prepare_assets(
+            job_dir,
+            style,
+            scene_doc,
+            visual_config=channel_config.get("visuals"),
+            tts_config=channel_config.get("tts"),
+            channel_id=channel_config["channel"]["id"],
+        )
+        logger.log(
+            "WHISPER_STAGE_PROGRESS",
+            {"job_id": state.job_id, "step": "narration_audio_ready"},
+        )
+
     if not narration_path.exists():
         raise StageInputMissingError(f"Missing narration audio: {narration_path}")
 
@@ -265,17 +312,28 @@ def run_whisper_timestamps_stage(job_dir: Path) -> Path:
         raise StageInputMissingError(f"Missing {scenes_path}")
 
     import whisper  # lazy import — heavy dep
-    from video_agent.utils.json_io import read_json
 
     scene_doc = read_json(scenes_path)
     scenes = scene_doc["scenes"]
 
+    logger.log(
+        "WHISPER_STAGE_PROGRESS",
+        {"job_id": state.job_id, "step": "loading_whisper_model_tiny"},
+    )
     model = whisper.load_model("tiny")
+    logger.log(
+        "WHISPER_STAGE_PROGRESS",
+        {"job_id": state.job_id, "step": "transcribing_audio"},
+    )
     result = model.transcribe(
         str(narration_path),
         word_timestamps=True,
         language="es",
         fp16=False,
+    )
+    logger.log(
+        "WHISPER_STAGE_PROGRESS",
+        {"job_id": state.job_id, "step": "transcription_complete"},
     )
 
     # Flatten all words from all segments (cast np.float64 → float for JSON)
@@ -333,6 +391,10 @@ def run_whisper_timestamps_stage(job_dir: Path) -> Path:
     output_path = job_dir / "whisper_timestamps.json"
     from video_agent.utils.json_io import write_json
     write_json(output_path, output)
+    logger.log(
+        "WHISPER_STAGE_PROGRESS",
+        {"job_id": state.job_id, "step": "timestamps_written"},
+    )
 
     _complete_stage(job_dir, "whisper_timestamps", output_path)
     return output_path
@@ -354,6 +416,7 @@ def run_render_stage(job_dir: Path, channel_path: Path) -> Path:
                 job_dir=job_dir,
                 render=True,
                 require_operator_qa=False,
+                stop_request_path=job_dir / ".stop_requested",
             )
         )
     except (FileNotFoundError, ValueError) as exc:
@@ -381,7 +444,7 @@ def run_review_stage(job_dir: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Gemini QA stages (script_qa, scenes_qa, seo_qa).
+# Claude QA stages (script_qa, scenes_qa, seo_qa).
 # ---------------------------------------------------------------------------
 
 _QA_ARTIFACT_FILE = {
@@ -397,7 +460,7 @@ _QA_RAW_PATH = {
 
 
 def promote_qa_stage(job_dir: Path, artifact: str, raw_response: str) -> Path:
-    """Promote a raw Gemini QA response into ``operator/gemini/<art>_qa.json``.
+    """Promote a raw Claude QA response into ``operator/claude/<art>_qa.json``.
 
     ``artifact`` is one of ``script``, ``scenes``, ``seo``. The stage
     name written to the job state is ``<artifact>_qa``. Verdict must
@@ -415,13 +478,13 @@ def promote_qa_stage(job_dir: Path, artifact: str, raw_response: str) -> Path:
             f"Cannot run {stage_name} from current_stage={state.current_stage!r}"
         )
     if not raw_response.strip():
-        raise StageInputMissingError(f"Missing raw Gemini QA response for {artifact}")
+        raise StageInputMissingError(f"Missing raw Claude QA response for {artifact}")
 
     raw_path = job_dir / _QA_RAW_PATH[artifact]
     raw_path.parent.mkdir(parents=True, exist_ok=True)
     raw_path.write_text(raw_response, encoding="utf-8")
 
-    qa_output = job_dir / "operator" / "gemini" / f"{artifact}_qa.json"
+    qa_output = job_dir / "operator" / "claude" / f"{artifact}_qa.json"
 
     try:
         result = promote_operator_qa(job_dir, artifact, raw_path)
@@ -454,7 +517,7 @@ def promote_qa_stage(job_dir: Path, artifact: str, raw_response: str) -> Path:
         qa_output.parent.mkdir(parents=True, exist_ok=True)
         _write_json(qa_output, qa_payload)
         raise StageInputMissingError(
-            f"Gemini QA verdict for {artifact} is "
+            f"Claude QA verdict for {artifact} is "
             f"{qa_payload['verdict']}: {qa_payload['issues']}"
         ) from exc
 
@@ -463,7 +526,7 @@ def promote_qa_stage(job_dir: Path, artifact: str, raw_response: str) -> Path:
     if verdict != "PASS":
         issues = qa_payload.get("issues") or qa_payload.get("required_changes") or []
         raise StageInputMissingError(
-            f"Gemini QA verdict for {artifact} is {verdict or 'MISSING'}: {issues}"
+            f"Claude QA verdict for {artifact} is {verdict or 'MISSING'}: {issues}"
         )
 
     _complete_stage(job_dir, stage_name, result.output_path)
@@ -619,7 +682,7 @@ async def auto_seo_stage(
 
 
 # ---------------------------------------------------------------------------
-# Auto Gemini QA stages: orchestrator -> browser-worker -> Gemini.
+# Auto Claude QA stages: orchestrator -> browser-worker -> Claude.
 # ---------------------------------------------------------------------------
 
 
@@ -641,7 +704,7 @@ async def _auto_qa(
         raise StageInputMissingError(f"Missing {artifact_path}")
 
     artifact_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
-    base_prompt = _gemini_qa_prompt(artifact, artifact_payload)
+    base_prompt = _claude_qa_prompt(artifact, artifact_payload)
 
     from video_agent.orchestrator.briefing import build_task_prompt
 
@@ -650,7 +713,7 @@ async def _auto_qa(
     raw_response = await session_fn([task])
     if not isinstance(raw_response, str) or not raw_response.strip():
         raise StageInputMissingError(
-            f"browser-worker returned an empty Gemini QA response for {artifact}"
+            f"browser-worker returned an empty Claude QA response for {artifact}"
         )
     return promote_qa_stage(job_dir, artifact, raw_response)
 
@@ -952,7 +1015,7 @@ _ASSET_GEN_PROMPT_PREFIX = (
 
 
 def _scene_project_name(job_id: str, scene_id: str) -> str:
-    return f"{job_id}-{scene_id}"[:60]
+    return f"{job_id[:35]}-{scene_id}"[:45]
 
 
 def _build_thumbnail_prompt(
@@ -1158,7 +1221,7 @@ async def auto_thumbnail_image_stage(
     assets_dir = job_dir / "assets"
     assets_dir.mkdir(parents=True, exist_ok=True)
     out_path = assets_dir / "thumbnail_bg.png"
-    project_name = f"{state.job_id}-thumbnail"[:60]
+    project_name = f"{state.job_id[:35]}-thumbnail"[:45]
 
     await image_fn(
         prompt=prompt,
@@ -1225,12 +1288,12 @@ async def auto_rework_artifact(
 ) -> Path:
     """Send QA issues back to ChatGPT and re-promote the artifact.
 
-    Reads ``operator/gemini/<artifact>_qa.json`` to extract issues and
+    Reads ``operator/claude/<artifact>_qa.json`` to extract issues and
     required_changes, resets the ``<artifact>_promote`` + ``<artifact>_qa``
     stages to pending, sends a rework message into the persistent
     ChatGPT tab, and re-runs the promoter with the new response.
     """
-    qa_path = job_dir / "operator" / "gemini" / f"{artifact}_qa.json"
+    qa_path = job_dir / "operator" / "claude" / f"{artifact}_qa.json"
     if not qa_path.exists():
         raise StageInputMissingError(
             f"Missing {qa_path}; cannot rework {artifact}"
@@ -1249,7 +1312,7 @@ async def auto_rework_artifact(
     rework_msg = (
         f"# Rework del artefacto `{artifact}`\n"
         f"Tu artefacto anterior recibió verdict NEEDS_REWORK del revisor "
-        f"(Gemini). Reescribe el artefacto JSON corrigiendo SOLO los puntos "
+        f"(Claude). Reescribe el artefacto JSON corrigiendo SOLO los puntos "
         f"a continuación. Mantén el mismo esquema, idioma es-419, job_id y "
         f"channel_id.\n\n"
         f"## Issues detectadas\n{issue_lines}\n\n"
@@ -1285,7 +1348,7 @@ async def auto_qa_with_rework(
     job_dir: Path,
     channel_path: Path,
     chatgpt_fn: SessionFn,
-    gemini_fn: SessionFn,
+    qa_session_fn: SessionFn,
 ) -> Path:
     """Run ``<artifact>_qa``; if NEEDS_REWORK, rework via ChatGPT and retry.
 
@@ -1299,7 +1362,7 @@ async def auto_qa_with_rework(
     last_exc: StageInputMissingError | None = None
     for attempt in range(max_retries + 1):
         try:
-            return await qa_fn(job_dir, channel_path, gemini_fn)
+            return await qa_fn(job_dir, channel_path, qa_session_fn)
         except StageInputMissingError as exc:
             last_exc = exc
             if attempt >= max_retries:
@@ -1307,7 +1370,7 @@ async def auto_qa_with_rework(
             # Only attempt rework if qa.json exists (QA ran but verdict=NEEDS_REWORK).
             # If qa.json is missing, the QA response itself was empty/invalid — skip
             # rework and retry qa_fn directly on the next iteration.
-            qa_path = job_dir / "operator" / "gemini" / f"{artifact}_qa.json"
+            qa_path = job_dir / "operator" / "claude" / f"{artifact}_qa.json"
             if qa_path.exists():
                 try:
                     await auto_rework_artifact(

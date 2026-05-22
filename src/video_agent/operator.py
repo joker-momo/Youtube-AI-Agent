@@ -19,6 +19,23 @@ ARTIFACT_SCHEMAS = {
 OPERATOR_ARTIFACTS = tuple(ARTIFACT_SCHEMAS.keys())
 
 
+def _qa_path(job_dir: Path, artifact: str) -> Path:
+    """Preferred QA artifact path (Claude)."""
+    return job_dir / "operator" / "claude" / f"{artifact}_qa.json"
+
+
+def _legacy_qa_path(job_dir: Path, artifact: str) -> Path:
+    """Legacy QA artifact path kept for backward compatibility."""
+    return job_dir / "operator" / "gemini" / f"{artifact}_qa.json"
+
+
+def _resolve_existing_qa_path(job_dir: Path, artifact: str) -> Path:
+    p = _qa_path(job_dir, artifact)
+    if p.exists():
+        return p
+    return _legacy_qa_path(job_dir, artifact)
+
+
 @dataclass
 class PromptWriteResult:
     paths: list[Path]
@@ -39,81 +56,64 @@ class OperatorNextResult:
     commands: list[str]
 
 
-def extract_json_object(text: str) -> dict[str, Any]:
-    start = text.find("{")
-    if start == -1:
-        raise ValueError("No JSON object found in model output.")
-
-    depth = 0
-    in_string = False
-    escape = False
-    for index in range(start, len(text)):
-        char = text[index]
-        if in_string:
-            if escape:
-                escape = False
-            elif char == "\\":
-                escape = True
-            elif char == '"':
-                in_string = False
-            continue
-
-        if char == '"':
-            in_string = True
-        elif char == "{":
-            depth += 1
-        elif char == "}":
-            depth -= 1
-            if depth == 0:
-                return json.loads(text[start : index + 1])
-
-    raise ValueError("JSON object was started but not closed.")
-
-
 def extract_json_objects(text: str) -> list[dict[str, Any]]:
     """Extract all parseable JSON objects found in ``text``.
 
     Useful when the model returns commentary plus multiple JSON blocks.
     """
     objects: list[dict[str, Any]] = []
-    start = text.find("{")
-    if start == -1:
-        return objects
-
-    depth = 0
-    in_string = False
-    escape = False
-    current_start = -1
-    for index in range(start, len(text)):
-        char = text[index]
-        if in_string:
-            if escape:
-                escape = False
-            elif char == "\\":
-                escape = True
-            elif char == '"':
-                in_string = False
-            continue
-
-        if char == '"':
-            in_string = True
-        elif char == "{":
-            if depth == 0:
-                current_start = index
-            depth += 1
-        elif char == "}":
-            if depth > 0:
-                depth -= 1
-                if depth == 0 and current_start >= 0:
-                    chunk = text[current_start : index + 1]
-                    try:
-                        parsed = json.loads(chunk)
-                    except Exception:
-                        parsed = None
-                    if isinstance(parsed, dict):
-                        objects.append(parsed)
-                    current_start = -1
+    index = 0
+    while True:
+        start = text.find("{", index)
+        if start == -1:
+            break
+        
+        depth = 0
+        in_string = False
+        escape = False
+        parsed_successfully = False
+        
+        for idx in range(start, len(text)):
+            char = text[idx]
+            if in_string:
+                if escape:
+                    escape = False
+                elif char == "\\":
+                    escape = True
+                elif char == '"':
+                    in_string = False
+                continue
+            
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                if depth > 0:
+                    depth -= 1
+                    if depth == 0:
+                        chunk = text[start : idx + 1]
+                        try:
+                            parsed = json.loads(chunk)
+                            if isinstance(parsed, dict):
+                                objects.append(parsed)
+                                index = idx + 1
+                                parsed_successfully = True
+                                break
+                        except Exception:
+                            pass
+        
+        if not parsed_successfully:
+            index = start + 1
+            
     return objects
+
+
+def extract_json_object(text: str) -> dict[str, Any]:
+    candidates = extract_json_objects(text)
+    if not candidates:
+        raise ValueError("No JSON object found in model output.")
+    return candidates[0]
 
 
 def _json_block(value: Any) -> str:
@@ -230,12 +230,12 @@ def _normalize_scenes_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
         )
     qa = parsed.get("qa")
     if not isinstance(qa, dict):
-        parsed["qa"] = {"verdict": "PENDING_GEMINI_QA"}
+        parsed["qa"] = {"verdict": "PENDING_CLAUDE_QA"}
     else:
         # Scenes QA must be produced by the dedicated QA reviewer,
         # never prefilled by the writing model.
         qa_obj = dict(qa)
-        qa_obj["verdict"] = "PENDING_GEMINI_QA"
+        qa_obj["verdict"] = "PENDING_CLAUDE_QA"
         parsed["qa"] = qa_obj
     return parsed
 
@@ -251,6 +251,20 @@ def _score_and_sort_seo_variants(seo: dict[str, Any]) -> dict[str, Any]:
     seo["title"] = scored[0]["title"]
     seo["thumbnail_text"] = scored[0]["thumbnail_text"]
     return seo
+
+
+def _normalize_seo_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Backfill SEO fields for compatibility with older model/test payloads."""
+    parsed = dict(candidate)
+    parsed = _score_and_sort_seo_variants(parsed)
+
+    title = str(parsed.get("title") or "").strip()
+    thumbnail_text = str(parsed.get("thumbnail_text") or "").strip()
+    if not thumbnail_text:
+        words = [w for w in title.split() if w]
+        fallback = " ".join(words[:5]).upper()
+        parsed["thumbnail_text"] = fallback or "DUERME MEJOR HOY"
+    return parsed
 
 
 def _chatgpt_script_prompt(channel_config: dict[str, Any], idea: dict[str, Any]) -> str:
@@ -291,46 +305,91 @@ def _chatgpt_script_prompt(channel_config: dict[str, Any], idea: dict[str, Any])
     )
 
 
-def _chatgpt_scenes_prompt(channel_config: dict[str, Any], script: dict[str, Any]) -> str:
+def get_scenes_qa_feedback(job_dir: Path) -> str | None:
+    """Helper to extract QA issues and required changes if the verdict is NEEDS_REWORK."""
+    try:
+        p = _resolve_existing_qa_path(job_dir, "scenes")
+        if p.exists():
+            qa_data = read_json(p)
+            verdict = str(qa_data.get("verdict", "")).upper()
+            if verdict == "NEEDS_REWORK":
+                issues = qa_data.get("issues") or []
+                changes = qa_data.get("required_changes") or []
+                
+                feedback_lines = []
+                if issues:
+                    feedback_lines.append("Issues found in previous version:")
+                    for issue in issues:
+                        feedback_lines.append(f"- {issue}")
+                if changes:
+                    feedback_lines.append("Required changes for this revision:")
+                    for change in changes:
+                        feedback_lines.append(f"- {change}")
+                
+                if feedback_lines:
+                    return "\n".join(feedback_lines)
+    except Exception:
+        pass
+    return None
+
+
+def _chatgpt_scenes_prompt(
+    channel_config: dict[str, Any],
+    script: dict[str, Any],
+    qa_feedback: str | None = None,
+) -> str:
     cf = channel_config.get("content_format", {})
     target_sec = cf.get("target_duration_sec", 840)
     scenes_min = cf.get("scenes_count_min", 40)
     scenes_max = cf.get("scenes_count_max", 55)
     scene_dur_target = round(target_sec / ((scenes_min + scenes_max) / 2))
-    return "\n".join(
-        [
-            "You are exporting a SCENES artifact as a JSON file for a YouTube channel pipeline.",
+    
+    prompt_parts = [
+        "You are exporting a SCENES artifact as a JSON file for a YouTube channel pipeline.",
+        "",
+        "⚠️ OUTPUT RULES — READ CAREFULLY:",
+        "• Your ENTIRE response must be ONE raw JSON object — nothing else.",
+        "• Do NOT write any text before or after the JSON.",
+        "• Do NOT use markdown code fences (no ```json, no ```).",
+        "• Do NOT add explanations, comments, or apologies.",
+        "• Imagine you are writing directly to a .json file on disk.",
+        f"• This JSON will be large ({scenes_min}-{scenes_max} scenes). That is fine — write the complete JSON until the final }}.",
+        "",
+        "Required JSON schema:",
+        "- channel_id, job_id, scenes (array), total_duration_sec, qa",
+        "- each scene object: id, duration_sec, narration, on_screen_text, caption, visual_prompt, motion, asset_refs",
+        f"- create {scenes_min}-{scenes_max} scenes; each scene duration_sec should be {scene_dur_target-3}–{scene_dur_target+3} seconds",
+        f"- total_duration_sec must be approximately {target_sec} (sum of all scene durations)",
+        "- scene ids: sequential scene-01, scene-02, ...",
+        "- HOOK RULE: scene-01 narration must match the script hook word-for-word.",
+        "  scene-01 on_screen_text: bold 3-6 word question or statement (e.g. '¿Por qué no puedes dormir?').",
+        "- asset_refs: must be an object {}, never an array",
+        "- visual_prompt: English, stock-search friendly, specific (person + setting + action)",
+        "- motion: 'slow_zoom' / 'pan_right' / 'pan_left'; never repeat same motion 3x in a row",
+        "- qa.verdict: must be PENDING_CLAUDE_QA — never mark your own scenes as PASS",
+        "",
+    ]
+    
+    if qa_feedback:
+        prompt_parts.extend([
+            "⚠️ CRITICAL REWORK FEEDBACK FROM PREVIOUS QA REVIEW:",
+            "The previous version of scenes was rejected by the QA reviewer with verdict NEEDS_REWORK.",
+            "You MUST revise and improve the scenes to address the following issues:",
+            qa_feedback,
             "",
-            "⚠️ OUTPUT RULES — READ CAREFULLY:",
-            "• Your ENTIRE response must be ONE raw JSON object — nothing else.",
-            "• Do NOT write any text before or after the JSON.",
-            "• Do NOT use markdown code fences (no ```json, no ```).",
-            "• Do NOT add explanations, comments, or apologies.",
-            "• Imagine you are writing directly to a .json file on disk.",
-            f"• This JSON will be large ({scenes_min}-{scenes_max} scenes). That is fine — write the complete JSON until the final }}.",
-            "",
-            "Required JSON schema:",
-            "- channel_id, job_id, scenes (array), total_duration_sec, qa",
-            "- each scene object: id, duration_sec, narration, on_screen_text, caption, visual_prompt, motion, asset_refs",
-            f"- create {scenes_min}-{scenes_max} scenes; each scene duration_sec should be {scene_dur_target-3}–{scene_dur_target+3} seconds",
-            f"- total_duration_sec must be approximately {target_sec} (sum of all scene durations)",
-            "- scene ids: sequential scene-01, scene-02, ...",
-            "- HOOK RULE: scene-01 narration must match the script hook word-for-word.",
-            "  scene-01 on_screen_text: bold 3-6 word question or statement (e.g. '¿Por qué no puedes dormir?').",
-            "- asset_refs: must be an object {}, never an array",
-            "- visual_prompt: English, stock-search friendly, specific (person + setting + action)",
-            "- motion: 'slow_zoom' / 'pan_right' / 'pan_left'; never repeat same motion 3x in a row",
-            "- qa.verdict: must be PENDING_GEMINI_QA — never mark your own scenes as PASS",
-            "",
-            "Channel config:",
-            _json_block(channel_config),
-            "",
-            "Approved script:",
-            _json_block(script),
-            "",
-            "⚠️ REMINDER: Output ONLY the raw JSON object. No markdown. No commentary. Start with { and end with }.",
-        ]
-    )
+        ])
+        
+    prompt_parts.extend([
+        "Channel config:",
+        _json_block(channel_config),
+        "",
+        "Approved script:",
+        _json_block(script),
+        "",
+        "⚠️ REMINDER: Output ONLY the raw JSON object. No markdown. No commentary. Start with { and end with }.",
+    ])
+    
+    return "\n".join(prompt_parts)
 
 
 def _chatgpt_seo_prompt(channel_config: dict[str, Any], script: dict[str, Any], scenes: dict[str, Any]) -> str:
@@ -366,15 +425,25 @@ def _chatgpt_seo_prompt(channel_config: dict[str, Any], script: dict[str, Any], 
             "Approved script:",
             _json_block(script),
             "",
-            "Approved scenes (summary only — use for context):",
-            json.dumps({"total_duration_sec": scenes.get("total_duration_sec"), "scene_count": len(scenes.get("scenes", []))}, ensure_ascii=False),
+            "Approved scenes (summary + key visuals):",
+            json.dumps(
+                {
+                    "total_duration_sec": scenes.get("total_duration_sec"),
+                    "scene_count": len(scenes.get("scenes", [])),
+                    "visual_prompts_sample": [
+                        str(scene.get("visual_prompt") or "")
+                        for scene in (scenes.get("scenes") or [])[:5]
+                    ],
+                },
+                ensure_ascii=False,
+            ),
             "",
             "⚠️ REMINDER: Output ONLY the raw JSON object. No markdown. No commentary. Start with { and end with }.",
         ]
     )
 
 
-def _gemini_qa_prompt(artifact_name: str, artifact: dict[str, Any] | None) -> str:
+def _claude_qa_prompt(artifact_name: str, artifact: dict[str, Any] | None) -> str:
     artifact_text = _json_block(artifact) if artifact is not None else "<paste ChatGPT JSON artifact here>"
     return "\n".join(
         [
@@ -468,9 +537,9 @@ def write_operator_prompts(
     idea = read_json(idea_path)
     prompt_dir = job_dir / "operator"
     chatgpt_dir = prompt_dir / "chatgpt"
-    gemini_dir = prompt_dir / "gemini"
+    claude_dir = prompt_dir / "claude"
     chatgpt_dir.mkdir(parents=True, exist_ok=True)
-    gemini_dir.mkdir(parents=True, exist_ok=True)
+    claude_dir.mkdir(parents=True, exist_ok=True)
 
     stages = ["script", "scenes", "seo"] if stage == "all" else [stage]
     written: list[Path] = []
@@ -482,14 +551,15 @@ def write_operator_prompts(
         if current_stage == "script":
             paths_and_text = [
                 (chatgpt_dir / "script_prompt.md", _chatgpt_script_prompt(channel_config, idea)),
-                (gemini_dir / "script_qa_prompt.md", _gemini_qa_prompt("script", script)),
+                (claude_dir / "script_qa_prompt.md", _claude_qa_prompt("script", script)),
             ]
         elif current_stage == "scenes":
             if script is None:
                 raise FileNotFoundError(f"{job_dir / 'script.json'} is required before writing scenes prompts.")
+            qa_feedback = get_scenes_qa_feedback(job_dir)
             paths_and_text = [
-                (chatgpt_dir / "scenes_prompt.md", _chatgpt_scenes_prompt(channel_config, script)),
-                (gemini_dir / "scenes_qa_prompt.md", _gemini_qa_prompt("scenes", scenes)),
+                (chatgpt_dir / "scenes_prompt.md", _chatgpt_scenes_prompt(channel_config, script, qa_feedback=qa_feedback)),
+                (claude_dir / "scenes_qa_prompt.md", _claude_qa_prompt("scenes", scenes)),
             ]
         elif current_stage == "seo":
             if script is None:
@@ -499,7 +569,7 @@ def write_operator_prompts(
             seo = _read_optional_json(job_dir / "seo.json")
             paths_and_text = [
                 (chatgpt_dir / "seo_prompt.md", _chatgpt_seo_prompt(channel_config, script, scenes)),
-                (gemini_dir / "seo_qa_prompt.md", _gemini_qa_prompt("seo", seo)),
+                (claude_dir / "seo_qa_prompt.md", _claude_qa_prompt("seo", seo)),
             ]
         else:
             raise ValueError(f"Unsupported operator prompt stage: {current_stage}")
@@ -534,7 +604,7 @@ def promote_operator_artifact(
         elif artifact == "scenes":
             candidate = _normalize_scenes_candidate(candidate)
         elif artifact == "seo":
-            candidate = _score_and_sort_seo_variants(candidate)
+            candidate = _normalize_seo_candidate(candidate)
         try:
             validate_json(candidate, schema_path)
             parsed = candidate
@@ -605,8 +675,10 @@ def promote_operator_qa(job_dir: Path, artifact: str, raw_path: Path) -> Promote
             f"No QA JSON object could be promoted for {artifact}. "
             f"Found {len(candidates)} object(s). {preview}"
         )
-    output_path = job_dir / "operator" / "gemini" / f"{artifact}_qa.json"
+    output_path = _qa_path(job_dir, artifact)
     write_json(output_path, qa)
+    # Keep writing legacy path so older tooling/tests remain functional.
+    write_json(_legacy_qa_path(job_dir, artifact), qa)
     return PromoteResult(artifact=artifact, raw_path=raw_path, output_path=output_path)
 
 
@@ -614,7 +686,7 @@ def assert_operator_qa_passed(job_dir: Path, artifacts: list[str] | tuple[str, .
     for artifact in artifacts:
         if artifact not in ARTIFACT_SCHEMAS:
             raise ValueError(f"Unsupported operator artifact QA: {artifact}")
-        qa_path = job_dir / "operator" / "gemini" / f"{artifact}_qa.json"
+        qa_path = _resolve_existing_qa_path(job_dir, artifact)
         if not qa_path.exists():
             raise FileNotFoundError(f"{qa_path} is required before operator render.")
         qa = read_json(qa_path)
@@ -627,7 +699,7 @@ def build_operator_status(job_dir: Path) -> dict[str, Any]:
     artifacts: dict[str, dict[str, str]] = {}
     for artifact in OPERATOR_ARTIFACTS:
         artifact_path = job_dir / f"{artifact}.json"
-        qa_path = job_dir / "operator" / "gemini" / f"{artifact}_qa.json"
+        qa_path = _resolve_existing_qa_path(job_dir, artifact)
         qa_status = "missing"
         if qa_path.exists():
             qa = _read_optional_json(qa_path) or {}
@@ -638,17 +710,17 @@ def build_operator_status(job_dir: Path) -> dict[str, Any]:
         }
 
     if artifacts["script"]["artifact"] == "missing":
-        next_step = "Generate and promote script.json, then run Gemini QA for script."
+        next_step = "Generate and promote script.json, then run Claude QA for script."
     elif artifacts["script"]["qa"] != "PASS":
-        next_step = "Promote a PASS Gemini QA response for script."
+        next_step = "Promote a PASS Claude QA response for script."
     elif artifacts["scenes"]["artifact"] == "missing":
-        next_step = "Generate and promote scenes.json, then run Gemini QA for scenes."
+        next_step = "Generate and promote scenes.json, then run Claude QA for scenes."
     elif artifacts["scenes"]["qa"] != "PASS":
-        next_step = "Promote a PASS Gemini QA response for scenes."
+        next_step = "Promote a PASS Claude QA response for scenes."
     elif artifacts["seo"]["artifact"] == "missing":
-        next_step = "Generate and promote seo.json, then run Gemini QA for seo."
+        next_step = "Generate and promote seo.json, then run Claude QA for seo."
     elif artifacts["seo"]["qa"] != "PASS":
-        next_step = "Promote a PASS Gemini QA response for seo."
+        next_step = "Promote a PASS Claude QA response for seo."
     elif not (job_dir / "render_props.json").exists():
         next_step = "Run operator-render to prepare assets and render props."
     elif not (job_dir / "operator_review.html").exists():
@@ -671,7 +743,7 @@ def build_operator_next(channel_path: Path, idea_path: Path, job_dir: Path) -> O
     for artifact in OPERATOR_ARTIFACTS:
         artifact_status = status["artifacts"][artifact]
         raw_artifact_path = job_dir / "operator" / "chatgpt" / f"{artifact}.raw.txt"
-        raw_qa_path = job_dir / "operator" / "gemini" / f"{artifact}_qa.raw.txt"
+        raw_qa_path = job_dir / "operator" / "claude" / f"{artifact}_qa.raw.txt"
 
         if artifact_status["artifact"] == "missing":
             if raw_artifact_path.exists():
@@ -718,7 +790,7 @@ def build_operator_next(channel_path: Path, idea_path: Path, job_dir: Path) -> O
             if raw_qa_path.exists():
                 return OperatorNextResult(
                     step=f"promote-{artifact}-qa",
-                    message=f"Raw Gemini QA exists for {artifact}; promote it into {artifact}_qa.json.",
+                    message=f"Raw Claude QA exists for {artifact}; promote it into {artifact}_qa.json.",
                     prompt_paths=[],
                     commands=[
                         _docker_cli_command(
@@ -733,10 +805,10 @@ def build_operator_next(channel_path: Path, idea_path: Path, job_dir: Path) -> O
                     ],
                 )
             write_operator_prompts(channel_path, idea_path, job_dir, stage=artifact)
-            prompt_path = job_dir / "operator" / "gemini" / f"{artifact}_qa_prompt.md"
+            prompt_path = job_dir / "operator" / "claude" / f"{artifact}_qa_prompt.md"
             return OperatorNextResult(
-                step=f"gemini-{artifact}-qa",
-                message=f"Copy the {artifact} QA prompt into Gemini, then save the response as {raw_qa_path}.",
+                step=f"claude-{artifact}-qa",
+                message=f"Copy the {artifact} QA prompt into Claude, then save the response as {raw_qa_path}.",
                 prompt_paths=[prompt_path],
                 commands=[
                     _docker_cli_command(
@@ -754,7 +826,7 @@ def build_operator_next(channel_path: Path, idea_path: Path, job_dir: Path) -> O
     if not (job_dir / "video.mp4").exists():
         return OperatorNextResult(
             step="render-video",
-            message="All operator artifacts and Gemini QA are ready; render the video.",
+            message="All operator artifacts and Claude QA are ready; render the video.",
             prompt_paths=[],
             commands=[
                 _docker_cli_command(
@@ -789,7 +861,7 @@ def write_operator_review(job_dir: Path, output_path: Path | None = None) -> Pat
     scene_items = scenes.get("scenes") if isinstance(scenes.get("scenes"), list) else []
     qa_rows = []
     for artifact in OPERATOR_ARTIFACTS:
-        qa_path = job_dir / "operator" / "gemini" / f"{artifact}_qa.json"
+        qa_path = _resolve_existing_qa_path(job_dir, artifact)
         qa = _read_optional_json(qa_path) or {}
         issues = qa.get("issues") if isinstance(qa.get("issues"), list) else []
         changes = qa.get("required_changes") if isinstance(qa.get("required_changes"), list) else []
@@ -874,7 +946,7 @@ def write_operator_review(job_dir: Path, output_path: Path | None = None) -> Pat
     </section>
 
     <section>
-      <h2>Gemini QA</h2>
+      <h2>Claude QA</h2>
       <table>
         <thead><tr><th>Artifact</th><th>Verdict</th><th>Issues</th><th>Required Changes</th><th>File</th></tr></thead>
         <tbody>{''.join(qa_rows)}</tbody>
@@ -900,3 +972,7 @@ def write_operator_review(job_dir: Path, output_path: Path | None = None) -> Pat
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(html, encoding="utf-8")
     return output_path
+
+
+# Backward-compatible alias for callers not yet migrated.
+_gemini_qa_prompt = _claude_qa_prompt

@@ -57,6 +57,38 @@ services:
       - --port
       - "8000"
 
+  worker:
+    build: .
+    working_dir: /app
+    environment:
+      TZ: ${TZ:-Asia/Ho_Chi_Minh}
+      PEXELS_API_KEY: ${PEXELS_API_KEY:-}
+      PIXABAY_API_KEY: ${PIXABAY_API_KEY:-}
+      BROWSER_WORKER_URL: http://browser-worker:8001
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      JOBS_DIR: /app/jobs
+      CHANNEL_CONFIG: /app/configs/vida-plena-45/channel.yaml
+    volumes:
+      - ./jobs:/app/jobs
+      - ./caches:/app/caches
+      - ./asset_library:/app/asset_library
+      - ./configs:/app/configs
+      - ./src:/app/src
+      - ./tests:/app/tests
+      - ./remotion/src:/app/remotion/src
+    networks:
+      - appliance_net
+    depends_on:
+      - browser-worker
+    command:
+      - python
+      - -m
+      - video_agent.cli
+      - worker
+      - --db-path
+      - /app/jobs/queue.db
+
   browser-runtime:
     build:
       context: .
@@ -69,7 +101,7 @@ services:
     volumes:
       - ./browser_profiles/default:/data/profile
     ports:
-      # noVNC web UI bound to localhost only — never expose the LAN.
+      # KasmVNC websocket/UI bound to localhost only — never expose the LAN.
       - "127.0.0.1:7900:7900"
     networks:
       - appliance_net

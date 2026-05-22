@@ -62,6 +62,33 @@ Browser access uses the user's logged-in ChatGPT Plus, Claude, and vidIQ session
 
 No host Python or Node setup is required.
 
+## Fresh Setup On A New Machine
+
+If you move this repository to another machine, run this once:
+
+```bash
+cp .env.example .env
+docker compose build
+docker compose up -d app browser-runtime browser-worker
+```
+
+Open:
+
+- Web app: `http://127.0.0.1:8000`
+- Browser runtime (KasmVNC): `http://127.0.0.1:7900/`
+
+In KasmVNC, sign in manually to the sites used by the pipeline
+(ChatGPT, Claude, vidIQ). The profile is persisted in
+`browser_profiles/default`, so you should not need to log in every run.
+Set `KASMVNC_USERNAME` and `KASMVNC_PASSWORD` in `.env` if you want fixed
+KasmVNC login credentials (otherwise runtime generates a password on boot).
+
+Optional quick verification:
+
+```bash
+docker compose run --rm video-agent pytest -v
+```
+
 ## Run
 
 ```bash

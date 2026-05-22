@@ -26,7 +26,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-import httpx
+from telegram import Bot
+from telegram.error import TelegramError
 
 
 def _esc(value: Any) -> str:
@@ -34,9 +35,6 @@ def _esc(value: Any) -> str:
     return html.escape(str(value), quote=False)
 
 _TELEGRAM_FILE_LIMIT = 50 * 1024 * 1024  # 50 MB — Bot API hard cap
-
-_API_BASE = "https://api.telegram.org"
-
 
 def _bot_token() -> str | None:
     return os.environ.get("TELEGRAM_BOT_TOKEN", "").strip() or None
@@ -50,28 +48,47 @@ def _configured() -> bool:
     return bool(_bot_token() and _chat_id())
 
 
+def _bot() -> Bot | None:
+    token = _bot_token()
+    if not token:
+        return None
+    return Bot(token=token)
+
+
+async def _with_retries(fn, *, attempts: int = 4) -> None:
+    last_exc: Exception | None = None
+    for idx in range(attempts):
+        try:
+            await fn()
+            return
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if idx < attempts - 1:
+                await asyncio.sleep(0.8 * (idx + 1))
+    if last_exc is not None:
+        raise last_exc
+
+
 async def _send_message(text: str, *, parse_mode: str = "HTML") -> None:
     """Raw async send. Swallows all errors."""
-    token = _bot_token()
     chat_id = _chat_id()
-    if not token or not chat_id:
+    bot = _bot()
+    if not bot or not chat_id:
         return
-    url = f"{_API_BASE}/bot{token}/sendMessage"
-    payload: dict[str, Any] = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": parse_mode,
-    }
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(url, json=payload)
-            if not resp.is_success:
-                print(
-                    f"[telegram] sendMessage HTTP {resp.status_code}: {resp.text[:200]}",
-                    file=sys.stderr,
-                )
-    except Exception as exc:  # noqa: BLE001
+        await _with_retries(
+            lambda: bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode=parse_mode,
+                disable_web_page_preview=True,
+            ),
+            attempts=4,
+        )
+    except TelegramError as exc:
         print(f"[telegram] send failed: {exc}", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[telegram] send failed (unexpected): {exc}", file=sys.stderr)
 
 
 async def send(text: str) -> None:
@@ -81,23 +98,25 @@ async def send(text: str) -> None:
 
 async def _send_photo_file(path: Path, caption: str = "") -> None:
     """Send an image file via sendPhoto. Swallows all errors."""
-    token = _bot_token()
     chat_id = _chat_id()
-    if not token or not chat_id or not path.exists():
+    bot = _bot()
+    if not bot or not chat_id or not path.exists():
         return
-    url = f"{_API_BASE}/bot{token}/sendPhoto"
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async def _send_once() -> None:
             with path.open("rb") as fh:
-                resp = await client.post(
-                    url,
-                    data={"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"},
-                    files={"photo": (path.name, fh, "image/jpeg")},
+                await bot.send_photo(
+                    chat_id=chat_id,
+                    photo=fh,
+                    caption=caption,
+                    parse_mode="HTML",
+                    filename=path.name,
                 )
-            if not resp.is_success:
-                print(f"[telegram] sendPhoto HTTP {resp.status_code}: {resp.text[:200]}", file=sys.stderr)
-    except Exception as exc:  # noqa: BLE001
+        await _with_retries(_send_once, attempts=4)
+    except TelegramError as exc:
         print(f"[telegram] sendPhoto failed: {exc}", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[telegram] sendPhoto failed (unexpected): {exc}", file=sys.stderr)
 
 
 def _compress_video(src: Path, dst: Path, target_mb: float = 45.0) -> bool:
@@ -161,9 +180,9 @@ async def _send_video_file(path: Path, caption: str = "") -> None:
     If file > 50 MB: compress to temp file with ffmpeg, send compressed version,
     then delete the temp file. Original is never touched.
     """
-    token = _bot_token()
     chat_id = _chat_id()
-    if not token or not chat_id or not path.exists():
+    bot = _bot()
+    if not bot or not chat_id or not path.exists():
         return
 
     send_path = path
@@ -188,19 +207,21 @@ async def _send_video_file(path: Path, caption: str = "") -> None:
             tmp_path.unlink(missing_ok=True)
             return
 
-    url = f"{_API_BASE}/bot{token}/sendDocument"
     try:
-        async with httpx.AsyncClient(timeout=300.0) as client:
+        async def _send_once() -> None:
             with send_path.open("rb") as fh:
-                resp = await client.post(
-                    url,
-                    data={"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"},
-                    files={"document": (path.name, fh, "video/mp4")},
+                await bot.send_document(
+                    chat_id=chat_id,
+                    document=fh,
+                    caption=caption,
+                    parse_mode="HTML",
+                    filename=path.name,
                 )
-            if not resp.is_success:
-                print(f"[telegram] sendDocument HTTP {resp.status_code}: {resp.text[:200]}", file=sys.stderr)
-    except Exception as exc:  # noqa: BLE001
+        await _with_retries(_send_once, attempts=4)
+    except TelegramError as exc:
         print(f"[telegram] sendDocument failed: {exc}", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[telegram] sendDocument failed (unexpected): {exc}", file=sys.stderr)
     finally:
         if send_path != path:
             send_path.unlink(missing_ok=True)  # delete temp, keep original

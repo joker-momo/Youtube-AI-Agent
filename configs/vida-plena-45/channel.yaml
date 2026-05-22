@@ -94,8 +94,8 @@ tts:
   pace_wpm: 145
 visuals:
   strategy: "auto"
-  source_dir: "inputs/image-library/vida-plena-45"
-  providers: ["pexels_video", "pexels", "pixabay"]
+  source_dir: "asset_library/source"
+  providers: ["pexels_video"]
   query_cache_ttl_hours: 24
   orientation: "landscape"
   per_page: 10
@@ -110,6 +110,11 @@ render:
   codec: "h264"
   crf: 18
   concurrency: 4
+  audio_loudness:
+    enabled: true
+    integrated_lufs: -14
+    true_peak_dbtp: -1
+    lra: 11
 upload:
   ai_disclosure: true
   default_privacy: "manual_upload_only"

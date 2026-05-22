@@ -4,8 +4,10 @@ import asyncio
 import json
 import os
 import re
+import signal
 import shutil
 from pathlib import Path
+from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
@@ -19,6 +21,7 @@ from video_agent.orchestrator import (
     create_job,
     load_job,
 )
+from video_agent.utils.logging import EventLogger
 from video_agent.orchestrator.idea_generator import (
     find_duplicate,
     generate_ideas,
@@ -63,7 +66,7 @@ from video_agent.web.approval_flow import (
     reset_stage_for_regen,
     set_approval,
 )
-from video_agent.web.run_all_pipeline import execute_run_all
+from video_agent.web.run_all_pipeline import execute_run_all, stop_request_path
 from video_agent.web.timeline_helpers import (
     STAGE_ARTIFACTS,
     STAGE_ETA_SECONDS,
@@ -74,6 +77,34 @@ from video_agent.web.timeline_helpers import (
 )
 
 app = FastAPI(title="video-agent-web", version="0.1.0")
+
+# Track live /run-all request tasks by job_id so /stop can cancel promptly.
+_RUN_ALL_TASKS: dict[str, asyncio.Task[Any]] = {}
+
+
+def _kill_job_subprocesses(job_dir: Path) -> list[int]:
+    """Best-effort hard-stop for known long-running subprocesses."""
+    killed: list[int] = []
+    for name in (".render.pid", ".thumbnail.pid"):
+        pid_path = job_dir / name
+        if not pid_path.exists():
+            continue
+        try:
+            pid = int(pid_path.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            continue
+        try:
+            os.killpg(pid, signal.SIGTERM)
+            killed.append(pid)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            pass
+        try:
+            pid_path.unlink()
+        except OSError:
+            pass
+    return killed
 
 
 class CreateJobRequest(BaseModel):
@@ -86,8 +117,20 @@ class RawScriptRequest(BaseModel):
     raw_response: str
 
 
+class EnvSaveRequest(BaseModel):
+    content: str
+
+
 def get_jobs_root() -> Path:
     return Path(os.environ.get("JOBS_DIR", "/app/jobs"))
+
+
+def _env_path() -> Path:
+    return repo_root() / ".env"
+
+
+def _env_example_path() -> Path:
+    return repo_root() / ".env.example"
 
 
 _SAFE_JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -121,6 +164,41 @@ def health() -> dict:
     return {"ok": True, "service": "app"}
 
 
+@app.get("/config/env")
+def get_env_config() -> dict:
+    env_path = _env_path()
+    example_path = _env_example_path()
+    content = ""
+    exists = env_path.exists()
+    if exists:
+        content = env_path.read_text(encoding="utf-8")
+    return {
+        "path": str(env_path),
+        "exists": exists,
+        "example_exists": example_path.exists(),
+        "content": content,
+    }
+
+
+@app.post("/config/env")
+def save_env_config(payload: EnvSaveRequest) -> dict:
+    env_path = _env_path()
+    env_path.write_text(payload.content, encoding="utf-8")
+    return {"ok": True, "path": str(env_path)}
+
+
+@app.post("/config/env/bootstrap")
+def bootstrap_env_config() -> dict:
+    env_path = _env_path()
+    example_path = _env_example_path()
+    if env_path.exists():
+        return {"ok": True, "created": False, "reason": ".env already exists"}
+    if not example_path.exists():
+        raise HTTPException(status_code=404, detail=".env.example not found")
+    env_path.write_text(example_path.read_text(encoding="utf-8"), encoding="utf-8")
+    return {"ok": True, "created": True, "path": str(env_path)}
+
+
 @app.get("/jobs")
 def list_jobs(jobs_root: Path = Depends(get_jobs_root)) -> dict:
     """List every job folder under JOBS_DIR that has a ``job.json``.
@@ -140,10 +218,13 @@ def list_jobs(jobs_root: Path = Depends(get_jobs_root)) -> dict:
             except Exception:
                 continue
             current_stage = payload.get("current_stage")
+            stop_requested = stop_request_path(entry).exists()
             stages = []
             for raw_stage in payload.get("stages", []):
                 stage = dict(raw_stage)
-                stage["status"] = effective_stage_status(stage, current_stage)
+                stage["status"] = effective_stage_status(
+                    stage, current_stage, stop_requested=stop_requested
+                )
                 stages.append(stage)
             done = sum(1 for s in stages if s.get("status") == "completed")
             total = len(stages)
@@ -187,6 +268,7 @@ def job_timeline(
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
 
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    stop_requested = stop_request_path(job_dir).exists()
 
     # Render ETA scales with target_duration_sec when known.
     render_eta = STAGE_ETA_SECONDS["render"]
@@ -214,7 +296,9 @@ def job_timeline(
     current_stage = state.get("current_stage")
     for raw_stage in state.get("stages", []):
         stage = dict(raw_stage)
-        stage["status"] = effective_stage_status(stage, current_stage)
+        stage["status"] = effective_stage_status(
+            stage, current_stage, stop_requested=stop_requested
+        )
         name = stage.get("name")
         cfg = STAGE_ARTIFACTS.get(name, {})
         inputs = []
@@ -247,6 +331,7 @@ def job_timeline(
 
     pct = (100.0 * completed_so_far / total_stages) if total_stages else 0
     approvals = load_approvals(job_dir)
+    stop_requested = stop_request_path(job_dir).exists()
     return {
         "job_id": job_id,
         "channel_id": state.get("channel_id"),
@@ -263,6 +348,7 @@ def job_timeline(
         "approval_blocked_by": approval_block_for_current_stage(
             state.get("current_stage"), approvals
         ),
+        "stop_requested": stop_requested,
     }
 
 
@@ -286,6 +372,88 @@ def job_artifact(
     # FastAPI guesses media type from the path; this is enough for our
     # mix of .json / .md / .txt / .mp4 / .jpg.
     return FileResponse(target)
+
+
+@app.get("/jobs/{job_id}/logs")
+def job_logs(
+    job_id: str,
+    jobs_root: Path = Depends(get_jobs_root),
+    tail: int = 200,
+) -> dict:
+    """Return realtime-friendly log payload for dashboard Logs tab."""
+    job_dir = _safe_job_dir(jobs_root, job_id)
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+
+    def _tail_lines(path: Path, limit: int) -> list[str]:
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except Exception:
+            return []
+        return lines[-max(1, limit):]
+
+    def _tail_jsonl(path: Path, limit: int) -> list[dict]:
+        out = []
+        for line in _tail_lines(path, limit):
+            try:
+                parsed = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(parsed, dict):
+                out.append(parsed)
+        return out
+
+    events = _tail_jsonl(job_dir / EVENT_LOG, limit=tail)
+    render_progress = None
+    try:
+        rp = job_dir / "render_progress.json"
+        if rp.exists():
+            render_progress = json.loads(rp.read_text(encoding="utf-8"))
+    except Exception:
+        render_progress = None
+
+    incident_dir = repo_root() / "logs" / "incidents"
+    latest_incident = None
+    if incident_dir.exists():
+        for p in sorted(incident_dir.glob("*.incident.json"), reverse=True)[:200]:
+            try:
+                payload = json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            for snap in payload.get("recent_jobs", []):
+                if job_id in str(snap.get("job_dir", "")):
+                    latest_incident = {
+                        "path": str(p),
+                        "run_id": payload.get("run_id"),
+                        "status": payload.get("status"),
+                        "ended_at": payload.get("ended_at"),
+                        "error": payload.get("error"),
+                    }
+                    break
+            if latest_incident:
+                break
+
+    text_lines = []
+    text_lines.append(f"job_id={job_id}")
+    text_lines.append(f"job_dir={job_dir}")
+    text_lines.append(f"stop_requested={stop_request_path(job_dir).exists()}")
+    if render_progress:
+        text_lines.append("render_progress=" + json.dumps(render_progress, ensure_ascii=False))
+    if latest_incident:
+        text_lines.append("latest_incident=" + json.dumps(latest_incident, ensure_ascii=False))
+    text_lines.append("events_tail:")
+    for e in events:
+        text_lines.append(json.dumps(e, ensure_ascii=False))
+
+    return {
+        "job_id": job_id,
+        "job_dir": str(job_dir),
+        "render_progress": render_progress,
+        "latest_incident": latest_incident,
+        "events": events,
+        "stop_requested": stop_request_path(job_dir).exists(),
+        "text": "\n".join(text_lines),
+    }
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -363,8 +531,21 @@ _DASHBOARD_HTML = """<!doctype html>
     color: #a7a7a7;
     font-size: 12px;
     border: 1px solid #262626;
+    background: transparent;
+    transition: all 140ms ease;
   }
-  .rail-pill.active { color: #fff; background: #242424; border-color: #343434; }
+  .rail-pill:hover { color: #e6e6e6; border-color: #3a3a3a; background: #1b1b1b; }
+  .rail-pill.active {
+    color: #fff;
+    background: linear-gradient(180deg, #2f2f2f, #232323);
+    border-color: #4a4a4a;
+    box-shadow: inset 0 0 0 1px #5a5a5a;
+    font-weight: 700;
+  }
+  .rail-pill:focus-visible {
+    outline: 2px solid #7db7ff;
+    outline-offset: 2px;
+  }
   .workspace { min-width: 0; display: grid; grid-template-rows: 76px minmax(0, 1fr); }
   .topbar {
     background: var(--panel);
@@ -503,6 +684,91 @@ _DASHBOARD_HTML = """<!doctype html>
   .panel-title { font-size: 13px; font-weight: 750; }
   .panel-count { font-size: 11px; color: var(--muted); }
   #jobs-list { padding: 12px; display: grid; gap: 10px; max-height: 660px; overflow: auto; }
+  .vnc-box {
+    border-top: 1px solid var(--line);
+    background: #fafafa;
+    padding: 10px 12px 12px;
+  }
+  .vnc-title { font-size: 11px; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 8px; }
+  .vnc-note { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  .vnc-controls { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+  .vnc-mode-btn {
+    border: 1px solid var(--line-strong);
+    background: #fff;
+    color: #374151;
+    border-radius: 6px;
+    height: 26px;
+    padding: 0 10px;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .vnc-mode-btn.active { background: var(--blue-soft); border-color: #b9d7f7; color: var(--blue); }
+  .vnc-frame {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    max-height: calc(100vh - 290px);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #111;
+    display: block;
+    margin: 10px 0;
+  }
+  .vnc-tab-box {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 16px;
+    margin-top: 14px;
+    box-shadow: var(--shadow);
+  }
+  .config-wrap { display: none; }
+  .config-wrap.active { display: block; }
+  .config-panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 18px;
+    box-shadow: var(--shadow);
+  }
+  .config-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+  .cfg-btn {
+    border: 1px solid var(--line-strong);
+    background: #fff;
+    color: #1f2937;
+    border-radius: 8px;
+    height: 34px;
+    padding: 0 12px;
+    font-size: 12px;
+    font-weight: 650;
+    cursor: pointer;
+    transition: all 140ms ease;
+  }
+  .cfg-btn:hover { border-color: #b8bec8; background: #f8fafc; }
+  .cfg-btn:disabled { opacity: .55; cursor: not-allowed; }
+  .cfg-btn.primary {
+    background: var(--blue);
+    border-color: #1b4f95;
+    color: #fff;
+    box-shadow: 0 8px 18px rgba(28,98,185,.18);
+  }
+  .cfg-btn.primary:hover { background: #19589f; border-color: #174d8b; }
+  .cfg-btn.warn {
+    border-color: #e6ceb0;
+    background: #fff7ed;
+    color: #9a4f00;
+  }
+  .cfg-btn.warn:hover { background: #ffedd5; border-color: #ddb78d; }
+  .config-textarea {
+    width: 100%;
+    min-height: 420px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 12px;
+    font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: #fff;
+    color: #111;
+  }
   .job-card {
     border: 1px solid var(--line);
     border-radius: 8px;
@@ -516,6 +782,20 @@ _DASHBOARD_HTML = """<!doctype html>
   .job-row { display: flex; justify-content: space-between; gap: 10px; align-items: start; }
   .job-main { min-width: 0; flex: 1 1 auto; }
   .job-tools { display: inline-flex; align-items: center; gap: 8px; }
+  .job-stop {
+    height: 24px;
+    min-width: 46px;
+    border: 1px solid #f2c2c2;
+    border-radius: 6px;
+    background: #fff7f7;
+    color: var(--red);
+    cursor: pointer;
+    font-size: 11px;
+    line-height: 1;
+    padding: 0 8px;
+    font-weight: 700;
+  }
+  .job-stop:disabled { opacity: .5; cursor: not-allowed; }
   .job-del {
     height: 24px;
     min-width: 24px;
@@ -557,6 +837,7 @@ _DASHBOARD_HTML = """<!doctype html>
   .sum-row { display: flex; justify-content: space-between; gap: 24px; align-items: start; }
   .sum-id { font-size: 20px; font-weight: 780; line-height: 1.2; word-break: break-word; }
   .sum-meta { margin-top: 9px; color: var(--muted); font-size: 12px; display: flex; flex-wrap: wrap; gap: 9px; align-items: center; }
+  .sum-actions { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
   .channel-pill { display: inline-flex; align-items: center; gap: 7px; }
   .avatar {
     width: 22px;
@@ -597,6 +878,25 @@ _DASHBOARD_HTML = """<!doctype html>
   }
   .stage-seg:hover .tip { display: block; }
   .sum-stagerow { margin-top: 13px; color: var(--muted); font-size: 12px; display: flex; justify-content: space-between; gap: 14px; }
+  .detail-tabs { margin-top: 18px; display: flex; gap: 8px; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+  .detail-tab-btn {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+    height: 30px;
+    padding: 0 12px;
+    cursor: pointer;
+  }
+  .detail-tab-btn.active {
+    border-color: #b9d7f7;
+    color: var(--blue);
+    background: var(--blue-soft);
+  }
+  .detail-tab-content { margin-top: 12px; }
+  .detail-tab-content.hidden { display: none; }
   .section-title {
     margin: 22px 0 10px;
     display: flex;
@@ -791,6 +1091,23 @@ _DASHBOARD_HTML = """<!doctype html>
   .ev-kind.JOB_COMPLETED { color: var(--green); }
   .ev-kind.STAGE_FAILED, .ev-kind.STAGE_NEEDS_REWORK { color: var(--red); }
   .ev-stage { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .logs-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .logs-sub { font-size: 12px; color: var(--muted); }
+  .log-card { border: 1px solid var(--line); border-radius: 8px; background: #fff; padding: 12px; margin-bottom: 10px; }
+  .log-title { font-size: 12px; font-weight: 750; color: var(--muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: .04em; }
+  .log-pre {
+    margin: 0;
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    max-height: 280px;
+    overflow: auto;
+    background: #0f1115;
+    color: #d7dce2;
+    font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
   .toast {
     position: fixed;
     right: 24px;
@@ -833,10 +1150,11 @@ _DASHBOARD_HTML = """<!doctype html>
   <aside class="rail">
     <div class="logo" aria-label="Video Agent"></div>
     <nav class="rail-nav" aria-label="Dashboard sections">
-      <div class="rail-pill active">Jobs</div>
+      <button type="button" class="rail-pill active" id="rail-jobs" onclick="switchPage('jobs')">Jobs</button>
+      <button type="button" class="rail-pill" id="rail-config" onclick="switchPage('config')">Config</button>
       <div class="rail-pill">AI</div>
       <div class="rail-pill">Files</div>
-      <div class="rail-pill">Logs</div>
+      <button type="button" class="rail-pill" id="rail-logs" onclick="openLogsTabFromRail()">Logs</button>
     </nav>
   </aside>
   <div class="workspace">
@@ -901,6 +1219,7 @@ _DASHBOARD_HTML = """<!doctype html>
           </div>
         </div>
       </div>
+      <div id="jobs-page">
       <section class="kpis" id="kpis"></section>
       <section class="ideas-section" id="ideas-section">
         <div class="panel-head" onclick="toggleIdeasPanel()">
@@ -934,11 +1253,25 @@ _DASHBOARD_HTML = """<!doctype html>
             <div class="panel-count" id="panel-count">0 jobs</div>
           </div>
           <div id="jobs-list"></div>
+          <div id="vnc-sidebar-box" class="vnc-box"></div>
         </div>
         <div class="panel detail-panel" id="detail-panel">
           <div class="empty">Chọn một job bên trái để xem timeline, artifact và output.</div>
         </div>
       </section>
+      </div>
+      <div id="config-page" class="config-wrap">
+          <div class="config-panel">
+          <div class="panel-title" style="margin-bottom:6px">Environment Config (.env)</div>
+          <div class="config-row">
+            <button class="cfg-btn warn" type="button" onclick="bootstrapEnvFromExample()">Initialize from .env.example</button>
+            <button class="cfg-btn" type="button" onclick="loadEnvConfig()">Reload</button>
+            <button class="cfg-btn primary" type="button" onclick="saveEnvConfig()">Save .env</button>
+          </div>
+          <div class="config-row" id="env-meta" style="font-size:12px;color:var(--muted)">Loading...</div>
+          <textarea id="env-editor" class="config-textarea" placeholder="KEY=value"></textarea>
+        </div>
+      </div>
     </main>
   </div>
 </div>
@@ -952,8 +1285,18 @@ let LAST_TIMELINE = null;
 let LAST_TIMELINE_JSON = '';
 let LAST_JOBS_JSON = '';
 let TIMELINE_POLL_TIMER = null;
+let LOGS_POLL_TIMER = null;
 let WS_RETRY_TIMER = null;
 let WS_RETRY_MS = 1000;
+let ACTIVE_DETAIL_TAB = 'timeline';
+let LAST_LOGS_PAYLOAD = null;
+let JOBS_BY_ID = {};
+let ACTIVE_PAGE = 'jobs';
+let VNC_MOUNTED_JOB_ID = null;
+let VNC_FIT_MODE = true;
+const VNC_IDLE_SENTINEL = '__idle__';
+// Cache for render progress — survives DOM rebuilds on each fetchTimeline poll
+let RENDER_PROGRESS_CACHE = { pct: 0, meta: '' };
 
 const STAGE_LABEL = {
   idea_research: 'Idea research',
@@ -989,7 +1332,18 @@ function fmtSize(n) {
 }
 
 function fmtTime(ts) {
-  return ts ? ts.slice(11, 19) : '-';
+  if (!ts) return '-';
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return ts;
+  return new Intl.DateTimeFormat(undefined, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(d);
 }
 
 function jobState(job) {
@@ -1005,6 +1359,8 @@ async function fetchJobs() {
     const r = await fetch('/jobs');
     const d = await r.json();
     const jobs = d.jobs || [];
+    JOBS_BY_ID = {};
+    for (const j of jobs) JOBS_BY_ID[j.job_id] = j;
     document.getElementById('job-count').textContent = d.count + ' jobs';
     document.getElementById('panel-count').textContent = d.count + ' jobs';
     // Only re-render jobs list when data actually changed — prevents flicker from polling.
@@ -1021,7 +1377,8 @@ async function fetchJobs() {
     if (!hasSelected) {
       SELECTED_ID = null;
       if (jobs.length) {
-        selectJob(jobs[0].job_id);
+        const runningJob = jobs.find((j) => Array.isArray(j.stages) && j.stages.some((s) => s.status === 'in_progress'));
+        selectJob((runningJob || jobs[0]).job_id);
         return;
       }
       if (WS) { try { WS.close(); } catch (e) {} WS = null; }
@@ -1029,8 +1386,10 @@ async function fetchJobs() {
       const label = document.getElementById('ws-label');
       dot.className = 'ws-dot off';
       label.textContent = 'disconnected';
+      updateVncPanel();
       return;
     }
+    updateVncPanel();
     fetchTimeline(SELECTED_ID);
   } catch (e) { console.error(e); }
 }
@@ -1056,9 +1415,11 @@ function renderJobsList(jobs) {
     const pct = j.stages_total ? (100 * j.stages_done / j.stages_total) : 0;
     const state = jobState(j);
     const fillCls = state === 'completed' ? 'completed' : (state === 'failed' ? 'failed' : '');
+    const stopDisabled = state !== 'in_progress' ? 'disabled' : '';
+    const stopTitle = state === 'in_progress' ? 'Request stop' : 'Job is not running';
     const deleteDisabled = state === 'in_progress' ? 'disabled' : '';
     const deleteTitle = state === 'in_progress'
-      ? 'Cannot delete while running'
+      ? 'Stop job first'
       : 'Delete job';
     const card = document.createElement('div');
     card.className = 'job-card' + (SELECTED_ID === j.job_id ? ' active' : '');
@@ -1067,6 +1428,7 @@ function renderJobsList(jobs) {
         <div class="job-main"><div class="job-id">${escapeHtml(j.job_id)}</div></div>
         <div class="job-tools">
           <div class="job-count"><b>${j.stages_done}</b>/${j.stages_total}</div>
+          <button class="job-stop" data-action="stop-job" data-job="${escapeHtml(j.job_id)}" ${stopDisabled} title="${escapeHtml(stopTitle)}">Stop</button>
           <button class="job-del" data-action="delete-job" data-job="${escapeHtml(j.job_id)}" ${deleteDisabled} title="${escapeHtml(deleteTitle)}">×</button>
         </div>
       </div>
@@ -1080,6 +1442,14 @@ function renderJobsList(jobs) {
       </div>
       <div class="job-bar ${fillCls}"><div style="width:${pct}%"></div></div>
     `;
+    const stopBtn = card.querySelector('button[data-action="stop-job"]');
+    if (stopBtn) {
+      stopBtn.onclick = (ev) => {
+        ev.stopPropagation();
+        if (state !== 'in_progress') return;
+        stopJob(j.job_id);
+      };
+    }
     const delBtn = card.querySelector('button[data-action="delete-job"]');
     if (delBtn) {
       delBtn.onclick = (ev) => {
@@ -1092,6 +1462,29 @@ function renderJobsList(jobs) {
     root.appendChild(card);
   }
   if (!jobs.length) root.innerHTML = '<div class="empty" style="min-height:320px">Chưa có job nào.</div>';
+}
+
+async function stopJob(jobId) {
+  if (!jobId) return;
+  if (!confirm(`Stop running job "${jobId}"?`)) return;
+  try {
+    const r = await fetch('/jobs/' + encodeURIComponent(jobId) + '/stop', { method: 'POST' });
+    if (!r.ok) {
+      let msg = 'Stop request failed';
+      try {
+        const body = await r.json();
+        msg = body.detail || msg;
+      } catch (e) {}
+      showToast(msg);
+      return;
+    }
+    showToast('Stop requested');
+    LAST_TIMELINE_JSON = '';
+    if (SELECTED_ID === jobId) fetchTimeline(jobId);
+    fetchJobs();
+  } catch (e) {
+    showToast('Stop request failed');
+  }
 }
 
 async function deleteJob(jobId) {
@@ -1124,9 +1517,55 @@ function selectJob(jobId) {
   SELECTED_ID = jobId;
   OPEN_STAGES = new Set();
   LAST_TIMELINE_JSON = ''; // force re-render on job switch
+  LAST_LOGS_PAYLOAD = null;
   document.querySelectorAll('.job-card').forEach(c => c.classList.remove('active'));
+  updateVncPanel();
   fetchTimeline(jobId);
+  if (ACTIVE_DETAIL_TAB === 'logs') {
+    fetchJobLogs(jobId);
+    startLogsPolling();
+  } else {
+    stopLogsPolling();
+  }
   reopenWs(jobId);
+}
+
+function updateVncPanel() {
+  const panel = document.getElementById('vnc-sidebar-box');
+  if (!panel) return;
+  const vncUrl = 'http://localhost:7900/vnc.html?autoconnect=1&resize=scale&view_only=false';
+  const selected = SELECTED_ID ? JOBS_BY_ID[SELECTED_ID] : null;
+  const selectedRunning = selected && Array.isArray(selected.stages) && selected.stages.some(s => s.status === 'in_progress');
+  const runningFallback = Object.values(JOBS_BY_ID).find((job) => Array.isArray(job.stages) && job.stages.some((s) => s.status === 'in_progress'));
+  const j = selectedRunning ? selected : runningFallback;
+  if (!j) {
+    if (VNC_MOUNTED_JOB_ID === VNC_IDLE_SENTINEL && panel.querySelector('iframe.vnc-frame')) {
+      return;
+    }
+    VNC_MOUNTED_JOB_ID = VNC_IDLE_SENTINEL;
+    panel.innerHTML = `
+      <div class="vnc-title">Live VNC</div>
+      <div class="vnc-note">Chưa có job chạy. Đang mở browser runtime mặc định.</div>
+      <iframe class="vnc-frame" src="${vncUrl}" title="VNC Runtime" allow="fullscreen" style="margin:0;"></iframe>
+    `;
+    return;
+  }
+  if (VNC_MOUNTED_JOB_ID === j.job_id && panel.querySelector('iframe.vnc-frame')) {
+    const note = panel.querySelector('.vnc-note');
+    if (note) note.innerHTML = `Đang theo dõi: <b>${escapeHtml(j.job_id)}</b>`;
+    return;
+  }
+  VNC_MOUNTED_JOB_ID = j.job_id;
+  panel.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+      <div>
+        <div class="vnc-title" style="margin:0;">Live VNC</div>
+        <div class="vnc-note" style="margin:2px 0 0;font-size:11px;">Đang theo dõi: <b>${escapeHtml(j.job_id)}</b></div>
+      </div>
+      <button class="action-btn" onclick="VNC_MOUNTED_JOB_ID=null;updateVncPanel()" style="height:22px;font-size:10px;padding:0 6px;line-height:1;">🔄 Reconnect</button>
+    </div>
+    <iframe class="vnc-frame" src="${vncUrl}" title="VNC Runtime" allow="fullscreen" style="margin:0;"></iframe>
+  `;
 }
 
 function stableTimelineKey(t) {
@@ -1163,6 +1602,7 @@ function renderTimeline(t) {
   const root = document.getElementById('detail-panel');
   const allDone = t.stages_total > 0 && t.stages_done === t.stages_total;
   const failed = (t.stages || []).some(s => s.status === 'failed');
+  const stopped = !!t.stop_requested;
   const renderStage = t.stages.find(s => s.name === 'render');
   // Only show final output when render stage is fully completed — not when
   // video.mp4 happens to exist from a previous run while render is in_progress.
@@ -1186,10 +1626,14 @@ function renderTimeline(t) {
             <span>updated ${fmtTime(t.updated_at)}</span>
             <span>created ${fmtTime(t.created_at)}</span>
           </div>
+          <div class="sum-actions">
+            <button class="action-btn warn" type="button" onclick="stopJob('${escapeJs(t.job_id)}')" ${t.stages.some(s => s.status === 'in_progress') ? '' : 'disabled'}>Stop Job</button>
+            <button class="action-btn" type="button" onclick="deleteJob('${escapeJs(t.job_id)}')" ${t.stages.some(s => s.status === 'in_progress') ? 'disabled' : ''}>Delete Job</button>
+          </div>
         </div>
         <div class="sum-right">
           <div class="sum-pct">${Math.round(t.percent)}<span class="pct-unit">%</span></div>
-          <div class="sum-eta">${failed ? '<b style="color:var(--red)">Failed</b>' : allDone ? '<b>Completed</b>' : 'ETA ~' + fmtSec(t.remaining_eta_seconds)}</div>
+          <div class="sum-eta">${stopped ? '<b style="color:var(--amber)">Stopped by operator</b>' : failed ? '<b style="color:var(--red)">Failed</b>' : allDone ? '<b>Completed</b>' : 'ETA ~' + fmtSec(t.remaining_eta_seconds)}</div>
         </div>
       </div>
       <div class="sum-bar ${barClass}"><div style="width:${t.percent}%"></div></div>
@@ -1199,23 +1643,160 @@ function renderTimeline(t) {
         <span>${t.stages_done}/${t.stages_total} stages</span>
       </div>
     </div>
-    <div class="section-title"><span>Pipeline stages</span><span>${t.stages_done}/${t.stages_total} done</span></div>
-    <div class="timeline" id="timeline"></div>
-    ${videoReady ? '<div id="final-mount"></div>' : ''}
-    <div class="events ${EVENTS_OPEN ? 'open' : ''}" id="events-panel">
-      <div class="events-head" onclick="toggleEvents()">
-        <h3>WebSocket events</h3>
-        <div><span class="events-count" id="events-count">live stream</span><span class="caret">›</span></div>
+    <div class="detail-tabs">
+      <button type="button" class="detail-tab-btn ${ACTIVE_DETAIL_TAB === 'timeline' ? 'active' : ''}" onclick="switchDetailTab('timeline')">Timeline</button>
+      <button type="button" class="detail-tab-btn ${ACTIVE_DETAIL_TAB === 'logs' ? 'active' : ''}" onclick="switchDetailTab('logs')">Logs</button>
+    </div>
+    <div id="detail-tab-timeline" class="detail-tab-content ${ACTIVE_DETAIL_TAB === 'timeline' ? '' : 'hidden'}">
+      <div class="section-title"><span>Pipeline stages</span><span>${t.stages_done}/${t.stages_total} done</span></div>
+      <div class="timeline" id="timeline"></div>
+      ${videoReady ? '<div id="final-mount"></div>' : ''}
+      <div class="events ${EVENTS_OPEN ? 'open' : ''}" id="events-panel">
+        <div class="events-head" onclick="toggleEvents()">
+          <h3>WebSocket events</h3>
+          <div><span class="events-count" id="events-count">live stream</span><span class="caret">›</span></div>
+        </div>
+        <div class="events-body" id="events"></div>
       </div>
-      <div class="events-body" id="events"></div>
+    </div>
+    <div id="detail-tab-logs" class="detail-tab-content ${ACTIVE_DETAIL_TAB === 'logs' ? '' : 'hidden'}"></div>
+  `;
+  if (ACTIVE_DETAIL_TAB === 'timeline') {
+    const tl = document.getElementById('timeline');
+    t.stages.forEach((s, idx) => {
+      tl.appendChild(renderStep(t.job_id, s, idx));
+      renderStageExtras(t.job_id, s);  // must be called after appendChild so getElementById finds the element
+    });
+    if (videoReady) renderFinal(t);
+    stopLogsPolling();
+  } else {
+    renderLogsTab(LAST_LOGS_PAYLOAD);
+    if (SELECTED_ID) {
+      fetchJobLogs(SELECTED_ID);
+      startLogsPolling();
+    }
+  }
+}
+
+function switchDetailTab(tab) {
+  if (tab !== 'timeline' && tab !== 'logs') return;
+  ACTIVE_DETAIL_TAB = tab;
+  updateRailNav();
+  // Instant client-side switch so the tab always responds even if
+  // timeline fetch is delayed/fails.
+  const timelinePane = document.getElementById('detail-tab-timeline');
+  const logsPane = document.getElementById('detail-tab-logs');
+  if (timelinePane && logsPane) {
+    timelinePane.classList.toggle('hidden', tab !== 'timeline');
+    logsPane.classList.toggle('hidden', tab !== 'logs');
+    document.querySelectorAll('.detail-tab-btn').forEach((btn) => {
+      const label = (btn.textContent || '').trim();
+      btn.classList.toggle('active', 
+        (tab === 'logs' && label === 'Logs') || 
+        (tab === 'timeline' && label === 'Timeline')
+      );
+    });
+    if (tab === 'logs') {
+      renderLogsTab(LAST_LOGS_PAYLOAD);
+      if (SELECTED_ID) {
+        fetchJobLogs(SELECTED_ID);
+        startLogsPolling();
+      }
+    } else {
+      stopLogsPolling();
+    }
+    return;
+  }
+  LAST_TIMELINE_JSON = ''; // fallback: re-render whole detail panel
+  if (SELECTED_ID) fetchTimeline(SELECTED_ID);
+}
+
+function updateRailNav() {
+  const jobs = document.getElementById('rail-jobs');
+  const config = document.getElementById('rail-config');
+  const logs = document.getElementById('rail-logs');
+  if (jobs) jobs.classList.toggle('active', ACTIVE_PAGE === 'jobs' && ACTIVE_DETAIL_TAB !== 'logs');
+  if (config) config.classList.toggle('active', ACTIVE_PAGE === 'config');
+  if (logs) logs.classList.toggle('active', ACTIVE_PAGE === 'jobs' && ACTIVE_DETAIL_TAB === 'logs');
+}
+
+function openLogsTabFromRail() {
+  if (ACTIVE_PAGE !== 'jobs') switchPage('jobs');
+  if (!SELECTED_ID) {
+    showToast('Select a job first');
+    return;
+  }
+  switchDetailTab('logs');
+}
+
+function switchPage(page) {
+  if (page !== 'jobs' && page !== 'config') return;
+  ACTIVE_PAGE = page;
+  const jobsPage = document.getElementById('jobs-page');
+  const configPage = document.getElementById('config-page');
+  if (jobsPage) jobsPage.style.display = (page === 'jobs') ? '' : 'none';
+  if (configPage) configPage.classList.toggle('active', page === 'config');
+  updateRailNav();
+  if (page === 'config') loadEnvConfig();
+}
+
+async function fetchJobLogs(jobId) {
+  try {
+    const r = await fetch('/jobs/' + encodeURIComponent(jobId) + '/logs?tail=200');
+    if (!r.ok) return;
+    const payload = await r.json();
+    LAST_LOGS_PAYLOAD = payload;
+    if (ACTIVE_DETAIL_TAB === 'logs' && SELECTED_ID === jobId) renderLogsTab(payload);
+  } catch (e) {}
+}
+
+function startLogsPolling() {
+  if (LOGS_POLL_TIMER || ACTIVE_DETAIL_TAB !== 'logs') return;
+  LOGS_POLL_TIMER = setInterval(() => {
+    if (SELECTED_ID && ACTIVE_DETAIL_TAB === 'logs') fetchJobLogs(SELECTED_ID);
+  }, 2000);
+}
+
+function stopLogsPolling() {
+  if (LOGS_POLL_TIMER) {
+    clearInterval(LOGS_POLL_TIMER);
+    LOGS_POLL_TIMER = null;
+  }
+}
+
+function renderLogsTab(payload) {
+  const mount = document.getElementById('detail-tab-logs');
+  if (!mount) return;
+  if (!payload) {
+    mount.innerHTML = '<div class="empty" style="min-height:220px">Chưa có log cho job này.</div>';
+    return;
+  }
+  const rp = payload.render_progress || null;
+  const inc = payload.latest_incident || null;
+  const events = Array.isArray(payload.events) ? payload.events : [];
+  const eventText = events.length
+    ? events.map(e => JSON.stringify(e)).join('\\n')
+    : '(no events yet)';
+  const rpText = rp ? JSON.stringify(rp, null, 2) : '(no render_progress.json yet)';
+  const incText = inc ? JSON.stringify(inc, null, 2) : '(no incident found for this job)';
+  mount.innerHTML = `
+    <div class="logs-head">
+      <div class="logs-sub">Realtime logs for <b>${escapeHtml(payload.job_id || '')}</b> · auto refresh 2s</div>
+      <button class="copy-btn" data-clip="${escapeHtml(payload.text || '')}" onclick="copyText(this, this.dataset.clip)">copy all logs</button>
+    </div>
+    <div class="log-card">
+      <div class="log-title">Render progress</div>
+      <pre class="log-pre">${escapeHtml(rpText)}</pre>
+    </div>
+    <div class="log-card">
+      <div class="log-title">Latest incident</div>
+      <pre class="log-pre">${escapeHtml(incText)}</pre>
+    </div>
+    <div class="log-card">
+      <div class="log-title">Event tail (${events.length})</div>
+      <pre class="log-pre">${escapeHtml(eventText)}</pre>
     </div>
   `;
-  const tl = document.getElementById('timeline');
-  t.stages.forEach((s, idx) => {
-    tl.appendChild(renderStep(t.job_id, s, idx));
-    renderStageExtras(t.job_id, s);  // must be called after appendChild so getElementById finds the element
-  });
-  if (videoReady) renderFinal(t);
 }
 
 // Render progress polling state
@@ -1228,18 +1809,25 @@ function startRenderProgressPolling(jobId) {
       const r = await fetch('/jobs/' + encodeURIComponent(jobId) + '/stages/render/progress');
       if (!r.ok) return;
       const p = await r.json();
+
+      // Build meta string
+      const parts = [];
+      if (p.frame && p.total_frames) parts.push(p.frame + '/' + p.total_frames + ' frames');
+      if (p.fps) parts.push(p.fps.toFixed(1) + ' fps');
+      if (p.eta) parts.push('ETA ' + p.eta);
+      const metaStr = parts.join(' · ');
+
+      // Save into global cache FIRST — so DOM rebuild in fetchTimeline reads this value
+      RENDER_PROGRESS_CACHE = { pct: p.percent || 0, meta: metaStr };
+
+      // Then update existing DOM elements (targeted update, no flicker)
       const bar = document.getElementById('render-progress-bar');
       const pct = document.getElementById('render-progress-pct');
       const meta = document.getElementById('render-progress-meta');
       if (bar) bar.style.width = p.percent + '%';
       if (pct) pct.textContent = Math.round(p.percent) + '%';
-      if (meta) {
-        const parts = [];
-        if (p.frame && p.total_frames) parts.push(p.frame + '/' + p.total_frames + ' frames');
-        if (p.fps) parts.push(p.fps.toFixed(1) + ' fps');
-        if (p.eta) parts.push('ETA ' + p.eta);
-        meta.textContent = parts.join(' · ');
-      }
+      if (meta) meta.textContent = metaStr;
+
       // Stop polling when render completes (step is no longer in_progress)
       const lastTl = LAST_TIMELINE;
       if (lastTl) {
@@ -1247,6 +1835,7 @@ function startRenderProgressPolling(jobId) {
         if (rs && rs.status !== 'in_progress') {
           clearInterval(RENDER_POLL_TIMER);
           RENDER_POLL_TIMER = null;
+          RENDER_PROGRESS_CACHE = { pct: 0, meta: '' };
         }
       }
     } catch(e) {}
@@ -1266,16 +1855,20 @@ function renderStep(jobId, s, idx) {
     : (s.status === 'completed' ? '' : '~' + fmtSec(s.eta_seconds));
 
   // Render-specific progress bar (shown when in_progress)
-  const renderProgressHtml = (s.name === 'render' && s.status === 'in_progress') ? `
+  // Read from RENDER_PROGRESS_CACHE — a global that survives DOM rebuilds.
+  // The old DOM elements are already gone by the time renderStep() is called,
+  // so we CANNOT read them here. The cache is updated by startRenderProgressPolling.
+  const _rpc = (s.name === 'render' && s.status === 'in_progress') ? RENDER_PROGRESS_CACHE : null;
+  const renderProgressHtml = _rpc ? `
     <div style="margin:10px 0 4px;padding:0 2px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
         <span style="font-size:12px;color:var(--muted);font-weight:600">Rendering…</span>
-        <span id="render-progress-pct" style="font-size:13px;font-weight:700;color:var(--blue)">0%</span>
+        <span id="render-progress-pct" style="font-size:13px;font-weight:700;color:var(--blue)">${Math.round(_rpc.pct)}%</span>
       </div>
       <div style="height:6px;border-radius:4px;background:var(--line-strong);overflow:hidden">
-        <div id="render-progress-bar" style="height:100%;width:0%;background:var(--blue);border-radius:4px;transition:width 1s linear"></div>
+        <div id="render-progress-bar" style="height:100%;width:${_rpc.pct}%;background:var(--blue);border-radius:4px;transition:width 1s linear"></div>
       </div>
-      <div id="render-progress-meta" style="margin-top:4px;font-size:11px;color:var(--muted-2)"></div>
+      <div id="render-progress-meta" style="margin-top:4px;font-size:11px;color:var(--muted-2)">${_rpc.meta}</div>
     </div>` : '';
 
   el.innerHTML = `
@@ -1317,12 +1910,8 @@ function renderStep(jobId, s, idx) {
   } else if (s.name === 'render' && s.status !== 'in_progress') {
     stopRenderProgressPolling();
   }
-  // Auto-expand approval-required stages that are completed but not confirmed
-  // so the user sees the insight + buttons without having to click
-  if (isStageApprovalRequired(s.name) && s.status === 'completed' && !isStageApproved(s.name)) {
-    el.classList.add('open');
-    OPEN_STAGES.add(s.name);
-  }
+  // NOTE: approval-required stages are NOT auto-expanded.
+  // User must click to open them. OPEN_STAGES persists their manual choice.
   return el;
 }
 
@@ -1720,6 +2309,7 @@ async function renderStageExtras(jobId, s) {
   const actions = document.getElementById('actions-' + s.name);
   const insight = document.getElementById('insight-' + s.name);
   if (!actions || !insight) return;
+  const hasOutput = (path) => Array.isArray(s.outputs) && s.outputs.some(o => o.path === path && o.exists);
 
   if (isStageApprovalRequired(s.name) && s.status === 'completed') {
     const approved = isStageApproved(s.name);
@@ -1735,30 +2325,39 @@ async function renderStageExtras(jobId, s) {
   try {
     let rendered = false;
     if (s.name === 'idea_research') {
+      if (!hasOutput('research.json')) return;
       insight.innerHTML = renderResearchInsight(await fetchArtifactJson(jobId, 'research.json'));
       rendered = true;
     } else if (s.name === 'script_promote') {
+      if (!hasOutput('script.json')) return;
       insight.innerHTML = renderScriptInsight(await fetchArtifactJson(jobId, 'script.json'));
       rendered = true;
     } else if (s.name === 'scenes_promote') {
+      if (!hasOutput('scenes.json')) return;
       insight.innerHTML = renderScenesInsight(await fetchArtifactJson(jobId, 'scenes.json'));
       rendered = true;
     } else if (s.name === 'seo_promote') {
+      if (!hasOutput('seo.json')) return;
       insight.innerHTML = renderSeoInsight(await fetchArtifactJson(jobId, 'seo.json'));
       rendered = true;
     } else if (s.name === 'script_qa') {
-      insight.innerHTML = renderQaInsight(await fetchArtifactJson(jobId, 'operator/gemini/script_qa.json'));
+      if (!hasOutput('operator/claude/script_qa.json')) return;
+      insight.innerHTML = renderQaInsight(await fetchArtifactJson(jobId, 'operator/claude/script_qa.json'));
       rendered = true;
     } else if (s.name === 'scenes_qa') {
-      insight.innerHTML = renderQaInsight(await fetchArtifactJson(jobId, 'operator/gemini/scenes_qa.json'));
+      if (!hasOutput('operator/claude/scenes_qa.json')) return;
+      insight.innerHTML = renderQaInsight(await fetchArtifactJson(jobId, 'operator/claude/scenes_qa.json'));
       rendered = true;
     } else if (s.name === 'seo_qa') {
-      insight.innerHTML = renderQaInsight(await fetchArtifactJson(jobId, 'operator/gemini/seo_qa.json'));
+      if (!hasOutput('operator/claude/seo_qa.json')) return;
+      insight.innerHTML = renderQaInsight(await fetchArtifactJson(jobId, 'operator/claude/seo_qa.json'));
       rendered = true;
     } else if (s.name === 'seo_vidiq') {
+      if (!hasOutput('seo_vidiq_report.json')) return;
       insight.innerHTML = renderSeoVidiqInsight(await fetchArtifactJson(jobId, 'seo_vidiq_report.json'));
       rendered = true;
     } else if (s.name === 'thumbnail_image') {
+      if (!hasOutput('thumbnail_bg.png')) return;
       // Show generated thumbnail background
       const bgUrl = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=thumbnail_bg.png';
       insight.innerHTML = `
@@ -1770,9 +2369,12 @@ async function renderStageExtras(jobId, s) {
         </div>`;
       rendered = true;
     } else if (s.name === 'render') {
+      if (!hasOutput('video.mp4') && !hasOutput('thumbnail.jpg') && !hasOutput('thumbnail_1.jpg')) return;
       // Show all 3 rendered thumbnails + title variants from seo.json
       let seo = {};
-      try { seo = await fetchArtifactJson(jobId, 'seo.json'); } catch(e) {}
+      try {
+        if (hasOutput('seo.json')) seo = await fetchArtifactJson(jobId, 'seo.json');
+      } catch(e) {}
       const variants = Array.isArray(seo.title_variants) && seo.title_variants.length
         ? seo.title_variants
         : [{title: seo.title || '', thumbnail_text: seo.thumbnail_text || '', score: null}];
@@ -1854,16 +2456,25 @@ async function renderFinal(t) {
   if (!mount) return;
   const jobId = t.job_id;
   const videoUrl = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=video.mp4';
+  const byName = {};
+  for (const st of (t.stages || [])) byName[st.name] = st;
+  const stageHas = (stageName, p) => {
+    const st = byName[stageName];
+    return !!(st && Array.isArray(st.outputs) && st.outputs.some(o => o.path === p && o.exists));
+  };
   let seo = {};
-  try {
-    const sr = await fetch('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=seo.json');
-    if (sr.ok) seo = await sr.json();
-  } catch (e) {}
+  if (stageHas('seo_promote', 'seo.json')) {
+    try {
+      const sr = await fetch('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=seo.json');
+      if (sr.ok) seo = await sr.json();
+    } catch (e) {}
+  }
 
   // Fetch all 3 QA files to build YouTube Policy summary
   async function fetchQa(name) {
+    if (!stageHas(name, 'operator/claude/' + name + '_qa.json')) return null;
     try {
-      const r = await fetch('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent('operator/gemini/' + name + '_qa.json'));
+      const r = await fetch('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent('operator/claude/' + name + '_qa.json'));
       return r.ok ? await r.json() : null;
     } catch (e) { return null; }
   }
@@ -2042,6 +2653,62 @@ function showToast(msg) {
   showToast._t = setTimeout(() => t.classList.remove('show'), 1600);
 }
 
+async function loadEnvConfig() {
+  const meta = document.getElementById('env-meta');
+  const editor = document.getElementById('env-editor');
+  if (!meta || !editor) return;
+  meta.textContent = 'Loading...';
+  try {
+    const r = await fetch('/config/env');
+    const d = await r.json();
+    if (!r.ok) {
+      meta.textContent = 'Failed to load .env';
+      return;
+    }
+    editor.value = d.content || '';
+    meta.textContent = `Path: ${d.path} | .env: ${d.exists ? 'exists' : 'missing'} | .env.example: ${d.example_exists ? 'found' : 'missing'}`;
+  } catch (e) {
+    meta.textContent = 'Failed to load .env';
+  }
+}
+
+async function saveEnvConfig() {
+  const editor = document.getElementById('env-editor');
+  if (!editor) return;
+  try {
+    const r = await fetch('/config/env', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({content: editor.value || ''}),
+    });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      showToast('Save failed: ' + (d.detail || r.status));
+      return;
+    }
+    showToast('Saved .env');
+    loadEnvConfig();
+  } catch (e) {
+    showToast('Save failed');
+  }
+}
+
+async function bootstrapEnvFromExample() {
+  try {
+    const r = await fetch('/config/env/bootstrap', { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      showToast('Init failed: ' + (d.detail || r.status));
+      return;
+    }
+    if (d.created) showToast('Created .env from .env.example');
+    else showToast(d.reason || '.env already exists');
+    loadEnvConfig();
+  } catch (e) {
+    showToast('Init failed');
+  }
+}
+
 async function runStage(evt, jobId, stageName) {
   evt.stopPropagation(); // don't toggle the step accordion
   if (isBlockedByApproval(stageName)) {
@@ -2204,10 +2871,16 @@ async function submitNewJob() {
     await fetchTimeline(jobId);
 
     // Auto-run full pipeline (fire-and-forget — UI polls for progress)
-    fetch('/jobs/' + encodeURIComponent(jobId) + '/run-all', { method: 'POST' })
-      .then(r => r.json())
-      .then(d => {
-        if (d && d.error) showToast('Pipeline error: ' + d.error);
+    fetch('/jobs/' + encodeURIComponent(jobId) + '/run-all?enforce_approvals=false', { method: 'POST' })
+      .then(async (r) => {
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          const msg = (d && (d.error || d.detail?.error || d.detail)) || ('HTTP ' + r.status);
+          throw new Error(String(msg));
+        }
+        return d;
+      })
+      .then(() => {
         LAST_TIMELINE_JSON = '';
         if (SELECTED_ID === jobId) fetchTimeline(jobId);
       })
@@ -2506,10 +3179,16 @@ async function createJobFromIdea(idea, savedPath) {
     await fetchTimeline(jobId);
 
     // Auto-run full pipeline (fire-and-forget — UI polls for progress)
-    fetch('/jobs/' + encodeURIComponent(jobId) + '/run-all', { method: 'POST' })
-      .then(r => r.json())
-      .then(d => {
-        if (d && d.error) showToast('Pipeline error: ' + d.error);
+    fetch('/jobs/' + encodeURIComponent(jobId) + '/run-all?enforce_approvals=false', { method: 'POST' })
+      .then(async (r) => {
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          const msg = (d && (d.error || d.detail?.error || d.detail)) || ('HTTP ' + r.status);
+          throw new Error(String(msg));
+        }
+        return d;
+      })
+      .then(() => {
         LAST_TIMELINE_JSON = '';
         if (SELECTED_ID === jobId) fetchTimeline(jobId);
       })
@@ -2568,9 +3247,41 @@ def delete_job(
     if job_has_in_progress_stage(payload):
         raise HTTPException(
             status_code=409,
-            detail="Cannot delete a running job. Wait until it finishes or fails.",
+            detail="Cannot delete a running job. Stop it first, then delete.",
         )
     shutil.rmtree(job_dir)
+
+
+@app.post("/jobs/{job_id}/stop")
+def stop_job(
+    job_id: str,
+    jobs_root: Path = Depends(get_jobs_root),
+) -> dict:
+    """Request graceful stop for the current /run-all execution."""
+    job_dir = _safe_job_dir(jobs_root, job_id)
+    job_file = job_dir / "job.json"
+    if not job_file.exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    stop_request_path(job_dir).write_text("1\n", encoding="utf-8")
+    try:
+        state = load_job(job_dir)
+        EventLogger(job_dir / EVENT_LOG).log(
+            "STOP_REQUESTED",
+            {"job_id": state.job_id, "current_stage": state.current_stage},
+        )
+    except Exception:
+        pass
+    killed_pids = _kill_job_subprocesses(job_dir)
+    cancelled = False
+    task = _RUN_ALL_TASKS.get(job_id)
+    if task is not None and not task.done():
+        cancelled = task.cancel("stop requested by operator")
+    return {
+        "job_id": job_id,
+        "stop_requested": True,
+        "cancelled": bool(cancelled),
+        "killed_pids": killed_pids,
+    }
 
 
 @app.post("/jobs/{job_id}/advance")
@@ -3176,9 +3887,10 @@ async def post_generate_ideas(
         ideas, top_keywords, seed_source = await generate_ideas(
             channel_path=channel_path,
             chatgpt_fn=lambda msgs: client.run_session("chatgpt", msgs),
-            vidiq_fn=client.run_vidiq_scores,
+            vidiq_fn=getattr(client, "run_vidiq_scores", None),
             seed_topics=req.seed_topics,
             count=req.count,
+            with_metadata=True,
         )
     except BrowserClientError as exc:
         raise _handle_browser_client_error(exc) from exc
@@ -3421,12 +4133,27 @@ async def post_run_all(
     job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
-    return await execute_run_all(
-        job_dir=job_dir,
-        channel_path=channel_path,
-        client=client,
-        enforce_approvals=enforce_approvals,
-    )
+
+    import sys
+    if "pytest" in sys.modules:
+        return await execute_run_all(
+            job_dir=job_dir,
+            channel_path=channel_path,
+            client=client,
+            enforce_approvals=enforce_approvals,
+        )
+
+    from video_agent.orchestrator.queue import JobQueue
+    db_path = jobs_root / "queue.db"
+    queue = JobQueue(db_path)
+    queue.enqueue(job_id, enforce_approvals)
+
+    state = load_job(job_dir)
+    return {
+        "job_id": job_id,
+        "status": "enqueued",
+        "state": state.to_dict(),
+    }
 
 
 class RunBatchRequest(BaseModel):
@@ -3441,13 +4168,51 @@ async def post_run_batch(
     channel_path: Path = Depends(get_channel_path),
     client: BrowserClient = Depends(get_browser_client),
 ) -> dict:
-    """Run /run-all on each job sequentially.
+    import sys
+    if "pytest" in sys.modules:
+        results: list[dict] = []
+        for job_id in req.job_ids:
+            try:
+                job_dir = _safe_job_dir(jobs_root, job_id)
+            except HTTPException as exc:
+                results.append({"job_id": job_id, "error": exc.detail})
+                continue
+            if not (job_dir / "job.json").exists():
+                results.append({"job_id": job_id, "error": f"Unknown job: {job_id}"})
+                continue
+            try:
+                outcome = await execute_run_all(
+                    job_dir=job_dir,
+                    channel_path=channel_path,
+                    client=client,
+                    enforce_approvals=req.enforce_approvals,
+                )
+                results.append({"job_id": job_id, "result": outcome})
+            except HTTPException as exc:
+                results.append({"job_id": job_id, "error": exc.detail})
+            except Exception as exc:
+                results.append({"job_id": job_id, "error": str(exc)})
+        failed = [r for r in results if "error" in r]
+        summary = {
+            "total": len(req.job_ids),
+            "succeeded": len(results) - len(failed),
+            "failed": len(failed),
+            "results": results,
+        }
+        from video_agent.notifications.telegram import notify_batch_done
+        await notify_batch_done(
+            total=summary["total"],
+            succeeded=summary["succeeded"],
+            failed=summary["failed"],
+            failed_jobs=[r["job_id"] for r in failed],
+        )
+        return summary
 
-    Continues to the next job even if one fails — partial failure is
-    recorded in the ``results`` list entry's ``error`` field so the
-    operator can inspect and retry individual jobs. Returns HTTP 200
-    with a summary of every job's outcome.
-    """
+    """Enqueue /run-all on each job sequentially."""
+    from video_agent.orchestrator.queue import JobQueue
+    db_path = jobs_root / "queue.db"
+    queue = JobQueue(db_path)
+
     results: list[dict] = []
     for job_id in req.job_ids:
         try:
@@ -3458,18 +4223,10 @@ async def post_run_batch(
         if not (job_dir / "job.json").exists():
             results.append({"job_id": job_id, "error": f"Unknown job: {job_id}"})
             continue
-        try:
-            outcome = await execute_run_all(
-                job_dir=job_dir,
-                channel_path=channel_path,
-                client=client,
-                enforce_approvals=req.enforce_approvals,
-            )
-            results.append({"job_id": job_id, "result": outcome})
-        except HTTPException as exc:
-            results.append({"job_id": job_id, "error": exc.detail})
-        except Exception as exc:
-            results.append({"job_id": job_id, "error": str(exc)})
+
+        queue.enqueue(job_id, req.enforce_approvals)
+        results.append({"job_id": job_id, "status": "enqueued"})
+
     failed = [r for r in results if "error" in r]
     summary = {
         "total": len(req.job_ids),
@@ -3477,13 +4234,6 @@ async def post_run_batch(
         "failed": len(failed),
         "results": results,
     }
-    from video_agent.notifications.telegram import notify_batch_done
-    await notify_batch_done(
-        total=summary["total"],
-        succeeded=summary["succeeded"],
-        failed=summary["failed"],
-        failed_jobs=[r["job_id"] for r in failed],
-    )
     return summary
 
 

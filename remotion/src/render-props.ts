@@ -42,6 +42,14 @@ export type RenderProps = {
       score_breakdown?: Record<string, unknown>;
     }>;
   };
+  branding?: {
+    logo_path?: string | null;
+    intro_video_path?: string | null;
+    outro_video_path?: string | null;
+    intro_sec?: number;
+    outro_sec?: number;
+    watermark_enabled?: boolean;
+  };
 };
 
 export const mediaSrc = (path: string): string => {

@@ -330,7 +330,7 @@ async def _discover_top_keywords(
 
 def _idea_gen_prompt(
     channel_config: dict,
-    top_keywords: list[dict],
+    top_keywords: list[dict] | list[str],
     count: int,
 ) -> str:
     ch = channel_config.get("channel", {})
@@ -364,6 +364,9 @@ def _idea_gen_prompt(
 
     kw_lines = []
     for i, kw in enumerate(top_keywords, 1):
+        if isinstance(kw, str):
+            kw_lines.append(f'  {i}. "{kw}"')
+            continue
         score = kw.get("score", "?")
         vol = kw.get("volume", "")
         comp = kw.get("competition", "")
@@ -542,10 +545,12 @@ async def generate_ideas(
     vidiq_fn: Callable[[list[str]], Awaitable[list[dict]]] | None = None,
     seed_topics: list[str] | None = None,
     count: int = 10,
-) -> tuple[list[dict], list[dict], str]:
+    with_metadata: bool = False,
+) -> list[dict] | tuple[list[dict], list[dict], str]:
     """Discover top keywords via vidIQ, then ask ChatGPT to flesh out ideas.
 
-    Returns (ideas, top_keywords, seed_source) where seed_source is one of:
+    Returns ideas list by default.
+    If ``with_metadata=True``, returns (ideas, top_keywords, seed_source) where seed_source is one of:
       "user"    — caller provided seed_topics
       "trend"   — auto-discovered from Google Trends matching channel niche
       "fallback" — trends didn't match niche; used channel sub_niches as seeds
@@ -579,4 +584,6 @@ async def generate_ideas(
     if not ideas:
         raise ValueError(f"ChatGPT returned no parseable ideas. Raw:\n{raw[:500]}")
 
-    return ideas, top_keywords, seed_source
+    if with_metadata:
+        return ideas, top_keywords, seed_source
+    return ideas

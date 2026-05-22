@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import shutil
+import subprocess
+import json
 
 from video_agent.contracts import (
     ARTIFACT_REPORT,
@@ -52,6 +55,111 @@ class OperatorRenderOptions:
     render: bool = True
     require_operator_qa: bool = True
     tts_override: dict | None = None
+    stop_request_path: Path | None = None
+
+
+def _resolve_brand_logo_source(channel_config: dict) -> Path | None:
+    root = repo_root()
+    branding = channel_config.get("branding") or {}
+    configured = branding.get("logo_path")
+    if isinstance(configured, str) and configured.strip():
+        p = Path(configured.strip())
+        if not p.is_absolute():
+            p = root / p
+        if p.exists() and p.is_file():
+            return p
+    for logo_dir in (root / "asset_library" / "source", root / "asset_library" / "logo"):
+        if not logo_dir.exists() or not logo_dir.is_dir():
+            continue
+        exact = logo_dir / "Logo.png"
+        if exact.exists() and exact.is_file():
+            return exact
+        for ext in ("*.png", "*.jpg", "*.jpeg", "*.webp"):
+            matches = sorted(logo_dir.glob(ext))
+            if matches:
+                return matches[0]
+    return None
+
+
+def _resolve_brand_video_source(channel_config: dict, kind: str) -> Path | None:
+    root = repo_root()
+    branding = channel_config.get("branding") or {}
+    configured = branding.get(f"{kind}_video_path")
+    if isinstance(configured, str) and configured.strip():
+        p = Path(configured.strip())
+        if not p.is_absolute():
+            p = root / p
+        if p.exists() and p.is_file():
+            return p
+    source_dir = root / "asset_library" / "source"
+    if not source_dir.exists() or not source_dir.is_dir():
+        return None
+    patterns = [f"*{kind}*.mp4", f"*{kind}*.mov", f"*{kind}*.mkv", f"*{kind}*.webm"]
+    if kind == "outro":
+        patterns.extend(["*outtro*.mp4", "*outtro*.mov", "*outtro*.mkv", "*outtro*.webm"])
+    for pat in patterns:
+        matches = sorted(source_dir.glob(pat))
+        if matches:
+            return matches[0]
+    return None
+
+
+def _probe_duration_sec(path: Path) -> float:
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "json",
+        str(path),
+    ]
+    out = subprocess.check_output(cmd, text=True)
+    payload = json.loads(out)
+    duration = float((payload.get("format") or {}).get("duration") or 0.0)
+    return max(0.0, duration)
+
+
+def _prepare_branding(channel_config: dict) -> dict:
+    root = repo_root()
+    channel_id = (channel_config.get("channel") or {}).get("id", "default")
+    branding_cfg = channel_config.get("branding") or {}
+    intro_sec = max(0.0, float(branding_cfg.get("intro_sec", 2.0)))
+    outro_sec = max(0.0, float(branding_cfg.get("outro_sec", 2.0)))
+    logo_source = _resolve_brand_logo_source(channel_config)
+    intro_video_source = _resolve_brand_video_source(channel_config, "intro")
+    outro_video_source = _resolve_brand_video_source(channel_config, "outro")
+    logo_public = None
+    intro_video_public = None
+    outro_video_public = None
+    if intro_video_source:
+        intro_sec = _probe_duration_sec(intro_video_source)
+    if outro_video_source:
+        outro_sec = _probe_duration_sec(outro_video_source)
+    if logo_source or intro_video_source or outro_video_source:
+        dest_dir = root / "remotion" / "public" / "branding" / str(channel_id)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        if logo_source:
+            dest = dest_dir / logo_source.name
+            shutil.copy2(logo_source, dest)
+            logo_public = f"branding/{channel_id}/{logo_source.name}"
+        if intro_video_source:
+            dest = dest_dir / intro_video_source.name
+            shutil.copy2(intro_video_source, dest)
+            intro_video_public = f"branding/{channel_id}/{intro_video_source.name}"
+        if outro_video_source:
+            dest = dest_dir / outro_video_source.name
+            shutil.copy2(outro_video_source, dest)
+            outro_video_public = f"branding/{channel_id}/{outro_video_source.name}"
+    return {
+        "logo_path": logo_public,
+        "intro_video_path": intro_video_public,
+        "outro_video_path": outro_video_public,
+        "intro_sec": intro_sec,
+        "outro_sec": outro_sec,
+        "watermark_enabled": bool(logo_public),
+    }
 
 
 def _load_style(channel_config: dict) -> dict:
@@ -273,13 +381,16 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
     validate_json(seo, root / "schemas/seo.schema.json")
     logger.log("ASSETS_READY", {"job_id": job_id, "cost_usd": 0})
 
+    branding = _prepare_branding(channel_config)
     render_props = {
         "channel": channel_config["channel"],
         "style": style,
-        "render": channel_config["render"] | {"duration_sec": scene_doc["total_duration_sec"]},
+        "render": channel_config["render"]
+        | {"duration_sec": scene_doc["total_duration_sec"] + branding["intro_sec"] + branding["outro_sec"]},
         "scenes": scene_doc["scenes"],
         "audio": assets["audio"],
         "seo": seo,
+        "branding": branding,
     }
     write_json(job_dir / ARTIFACT_RENDER_PROPS, render_props)
     validate_json(render_props, root / "schemas/render-props.schema.json")
@@ -289,7 +400,12 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
     video_path = None
     if options.render:
         video_path = job_dir / ARTIFACT_VIDEO
-        render_with_remotion(job_dir / ARTIFACT_RENDER_PROPS, video_path, job_dir / "thumbnail.jpg")
+        render_with_remotion(
+            job_dir / ARTIFACT_RENDER_PROPS,
+            video_path,
+            job_dir / "thumbnail.jpg",
+            stop_request_path=options.stop_request_path,
+        )
         logger.log("RENDERED", {"job_id": job_id, "video_path": str(video_path), "cost_usd": 0})
 
     report_path = _write_report(job_dir, job_id, channel_config, idea, options.render, visual_review)
@@ -347,13 +463,16 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
         tts_config=channel_config.get("tts"),
         channel_id=channel_config["channel"]["id"],
     )
+    branding = _prepare_branding(channel_config)
     render_props = {
         "channel": channel_config["channel"],
         "style": style,
-        "render": channel_config["render"] | {"duration_sec": scene_doc["total_duration_sec"]},
+        "render": channel_config["render"]
+        | {"duration_sec": scene_doc["total_duration_sec"] + branding["intro_sec"] + branding["outro_sec"]},
         "scenes": scene_doc["scenes"],
         "audio": assets["audio"],
         "seo": seo,
+        "branding": branding,
     }
     write_json(job_dir / ARTIFACT_RENDER_PROPS, render_props)
     validate_json(render_props, root / "schemas/render-props.schema.json")

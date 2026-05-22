@@ -21,7 +21,7 @@ STAGE_ARTIFACTS = {
     },
     "script_qa": {
         "input": ["script.json"],
-        "output": ["operator/gemini/script_qa.json"],
+        "output": ["operator/claude/script_qa.json"],
     },
     "scenes": {
         "input": ["script.json"],
@@ -33,7 +33,7 @@ STAGE_ARTIFACTS = {
     },
     "scenes_qa": {
         "input": ["scenes.json"],
-        "output": ["operator/gemini/scenes_qa.json"],
+        "output": ["operator/claude/scenes_qa.json"],
     },
     "seo": {
         "input": ["scenes.json"],
@@ -45,7 +45,7 @@ STAGE_ARTIFACTS = {
     },
     "seo_qa": {
         "input": ["seo.json"],
-        "output": ["operator/gemini/seo_qa.json"],
+        "output": ["operator/claude/seo_qa.json"],
     },
     "seo_vidiq": {
         "input": ["seo.json"],
@@ -139,8 +139,12 @@ def stage_duration_seconds(stage: dict) -> float | None:
     return max(0.0, end - start)
 
 
-def effective_stage_status(stage: dict, current_stage: str | None) -> str:
+def effective_stage_status(
+    stage: dict, current_stage: str | None, *, stop_requested: bool = False
+) -> str:
     status = str(stage.get("status") or "pending")
+    if stop_requested:
+        return status
     if status == "pending" and stage.get("name") == current_stage:
         return "in_progress"
     return status

@@ -98,4 +98,5 @@ class MockProvider:
             "language": channel_config.get("seo", {}).get("language", channel_config["audience"]["language"]),
             "ai_disclosure": bool(channel_config["upload"]["ai_disclosure"]),
             "thumbnail_path": thumbnail_path,
+            "thumbnail_text": "DUERME MEJOR HOY",
         }

@@ -96,37 +96,90 @@ class ChatGPTImageDriver:
                 pass  # best effort — may already be expanded
 
     async def _create_project(self, name: str) -> None:
-        await self._ensure_projects_expanded()
-        new_btn = self.page.locator(NEW_PROJECT_BUTTON_SELECTOR).first
         try:
-            await new_btn.wait_for(state="visible", timeout=5_000)
-        except Exception:
-            shot = await save_trace_screenshot(self.page, prefix="chatgpt-image-no-new-project")
-            raise BrowserDriverError(
-                "ChatGPT 'New project' button not found.",
-                screenshot_path=shot,
+            name_input = self.page.locator(PROJECT_NAME_INPUT_SELECTOR).first
+            dialog_already_open = False
+            try:
+                if await name_input.is_visible():
+                    dialog_already_open = True
+            except Exception:
+                pass
+
+            if not dialog_already_open:
+                await self._ensure_projects_expanded()
+                new_btn = self.page.locator(NEW_PROJECT_BUTTON_SELECTOR).first
+                try:
+                    await new_btn.wait_for(state="visible", timeout=5_000)
+                except Exception:
+                    # Double-check if dialog appeared while expanding sidebar
+                    try:
+                        if await name_input.is_visible():
+                            dialog_already_open = True
+                    except Exception:
+                        pass
+                    if not dialog_already_open:
+                        shot = await save_trace_screenshot(self.page, prefix="chatgpt-image-no-new-project")
+                        raise BrowserDriverError(
+                            "ChatGPT 'New project' button not found.",
+                            screenshot_path=shot,
+                        )
+                if not dialog_already_open:
+                    await human_click(new_btn)
+                    await human_pause(self.page, min_ms=600, max_ms=1200)
+
+            try:
+                await name_input.wait_for(state="visible", timeout=5_000)
+            except Exception:
+                shot = await save_trace_screenshot(self.page, prefix="chatgpt-image-no-name-input")
+                raise BrowserDriverError(
+                    "ChatGPT new-project name input not found.",
+                    screenshot_path=shot,
+                )
+            
+            # Super-robust React input filling
+            await name_input.click()
+            await name_input.focus()
+            await name_input.fill("")
+            await name_input.type(name, delay=30)
+            await self.page.evaluate(
+                """(val) => {
+                    const el = document.querySelector("input[name='projectName']");
+                    if (el) {
+                        el.value = val;
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                }""",
+                name
             )
-        await human_click(new_btn)
-        await human_pause(self.page, min_ms=600, max_ms=1200)
-        name_input = self.page.locator(PROJECT_NAME_INPUT_SELECTOR).first
-        try:
-            await name_input.wait_for(state="visible", timeout=5_000)
-        except Exception:
-            shot = await save_trace_screenshot(self.page, prefix="chatgpt-image-no-name-input")
+            await human_pause(self.page, min_ms=500, max_ms=1000)
+
+            create_btn = self.page.locator(CREATE_PROJECT_BUTTON_SELECTOR).first
+            try:
+                await create_btn.wait_for(state="visible", timeout=5_000)
+            except Exception:
+                shot = await save_trace_screenshot(self.page, prefix="chatgpt-image-no-create-btn")
+                raise BrowserDriverError(
+                    "ChatGPT 'Create project' button not found.",
+                    screenshot_path=shot,
+                )
+            await human_click(create_btn)
+            
+            # Wait for URL change to /g/g-p-<id>
+            try:
+                await self.page.wait_for_url(re.compile(r"/g/g-p-"), timeout=15_000)
+            except Exception:
+                # Project may still have created even if URL pattern differs.
+                pass
+            await human_pause(self.page, min_ms=1200, max_ms=2200)
+        except Exception as exc:
+            if isinstance(exc, BrowserDriverError):
+                raise
+            shot = await save_trace_screenshot(self.page, prefix="chatgpt-image-create-project-error")
             raise BrowserDriverError(
-                "ChatGPT new-project name input not found.",
+                f"Create project failed: {exc}",
                 screenshot_path=shot,
-            )
-        await name_input.fill(name)
-        await human_pause(self.page, min_ms=300, max_ms=700)
-        await human_click(self.page.locator(CREATE_PROJECT_BUTTON_SELECTOR).first)
-        # Wait for URL change to /g/g-p-<id>
-        try:
-            await self.page.wait_for_url(re.compile(r"/g/g-p-"), timeout=15_000)
-        except Exception:
-            # Project may still have created even if URL pattern differs.
-            pass
-        await human_pause(self.page, min_ms=1200, max_ms=2200)
+            ) from exc
 
     async def _focus_composer(self) -> None:
         composer = None

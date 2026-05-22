@@ -5,6 +5,7 @@ import {mediaSrc, RenderProps, Scene} from './render-props';
 import {fitHeadline, fullFrame} from './styles';
 
 const FADE_IN = 18; // 0.6 s fade-in per scene
+const BRIDGE_FRAMES = 18; // 0.6 s bridge transition between intro/main/outro
 
 const motionTransform = (motion: string, progress: number) => {
   const s = motion === 'slow_zoom'
@@ -26,6 +27,68 @@ const ProgressBar: React.FC<{active: number; total: number; accent: string}> = (
   </div>
 );
 
+const LogoWatermark: React.FC<{logoPath: string}> = ({logoPath}) => (
+  <div style={{position: 'absolute', top: 24, right: 28, zIndex: 20}}>
+    <Img
+      src={mediaSrc(logoPath)}
+      style={{
+        height: 78,
+        width: 'auto',
+        objectFit: 'contain',
+        filter: 'drop-shadow(0 8px 18px rgba(0,0,0,0.55))',
+        opacity: 0.95,
+      }}
+    />
+  </div>
+);
+
+const BrandCard: React.FC<{
+  logoPath: string;
+  title: string;
+  subtitle: string;
+  palette: RenderProps['style']['palette'];
+}> = ({logoPath, title, subtitle, palette}) => {
+  const frame = useCurrentFrame();
+  const scale = interpolate(frame, [0, 18, 48], [0.92, 1.0, 1.03], {extrapolateRight: 'clamp'});
+  const alpha = interpolate(frame, [0, 10], [0, 1], {extrapolateRight: 'clamp'});
+  return (
+    <AbsoluteFill style={{...fullFrame, background: `radial-gradient(circle at 50% 38%, ${palette.primary} 0%, #0C100D 78%)`}}>
+      <div style={{position: 'absolute', inset: 0, background: 'linear-gradient(135deg, rgba(255,255,255,0.05), transparent 45%)'}} />
+      <div
+        style={{
+          margin: 'auto',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: 24,
+          transform: `scale(${scale})`,
+          opacity: alpha,
+        }}
+      >
+        <Img src={mediaSrc(logoPath)} style={{height: 280, width: 'auto', objectFit: 'contain', filter: 'drop-shadow(0 10px 30px rgba(0,0,0,0.6))'}} />
+        <div style={{color: '#fff', fontSize: 64, fontWeight: 900, letterSpacing: 1, textAlign: 'center'}}>{title}</div>
+        <div style={{color: palette.accent, fontSize: 34, fontWeight: 700, textAlign: 'center'}}>{subtitle}</div>
+      </div>
+    </AbsoluteFill>
+  );
+};
+
+const BridgeFade: React.FC<{mode: 'out' | 'in'}> = ({mode}) => {
+  const frame = useCurrentFrame();
+  const alpha = mode === 'out'
+    ? interpolate(frame, [0, BRIDGE_FRAMES - 1], [0, 1], {extrapolateRight: 'clamp'})
+    : interpolate(frame, [0, BRIDGE_FRAMES - 1], [1, 0], {extrapolateRight: 'clamp'});
+  return (
+    <AbsoluteFill
+      style={{
+        background: '#0C100D',
+        opacity: alpha,
+        pointerEvents: 'none',
+      }}
+    />
+  );
+};
+
 const SceneView: React.FC<{
   scene: Scene;
   totalFrames: number;
@@ -33,7 +96,8 @@ const SceneView: React.FC<{
   totalScenes: number;
   palette: RenderProps['style']['palette'];
   channelName: string;
-}> = ({scene, totalFrames, sceneIndex, totalScenes, palette, channelName}) => {
+  logoPath?: string | null;
+}> = ({scene, totalFrames, sceneIndex, totalScenes, palette, channelName, logoPath}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
   const progress = frame / Math.max(totalFrames - 1, 1);
@@ -60,9 +124,13 @@ const SceneView: React.FC<{
   if (activeSegment) {
     const chunkStartFrame = Math.round(activeSegment.start * fps);
     const chunkEndFrame   = Math.round(activeSegment.end   * fps);
+    const chunkFrames = Math.max(1, chunkEndFrame - chunkStartFrame);
+    const fadeFrames = Math.min(CHUNK_FADE, Math.max(1, Math.floor(chunkFrames / 2)));
+    const fadeInEnd = chunkStartFrame + fadeFrames;
+    const fadeOutStart = Math.max(fadeInEnd, chunkEndFrame - fadeFrames);
     captionChunkAlpha = interpolate(
       frame,
-      [chunkStartFrame, chunkStartFrame + CHUNK_FADE, chunkEndFrame - CHUNK_FADE, chunkEndFrame],
+      [chunkStartFrame, fadeInEnd, fadeOutStart, chunkEndFrame],
       [0, 1, 1, 0],
       {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'},
     );
@@ -132,6 +200,8 @@ const SceneView: React.FC<{
         {channelName}
       </div>
 
+      {logoPath ? <LogoWatermark logoPath={logoPath} /> : null}
+
       {/* Headline block — bottom-left, above caption */}
       <div style={{
         position: 'absolute', left: 56, bottom: 190, width: 920,
@@ -169,10 +239,38 @@ const SceneView: React.FC<{
 
 export const ChannelVideo: React.FC<RenderProps> = (props) => {
   const {fps} = useVideoConfig();
-  let start = 0;
+  const logoPath = props.branding?.logo_path ?? null;
+  const introVideoPath = props.branding?.intro_video_path ?? null;
+  const outroVideoPath = props.branding?.outro_video_path ?? null;
+  const introFrames = Math.max(0, Math.round((props.branding?.intro_sec ?? 0) * fps));
+  const outroFrames = Math.max(0, Math.round((props.branding?.outro_sec ?? 0) * fps));
+  let start = introFrames;
+  const totalSceneFrames = props.scenes.reduce((acc, s) => acc + Math.round(s.duration_sec * fps), 0);
+  const outroFrom = start + totalSceneFrames;
   return (
     <AbsoluteFill style={{backgroundColor: '#0C100D'}}>
-      {props.audio.narration ? <Audio src={mediaSrc(props.audio.narration)} /> : null}
+      {props.audio.narration ? (
+        <Sequence from={introFrames}>
+          <Audio src={mediaSrc(props.audio.narration)} />
+        </Sequence>
+      ) : null}
+      {introVideoPath && introFrames > 0 ? (
+        <Sequence from={0} durationInFrames={introFrames}>
+          <OffthreadVideo
+            src={mediaSrc(introVideoPath)}
+            style={{position: 'absolute', width: '100%', height: '100%', objectFit: 'cover'}}
+          />
+        </Sequence>
+      ) : logoPath && introFrames > 0 ? (
+        <Sequence from={0} durationInFrames={introFrames}>
+          <BrandCard
+            logoPath={logoPath}
+            title={props.channel.name}
+            subtitle="Bienvenido"
+            palette={props.style.palette}
+          />
+        </Sequence>
+      ) : null}
       {props.scenes.map((scene, i) => {
         const totalFrames = Math.round(scene.duration_sec * fps);
         const from = start;
@@ -186,10 +284,52 @@ export const ChannelVideo: React.FC<RenderProps> = (props) => {
               totalScenes={props.scenes.length}
               palette={props.style.palette}
               channelName={props.channel.name}
+              logoPath={logoPath}
             />
           </Sequence>
         );
       })}
+      {logoPath && outroFrames > 0 ? (
+        outroVideoPath ? (
+          <Sequence from={start} durationInFrames={outroFrames}>
+            <OffthreadVideo
+              src={mediaSrc(outroVideoPath)}
+              style={{position: 'absolute', width: '100%', height: '100%', objectFit: 'cover'}}
+            />
+          </Sequence>
+        ) : (
+        <Sequence from={start} durationInFrames={outroFrames}>
+          <BrandCard
+            logoPath={logoPath}
+            title="Gracias por ver"
+            subtitle={props.channel.name}
+            palette={props.style.palette}
+          />
+        </Sequence>
+        )
+      ) : null}
+
+      {introFrames > 0 ? (
+        <>
+          <Sequence from={Math.max(0, introFrames - BRIDGE_FRAMES)} durationInFrames={BRIDGE_FRAMES}>
+            <BridgeFade mode="out" />
+          </Sequence>
+          <Sequence from={introFrames} durationInFrames={BRIDGE_FRAMES}>
+            <BridgeFade mode="in" />
+          </Sequence>
+        </>
+      ) : null}
+
+      {outroFrames > 0 ? (
+        <>
+          <Sequence from={Math.max(0, outroFrom - BRIDGE_FRAMES)} durationInFrames={BRIDGE_FRAMES}>
+            <BridgeFade mode="out" />
+          </Sequence>
+          <Sequence from={outroFrom} durationInFrames={BRIDGE_FRAMES}>
+            <BridgeFade mode="in" />
+          </Sequence>
+        </>
+      ) : null}
     </AbsoluteFill>
   );
 };

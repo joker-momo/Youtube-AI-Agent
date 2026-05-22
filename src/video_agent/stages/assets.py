@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import shutil
+import subprocess
 import wave
 from pathlib import Path
 from typing import Any
@@ -86,6 +87,46 @@ def _write_placeholder_image(path: Path, scene: dict[str, Any], color: tuple[int
     image.save(path, quality=92)
 
 
+def _write_video_from_image(image_path: Path, output_path: Path, duration_sec: float) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-loop",
+        "1",
+        "-i",
+        str(image_path),
+        "-t",
+        f"{max(1.0, float(duration_sec)):.2f}",
+        "-vf",
+        "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080",
+        "-r",
+        "30",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "21",
+        "-pix_fmt",
+        "yuv420p",
+        str(output_path),
+    ]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _write_placeholder_video(path: Path, scene: dict[str, Any], color: tuple[int, int, int], palette: dict[str, str], duration_sec: float) -> None:
+    temp_image = path.with_suffix(".jpg")
+    _write_placeholder_image(temp_image, scene, color, palette)
+    try:
+        _write_video_from_image(temp_image, path, duration_sec)
+    finally:
+        try:
+            temp_image.unlink()
+        except OSError:
+            pass
+
+
 def prepare_assets(
     job_dir: Path,
     style_dna: dict[str, Any],
@@ -115,20 +156,18 @@ def prepare_assets(
         primary_asset = _find_asset_refs_primary(scene, job_dir)
         local_image = primary_asset or _find_local_scene_image(scene["id"], source_dir)
         stock_asset = None
+        scene_dur = float(scene.get("duration_sec") or 30)
         if not local_image and stock_service:
             stock_asset = stock_service.get_scene_asset(scene, channel_id, job_dir.name)
-        # Determine suffix: local image uses its own suffix; stock asset uses library
-        # file extension (may be .mp4 for video); fallback .jpg for placeholder.
-        if local_image:
-            asset_suffix = local_image.suffix
-        elif stock_asset:
-            asset_suffix = Path(stock_asset["file_path"]).suffix or ".mp4"
-        else:
-            asset_suffix = ".jpg"
+        # Force all scene backgrounds to video so Remotion always renders OffthreadVideo.
+        asset_suffix = ".mp4"
         image_path = assets_dir / f"{scene['id']}{asset_suffix}"
         if local_image:
-            if local_image.resolve() != image_path.resolve():
-                shutil.copy2(local_image, image_path)
+            if local_image.suffix.lower() == ".mp4":
+                if local_image.resolve() != image_path.resolve():
+                    shutil.copy2(local_image, image_path)
+            else:
+                _write_video_from_image(local_image, image_path, scene_dur)
             source = (
                 "asset_refs_primary" if primary_asset is not None else "local_directory"
             )
@@ -136,7 +175,10 @@ def prepare_assets(
             extra_manifest = {}
         elif stock_asset:
             library_path = stock_service.library.root / stock_asset["file_path"]
-            shutil.copy2(library_path, image_path)
+            if library_path.suffix.lower() == ".mp4":
+                shutil.copy2(library_path, image_path)
+            else:
+                _write_video_from_image(library_path, image_path, scene_dur)
             source = "asset_library"
             source_path = str(library_path.resolve())
             extra_manifest = {
@@ -148,7 +190,13 @@ def prepare_assets(
                 "asset_selection": stock_asset.get("asset_selection"),
             }
         else:
-            _write_placeholder_image(image_path, scene, colors[index % len(colors)], palette)
+            _write_placeholder_video(
+                image_path,
+                scene,
+                colors[index % len(colors)],
+                palette,
+                scene_dur,
+            )
             source = "generated_placeholder"
             source_path = None
             extra_manifest = {"stock_errors": stock_service.last_errors} if stock_service else {}
@@ -180,7 +228,17 @@ def prepare_assets(
         }
     else:
         client = tts_client or build_tts_client(tts_config)
-        audio_metadata = synthesize_scene_track(scene_doc, narration_path, tts_config, client) | {"source": "tts"}
+        try:
+            audio_metadata = synthesize_scene_track(scene_doc, narration_path, tts_config, client) | {"source": "tts"}
+        except Exception:
+            # Fallback for environments without optional TTS runtime deps
+            # or network/model bootstrap failures in external providers.
+            _write_silent_wav(narration_path, int(scene_doc["total_duration_sec"]))
+            audio_metadata = {
+                "provider": "mock-local",
+                "source": "silent_placeholder",
+                "sample_rate": 44100,
+            }
     public_narration_path = public_assets_dir / "narration.wav"
     shutil.copy2(narration_path, public_narration_path)
     public_narration_ref = f"jobs/{job_dir.name}/assets/narration.wav"

@@ -12,7 +12,7 @@ PROFILE_DIR="${CHROME_PROFILE_DIR:-/data/profile}"
 # CHROME_CDP_INTERNAL_PORT (loopback) on 0.0.0.0:9222 inside the
 # container so the worker can reach it over the docker network.
 CDP_PORT="${CHROME_CDP_INTERNAL_PORT:-9223}"
-WINDOW_SIZE="${CHROME_WINDOW_SIZE:-1366,768}"
+WINDOW_SIZE="${CHROME_WINDOW_SIZE:-1920,1080}"
 
 mkdir -p "$PROFILE_DIR"
 
@@ -35,6 +35,7 @@ exec "$CHROME_BIN" \
   --user-data-dir="$PROFILE_DIR" \
   --remote-debugging-port="$CDP_PORT" \
   --remote-allow-origins=* \
+  --start-maximized \
   --window-size="$WINDOW_SIZE" \
   --window-position=0,0 \
   --no-first-run \

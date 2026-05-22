@@ -41,6 +41,12 @@ from video_agent.web.approval_flow import (
     set_approval,
 )
 
+STOP_REQUEST_FILE = ".stop_requested"
+
+
+def stop_request_path(job_dir: Path) -> Path:
+    return job_dir / STOP_REQUEST_FILE
+
 
 def _browser_http_exception(exc: BrowserClientError) -> HTTPException:
     if isinstance(exc, LoginRequiredFromWorker):
@@ -78,6 +84,11 @@ async def execute_run_all(
     import fcntl
 
     job_dir.mkdir(parents=True, exist_ok=True)
+    # Clear stale stop marker from older runs.
+    try:
+        stop_request_path(job_dir).unlink()
+    except FileNotFoundError:
+        pass
     lock_path = job_dir / ".run.lock"
     lock_fd = lock_path.open("w")
     try:
@@ -120,6 +131,21 @@ async def _execute_run_all_locked(
             {"stage": stage_label, "output": str(output_path.relative_to(job_dir))}
         )
 
+    def _check_stop_requested() -> None:
+        if not stop_request_path(job_dir).exists():
+            return
+        state_now = load_job(job_dir)
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "Stop requested by operator.",
+                "stop_requested": True,
+                "completed": completed,
+                "stopped_at": state_now.current_stage,
+                "state": state_now.to_dict(),
+            },
+        )
+
     def _approval_stop_payload(stage_name: str, state) -> dict:
         approvals = load_approvals(job_dir)
         return {
@@ -155,6 +181,7 @@ async def _execute_run_all_locked(
             status_code=409,
             detail={"error": f"Unknown pending stage: {pending_stage}"},
         )
+    _check_stop_requested()
     approvals = load_approvals(job_dir)
     blocked_by = approval_block_for_current_stage(state.current_stage, approvals)
     if enforce_approvals and blocked_by:
@@ -177,6 +204,7 @@ async def _execute_run_all_locked(
     remaining = set(stage_order[start_idx:])
 
     if "idea_research" in remaining:
+        _check_stop_requested()
         try:
             await _record_gate_and_stop(
                 "idea_research",
@@ -262,6 +290,7 @@ async def _execute_run_all_locked(
     need_qa_tab = any(s in remaining for s in ("script_qa", "scenes_qa", "seo_qa"))
 
     try:
+        _check_stop_requested()
         if need_writing_tab:
             chatgpt_sender, chatgpt_close = await _open_with_retry("chatgpt")
         if need_qa_tab:
@@ -308,11 +337,13 @@ async def _execute_run_all_locked(
             )
 
         if "script" in remaining or "script_promote" in remaining:
+            _check_stop_requested()
             await _record_gate_and_stop(
                 "script_promote",
                 await auto_script_stage(job_dir, channel_path, chatgpt_fn),
             )
         if "script_qa" in remaining:
+            _check_stop_requested()
             await _record(
                 "script_qa",
                 await auto_qa_with_rework(
@@ -320,11 +351,13 @@ async def _execute_run_all_locked(
                 ),
             )
         if "scenes" in remaining or "scenes_promote" in remaining:
+            _check_stop_requested()
             await _record_gate_and_stop(
                 "scenes_promote",
                 await auto_scenes_stage(job_dir, channel_path, chatgpt_fn),
             )
         if "scenes_qa" in remaining:
+            _check_stop_requested()
             await _record(
                 "scenes_qa",
                 await auto_qa_with_rework(
@@ -332,11 +365,13 @@ async def _execute_run_all_locked(
                 ),
             )
         if "seo" in remaining or "seo_promote" in remaining:
+            _check_stop_requested()
             await _record_gate_and_stop(
                 "seo_promote",
                 await auto_seo_stage(job_dir, channel_path, chatgpt_fn),
             )
         if "seo_qa" in remaining:
+            _check_stop_requested()
             await _record(
                 "seo_qa",
                 await auto_qa_with_rework(
@@ -344,6 +379,7 @@ async def _execute_run_all_locked(
                 ),
             )
         if "seo_vidiq" in remaining:
+            _check_stop_requested()
             await _record(
                 "seo_vidiq",
                 await auto_seo_vidiq_stage(
@@ -351,6 +387,7 @@ async def _execute_run_all_locked(
                 ),
             )
         if "thumbnail_image" in remaining:
+            _check_stop_requested()
             await _record_gate_and_stop(
                 "thumbnail_image",
                 await auto_thumbnail_image_stage(
@@ -358,6 +395,7 @@ async def _execute_run_all_locked(
                 ),
             )
         if "assets_chatgpt" in remaining:
+            _check_stop_requested()
             await _record(
                 "assets_chatgpt",
                 await auto_assets_chatgpt_stage(
@@ -365,10 +403,13 @@ async def _execute_run_all_locked(
                 ),
             )
         if "whisper_timestamps" in remaining:
+            _check_stop_requested()
             await _record("whisper_timestamps", run_whisper_timestamps_stage(job_dir))
         if "render" in remaining:
+            _check_stop_requested()
             await _record("render", run_render_stage(job_dir, channel_path))
         if "review" in remaining:
+            _check_stop_requested()
             await _record("review", run_review_stage(job_dir))
     except StageInputMissingError as exc:
         state = load_job(job_dir)

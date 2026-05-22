@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import json
 import os
 import subprocess
 import sys
@@ -320,7 +321,27 @@ async def notify_job_done_with_files(
     stages_done: list[str] | None = None,
     wall_seconds: float | None = None,
 ) -> None:
-    """Send thumbnail image then video file. No text message — files only."""
+    """Send persona summary (if any), then thumbnail image and video file."""
+    persona_path = job_dir / "persona_eval.json"
+    if persona_path.exists():
+        try:
+            persona = json.loads(persona_path.read_text(encoding="utf-8"))
+            verdict = str(persona.get("verdict", "UNKNOWN"))
+            median = persona.get("median_score")
+            threshold = ((persona.get("threshold") or {}).get("min_median_score"))
+            await send(
+                "\n".join(
+                    [
+                        "🧪 <b>Persona evaluation</b>",
+                        f"<code>{_esc(job_id)}</code>",
+                        f"Verdict: <b>{_esc(verdict)}</b>",
+                        f"Median: <b>{_esc(median)}</b> / threshold {_esc(threshold)}",
+                    ]
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[telegram] persona summary failed: {exc}", file=sys.stderr)
+
     # Thumbnail — try thumbnail_1.jpg first, fall back to thumbnail.jpg
     thumb = job_dir / "thumbnail_1.jpg"
     if not thumb.exists():

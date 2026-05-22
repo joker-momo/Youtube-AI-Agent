@@ -127,6 +127,77 @@ def _write_placeholder_video(path: Path, scene: dict[str, Any], color: tuple[int
             pass
 
 
+def _choose_bgm_track(job_dir: Path, music_cfg: dict[str, Any]) -> Path | None:
+    bgm_dir = repo_root() / "asset_library" / "source" / "bgm"
+    if not bgm_dir.exists():
+        return None
+    candidates = sorted(
+        p
+        for p in bgm_dir.iterdir()
+        if p.is_file() and p.suffix.lower() in {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
+    )
+    if not candidates:
+        return None
+    preferred = str(music_cfg.get("preferred_track") or "").strip()
+    if preferred:
+        for c in candidates:
+            if c.name == preferred:
+                return c
+    return candidates[0]
+
+
+def _mix_bgm_with_narration(
+    narration_path: Path,
+    bgm_path: Path,
+    mixed_path: Path,
+    *,
+    voice_gain_db: float = -4.5,
+    bgm_gain_db: float = -24.0,
+    duck_db: float = 8.0,
+    target_lufs: float = -13.6,
+    target_tp: float = 0.0,
+    target_lra: float = 4.8,
+    out_sample_rate: int = 44100,
+    out_bitrate: str = "128k",
+    stereo: bool = True,
+) -> bool:
+    if not narration_path.exists() or not bgm_path.exists():
+        return False
+    ratio = max(3.0, min(12.0, 1.5 + duck_db * 0.7))
+    pan = "pan=stereo|c0=c0|c1=c0," if stereo else ""
+    filter_complex = (
+        f"[0:a]volume={voice_gain_db}dB[vox];"
+        f"[1:a]volume={bgm_gain_db}dB,aloop=loop=-1:size=2147483647[bgmraw];"
+        f"[bgmraw][vox]sidechaincompress=threshold=0.03:ratio={ratio:.2f}:attack=20:release=300:makeup=1[bgmduck];"
+        f"[vox][bgmduck]amix=inputs=2:duration=first:dropout_transition=2:normalize=0,"
+        f"{pan}loudnorm=I={target_lufs}:TP={target_tp}:LRA={target_lra}[out]"
+    )
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(narration_path),
+        "-i",
+        str(bgm_path),
+        "-filter_complex",
+        filter_complex,
+        "-map",
+        "[out]",
+        "-c:a",
+        "aac",
+        "-b:a",
+        out_bitrate,
+        "-ar",
+        str(out_sample_rate),
+        str(mixed_path),
+    ]
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        return False
+    return mixed_path.exists() and mixed_path.stat().st_size > 0
+
+
 def prepare_assets(
     job_dir: Path,
     style_dna: dict[str, Any],
@@ -214,6 +285,7 @@ def prepare_assets(
         scene_asset.update(extra_manifest)
         scene_assets.append(scene_asset)
     tts_config = tts_config or {"provider": "mock-local"}
+    music_cfg = (tts_config.get("music") or {}) if isinstance(tts_config, dict) else {}
     tts_provider = tts_config.get("provider", "mock-local")
     narration_path = assets_dir / "narration.wav"
     audio_metadata = {"provider": "mock-local", "source": "silent_placeholder", "sample_rate": 44100}
@@ -242,8 +314,63 @@ def prepare_assets(
     public_narration_path = public_assets_dir / "narration.wav"
     shutil.copy2(narration_path, public_narration_path)
     public_narration_ref = f"jobs/{job_dir.name}/assets/narration.wav"
+    public_music_ref = None
+
+    bgm_track = _choose_bgm_track(job_dir, music_cfg)
+    if bgm_track is not None:
+        bgm_copy = assets_dir / f"bgm{bgm_track.suffix.lower()}"
+        shutil.copy2(bgm_track, bgm_copy)
+        public_bgm_copy = public_assets_dir / bgm_copy.name
+        shutil.copy2(bgm_copy, public_bgm_copy)
+        public_music_ref = f"jobs/{job_dir.name}/assets/{bgm_copy.name}"
+        mixed_path = assets_dir / "narration_mixed.m4a"
+        voice_gain_db = float(music_cfg.get("voice_gain_db", -4.5))
+        bgm_gain_db = float(music_cfg.get("level_db", -24.0))
+        duck_db = float(music_cfg.get("duck_db", 8.0))
+        target_lufs = float(music_cfg.get("target_lufs", -13.6))
+        target_tp = float(music_cfg.get("target_tp_dbtp", 0.0))
+        target_lra = float(music_cfg.get("target_lra", 4.8))
+        out_sr = int(music_cfg.get("sample_rate", 44100))
+        out_br = str(music_cfg.get("bitrate", "128k"))
+        out_stereo = bool(music_cfg.get("stereo", True))
+        if _mix_bgm_with_narration(
+            narration_path,
+            bgm_copy,
+            mixed_path,
+            voice_gain_db=voice_gain_db,
+            bgm_gain_db=bgm_gain_db,
+            duck_db=duck_db,
+            target_lufs=target_lufs,
+            target_tp=target_tp,
+            target_lra=target_lra,
+            out_sample_rate=out_sr,
+            out_bitrate=out_br,
+            stereo=out_stereo,
+        ):
+            public_mixed_path = public_assets_dir / mixed_path.name
+            shutil.copy2(mixed_path, public_mixed_path)
+            public_narration_ref = f"jobs/{job_dir.name}/assets/{mixed_path.name}"
+            audio_metadata = {
+                **audio_metadata,
+                "mix": {
+                    "bgm_enabled": True,
+                    "bgm_track": bgm_track.name,
+                    "voice_gain_db": voice_gain_db,
+                    "bgm_gain_db": bgm_gain_db,
+                    "duck_db": duck_db,
+                    "target_lufs": target_lufs,
+                    "target_tp": target_tp,
+                    "target_lra": target_lra,
+                    "sample_rate": out_sr,
+                    "bitrate": out_br,
+                    "stereo": out_stereo,
+                },
+            }
+        else:
+            audio_metadata = {**audio_metadata, "mix": {"bgm_enabled": False, "error": "ffmpeg_mix_failed"}}
+
     manifest = {
-        "audio": {"narration": public_narration_ref, "music": None, **audio_metadata},
+        "audio": {"narration": public_narration_ref, "music": public_music_ref, **audio_metadata},
         "scenes": scene_assets,
         "thumbnail_source": scene_assets[0]["background"],
     }

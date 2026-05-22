@@ -53,6 +53,7 @@ from video_agent.orchestrator.stages import (
     promote_seo_stage,
     promote_script_stage,
     run_render_stage,
+    run_persona_eval_stage,
     run_review_stage,
     run_scenes_stage,
     run_seo_stage,
@@ -1315,6 +1316,7 @@ const STAGE_LABEL = {
   whisper_timestamps: 'Whisper timestamps',
   render: 'Render video',
   review: 'Review page',
+  persona_eval: 'Persona eval',
 };
 
 function fmtSec(s) {
@@ -3521,6 +3523,23 @@ def post_run_review(
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     try:
         output = run_review_stage(job_dir)
+    except StageInputMissingError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    state = load_job(job_dir)
+    return {"output": str(output.relative_to(job_dir)), "state": state.to_dict()}
+
+
+@app.post("/jobs/{job_id}/stages/persona_eval/run")
+def post_run_persona_eval(
+    job_id: str,
+    jobs_root: Path = Depends(get_jobs_root),
+    channel_path: Path = Depends(get_channel_path),
+) -> dict:
+    job_dir = _safe_job_dir(jobs_root, job_id)
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    try:
+        output = run_persona_eval_stage(job_dir, channel_path)
     except StageInputMissingError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     state = load_job(job_dir)

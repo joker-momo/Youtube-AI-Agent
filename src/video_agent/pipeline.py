@@ -374,7 +374,8 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
         style,
         scene_doc,
         visual_config=channel_config.get("visuals"),
-        tts_config=channel_config.get("tts"),
+        tts_config=(channel_config.get("tts") or {})
+        | {"music": channel_config.get("music") or {}},
         channel_id=channel_config["channel"]["id"],
     )
     seo = create_thumbnail_and_seo(provider, channel_config, style, idea, job_dir)
@@ -460,7 +461,8 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
         style,
         scene_doc,
         visual_config=channel_config.get("visuals"),
-        tts_config=channel_config.get("tts"),
+        tts_config=(channel_config.get("tts") or {})
+        | {"music": channel_config.get("music") or {}},
         channel_id=channel_config["channel"]["id"],
     )
     branding = _prepare_branding(channel_config)

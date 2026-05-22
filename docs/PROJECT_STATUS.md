@@ -851,6 +851,9 @@ system added:
   script_qa → scenes → scenes_promote → scenes_qa → seo → seo_promote →
   seo_qa → seo_vidiq → thumbnail_image → assets_chatgpt →
   whisper_timestamps → render → review`.
+- `persona_eval` implementation exists but is intentionally out of default
+  `/run-all`; run it manually only when needed via
+  `POST /jobs/{job_id}/stages/persona_eval/run`.
 - Dashboard at `http://127.0.0.1:8000/` gives step-by-step progress
   + ETA + final video / metadata / thumbnail ready to copy into
   YouTube Studio.

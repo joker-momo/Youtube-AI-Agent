@@ -31,6 +31,8 @@ trend/data intake
 
 The project should only prioritize tasks that directly complete this full video flow. Optimization, analytics, semantic reuse, persona eval, scheduling, and upload automation come later.
 
+Note: `persona_eval` code exists and can run manually via stage route, but it is intentionally excluded from default `/run-all` flow for now.
+
 ## Current v2 CLI Flow
 
 ```text

@@ -80,6 +80,10 @@ STAGE_ARTIFACTS = {
         "input": ["video.mp4"],
         "output": ["operator_review.html"],
     },
+    "persona_eval": {
+        "input": ["video.mp4", "script.json", "scenes.json", "seo.json"],
+        "output": ["persona_eval.json"],
+    },
 }
 
 # Empirical seconds per stage when long-form 20-30 min config is in
@@ -103,6 +107,7 @@ STAGE_ETA_SECONDS = {
     "whisper_timestamps": 30,
     "render": 600,  # overridden when target_duration_sec known
     "review": 5,
+    "persona_eval": 8,
 }
 
 

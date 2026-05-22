@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 import os
 
 import httpx
+
+_log = logging.getLogger(__name__)
 
 
 class BrowserClientError(RuntimeError):
@@ -255,8 +258,8 @@ class BrowserClient:
         finally:
             try:
                 await self.close_session("vidiq", session_id)
-            except Exception:
-                pass
+            except Exception as exc:
+                _log.warning("close_session(vidiq, %s) failed: %s", session_id, exc)
 
     async def run_session(
         self,
@@ -294,8 +297,8 @@ class BrowserClient:
         finally:
             try:
                 await self.close_session(site, session_id)
-            except Exception:
-                pass
+            except Exception as exc:
+                _log.warning("close_session(%s, %s) failed: %s", site, session_id, exc)
 
     async def open_persistent_session(self, site: str):
         """Open a long-lived temp chat; return ``(sender, closer)``.
@@ -331,7 +334,7 @@ class BrowserClient:
         async def closer() -> None:
             try:
                 await self.close_session(site, session_id)
-            except Exception:
-                pass
+            except Exception as exc:
+                _log.warning("close_session(%s, %s) failed: %s", site, session_id, exc)
 
         return sender, closer

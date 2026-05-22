@@ -113,7 +113,7 @@ def resolve_inside(job_dir: Path, rel: str) -> Path | None:
     """
     try:
         candidate = (job_dir / rel).resolve()
-        if str(candidate).startswith(str(job_dir.resolve())):
+        if candidate.is_relative_to(job_dir.resolve()):
             return candidate
     except Exception:
         pass

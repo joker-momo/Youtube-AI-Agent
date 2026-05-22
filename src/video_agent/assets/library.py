@@ -25,6 +25,8 @@ def _sha256(path: Path) -> str:
 
 
 def _aspect_ratio(width: int, height: int) -> str:
+    if not width or not height:
+        return "unknown"
     ratio = width / height
     if abs(ratio - 16 / 9) < 0.08:
         return "16:9"
@@ -137,17 +139,18 @@ class AssetLibrary:
         if not query_terms:
             return []
 
-        clause = "is_banned = 0"
         params: list[Any] = []
         if media_type:
-            clause += " AND media_type = ?"
+            sql = (
+                "SELECT * FROM assets WHERE is_banned = 0 AND media_type = ? "
+                "ORDER BY use_count ASC"
+            )
             params.append(media_type)
+        else:
+            sql = "SELECT * FROM assets WHERE is_banned = 0 ORDER BY use_count ASC"
 
         with self._connect() as db:
-            rows = db.execute(
-                f"SELECT * FROM assets WHERE {clause} ORDER BY use_count ASC",
-                params,
-            ).fetchall()
+            rows = db.execute(sql, params).fetchall()
 
         exclude = exclude_asset_ids or set()
         scored: list[tuple[int, dict[str, Any]]] = []
@@ -175,7 +178,8 @@ class AssetLibrary:
         provider_asset_id = str(candidate["provider_asset_id"])
         existing = self.get_by_provider_id(provider, provider_asset_id)
         quality = candidate.get("quality") or "photo"
-        relative_dir = Path("photos") / provider / _now_iso()[:4] / _now_iso()[5:7]
+        now = _now_iso()
+        relative_dir = Path("photos") / provider / now[:4] / now[5:7]
         relative_path = relative_dir / f"{provider}_{provider_asset_id}_{quality}.jpg"
         absolute_path = self.root / (existing["file_path"] if existing else relative_path)
         absolute_path.parent.mkdir(parents=True, exist_ok=True)
@@ -237,7 +241,8 @@ class AssetLibrary:
         provider_asset_id = str(candidate["provider_asset_id"])
         existing = self.get_by_provider_id(provider, provider_asset_id)
         quality = candidate.get("quality") or "hd"
-        relative_dir = Path("videos") / provider / _now_iso()[:4] / _now_iso()[5:7]
+        now = _now_iso()
+        relative_dir = Path("videos") / provider / now[:4] / now[5:7]
         relative_path = relative_dir / f"{provider}_{provider_asset_id}_{quality}.mp4"
         absolute_path = self.root / (existing["file_path"] if existing else relative_path)
         absolute_path.parent.mkdir(parents=True, exist_ok=True)

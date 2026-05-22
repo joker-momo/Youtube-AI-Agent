@@ -5,10 +5,37 @@ import tempfile
 import re
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from video_agent.assets.library import AssetLibrary
 from video_agent.assets.providers import DEFAULT_HEADERS, StockPhotoClient
+
+
+def _assert_safe_http_url(url: str) -> None:
+    """Reject non-http(s) schemes and link-local / loopback / RFC1918 hosts.
+
+    Stock-asset URLs come from third-party JSON responses; a compromised
+    provider could return ``file://`` or ``http://169.254.169.254/...`` to
+    coerce the worker into reading local resources.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"Refusing non-http(s) URL: {url!r}")
+    host = (parsed.hostname or "").lower()
+    if not host:
+        raise ValueError(f"URL missing host: {url!r}")
+    if host in ("localhost", "metadata.google.internal"):
+        raise ValueError(f"Refusing internal host: {host}")
+    if host.startswith(("127.", "10.", "169.254.", "192.168.")):
+        raise ValueError(f"Refusing internal host: {host}")
+    if host.startswith("172."):
+        try:
+            second = int(host.split(".")[1])
+            if 16 <= second <= 31:
+                raise ValueError(f"Refusing internal host: {host}")
+        except (ValueError, IndexError):
+            pass
 from video_agent.assets.query_cache import QueryCache
 from video_agent.contracts import repo_root
 
@@ -19,9 +46,10 @@ class DownloadClient(Protocol):
 
 class UrlDownloadClient:
     def download(self, url: str, output_path: Path) -> None:
+        _assert_safe_http_url(url)
         request = Request(url, headers=DEFAULT_HEADERS)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        with urlopen(request, timeout=60) as response, output_path.open("wb") as handle:
+        with urlopen(request, timeout=60) as response, output_path.open("wb") as handle:  # noqa: S310 — scheme/host vetted above
             shutil.copyfileobj(response, handle)
 
 

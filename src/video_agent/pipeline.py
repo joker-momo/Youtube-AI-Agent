@@ -138,8 +138,14 @@ def _add_visual_qa(review: dict) -> dict:
 
 
 def _write_visual_review(job_dir: Path, job_id: str, assets: dict, scene_doc: dict) -> dict:
+    asset_scenes = assets["scenes"]
+    doc_scenes = scene_doc["scenes"]
+    if len(asset_scenes) != len(doc_scenes):
+        raise RuntimeError(
+            f"visual_review scene count mismatch: assets={len(asset_scenes)}, scenes={len(doc_scenes)}"
+        )
     scenes = []
-    for scene_asset, scene in zip(assets["scenes"], scene_doc["scenes"]):
+    for scene_asset, scene in zip(asset_scenes, doc_scenes):
         scenes.append(
             {
                 "scene_id": scene_asset["scene_id"],

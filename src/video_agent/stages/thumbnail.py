@@ -30,7 +30,9 @@ def create_thumbnail_and_seo(
     seo.setdefault("job_id", job_dir.name)
     qa = check_thumbnail_title(seo, channel_config)
     seo["qa"] = {"iterations": [{"iteration": 1, **qa}], "verdict": qa["verdict"]}
+    # Persist the QA result before deciding to raise, so a failed run is
+    # inspectable from disk (matches stages/script.py + stages/scene.py).
+    write_json(job_dir / ARTIFACT_SEO, seo)
     if qa["verdict"] != "PASS":
         raise RuntimeError("Thumbnail/title QA failed.")
-    write_json(job_dir / ARTIFACT_SEO, seo)
     return seo

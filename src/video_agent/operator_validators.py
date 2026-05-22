@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 import re
 from pathlib import Path
@@ -106,7 +107,7 @@ def _validate_scenes(parsed: dict[str, Any]) -> ValidationResult:
         result.merge(_validate_asset_refs(scene, scene_id or f"index {index}"))
         result.merge(_validate_visual_prompt(scene, scene_id or f"index {index}"))
 
-    duplicates = sorted({scene_id for scene_id in ids if scene_id and ids.count(scene_id) > 1})
+    duplicates = sorted({sid for sid, n in Counter(s for s in ids if s).items() if n > 1})
     if duplicates:
         result.errors.append(f"Duplicate scene IDs: {duplicates}")
     return result
@@ -189,7 +190,7 @@ def _validate_tags(tags: Any, min_tags: int, max_tags: int) -> ValidationResult:
         if not clean:
             result.errors.append(f"Tag at index {index} is empty or whitespace.")
         normalized.append(clean)
-    duplicates = sorted({tag for tag in normalized if normalized.count(tag) > 1})
+    duplicates = sorted({tag for tag, n in Counter(normalized).items() if n > 1})
     if duplicates:
         result.errors.append(f"Duplicate tags: {duplicates}")
 

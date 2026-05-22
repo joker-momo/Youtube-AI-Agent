@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 DEFAULT_HEADERS = {"User-Agent": "Youtube-AI-Agent-MVP/0.1"}
@@ -47,7 +47,11 @@ def normalize_pixabay_response(response: dict[str, Any]) -> list[dict[str, Any]]
         user = hit.get("user")
         user_id = hit.get("user_id")
         tags = [tag.strip() for tag in (hit.get("tags") or "").split(",") if tag.strip()]
-        user_url = f"https://pixabay.com/users/{user}-{user_id}/" if user and user_id else None
+        user_url = (
+            f"https://pixabay.com/users/{quote(str(user), safe='')}-{user_id}/"
+            if user and user_id
+            else None
+        )
         quality = "fullhd" if hit.get("fullHDURL") else "large"
         results.append(
             {

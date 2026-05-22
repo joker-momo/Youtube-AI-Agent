@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -89,6 +90,32 @@ def get_jobs_root() -> Path:
     return Path(os.environ.get("JOBS_DIR", "/app/jobs"))
 
 
+_SAFE_JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_SAFE_CHANNEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def _safe_channel_id(channel_id: str) -> str:
+    if not channel_id or not _SAFE_CHANNEL_ID_RE.match(channel_id):
+        raise HTTPException(status_code=400, detail=f"Invalid channel_id: {channel_id!r}")
+    return channel_id
+
+
+def _safe_job_dir(jobs_root: Path, job_id: str) -> Path:
+    """Validate ``job_id`` and return the resolved job directory inside ``jobs_root``.
+
+    Rejects any id that contains path separators, parent refs, NUL, or that
+    resolves outside ``jobs_root``. Raises HTTPException(400) on violation.
+    """
+    if not job_id or not _SAFE_JOB_ID_RE.match(job_id):
+        raise HTTPException(status_code=400, detail=f"Invalid job_id: {job_id!r}")
+    candidate = (jobs_root / job_id).resolve()
+    try:
+        candidate.relative_to(jobs_root.resolve())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid job_id: {job_id!r}") from exc
+    return candidate
+
+
 @app.get("/health")
 def health() -> dict:
     return {"ok": True, "service": "app"}
@@ -155,7 +182,7 @@ def job_timeline(
     /jobs/{id}/artifact?path=...), the actual elapsed seconds if the
     stage has run, and an ETA in seconds for stages still pending.
     """
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
 
@@ -250,7 +277,7 @@ def job_artifact(
     ``path`` is interpreted as relative to ``<jobs_root>/<job_id>/`` and
     is rejected (404) if it escapes that directory.
     """
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     target = resolve_inside(job_dir, path)
@@ -2503,7 +2530,7 @@ def post_job(
     payload: CreateJobRequest,
     jobs_root: Path = Depends(get_jobs_root),
 ) -> dict:
-    job_dir = jobs_root / payload.job_id
+    job_dir = _safe_job_dir(jobs_root, payload.job_id)
     try:
         state = create_job(
             job_dir,
@@ -2521,7 +2548,7 @@ def get_job(
     job_id: str,
     jobs_root: Path = Depends(get_jobs_root),
 ) -> dict:
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     return load_job(job_dir).to_dict()
@@ -2532,7 +2559,7 @@ def delete_job(
     job_id: str,
     jobs_root: Path = Depends(get_jobs_root),
 ) -> None:
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     job_file = job_dir / "job.json"
     if not job_file.exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
@@ -2551,7 +2578,7 @@ def post_advance(
     job_id: str,
     jobs_root: Path = Depends(get_jobs_root),
 ) -> dict:
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     try:
         state = advance(job_dir)
     except JobNotFoundError as exc:
@@ -2566,7 +2593,7 @@ def get_events(
     job_id: str,
     jobs_root: Path = Depends(get_jobs_root),
 ) -> dict:
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     events_path = job_dir / EVENT_LOG
@@ -2599,9 +2626,14 @@ def post_idea(
     idea: dict,
     jobs_root: Path = Depends(get_jobs_root),
 ) -> dict:
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    from video_agent.utils.validation import validate_json
+    try:
+        validate_json(idea, repo_root() / "schemas" / "manual-idea.schema.json")
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid idea payload: {exc}") from exc
     idea_path = job_dir / IDEA_FILE
     idea_path.write_text(
         json.dumps(idea, ensure_ascii=False, indent=2),
@@ -2616,7 +2648,7 @@ def post_run_script(
     jobs_root: Path = Depends(get_jobs_root),
     channel_path: Path = Depends(get_channel_path),
 ) -> dict:
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     try:
@@ -2634,7 +2666,7 @@ def post_promote_script(
     jobs_root: Path = Depends(get_jobs_root),
     channel_path: Path = Depends(get_channel_path),
 ) -> dict:
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     try:
@@ -2652,7 +2684,7 @@ def post_run_scenes(
     jobs_root: Path = Depends(get_jobs_root),
     channel_path: Path = Depends(get_channel_path),
 ) -> dict:
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     try:
@@ -2670,7 +2702,7 @@ def post_promote_scenes(
     jobs_root: Path = Depends(get_jobs_root),
     channel_path: Path = Depends(get_channel_path),
 ) -> dict:
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     try:
@@ -2688,7 +2720,7 @@ def post_run_seo(
     jobs_root: Path = Depends(get_jobs_root),
     channel_path: Path = Depends(get_channel_path),
 ) -> dict:
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     try:
@@ -2706,7 +2738,7 @@ def post_promote_seo(
     jobs_root: Path = Depends(get_jobs_root),
     channel_path: Path = Depends(get_channel_path),
 ) -> dict:
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     try:
@@ -2723,7 +2755,7 @@ def post_run_whisper_timestamps(
     job_id: str,
     jobs_root: Path = Depends(get_jobs_root),
 ) -> dict:
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     try:
@@ -2740,7 +2772,7 @@ def post_run_render(
     jobs_root: Path = Depends(get_jobs_root),
     channel_path: Path = Depends(get_channel_path),
 ) -> dict:
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     try:
@@ -2757,13 +2789,13 @@ def get_render_progress(
     jobs_root: Path = Depends(get_jobs_root),
 ) -> dict:
     """Return current Remotion render progress. Polling-friendly — always 200."""
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     progress_path = job_dir / "render_progress.json"
     if not progress_path.exists():
         return {"percent": 0, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""}
     try:
         import json as _json
-        return _json.loads(progress_path.read_text())
+        return _json.loads(progress_path.read_text(encoding="utf-8"))
     except Exception:
         return {"percent": 0, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""}
 
@@ -2773,7 +2805,7 @@ def post_run_review(
     job_id: str,
     jobs_root: Path = Depends(get_jobs_root),
 ) -> dict:
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     try:
@@ -2851,7 +2883,7 @@ def get_approvals(
     job_id: str,
     jobs_root: Path = Depends(get_jobs_root),
 ) -> dict:
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     approvals = load_approvals(job_dir)
@@ -2872,7 +2904,7 @@ def post_confirm_approval(
     stage_name: str,
     jobs_root: Path = Depends(get_jobs_root),
 ) -> dict:
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     if stage_name not in APPROVAL_REQUIRED_STAGES:
@@ -2887,7 +2919,7 @@ def post_clear_approval(
     stage_name: str,
     jobs_root: Path = Depends(get_jobs_root),
 ) -> dict:
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     if stage_name not in APPROVAL_REQUIRED_STAGES:
@@ -2903,7 +2935,7 @@ async def post_auto_idea_research(
     channel_path: Path = Depends(get_channel_path),
     client: BrowserClient = Depends(get_browser_client),
 ) -> dict:
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     try:
@@ -2929,7 +2961,7 @@ async def post_auto_seo_vidiq(
     channel_path: Path = Depends(get_channel_path),
     client: BrowserClient = Depends(get_browser_client),
 ) -> dict:
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     try:
@@ -2952,7 +2984,7 @@ def post_regenerate_stage(
     stage_name: str,
     jobs_root: Path = Depends(get_jobs_root),
 ) -> dict:
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     if stage_name not in APPROVAL_REQUIRED_STAGES:
@@ -2998,33 +3030,30 @@ def list_saved_ideas(
     inputs/*.json root files (legacy batch ideas), returning all that
     look like valid idea objects (have at least a 'topic' field).
     """
+    _safe_channel_id(channel_id)
     _IDEA_FIELDS = {"topic", "angle", "title_seed", "key_points"}
     ideas: list[dict] = []
     paths: list[str] = []
 
-    # 1. ideas/{channel_id}/ subdirectory (generated by idea_generator)
+    # ideas/{channel_id}/ subdirectory (generated by idea_generator).
+    # Root inputs/*.json fallback removed — it leaked ideas from other channels.
     ideas_dir = inputs_root / "ideas" / channel_id
     subdir_files: list[Path] = []
     if ideas_dir.exists():
         subdir_files = sorted(ideas_dir.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
 
-    # 2. root inputs/*.json fallback (legacy batch files)
-    root_files = sorted(
-        (f for f in inputs_root.glob("*.json") if f.is_file()),
-        key=lambda f: f.stat().st_mtime,
-        reverse=True,
-    )
-
-    for f, rel_prefix in [*((f, f"ideas/{channel_id}/{f.name}") for f in subdir_files),
-                           *((f, f.name) for f in root_files)]:
+    for f in subdir_files:
         if len(ideas) >= 50:
             break
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
             if not isinstance(data, dict) or not (_IDEA_FIELDS & data.keys()):
                 continue
+            # Belt-and-braces: drop entries tagged with a different channel_id.
+            if data.get("channel_id") and data.get("channel_id") != channel_id:
+                continue
             ideas.append(data)
-            paths.append(rel_prefix)
+            paths.append(f"ideas/{channel_id}/{f.name}")
         except Exception:
             pass
     return {"channel_id": channel_id, "ideas": ideas, "paths": paths}
@@ -3041,6 +3070,7 @@ async def post_score_ideas(
     Returns per-idea: keywords scored, best_score, competition, related keywords.
     Scoring is best-effort — if vidIQ is unavailable all scores are null.
     """
+    _safe_channel_id(channel_id)
     # Collect all keywords from all ideas in one flat list, track ranges
     all_keywords: list[str] = []
     ranges: list[tuple[int, int]] = []
@@ -3105,6 +3135,7 @@ async def get_sync_channel_videos(
     channel_id: str,
 ) -> dict:
     """Fetch published videos from YouTube RSS and cache to published_videos.json."""
+    _safe_channel_id(channel_id)
     channel_path = repo_root() / "configs" / channel_id / "channel.yaml"
     if not channel_path.exists():
         raise HTTPException(status_code=404, detail=f"No config for channel: {channel_id}")
@@ -3133,6 +3164,7 @@ async def post_generate_ideas(
 
     Returns ideas with pre-computed keyword scores so the UI shows scores immediately.
     """
+    _safe_channel_id(channel_id)
     channel_path = repo_root() / "configs" / channel_id / "channel.yaml"
     if not channel_path.exists():
         raise HTTPException(status_code=404, detail=f"No config for channel: {channel_id}")
@@ -3195,7 +3227,7 @@ async def post_auto_script(
     channel_path: Path = Depends(get_channel_path),
     client: BrowserClient = Depends(get_browser_client),
 ) -> dict:
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     try:
@@ -3216,7 +3248,7 @@ async def post_auto_scenes(
     channel_path: Path = Depends(get_channel_path),
     client: BrowserClient = Depends(get_browser_client),
 ) -> dict:
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     try:
@@ -3237,7 +3269,7 @@ async def post_auto_seo(
     channel_path: Path = Depends(get_channel_path),
     client: BrowserClient = Depends(get_browser_client),
 ) -> dict:
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     try:
@@ -3258,7 +3290,7 @@ async def post_auto_script_qa(
     channel_path: Path = Depends(get_channel_path),
     client: BrowserClient = Depends(get_browser_client),
 ) -> dict:
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     try:
@@ -3281,7 +3313,7 @@ async def post_auto_scenes_qa(
     channel_path: Path = Depends(get_channel_path),
     client: BrowserClient = Depends(get_browser_client),
 ) -> dict:
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     try:
@@ -3304,7 +3336,7 @@ async def post_auto_seo_qa(
     channel_path: Path = Depends(get_channel_path),
     client: BrowserClient = Depends(get_browser_client),
 ) -> dict:
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     try:
@@ -3327,7 +3359,7 @@ async def post_auto_thumbnail_image(
     channel_path: Path = Depends(get_channel_path),
     client: BrowserClient = Depends(get_browser_client),
 ) -> dict:
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     try:
@@ -3361,7 +3393,7 @@ async def post_generate_scene_asset(
     the new file. The next render run picks it up via the
     ``_find_asset_refs_primary`` priority path.
     """
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     try:
@@ -3386,7 +3418,7 @@ async def post_run_all(
     channel_path: Path = Depends(get_channel_path),
     client: BrowserClient = Depends(get_browser_client),
 ) -> dict:
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     return await execute_run_all(
@@ -3418,7 +3450,11 @@ async def post_run_batch(
     """
     results: list[dict] = []
     for job_id in req.job_ids:
-        job_dir = jobs_root / job_id
+        try:
+            job_dir = _safe_job_dir(jobs_root, job_id)
+        except HTTPException as exc:
+            results.append({"job_id": job_id, "error": exc.detail})
+            continue
         if not (job_dir / "job.json").exists():
             results.append({"job_id": job_id, "error": f"Unknown job: {job_id}"})
             continue
@@ -3460,7 +3496,7 @@ async def ws_events(
     job_id: str,
     jobs_root: Path = Depends(get_jobs_root),
 ) -> None:
-    job_dir = jobs_root / job_id
+    job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         await websocket.close(code=4404)
         return
@@ -3470,6 +3506,9 @@ async def ws_events(
     offset = 0
     try:
         while True:
+            if not (job_dir / "job.json").exists():
+                await websocket.close(code=4404)
+                return
             if events_path.exists():
                 with events_path.open("r", encoding="utf-8") as handle:
                     handle.seek(offset)

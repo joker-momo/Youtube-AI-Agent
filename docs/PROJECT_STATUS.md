@@ -987,6 +987,68 @@ The command will either:
 - tell you to run `operator-render`,
 - or tell you to open the review page.
 
+## Security & Reliability Hardening (2026-05-22)
+
+Audit of `src/` produced ~20 findings; all but the per-job delete-lock are now fixed:
+
+- **Path traversal** locked down: `_safe_job_dir` in `web/app.py` validates every `job_id` (POST/DELETE/GET/idea/stages/timeline/artifact). `timeline_helpers.resolve_inside` switched from `startswith` to `Path.is_relative_to`.
+- **Browser-worker `/chatgpt/image`** now jails `out_path` under `WORKER_ASSETS_ROOT` (default `/app/jobs`) — refuses absolute paths that escape.
+- **Auth handlers** (`/auth/{site}/status`, `/auth/{site}/cookies`) re-raise `HTTPException` so 404/409 from inner code paths survive.
+- **Browser-worker session creation** serialized per-site via `asyncio.Lock`.
+- **`save_job`** now atomic (tempfile + `os.replace`) so a crash mid-write cannot corrupt `job.json`.
+- **`render._run_with_progress`** uses `Popen` as a context manager + explicit `stdout.close()`; child process always cleaned up on exception.
+- **`idea_generator`** now uses `defusedxml.ElementTree` for YouTube RSS + Google Trends (XXE-safe). Dedup uses `dict.fromkeys` instead of side-effect comprehension.
+- **`POST /jobs/{id}/idea`** validates payload against `schemas/manual-idea.schema.json`.
+- **`assets_chatgpt` stage** skips scenes without `id` and re-raises `asyncio.CancelledError` so `/run-all` cancellation actually propagates.
+- **`AssetLibrary`** uses a single timestamp per store call (fixes year/month skew at midnight UTC boundary); `_aspect_ratio` guards against zero dimensions.
+- **`query_cache.set`** now records correct `results_count` for `pexels_video` (was always 0).
+- **Render progress endpoint + render writes** use explicit `encoding="utf-8"`.
+- **Events WebSocket loop** exits with close-code 4404 if `job.json` is deleted under it.
+
+Remaining: `DELETE /jobs/{id}` still has a small TOCTOU window between the in-progress check and `shutil.rmtree`. Proper per-job lock requires shared lock manager — deferred.
+
+### Round 2 (2026-05-22, after second-pass audit)
+
+- **`channel_id` path traversal**: added `_safe_channel_id` validator; applied to `/channels/{id}/ideas` (GET), `/channels/{id}/ideas/score` (POST), `/channels/{id}/sync-videos` (GET), `/channels/{id}/ideas/generate` (POST).
+- **`save_ideas`** (idea_generator) now validates `channel_id` and asserts the resolved destination stays inside `out_dir` — defends CLI/batch callers too.
+- **`write_json`** (`utils/json_io.py`) is now atomic (tempfile + fsync + `os.replace`). Every artifact write (`scenes.json`, `seo.json`, QA outputs, scene asset patches) inherits crash-safety.
+- **`list_saved_ideas`**: removed root `inputs/*.json` fallback that leaked other channels' ideas; scoped to `inputs/ideas/<channel_id>/` only.
+- **`AssetLibrary.find_by_query`**: replaced f-string SQL `clause` with branched static SQL (kills SQLi footgun).
+- **`generate_scene_asset`**: validates `scene_id` against safe-id regex before composing `assets/<scene_id>.png`.
+- **`/run-batch`**: bad `job_id` from `_safe_job_dir` now lands in per-job `error` slot instead of aborting the batch.
+- **`execute_run_all`**: takes a non-blocking `fcntl.flock` on `<job_dir>/.run.lock` for the full pipeline run — two concurrent `/run-all` calls on the same job get HTTP 409 instead of stomping state.
+- **`UrlDownloadClient.download`**: `_assert_safe_http_url` rejects non-http(s) schemes and loopback / link-local / RFC1918 hosts (SSRF defense for stock-asset URLs).
+- **`browser_client.close_session`** swallows: logged at warn instead of silent `pass`.
+- Misc: `render_with_remotion` 100% write uses `encoding="utf-8"`; `ImagePromptRequest.out_path` comment aligned with new jail behaviour.
+
+### Round 3 (2026-05-22, third-pass audit)
+
+- **`asset_refs.primary` path traversal** (HIGH): `stages/assets.py:_find_asset_refs_primary` now refuses absolute paths and `..` segments; resolved candidate must be `is_relative_to(job_dir)`. Previously an operator-supplied primary string could leak arbitrary readable files into the publicly-served `remotion/public/jobs/<id>/assets/` mirror.
+- **Telegram HTML-escape** (MEDIUM): all interpolated values inside `<code>…</code>` / `<a href>` are now run through `html.escape(..., quote=False)` so traceback strings with `<` or `&` no longer fail Telegram's HTML parser.
+- **Telegram asyncio modernization** (MEDIUM): replaced `asyncio.get_event_loop()` with `asyncio.get_running_loop()` (or `asyncio.run`) in `notify_sync` and `_send_video_file` — fixes the 3.12+ deprecation and the no-loop `RuntimeError`.
+- **TTS sample-rate drift** (MEDIUM): `synthesize_scene_track` now locks `sample_rate` from config and raises on any scene metadata that reports a different rate. Prevents pitched/garbled audio when two scenes report different rates.
+- **`stages/thumbnail.py`**: write seo.json (with QA result) before raising on QA fail, so failed runs are inspectable on disk (parity with script/scene stages).
+- **`cli.py _run_auto`**: catches `json.JSONDecodeError` on the idea file and returns 2 with a clear message instead of a bare traceback.
+
+### Round 4 (2026-05-22, remaining lows)
+
+- **`stages/script.py`**: retry loop breaks early when `retry_action` is anything other than `add_disclaimer` (was wasting 2 no-op iterations).
+- **`stages/scene.py`**: collapsed the 3-iter loop to a single pass — no `retry_action` mutates the doc anyway.
+- **`operator_validators.py`**: `Counter` replaces `list.count` in two places (O(n²) → O(n)) for duplicate scene-id / tag detection.
+- **`qa/common.average_sentence_words`**: regex split on `[.!?]+` so `...` counts as a single boundary instead of three empty sentences.
+- **`operator.py:813`**: `<a href={!r}>` Python-quoted attribute replaced with explicit `<a href="…">` — removes fragility around HTML attribute encoding of `&#x27;`.
+
+False positives from audit: `extract_json_object` backslash handling (already correct — `escape` flag unconditionally resets next char).
+
+### Round 5 (2026-05-22, final pass — all material findings cleared)
+
+- **`pipeline._write_visual_review`**: asserts `len(asset_scenes) == len(doc_scenes)` so a dropped scene fails loudly instead of silently truncating via `zip`.
+- **`stages/render.py`**: thumbnail variant loop catches `CalledProcessError` per-variant; raises only if no variant produced `thumbnail_1.jpg`. Failed variants no longer wipe a successfully rendered video.
+- **`stages/visual_contact_sheet.py`**: refuses empty `scenes`; uses `scene.get("background")` so missing key returns a placeholder thumb instead of `KeyError`.
+- **`assets/providers.py`**: Pixabay user URL quotes `user` via `urllib.parse.quote` — spaces / special chars no longer break the stored attribution URL.
+
+Skipped: `qa/script_qa.py` disclaimer phrase variant list — intentional QA gate; needs product decision on which phrases to accept.
+
 ## Recent Commits
 
 - `fef352e fix: resume run-all and normalize Claude artifact shapes`

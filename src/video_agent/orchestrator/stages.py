@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from pathlib import Path
 from typing import Awaitable, Callable, Sequence
 
@@ -999,6 +1000,8 @@ async def generate_scene_asset(
     scenes_path = job_dir / "scenes.json"
     if not scenes_path.exists():
         raise StageInputMissingError(f"Missing {scenes_path}")
+    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", scene_id or ""):
+        raise StageInputMissingError(f"Invalid scene_id: {scene_id!r}")
     scenes_doc = json.loads(scenes_path.read_text(encoding="utf-8"))
     target = None
     for s in scenes_doc.get("scenes", []):
@@ -1086,14 +1089,25 @@ async def auto_assets_chatgpt_stage(
         raise StageInputMissingError(f"Missing {scenes_path}")
 
     scenes_doc = json.loads(scenes_path.read_text(encoding="utf-8"))
-    scene_ids = [s["id"] for s in scenes_doc.get("scenes", [])]
     logger = EventLogger(job_dir / EVENT_LOG)
+    scene_ids: list[str] = []
+    for s in scenes_doc.get("scenes", []):
+        sid = s.get("id")
+        if sid:
+            scene_ids.append(sid)
+        else:
+            logger.log(
+                "SCENE_ASSET_FAILED",
+                {"job_id": state.job_id, "scene_id": None, "error": "scene missing id"},
+            )
 
     for idx, scene_id in enumerate(scene_ids):
         if idx > 0:
             await asyncio.sleep(throttle_sec)
         try:
             await generate_scene_asset(job_dir, channel_path, scene_id, image_fn)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.log(
                 "SCENE_ASSET_FAILED",

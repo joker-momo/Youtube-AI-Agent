@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import time
 from pathlib import Path
 
@@ -68,8 +69,49 @@ async def execute_run_all(
     client: BrowserClient,
     enforce_approvals: bool = True,
 ) -> dict:
-    """End-to-end pipeline: script -> scenes -> seo -> render -> review."""
+    """End-to-end pipeline: script -> scenes -> seo -> render -> review.
 
+    Holds a non-blocking ``fcntl.flock`` on ``<job_dir>/.run.lock`` for the
+    duration so two concurrent ``/run-all`` calls on the same job don't
+    stomp each other's state writes.
+    """
+    import fcntl
+
+    job_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = job_dir / ".run.lock"
+    lock_fd = lock_path.open("w")
+    try:
+        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        lock_fd.close()
+        if exc.errno in (errno.EWOULDBLOCK, errno.EAGAIN):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Job {job_dir.name} already has a /run-all in progress.",
+            ) from exc
+        raise
+
+    try:
+        return await _execute_run_all_locked(
+            job_dir=job_dir,
+            channel_path=channel_path,
+            client=client,
+            enforce_approvals=enforce_approvals,
+        )
+    finally:
+        try:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+        finally:
+            lock_fd.close()
+
+
+async def _execute_run_all_locked(
+    *,
+    job_dir: Path,
+    channel_path: Path,
+    client: BrowserClient,
+    enforce_approvals: bool = True,
+) -> dict:
     completed: list[dict] = []
     _start_time = time.monotonic()
 

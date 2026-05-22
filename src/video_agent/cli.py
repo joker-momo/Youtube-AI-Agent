@@ -269,7 +269,11 @@ def _run_auto(args: argparse.Namespace) -> int:
     if not idea_path.exists():
         print(f"idea file not found: {idea_path}")
         return 2
-    idea_payload = json.loads(idea_path.read_text(encoding="utf-8"))
+    try:
+        idea_payload = json.loads(idea_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        print(f"idea file is not valid JSON: {idea_path}: {exc}")
+        return 2
     job_id = args.job_id or f"auto-{int(time.time())}"
 
     def _post(url: str, payload: dict | None, timeout: int) -> tuple[int, dict]:

@@ -22,15 +22,24 @@ def create_visual_contact_sheet(job_dir: Path, visual_review: dict) -> Path:
     thumb_size = (320, 180)
     padding = 24
     label_height = 92
-    width = padding + len(visual_review["scenes"]) * (thumb_size[0] + padding)
+    scenes = visual_review.get("scenes") or []
+    if not scenes:
+        raise RuntimeError("visual_review has no scenes; refusing to render an empty contact sheet.")
+    width = padding + len(scenes) * (thumb_size[0] + padding)
     height = padding + thumb_size[1] + label_height + padding
     sheet = Image.new("RGB", (width, height), "#f7f7f2")
     draw = ImageDraw.Draw(sheet)
 
-    for index, scene in enumerate(visual_review["scenes"]):
+    for index, scene in enumerate(scenes):
         x = padding + index * (thumb_size[0] + padding)
         y = padding
-        image_path = Path(scene["background"])
+        background = scene.get("background")
+        if not background:
+            thumb = Image.new("RGB", thumb_size, "#d8d8d8")
+            ImageDraw.Draw(thumb).text((16, 76), "no background", fill="#333333")
+            sheet.paste(thumb, (x, y))
+            continue
+        image_path = Path(background)
         try:
             thumb = _fit_image(image_path, thumb_size)
         except OSError:

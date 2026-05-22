@@ -18,6 +18,7 @@ Usage (from sync context)::
 from __future__ import annotations
 
 import asyncio
+import html
 import os
 import subprocess
 import sys
@@ -26,6 +27,11 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+
+
+def _esc(value: Any) -> str:
+    """HTML-escape an interpolated value for Telegram parse_mode=HTML."""
+    return html.escape(str(value), quote=False)
 
 _TELEGRAM_FILE_LIMIT = 50 * 1024 * 1024  # 50 MB — Bot API hard cap
 
@@ -161,7 +167,6 @@ async def _send_video_file(path: Path, caption: str = "") -> None:
         return
 
     send_path = path
-    tmp_file: tempfile.NamedTemporaryFile | None = None
 
     size = path.stat().st_size
     if size > _TELEGRAM_FILE_LIMIT:
@@ -171,7 +176,7 @@ async def _send_video_file(path: Path, caption: str = "") -> None:
         tmp = tempfile.NamedTemporaryFile(suffix="_tg.mp4", delete=False)
         tmp.close()
         tmp_path = Path(tmp.name)
-        ok = await asyncio.get_event_loop().run_in_executor(
+        ok = await asyncio.get_running_loop().run_in_executor(
             None, _compress_video, path, tmp_path
         )
         if ok and tmp_path.stat().st_size <= _TELEGRAM_FILE_LIMIT:
@@ -204,12 +209,15 @@ async def _send_video_file(path: Path, caption: str = "") -> None:
 def notify_sync(text: str) -> None:
     """Sync wrapper — schedules send on a new event loop if none running."""
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None:
             # Inside an already-running loop (FastAPI): schedule as a task.
             loop.create_task(_send_message(text))
         else:
-            loop.run_until_complete(_send_message(text))
+            asyncio.run(_send_message(text))
     except Exception as exc:  # noqa: BLE001
         print(f"[telegram] notify_sync failed: {exc}", file=sys.stderr)
 
@@ -227,7 +235,7 @@ def _job_url(job_id: str) -> str:
 async def notify_job_started(job_id: str) -> None:
     text = (
         f"🚀 <b>Job started</b>\n"
-        f"<code>{job_id}</code>"
+        f"<code>{_esc(job_id)}</code>"
     )
     await send(text)
 
@@ -245,9 +253,9 @@ async def notify_stage_done(job_id: str, stage: str, output: str | None = None) 
     label = label_map.get(stage)
     if not label:
         return  # skip minor stages
-    text = f"{label}\n<code>{job_id}</code>"
+    text = f"{label}\n<code>{_esc(job_id)}</code>"
     if output:
-        text += f"\n→ <code>{output}</code>"
+        text += f"\n→ <code>{_esc(output)}</code>"
     await send(text)
 
 
@@ -257,13 +265,13 @@ async def notify_job_done(
     stages_done: list[str] | None = None,
     wall_seconds: float | None = None,
 ) -> None:
-    parts = [f"✅ <b>Job complete</b>", f"<code>{job_id}</code>"]
+    parts = [f"✅ <b>Job complete</b>", f"<code>{_esc(job_id)}</code>"]
     if stages_done:
         parts.append(f"{len(stages_done)} stages completed")
     if wall_seconds is not None:
         mins, secs = divmod(int(wall_seconds), 60)
         parts.append(f"⏱ {mins}m{secs:02d}s")
-    parts.append(f'<a href="{_job_url(job_id)}">Open dashboard →</a>')
+    parts.append(f'<a href="{_esc(_job_url(job_id))}">Open dashboard →</a>')
     await send("\n".join(parts))
 
 
@@ -273,14 +281,14 @@ async def notify_job_failed(
     stopped_at: str | None = None,
     error: str | None = None,
 ) -> None:
-    parts = [f"❌ <b>Job failed</b>", f"<code>{job_id}</code>"]
+    parts = [f"❌ <b>Job failed</b>", f"<code>{_esc(job_id)}</code>"]
     if stopped_at:
-        parts.append(f"Stopped at: <code>{stopped_at}</code>")
+        parts.append(f"Stopped at: <code>{_esc(stopped_at)}</code>")
     if error:
         # truncate long errors
         err_short = str(error)[:300]
-        parts.append(f"Error: <code>{err_short}</code>")
-    parts.append(f'<a href="{_job_url(job_id)}">Open dashboard →</a>')
+        parts.append(f"Error: <code>{_esc(err_short)}</code>")
+    parts.append(f'<a href="{_esc(_job_url(job_id))}">Open dashboard →</a>')
     await send("\n".join(parts))
 
 

@@ -1,12 +1,49 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import re
+from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
 import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+
+
+def _assets_root() -> Path:
+    """Root directory the worker is allowed to write generated assets into."""
+    return Path(os.environ.get("WORKER_ASSETS_ROOT", "/app/jobs")).resolve()
+
+
+def _safe_asset_path(out_path: str) -> Path:
+    """Resolve ``out_path`` and ensure it stays inside ``_assets_root``.
+
+    Raises HTTPException(400) on traversal or absolute paths outside the root.
+    """
+    if not out_path:
+        raise HTTPException(status_code=400, detail="out_path required")
+    root = _assets_root()
+    candidate = (root / out_path).resolve() if not Path(out_path).is_absolute() else Path(out_path).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"out_path must be inside {root}",
+        ) from exc
+    return candidate
+
+
+_SESSION_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _site_lock(site: str) -> asyncio.Lock:
+    lock = _SESSION_LOCKS.get(site)
+    if lock is None:
+        lock = asyncio.Lock()
+        _SESSION_LOCKS[site] = lock
+    return lock
 
 from video_agent.browser_worker.drivers import (
     BrowserDriverError,
@@ -177,6 +214,11 @@ async def _open_session(site: str) -> str:
     """Create a new session: connect runtime, open page, run driver.open()."""
     if site not in {"chatgpt", "gemini", "claude", "vidiq"}:
         raise HTTPException(status_code=404, detail=f"Unsupported site: {site}")
+    async with _site_lock(site):
+        return await _open_session_locked(site)
+
+
+async def _open_session_locked(site: str) -> str:
     try:
         pw_ctx, browser = await _connect_runtime()
     except Exception as exc:
@@ -515,7 +557,7 @@ async def vidiq_close_session(session_id: str):
 class ImagePromptRequest(BaseModel):
     prompt: str
     project_name: str
-    out_path: str  # absolute path inside the worker container
+    out_path: str  # path relative to WORKER_ASSETS_ROOT, or absolute path inside it
     response_timeout_ms: int = 240_000
 
 
@@ -529,11 +571,12 @@ async def chatgpt_image(payload: ImagePromptRequest) -> dict:
     and closes the page. Each call creates a fresh project so images
     stay organised per video / per scene.
     """
-    from pathlib import Path as _P
     from playwright.async_api import async_playwright
 
     from video_agent.browser_worker.drivers import ChatGPTImageDriver
 
+    safe_out = _safe_asset_path(payload.out_path)
+    safe_out.parent.mkdir(parents=True, exist_ok=True)
     cdp_url = _cdp_url()
     try:
         ws_endpoint = await _resolve_browser_ws(cdp_url)
@@ -558,7 +601,7 @@ async def chatgpt_image(payload: ImagePromptRequest) -> dict:
                 result = await driver.generate_image(
                     payload.prompt,
                     project_name=payload.project_name,
-                    out_path=_P(payload.out_path),
+                    out_path=safe_out,
                     response_timeout_ms=payload.response_timeout_ms,
                 )
                 return result
@@ -650,6 +693,8 @@ async def auth_clear_cookies(site: str) -> dict:
                 }
             finally:
                 await browser.close()
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=503, detail={"cdp_url": cdp_url, "error": str(exc)}) from exc
 
@@ -703,6 +748,8 @@ async def auth_status(site: str) -> dict:
                 }
             finally:
                 await browser.close()
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(
             status_code=503,

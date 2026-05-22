@@ -810,7 +810,7 @@ def write_operator_review(job_dir: Path, output_path: Path | None = None) -> Pat
             "<tr>"
             f"<td>{escape(filename)}</td>"
             f"<td>{_status_badge('PASS' if path.exists() else 'MISSING')}</td>"
-            f"<td>{f'<a href={_relative_href(path, job_dir)!r}>{escape(filename)}</a>' if path.exists() else ''}</td>"
+            f'<td>{f"""<a href="{_relative_href(path, job_dir)}">{escape(filename)}</a>""" if path.exists() else ""}</td>'
             "</tr>"
         )
 

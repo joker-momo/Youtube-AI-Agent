@@ -100,41 +100,43 @@ def build_thumbnail_commands(render_props_path: Path, out_dir: Path) -> list[lis
 
 def _run_with_progress(cmd: list[str], progress_path: Path | None = None) -> None:
     """Run a subprocess, streaming stdout and writing Remotion progress to a JSON file."""
-    proc = subprocess.Popen(
+    with subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
         cwd=repo_root(),
-    )
-    progress: dict = {"percent": 0, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""}
-    for line in proc.stdout:  # type: ignore[union-attr]
-        print(line, end="", flush=True)
-        # Remotion progress line: "Rendered 18800/44400, time remaining: 5m 22s"
-        # Also catches generic "N/M" variants with optional fps/ETA.
-        m_frame = re.search(r"(\d+)\s*/\s*(\d+)", line)
-        if m_frame and progress_path:
-            frame = int(m_frame.group(1))
-            total = int(m_frame.group(2))
-            pct = round(frame / max(total, 1) * 100, 1)
-            fps_m = re.search(r"([\d.]+)\s*fps", line, re.IGNORECASE)
-            # "time remaining: 5m 22s" or "ETA 0:05:22"
-            eta_m = re.search(r"time remaining:\s*([\dm\s]+\d+s)", line, re.IGNORECASE) \
-                 or re.search(r"ETA\s*([\d:]+)", line, re.IGNORECASE)
-            progress = {
-                "percent": pct,
-                "frame": frame,
-                "total_frames": total,
-                "fps": float(fps_m.group(1)) if fps_m else progress.get("fps", 0.0),
-                "eta": eta_m.group(1).strip() if eta_m else "",
-            }
-            try:
-                progress_path.write_text(json.dumps(progress))
-            except OSError:
-                pass
-    proc.wait()
-    if proc.returncode != 0:
-        raise subprocess.CalledProcessError(proc.returncode, cmd)
+    ) as proc:
+        progress: dict = {"percent": 0, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""}
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                print(line, end="", flush=True)
+                m_frame = re.search(r"(\d+)\s*/\s*(\d+)", line)
+                if m_frame and progress_path:
+                    frame = int(m_frame.group(1))
+                    total = int(m_frame.group(2))
+                    pct = round(frame / max(total, 1) * 100, 1)
+                    fps_m = re.search(r"([\d.]+)\s*fps", line, re.IGNORECASE)
+                    eta_m = re.search(r"time remaining:\s*([\dm\s]+\d+s)", line, re.IGNORECASE) \
+                         or re.search(r"ETA\s*([\d:]+)", line, re.IGNORECASE)
+                    progress = {
+                        "percent": pct,
+                        "frame": frame,
+                        "total_frames": total,
+                        "fps": float(fps_m.group(1)) if fps_m else progress.get("fps", 0.0),
+                        "eta": eta_m.group(1).strip() if eta_m else "",
+                    }
+                    try:
+                        progress_path.write_text(json.dumps(progress), encoding="utf-8")
+                    except OSError:
+                        pass
+        finally:
+            if proc.stdout is not None:
+                proc.stdout.close()
+        rc = proc.wait()
+        if rc != 0:
+            raise subprocess.CalledProcessError(rc, cmd)
 
 
 def render_with_remotion(render_props_path: Path, video_path: Path, thumbnail_path: Path) -> None:
@@ -143,14 +145,26 @@ def render_with_remotion(render_props_path: Path, video_path: Path, thumbnail_pa
     _run_with_progress(commands.video, progress_path)
     # Mark 100% on completion.
     try:
-        progress_path.write_text(json.dumps({"percent": 100, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""}))
+        progress_path.write_text(
+            json.dumps({"percent": 100, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""}),
+            encoding="utf-8",
+        )
     except OSError:
         pass
     thumb_dir = render_props_path.parent
     thumb_cmds = build_thumbnail_commands(render_props_path, thumb_dir)
-    for cmd in thumb_cmds:
-        subprocess.run(cmd, cwd=repo_root(), check=True)
+    thumb_errors: list[str] = []
+    for i, cmd in enumerate(thumb_cmds, start=1):
+        try:
+            subprocess.run(cmd, cwd=repo_root(), check=True)
+        except subprocess.CalledProcessError as exc:
+            # One bad variant should not invalidate the rendered video.
+            thumb_errors.append(f"variant {i}: {exc}")
     # Keep thumbnail.jpg as alias of thumbnail_1.jpg for backward compat
     t1 = thumb_dir / "thumbnail_1.jpg"
     if t1.exists():
         shutil.copy2(t1, thumb_dir / "thumbnail.jpg")
+    elif thumb_errors:
+        raise RuntimeError(
+            "All thumbnail variants failed: " + "; ".join(thumb_errors)
+        )

@@ -27,7 +27,11 @@ import json
 import re
 import unicodedata
 import urllib.request
-import xml.etree.ElementTree as ET
+
+try:
+    from defusedxml import ElementTree as ET  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover - falls back when defusedxml missing
+    import xml.etree.ElementTree as ET  # noqa: S405 — XXE-safe payload only via defusedxml; install defusedxml
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Awaitable, Callable
@@ -227,9 +231,7 @@ def _auto_seeds_from_trends(channel_config: dict, max_seeds: int = 10) -> list[s
     matched = [t for t in all_trends if _trend_matches_niche(t, niche_kws)]
 
     if matched:
-        # Deduplicate while preserving order
-        seen: set[str] = set()
-        unique = [t for t in matched if t not in seen and not seen.add(t)]  # type: ignore[func-returns-value]
+        unique = list(dict.fromkeys(matched))
         return unique[:max_seeds]
 
     # Fallback: use sub_niches expanded to Spanish keywords as seeds
@@ -500,8 +502,21 @@ def _slug(text: str, max_len: int = 40) -> str:
 
 
 def save_ideas(ideas: list[dict], channel_id: str, out_dir: Path) -> list[Path]:
-    """Write each idea to ``out_dir/ideas/<channel_id>/<timestamp>-<slug>.json``."""
-    dest = out_dir / IDEAS_SUBDIR / channel_id
+    """Write each idea to ``out_dir/ideas/<channel_id>/<timestamp>-<slug>.json``.
+
+    ``channel_id`` is validated against a safe-id regex and the resolved
+    ``dest`` is asserted to stay inside ``out_dir`` to prevent traversal
+    when this helper is called from CLI/batch entrypoints.
+    """
+    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", channel_id or ""):
+        raise ValueError(f"Invalid channel_id: {channel_id!r}")
+
+    out_root = out_dir.resolve()
+    dest = (out_dir / IDEAS_SUBDIR / channel_id).resolve()
+    try:
+        dest.relative_to(out_root)
+    except ValueError as exc:
+        raise ValueError(f"channel_id escapes out_dir: {channel_id!r}") from exc
     dest.mkdir(parents=True, exist_ok=True)
 
     now = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")

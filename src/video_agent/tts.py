@@ -25,7 +25,11 @@ def synthesize_scene_track(
         for index, scene in enumerate(scene_doc["scenes"], start=1):
             scene_audio_path = temp_root / f"scene-{index:02d}.wav"
             metadata = client.synthesize(scene["narration"], scene_audio_path, config)
-            sample_rate = int(metadata.get("sample_rate") or sample_rate)
+            scene_rate = int(metadata.get("sample_rate") or sample_rate)
+            if scene_rate != sample_rate:
+                raise RuntimeError(
+                    f"TTS sample-rate drift on scene {index}: expected {sample_rate}, got {scene_rate}"
+                )
             audio, read_rate = sf.read(scene_audio_path, dtype="float32")
             if read_rate != sample_rate:
                 raise RuntimeError(f"TTS sample-rate mismatch: expected {sample_rate}, got {read_rate}")

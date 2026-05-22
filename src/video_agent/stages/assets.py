@@ -64,9 +64,17 @@ def _find_asset_refs_primary(scene: dict[str, Any], job_dir: Path) -> Path | Non
     primary = refs.get("primary")
     if not isinstance(primary, str) or not primary:
         return None
-    candidate = Path(primary)
-    if not candidate.is_absolute():
-        candidate = job_dir / primary
+    # Always interpret as job-relative — the field is operator-controlled
+    # (model output / external image generator), so an absolute path or
+    # ``..`` segment must not escape the job dir and end up mirrored under
+    # ``remotion/public/jobs/<id>/assets`` (a publicly-served directory).
+    if Path(primary).is_absolute() or ".." in Path(primary).parts:
+        return None
+    candidate = (job_dir / primary).resolve()
+    try:
+        candidate.relative_to(job_dir.resolve())
+    except ValueError:
+        return None
     return candidate if candidate.exists() else None
 
 

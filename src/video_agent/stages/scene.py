@@ -17,14 +17,14 @@ def run_scene_stage(
     job_dir: Path,
 ) -> dict[str, Any]:
     scene_doc = provider.generate_scenes(channel_config, idea, script, job_id)
-    iterations = []
-    for iteration in range(1, 4):
-        qa = check_scenes(scene_doc, channel_config)
-        iterations.append({"iteration": iteration, **qa})
-        if qa["verdict"] == "PASS":
-            scene_doc["qa"] = {"verdict": "PASS", "iterations": iterations}
-            write_json(job_dir / ARTIFACT_SCENES, scene_doc)
-            return scene_doc
+    # No retry_action mutates scene_doc between iterations, so re-running
+    # check_scenes on the unchanged doc would just re-fail. One pass.
+    qa = check_scenes(scene_doc, channel_config)
+    iterations = [{"iteration": 1, **qa}]
+    if qa["verdict"] == "PASS":
+        scene_doc["qa"] = {"verdict": "PASS", "iterations": iterations}
+        write_json(job_dir / ARTIFACT_SCENES, scene_doc)
+        return scene_doc
     scene_doc["qa"] = {"verdict": "FAIL", "iterations": iterations}
     write_json(job_dir / ARTIFACT_SCENES, scene_doc)
-    raise RuntimeError("Scene QA failed after 3 iterations.")
+    raise RuntimeError("Scene QA failed.")

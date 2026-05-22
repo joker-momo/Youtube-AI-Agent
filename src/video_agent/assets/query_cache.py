@@ -71,7 +71,12 @@ class QueryCache:
         key = query_cache_key(provider, query, filters)
         cached_at = self.now()
         expires_at = cached_at + timedelta(hours=ttl_hours)
-        results = response.get("photos") if provider == "pexels" else response.get("hits")
+        if provider == "pexels":
+            results = response.get("photos")
+        elif provider == "pexels_video":
+            results = response.get("videos")
+        else:
+            results = response.get("hits")
         results_count = len(results or [])
         with self._connect() as db:
             db.execute(

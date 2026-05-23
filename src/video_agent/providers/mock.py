@@ -99,4 +99,8 @@ class MockProvider:
             "ai_disclosure": bool(channel_config["upload"]["ai_disclosure"]),
             "thumbnail_path": thumbnail_path,
             "thumbnail_text": "DUERME MEJOR HOY",
+            "suggested_pinned_comments": (
+                "¿Qué opinas de estos consejos? Cuéntanos en los comentarios. 👇\n\n"
+                "Si te gustó el video, ¡suscríbete para más contenido de bienestar! 🔔 https://www.youtube.com/channel/UCKUswqsAaLsEkcsgzTuKAmw?sub_confirmation=1"
+            ),
         }

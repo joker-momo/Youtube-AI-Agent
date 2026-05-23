@@ -264,6 +264,26 @@ def _normalize_seo_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
         words = [w for w in title.split() if w]
         fallback = " ".join(words[:5]).upper()
         parsed["thumbnail_text"] = fallback or "DUERME MEJOR HOY"
+    if "suggested_pinned_comments" not in parsed:
+        parsed["suggested_pinned_comments"] = (
+            "¿Qué opinas de estos consejos? Cuéntanos en los comentarios. 👇\n\n"
+            "Si te gustó el video, ¡suscríbete para más contenido de bienestar! 🔔 https://www.youtube.com/channel/UCKUswqsAaLsEkcsgzTuKAmw?sub_confirmation=1"
+        )
+    elif isinstance(parsed["suggested_pinned_comments"], dict):
+        comments = parsed["suggested_pinned_comments"]
+        eb = comments.get("engagement_boosting") or comments.get("engage") or ""
+        sg = comments.get("subscriber_growth") or comments.get("subscriber") or ""
+        if eb and sg:
+            parsed["suggested_pinned_comments"] = f"{eb}\n\n{sg}"
+        elif eb:
+            parsed["suggested_pinned_comments"] = eb
+        elif sg:
+            parsed["suggested_pinned_comments"] = sg
+        else:
+            parsed["suggested_pinned_comments"] = (
+                "¿Qué opinas de estos consejos? Cuéntanos en los comentarios. 👇\n\n"
+                "Si te gustó el video, ¡suscríbete para más contenido de bienestar! 🔔 https://www.youtube.com/channel/UCKUswqsAaLsEkcsgzTuKAmw?sub_confirmation=1"
+            )
     return parsed
 
 
@@ -415,7 +435,7 @@ def _chatgpt_seo_prompt(channel_config: dict[str, Any], script: dict[str, Any], 
             "• Imagine you are writing directly to a .json file on disk.",
             "",
             "Required JSON schema:",
-            "- job_id, title, description, tags, language, ai_disclosure, thumbnail_path, thumbnail_text",
+            "- job_id, title, description, tags, language, ai_disclosure, thumbnail_path, thumbnail_text, suggested_pinned_comments",
             "- title_variants: array of EXACTLY 3 objects, each: {title, thumbnail_text}",
             "  • title: clear Spanish, searchable, 6-10 words, may include numbers or questions",
             "  • thumbnail_text: 3-5 words ALL-CAPS Spanish emotional hook (e.g. 'ADIÓS AL INSOMNIO')",
@@ -424,7 +444,14 @@ def _chatgpt_seo_prompt(channel_config: dict[str, Any], script: dict[str, Any], 
             "  • Do NOT repeat the same hook with minor word swaps",
             "- title: copy from the best title_variants entry",
             "- thumbnail_text: copy from the best title_variants entry",
-            "- description: YouTube video description in Spanish, 150-200 words",
+            "- description: YouTube video description in Spanish. It MUST follow this Golden Structure (structured into 6 distinct sections/paragraphs separated by blank lines):",
+            "  1. Section 1 (Hook & SEO): 2-3 short sentences. Start with the primary keyword within the first 25 characters (e.g. 'Si después de los 45...').",
+            "  2. Section 2 (Detailed Summary): 2-3 short paragraphs detailing what the video covers and what the viewer will learn, incorporating secondary/LSI keywords naturally.",
+            "  3. Section 3 (Timestamps): A list of timestamps for key parts/scenes in 'mm:ss - Section Title' format (derive these from the approved scenes narration and durations). IMPORTANT: Do not include any primary or external links in this section.",
+            "  4. Section 4 (CTA & Subscription Link): A call-to-action asking viewers to subscribe, accompanied by the subscription link 'https://www.youtube.com/channel/UCKUswqsAaLsEkcsgzTuKAmw?sub_confirmation=1' and other social links.",
+            "  5. Section 5 (Channel Info, Disclaimer & AI Disclosure): A short blurb about the channel's mission (Vida Plena 45+), the medical disclaimer (e.g., 'Aviso: El contenido es de carácter informativo y no sustituye la opinión médica.'), and the AI disclosure statement (disclosing that the video uses AI voice/visual assist).",
+            "  6. Section 6 (Hashtags): 3-5 relevant hashtags at the very bottom (e.g., #vidasana #bienestar45).",
+            "- suggested_pinned_comments: a single suggested pinned comment in Spanish (containing warm/engaging emojis) that combines two strategies: start with an engaging question to boost audience interaction (e.g. asking for opinions or experiences), and follow with a clear call-to-action to subscribe to the channel with the exact link: https://www.youtube.com/channel/UCKUswqsAaLsEkcsgzTuKAmw?sub_confirmation=1",
             "- language: must be es-419",
             "- tags: 5-8 concise Spanish/LatAm wellness search terms",
             "- ai_disclosure: must be true",
@@ -937,8 +964,13 @@ def write_operator_review(job_dir: Path, output_path: Path | None = None) -> Pat
 
     <section>
       <h2>{escape(title)}</h2>
-      <p>{escape(str(seo.get("description", "")))}</p>
+      <p style="white-space: pre-wrap;">{escape(str(seo.get("description", "")))}</p>
       <p class="meta">Providers: {escape(provider_text)}</p>
+    </section>
+
+    <section>
+      <h2>Suggested Pinned Comment</h2>
+      <p style="white-space: pre-wrap;">{escape(str(seo.get("suggested_pinned_comments", "")))}</p>
     </section>
 
     <section class="grid">

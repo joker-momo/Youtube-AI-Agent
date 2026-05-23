@@ -1404,6 +1404,7 @@ async def auto_thumbnail_image_stage(
     logger = EventLogger(job_dir / EVENT_LOG)
     generated: list[Path] = []   # successfully created .jpg files
     errors: list[str] = []
+    last_exc: Exception | None = None
 
     has_batch = hasattr(image_fn, "generate_images")
     if has_batch:
@@ -1440,6 +1441,7 @@ async def auto_thumbnail_image_stage(
                         {"job_id": state.job_id, "variant": i, "error": "Output image file missing"},
                     )
         except Exception as exc:
+            last_exc = exc
             errors.append(f"Batch generation failed: {exc}")
             logger.log(
                 "THUMBNAIL_IMAGE_BATCH_FAILED",
@@ -1473,6 +1475,7 @@ async def auto_thumbnail_image_stage(
                     {"job_id": state.job_id, "variant": i, "path": str(jpg_path), "text": thumb_text},
                 )
             except Exception as exc:
+                last_exc = exc
                 errors.append(f"variant {i} ('{thumb_text}'): {exc}")
                 logger.log(
                     "THUMBNAIL_IMAGE_FAILED",
@@ -1480,6 +1483,8 @@ async def auto_thumbnail_image_stage(
                 )
 
     if not generated:
+        if last_exc is not None:
+            raise last_exc
         raise RuntimeError(
             "All thumbnail variants failed: " + "; ".join(errors)
         )

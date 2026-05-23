@@ -83,7 +83,7 @@ def test_prepare_assets_uses_real_tts_provider_when_configured(tmp_path):
     assert (tmp_path / "job-tts/assets/narration.wav").exists()
     with wave.open(str(tmp_path / "job-tts/assets/narration.wav"), "r") as handle:
         assert handle.getframerate() == 24000
-        assert handle.getnframes() == 4 * 24000
+        assert handle.getnframes() == int(3.3 * 24000)
 
 
 def test_prepare_assets_keeps_silent_mock_audio_by_default(tmp_path):

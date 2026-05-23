@@ -2045,6 +2045,10 @@ async function previewArtifact(jobId, path) {
   if (!mount) return;
   const url = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(path) + '&t=' + Date.now();
   const name = path.split('/').pop();
+  if (/\.html$/i.test(path)) {
+    window.open(url, '_blank');
+    return;
+  }
   if (/\.(png|jpe?g|gif|webp)$/i.test(path)) {
     mount.innerHTML = `<div class="preview"><div class="preview-head"><span><b>${escapeHtml(name)}</b> · ${escapeHtml(path)}</span><button class="preview-close" onclick="this.closest('.preview').remove()">x</button></div><img src="${url}" alt="${escapeHtml(name)}"></div>`;
     return;
@@ -2682,6 +2686,24 @@ async function renderFinal(t) {
           <div class="copy-row">
             <div class="crh"><div class="cr-label">Description <span class="count">${(seo.description || '').length} chars</span></div><button class="copy-btn" onclick="copyText(this, document.getElementById('seo-desc').innerText)">copy</button></div>
             <div class="copy-content scroll" id="seo-desc">${escapeHtml(seo.description || '(missing)')}</div>
+          </div>
+          <div class="copy-row">
+            <div class="crh">
+              <div class="cr-label">Suggested Pinned Comment</div>
+              <button class="copy-btn" onclick="copyText(this, document.getElementById('pinned-comment').innerText)">copy</button>
+            </div>
+            <div class="copy-content scroll" id="pinned-comment">${
+              typeof seo.suggested_pinned_comments === 'string'
+                ? escapeHtml(seo.suggested_pinned_comments)
+                : seo.suggested_pinned_comments
+                  ? escapeHtml(
+                      [
+                        seo.suggested_pinned_comments.engagement_boosting || seo.suggested_pinned_comments.engage || '',
+                        seo.suggested_pinned_comments.subscriber_growth || seo.suggested_pinned_comments.subscriber || ''
+                      ].filter(Boolean).join('\\n\\n') || '(missing)'
+                    )
+                  : '(missing)'
+            }</div>
           </div>
           <div class="copy-row">
             <div class="crh"><div class="cr-label">Tags <span class="count">${(seo.tags || []).length}</span></div><button class="copy-btn" data-clip="${escapeHtml((seo.tags || []).join(', '))}" onclick="copyText(this, this.dataset.clip)">copy</button></div>
@@ -4452,3 +4474,25 @@ async def ws_events(
             await asyncio.sleep(EVENTS_POLL_SECONDS)
     except WebSocketDisconnect:
         return
+
+
+@app.get("/jobs/{job_id}/{path:path}")
+def job_file_fallback(
+    job_id: str,
+    path: str,
+    jobs_root: Path = Depends(get_jobs_root),
+):
+    """Fallback route to serve static assets for generated HTML pages like operator_review.html."""
+    job_dir = _safe_job_dir(jobs_root, job_id)
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    
+    target = (job_dir / path).resolve()
+    if not str(target).startswith(str(job_dir.resolve())):
+        raise HTTPException(status_code=404, detail="Not found")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="Not found")
+        
+    import mimetypes
+    media_type, _ = mimetypes.guess_type(target.name)
+    return FileResponse(target, media_type=media_type)

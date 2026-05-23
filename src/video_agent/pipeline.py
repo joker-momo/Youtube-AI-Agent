@@ -318,6 +318,31 @@ def _write_report(
         issue_count = len(scene.get("qa", {}).get("issues", []))
         suffix = f" ({issue_count} issue)" if issue_count == 1 else f" ({issue_count} issues)" if issue_count else ""
         visual_lines.append(f"- {scene['scene_id']}: {source} {provider}/{asset_id}{suffix}")
+
+    seo_path = job_dir / "seo.json"
+    pinned_comment_lines = []
+    if seo_path.exists():
+        try:
+            seo_data = read_json(seo_path)
+            comments = seo_data.get("suggested_pinned_comments")
+            if isinstance(comments, str):
+                pinned_comment_lines.extend([
+                    "",
+                    "## Suggested Pinned Comment",
+                    comments
+                ])
+            elif isinstance(comments, dict):
+                eb = comments.get("engagement_boosting") or comments.get("engage") or ""
+                sg = comments.get("subscriber_growth") or comments.get("subscriber") or ""
+                merged = f"{eb}\n\n{sg}".strip()
+                pinned_comment_lines.extend([
+                    "",
+                    "## Suggested Pinned Comment",
+                    merged or "n/a"
+                ])
+        except Exception:
+            pass
+
     report_path = job_dir / ARTIFACT_REPORT
     report_path.write_text(
         "\n".join(
@@ -337,6 +362,7 @@ def _write_report(
                 "  - thumbnail.jpg",
                 "  - video.mp4" if render_enabled else "  - video.mp4 skipped",
                 *visual_lines,
+                *pinned_comment_lines,
             ]
         )
         + "\n",

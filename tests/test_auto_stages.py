@@ -171,9 +171,9 @@ class FakeBrowserClient:
         response_timeout_ms: int = 360_000,
     ) -> dict:
         import os
+        from PIL import Image
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
-        with open(out_path, "wb") as fh:
-            fh.write(b"\x89PNG stub")
+        Image.new("RGB", (640, 360), (12, 34, 56)).save(out_path, format="PNG")
         return {"src": "https://example.com/img.png", "local_path": out_path, "project_name": project_name, "bytes": 9}
 
     async def run_vidiq_scores(self, keywords: list[str]) -> list[dict]:
@@ -587,7 +587,7 @@ def test_http_auto_thumbnail_image(
     assert body["output"] == "seo.json"
     assert body["state"]["current_stage"] == "whisper_timestamps"
     seo = json.loads((job_dir / "seo.json").read_text(encoding="utf-8"))
-    assert seo["thumbnail_path"].endswith("/assets/thumbnail_bg.png")
+    assert seo["thumbnail_path"].endswith("thumbnail_1.jpg")
 
 
 def test_http_auto_thumbnail_image_worker_error_returns_502(

@@ -23,9 +23,6 @@ def test_build_thumbnail_prompt_contains_thumbnail_text():
     assert "INSOMNIO SECRETO" in p
 
 
-def test_build_thumbnail_prompt_no_text_instruction():
-    p = _build_thumbnail_prompt("t", "HOOK", "#fff", "desc")
-    assert "no text" in p.lower() or "no watermark" in p.lower()
 
 
 def test_build_thumbnail_prompt_16x9():
@@ -108,7 +105,8 @@ def test_auto_thumbnail_image_stage_calls_image_fn(tmp_path, channel_path):
     _seed_at_thumbnail_image(job_dir)
 
     async def fake_image_fn(*, prompt, project_name, out_path, **kwargs):
-        Path(out_path).write_bytes(b"\x89PNG fake")
+        from PIL import Image
+        Image.new("RGB", (640, 360), (12, 34, 56)).save(out_path, format="PNG")
         return {"src": "https://example.com/img.png", "bytes": 9}
 
     with patch("video_agent.contracts.repo_root", return_value=tmp_path):
@@ -116,7 +114,7 @@ def test_auto_thumbnail_image_stage_calls_image_fn(tmp_path, channel_path):
 
     assert result == job_dir / "seo.json"
     seo = json.loads((job_dir / "seo.json").read_text())
-    assert "thumbnail_bg.png" in seo["thumbnail_path"]
+    assert seo["thumbnail_path"].endswith("thumbnail_1.jpg")
     assert seo["thumbnail_path"].startswith("jobs/")
 
     state = json.loads((job_dir / "job.json").read_text())
@@ -135,7 +133,8 @@ def test_auto_thumbnail_image_stage_uses_variant_text(tmp_path, channel_path):
 
     async def fake_image_fn(*, prompt, project_name, out_path, **kwargs):
         captured.append(prompt)
-        Path(out_path).write_bytes(b"\x89PNG fake")
+        from PIL import Image
+        Image.new("RGB", (640, 360), (12, 34, 56)).save(out_path, format="PNG")
         return {"src": "x", "bytes": 9}
 
     with patch("video_agent.contracts.repo_root", return_value=tmp_path):

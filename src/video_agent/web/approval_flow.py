@@ -30,7 +30,13 @@ def default_approvals() -> dict[str, bool]:
 
 
 def load_approvals(job_dir: Path) -> dict[str, bool]:
-    return {name: True for name in APPROVAL_REQUIRED_STAGES}
+    path = approvals_path(job_dir)
+    if not path.exists():
+        return default_approvals()
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return default_approvals()
 
 
 def save_approvals(job_dir: Path, approvals: dict[str, bool]) -> None:

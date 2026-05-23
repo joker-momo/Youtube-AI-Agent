@@ -145,13 +145,13 @@ _SCHEMA_ES = {
         '  "job_id": str (= job_id dado),\n'
         '  "channel_id": str (= channel_id dado),\n'
         '  "title": str (50-70 caracteres, en es-419, sin clickbait),\n'
-        '  "description": str (700-1500 caracteres, 3-5 párrafos, '
-        'palabra clave principal en los primeros 25 caracteres),\n'
+        '  "description": str (mô tả chuẩn vàng 6 phần, 700-1500 caracteres),\n'
         '  "tags": array de 6-10 strings (es-419, mezcla 1-2 broad + '
         '4-8 long-tail, sin duplicados),\n'
         '  "language": "es-419",\n'
         '  "ai_disclosure": true,\n'
-        '  "thumbnail_path": str (ruta relativa, por ej. "thumbnail.jpg")\n'
+        '  "thumbnail_path": str (ruta relativa, por ej. "thumbnail.jpg"),\n'
+        '  "suggested_pinned_comments": str (un comentario fijado en español que combine ambas estrategias: una pregunta para interactuar y un CTA con link de suscripción)\n'
         "}"
     ),
     "script_qa": _QA_SCHEMA,
@@ -185,10 +185,14 @@ _LENGTH_ES = {
     ),
     "seo": (
         "- title: 50-70 caracteres, palabra clave principal en primeros 60 chars.\n"
-        "- description: 700-1500 caracteres, 3-5 párrafos.\n"
-        "    primer párrafo: hook + palabra clave principal en primeras 25 letras.\n"
-        "    segundo párrafo: qué aprenderá el espectador (3-5 puntos).\n"
-        "    tercer párrafo: cta + recordatorio de consultar profesional.\n"
+        "- description: 700-1500 caracteres. Debe seguir estrictamente esta Estructura de Oro (6 secciones separadas por líneas en blanco):\n"
+        "    1. Sección 1 (Hook & SEO): 2-3 frases cortas. Comienza con la palabra clave principal en las primeras 25 letras.\n"
+        "    2. Sección 2 (Resumen detallado): 2-3 párrafos cortos explicando el contenido y qué aprenderá el espectador, con palabras clave secundarias.\n"
+        "    3. Sección 3 (Timestamps / Mốc thời gian): Lista de timestamps en formato 'mm:ss - Título de la sección'. IMPORTANTE: No incluyas ningún enlace aquí.\n"
+        "    4. Sección 4 (CTA & Link de suscripción): Llamado a la acción para suscribirse, con el enlace exacto: https://www.youtube.com/channel/UCKUswqsAaLsEkcsgzTuKAmw?sub_confirmation=1\n"
+        "    5. Sección 5 (Info del canal, Disclaimer y AI Disclosure): Breve descripción del canal (Vida Plena 45+), descargo de responsabilidad médica y declaración de uso de IA.\n"
+        "    6. Sección 6 (Hashtags): 3-5 hashtags relevantes al final.\n"
+        "- suggested_pinned_comments: un único comentario fijado sugerido (en español, con emojis cálidos) que combine dos estrategias: una pregunta de enganche al inicio para generar conversación y debate en el público, seguido inmediatamente por un llamado a la acción para suscribirse al canal con el link de suscripción exacto: https://www.youtube.com/channel/UCKUswqsAaLsEkcsgzTuKAmw?sub_confirmation=1\n"
         "- tags: 6-10 elementos, mezcla 1-2 broad (high comp) + 4-8 long-tail "
         "(low comp, score 50+), es-419, sin duplicados."
     ),
@@ -219,10 +223,11 @@ _DECOMP_ES = {
     "seo": [
         "1. Extrae el tema y el beneficio principal del script y las escenas.",
         "2. Redacta un title de 50-70 chars sin clickbait ni promesas médicas.",
-        "3. Redacta la description en 2-3 párrafos cortos: hook breve, contenido, CTA suave.",
-        "4. Genera 5-8 tags en es-419, todos relevantes, sin duplicados, sin frases prohibidas.",
-        "5. Confirma language=es-419, ai_disclosure=true, thumbnail_path razonable.",
-        "6. Solo entonces construye el JSON.",
+        "3. Redacta la description siguiendo la Estructura de Oro de 6 secciones descrita en el contrato de longitud.",
+        "4. Genera las 2 propuestas de comentarios fijados (engagement_boosting y subscriber_growth) con emojis y el link de suscripción correcto.",
+        "5. Genera 5-8 tags en es-419, todos relevantes, sin duplicados, sin frases prohibidas.",
+        "6. Confirma language=es-419, ai_disclosure=true, thumbnail_path razonable y la estructura del JSON.",
+        "7. Solo entonces construye el JSON.",
     ],
 }
 

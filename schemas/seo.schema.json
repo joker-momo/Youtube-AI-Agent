@@ -1,7 +1,17 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["job_id", "title", "description", "tags", "language", "ai_disclosure", "thumbnail_path", "thumbnail_text"],
+  "required": [
+    "job_id",
+    "title",
+    "description",
+    "tags",
+    "language",
+    "ai_disclosure",
+    "thumbnail_path",
+    "thumbnail_text",
+    "suggested_pinned_comments"
+  ],
   "properties": {
     "job_id": { "type": "string" },
     "title": { "type": "string" },
@@ -29,6 +39,28 @@
       },
       "minItems": 1,
       "maxItems": 3
+    },
+    "suggested_pinned_comments": {
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "A single unified pinned comment suggestion in Spanish combining engagement boosting (asking a question) and subscriber growth (call-to-action + subscription link)."
+        },
+        {
+          "type": "object",
+          "required": ["engagement_boosting", "subscriber_growth"],
+          "properties": {
+            "engagement_boosting": {
+              "type": "string",
+              "description": "A pinned comment suggestion in Spanish to boost audience interaction (engagement)."
+            },
+            "subscriber_growth": {
+              "type": "string",
+              "description": "A pinned comment suggestion in Spanish to grow subscribers."
+            }
+          }
+        }
+      ]
     }
   }
 }

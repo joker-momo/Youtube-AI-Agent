@@ -45,7 +45,9 @@ def test_prepare_assets_uses_local_directory_image_when_available(tmp_path):
     )
 
     copied_background = Path(manifest["scenes"][0]["background"])
-    assert copied_background.read_bytes() == local_image.read_bytes()
+    assert copied_background.suffix == ".mp4"
+    assert copied_background.exists()
+    assert copied_background.stat().st_size > 0
     assert manifest["scenes"][0]["source"] == "local_directory"
     assert manifest["scenes"][0]["source_path"] == str(local_image.resolve())
 
@@ -79,7 +81,7 @@ def test_prepare_assets_auto_prefers_local_directory_before_stock_api(tmp_path):
     )
 
     assert manifest["scenes"][0]["source"] == "local_directory"
-    assert manifest["scenes"][0]["background"].endswith("scene-01.png")
+    assert manifest["scenes"][0]["background"].endswith("scene-01.mp4")
 
 
 def test_prepare_assets_records_stock_errors_when_falling_back_to_placeholder(tmp_path):

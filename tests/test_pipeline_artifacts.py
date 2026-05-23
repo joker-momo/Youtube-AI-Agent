@@ -122,6 +122,7 @@ def test_operator_render_writes_review_page_without_render(tmp_path, monkeypatch
                 "ai_disclosure": True,
                 "thumbnail_path": "thumbnail.jpg",
                 "thumbnail_text": "DUERME MEJOR HOY",
+                "suggested_pinned_comments": "¿Qué opinas? 👇\n\nSuscríbete: https://www.youtube.com/channel/UCKUswqsAaLsEkcsgzTuKAmw?sub_confirmation=1"
             }
         ),
         encoding="utf-8",

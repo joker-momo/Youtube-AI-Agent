@@ -1165,21 +1165,37 @@ def _build_thumbnail_prompt(
     accent_color: str,
     channel_description: str,
 ) -> str:
+    """Build a ChatGPT image prompt for a FULL composite thumbnail.
+
+    The generated image will contain both the photorealistic background
+    AND the bold text hook baked directly into the image, so background
+    and typography are visually coherent from the start.
+    """
     return (
-        f"Photorealistic YouTube thumbnail background image. "
-        f"No text, no watermarks, no captions, no overlays. "
-        f"16:9 aspect ratio, high resolution. "
+        f"Create a complete YouTube thumbnail image — photorealistic, 16:9 aspect ratio. "
         f"Topic: '{title}'. "
-        f"Mood/emotion reference: '{thumbnail_text}'. "
-        f"Subject: Hispanic or Latina woman aged 45-55 years old. "
-        f"Her expression conveys the emotion of the hook: concern, relief, or urgency — matching '{thumbnail_text}'. "
-        f"Composition: subject positioned in the left third of the frame, "
-        f"face clearly visible and sharp, looking slightly toward the right (center of frame). "
-        f"Right third of frame is intentionally empty for text overlay. "
-        f"Background: simple, warm-toned, uncluttered. "
-        f"Accent color to complement: {accent_color}. "
-        f"Lighting: soft natural light, professional photography, bokeh background. "
-        f"Channel context: {channel_description}."
+        f"Channel context: {channel_description}. "
+        f"\n\n"
+        f"SUBJECT: A Hispanic or Latina woman aged 45-55 years old. "
+        f"She is positioned in the LEFT half of the frame, face clearly visible, "
+        f"sharp focus, looking slightly toward the right (center of image). "
+        f"Her expression is emotional and expressive — conveying concern, relief, or urgency "
+        f"that matches the hook text '{thumbnail_text}'. "
+        f"\n\n"
+        f"BACKGROUND: Simple, warm-toned, slightly blurred (bokeh), "
+        f"professional photography lighting, soft and natural. "
+        f"\n\n"
+        f"TEXT OVERLAY — render this EXACTLY in the image: \"{thumbnail_text}\". "
+        f"Placement: right half of the image, vertically centered or lower-right area. "
+        f"Style: extremely bold, ALL-CAPS, very large font (occupying ~40% of image width), "
+        f"white color with thick black stroke/outline (3-4px) and a strong drop shadow "
+        f"so it's readable on any background. "
+        f"Font style similar to Impact, Anton, or Bebas Neue — punchy and attention-grabbing. "
+        f"Accent color for a thin decorative underline or glow beneath the text: {accent_color}. "
+        f"\n\n"
+        f"RULES: No additional text, captions, watermarks, or UI elements. "
+        f"Only the subject, background, and the exact hook text \"{thumbnail_text}\". "
+        f"The final result must look like a polished professional YouTube thumbnail."
     )
 
 
@@ -1331,7 +1347,23 @@ async def auto_thumbnail_image_stage(
     job_dir: Path,
     channel_path: Path,
     image_fn,
+    *,
+    throttle_sec: float = 8.0,
 ) -> Path:
+    """Generate full-composite thumbnails (background + text baked in) via ChatGPT.
+
+    Generates one JPEG per title_variant (up to 3) so each has its own
+    visually coherent hook text. Outputs:
+      jobs/<id>/thumbnail_1.jpg  ← variant 1 (primary)
+      jobs/<id>/thumbnail_2.jpg  ← variant 2
+      jobs/<id>/thumbnail_3.jpg  ← variant 3
+      jobs/<id>/thumbnail.jpg    ← alias of thumbnail_1.jpg (backward compat)
+
+    The render stage detects these files and skips the Remotion still step.
+    """
+    import shutil as _shutil
+    from PIL import Image as _PilImage
+
     stage_name = "thumbnail_image"
     state = load_job(job_dir)
     if state.current_stage != stage_name:
@@ -1348,41 +1380,97 @@ async def auto_thumbnail_image_stage(
         raise StageInputMissingError(f"Missing channel config {channel_path}")
     channel_config = read_yaml(channel_path)
 
-    variants = seo.get("title_variants") or []
-    thumbnail_text = (variants[0].get("thumbnail_text") or "") if variants else ""
-    if not thumbnail_text:
-        thumbnail_text = seo.get("thumbnail_text") or ""
     title = seo.get("title") or ""
     palette = (channel_config.get("style") or {}).get("palette") or {}
     accent_color = palette.get("accent", "#F2C94C")
-    channel_description = (channel_config.get("channel") or {}).get("description", "Wellness channel for adults 45+")
+    channel_description = (
+        (channel_config.get("channel") or {}).get("description", "Wellness channel for adults 45+")
+    )
 
-    prompt = _build_thumbnail_prompt(title, thumbnail_text, accent_color, channel_description)
+    # Build variant list: up to 3 title_variants, fallback to top-level thumbnail_text.
+    raw_variants = seo.get("title_variants") or []
+    variants: list[str] = [
+        v.get("thumbnail_text") or ""
+        for v in raw_variants[:3]
+        if v.get("thumbnail_text")
+    ]
+    if not variants:
+        fallback = seo.get("thumbnail_text") or title.split(" ")[:5]
+        variants = [fallback if isinstance(fallback, str) else " ".join(fallback)]
 
     assets_dir = job_dir / "assets"
     assets_dir.mkdir(parents=True, exist_ok=True)
-    out_path = assets_dir / "thumbnail_bg.png"
-    project_name = f"{state.job_id[:35]}-thumbnail"[:45]
 
-    await image_fn(
-        prompt=prompt,
-        project_name=project_name,
-        out_path=str(out_path),
-    )
+    logger = EventLogger(job_dir / EVENT_LOG)
+    generated: list[Path] = []   # successfully created .jpg files
+    errors: list[str] = []
 
-    public_assets_dir = repo_root() / "remotion/public/jobs" / job_dir.name / "assets"
-    public_assets_dir.mkdir(parents=True, exist_ok=True)
-    import shutil as _shutil
-    _shutil.copy2(out_path, public_assets_dir / "thumbnail_bg.png")
+    for i, thumb_text in enumerate(variants, start=1):
+        if i > 1:
+            await asyncio.sleep(throttle_sec)
 
-    public_ref = f"jobs/{job_dir.name}/assets/thumbnail_bg.png"
+        prompt = _build_thumbnail_prompt(title, thumb_text, accent_color, channel_description)
+        project_name = f"{state.job_id[:30]}-thumb{i}"[:45]
+        png_path = assets_dir / f"thumbnail_{i}.png"
+        jpg_path = job_dir / f"thumbnail_{i}.jpg"
+
+        try:
+            await image_fn(
+                prompt=prompt,
+                project_name=project_name,
+                out_path=str(png_path),
+            )
+
+            # Convert PNG → JPG (Pillow — already a project dependency)
+            img = _PilImage.open(png_path).convert("RGB")
+            img.save(jpg_path, "JPEG", quality=92, optimize=True)
+            png_path.unlink(missing_ok=True)  # remove intermediate PNG
+
+            generated.append(jpg_path)
+            logger.log(
+                "THUMBNAIL_IMAGE_GENERATED",
+                {"job_id": state.job_id, "variant": i, "path": str(jpg_path), "text": thumb_text},
+            )
+        except Exception as exc:
+            errors.append(f"variant {i} ('{thumb_text}'): {exc}")
+            logger.log(
+                "THUMBNAIL_IMAGE_FAILED",
+                {"job_id": state.job_id, "variant": i, "error": str(exc)},
+            )
+
+    if not generated:
+        raise RuntimeError(
+            "All thumbnail variants failed: " + "; ".join(errors)
+        )
+
+    # thumbnail.jpg = alias of thumbnail_1.jpg (backward compat for Telegram, operator UI)
+    primary = job_dir / "thumbnail_1.jpg"
+    if primary.exists():
+        _shutil.copy2(primary, job_dir / "thumbnail.jpg")
+
+    # Copy all generated thumbnails to remotion/public/ so Remotion Studio
+    # and the Thumbnail.tsx preview component can load them via staticFile().
+    public_job_dir = repo_root() / "remotion/public/jobs" / job_dir.name
+    public_job_dir.mkdir(parents=True, exist_ok=True)
+    for jpg in generated:
+        _shutil.copy2(jpg, public_job_dir / jpg.name)
+    # Also copy the backward-compat alias
+    thumb_alias = job_dir / "thumbnail.jpg"
+    if thumb_alias.exists():
+        _shutil.copy2(thumb_alias, public_job_dir / "thumbnail.jpg")
+
+    # seo.thumbnail_path: use public-relative path (jobs/<id>/thumbnail_1.jpg)
+    # so Thumbnail.tsx can load it via staticFile() in Remotion Studio.
+    public_ref = f"jobs/{job_dir.name}/thumbnail_1.jpg"
     seo["thumbnail_path"] = public_ref
     _write_json(seo_path, seo)
 
-    EventLogger(job_dir / EVENT_LOG).log(
-        "THUMBNAIL_IMAGE_GENERATED",
-        {"job_id": state.job_id, "public_path": public_ref},
-    )
+    if errors:
+        logger.log(
+            "THUMBNAIL_IMAGE_PARTIAL",
+            {"job_id": state.job_id, "generated": len(generated), "errors": errors},
+        )
+
     _complete_stage(job_dir, stage_name, seo_path)
     return seo_path
 

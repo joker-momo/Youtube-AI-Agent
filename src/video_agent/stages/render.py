@@ -269,24 +269,40 @@ def render_with_remotion(
         )
     except OSError:
         pass
+
+    # ------------------------------------------------------------------
+    # Thumbnail step: skip if ChatGPT already generated thumbnail_1.jpg
+    # (new full-composite flow via auto_thumbnail_image_stage).
+    # Fall back to remotion still for legacy jobs or if file is missing.
+    # ------------------------------------------------------------------
     thumb_dir = render_props_path.parent
-    thumb_cmds = build_thumbnail_commands(render_props_path, thumb_dir)
-    thumb_errors: list[str] = []
-    for i, cmd in enumerate(thumb_cmds, start=1):
-        try:
-            _run_with_progress(
-                cmd,
-                stop_request_path=stop_request_path,
-                pid_file_path=thumb_pid_path,
+    chatgpt_thumb = thumb_dir / "thumbnail_1.jpg"
+
+    if chatgpt_thumb.exists():
+        # New flow: thumbnails were already generated with text baked in.
+        # Make sure thumbnail.jpg alias is in place for Telegram / operator UI.
+        if not (thumb_dir / "thumbnail.jpg").exists():
+            shutil.copy2(chatgpt_thumb, thumb_dir / "thumbnail.jpg")
+    else:
+        # Legacy/fallback flow: render thumbnails via Remotion still.
+        thumb_cmds = build_thumbnail_commands(render_props_path, thumb_dir)
+        thumb_errors: list[str] = []
+        for i, cmd in enumerate(thumb_cmds, start=1):
+            try:
+                _run_with_progress(
+                    cmd,
+                    stop_request_path=stop_request_path,
+                    pid_file_path=thumb_pid_path,
+                )
+            except subprocess.CalledProcessError as exc:
+                # One bad variant should not invalidate the rendered video.
+                thumb_errors.append(f"variant {i}: {exc}")
+        # Keep thumbnail.jpg as alias of thumbnail_1.jpg for backward compat
+        t1 = thumb_dir / "thumbnail_1.jpg"
+        if t1.exists():
+            shutil.copy2(t1, thumb_dir / "thumbnail.jpg")
+        elif thumb_errors:
+            raise RuntimeError(
+                "All thumbnail variants failed: " + "; ".join(thumb_errors)
             )
-        except subprocess.CalledProcessError as exc:
-            # One bad variant should not invalidate the rendered video.
-            thumb_errors.append(f"variant {i}: {exc}")
-    # Keep thumbnail.jpg as alias of thumbnail_1.jpg for backward compat
-    t1 = thumb_dir / "thumbnail_1.jpg"
-    if t1.exists():
-        shutil.copy2(t1, thumb_dir / "thumbnail.jpg")
-    elif thumb_errors:
-        raise RuntimeError(
-            "All thumbnail variants failed: " + "; ".join(thumb_errors)
-        )
+

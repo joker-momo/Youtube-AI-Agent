@@ -1,7 +1,23 @@
-FROM python:3.11-slim
+# ============================================================
+# Version Pins (update this block when upgrading)
+# ------------------------------------------------------------
+# Base image  : python:3.11.15-slim-bookworm
+# Node.js     : 22.22.2  (via nodesource setup_22.x)
+# npm         : 10.9.7   (bundled with Node 22.22.2)
+# remotion    : 4.0.464
+# react       : 18.3.1
+# typescript  : 5.9.3
+# kokoro      : 0.9.4
+# torch       : 2.5.1
+# playwright  : 1.60.0  (python pkg) / v1.49.0-jammy (browser-runtime)
+# KasmVNC     : 1.3.4   (browser-runtime/Dockerfile)
+# ============================================================
+FROM python:3.11.15-slim-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
+# Node major version — nodesource will install the latest patch of this major.
+# Pinned minor: 22.22.2 (npm 10.9.7). Bump NODE_VERSION to upgrade.
 ENV NODE_VERSION=22
 ENV HF_HOME=/app/caches/huggingface
 ENV XDG_CACHE_HOME=/app/caches

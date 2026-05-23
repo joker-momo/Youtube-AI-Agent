@@ -1,16 +1,49 @@
-fastapi>=0.115
-httpx>=0.27
-python-telegram-bot>=21.6
-jsonschema>=4.22
-kokoro>=0.9.2
-numpy>=1.26
-PyYAML>=6.0.1
-defusedxml>=0.7.1
-Pillow>=10.4
-playwright>=1.40
-pytest>=8.2
-soundfile>=0.12.1
-openai-whisper>=20240930
+# ============================================================
+# Python dependency pins — last resolved: 2026-05-23
+# Environment: Python 3.11.15 / macOS + Docker python:3.11.15-slim-bookworm
+# Run `pip freeze` inside .venv to refresh these after upgrading.
+# ============================================================
+
+# Web framework
+fastapi==0.136.1
+uvicorn==0.47.0
+
+# HTTP client
+httpx==0.28.1
+
+# Telegram bot
+python-telegram-bot==22.7
+
+# Schema validation
+jsonschema==4.26.0
+
+# TTS (Kokoro 82M) — requires Python >= 3.10
+kokoro==0.9.4
+
+# Numerics
+numpy==2.4.6
+
+# Config / serialization
+PyYAML==6.0.3
+defusedxml==0.7.1
+
+# Image processing
+Pillow==12.2.0
+
+# Browser automation
+playwright==1.60.0
+
+# Audio I/O
+soundfile==0.13.1
+
+# Speech recognition (Whisper)
+openai-whisper==20250625
+
+# Deep learning (CPU on Docker, MPS on macOS, CUDA on Linux+NVIDIA)
 torch==2.5.1
-uvicorn>=0.30
-websockets>=12.0
+
+# WebSocket support
+websockets==16.0
+
+# Testing (dev only — safe to unpin)
+pytest>=8.2

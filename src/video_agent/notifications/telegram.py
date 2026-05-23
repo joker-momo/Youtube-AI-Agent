@@ -121,12 +121,11 @@ async def _send_photo_file(path: Path, caption: str = "") -> None:
 
 
 def _compress_video(src: Path, dst: Path, target_mb: float = 45.0) -> bool:
-    """Re-encode src → dst targeting ~target_mb using ffmpeg 2-pass CRF.
+    """Re-encode src → dst targeting ~target_mb using ffmpeg downscaling and fast rate-control.
 
     Returns True on success. Original file is never modified.
-    Strategy: calculate bitrate from target size and duration, use libx264 CRF
-    with constrained bitrate. Falls back to a single-pass CRF=28 if ffprobe
-    fails to read duration.
+    Downscales to 480p to reduce file size and encode time, uses preset 'veryfast'
+    to prevent timeouts, and applies strict maxrate/bufsize limits to avoid overshooting.
     """
     try:
         # Get duration via ffprobe
@@ -149,23 +148,31 @@ def _compress_video(src: Path, dst: Path, target_mb: float = 45.0) -> bool:
         target_kbps = max(200, target_kbps)
         cmd = [
             "ffmpeg", "-y", "-i", str(src),
-            "-c:v", "libx264", "-b:v", f"{target_kbps}k",
+            "-vf", "scale=-2:'min(480,ih)'",
+            "-c:v", "libx264",
+            "-b:v", f"{target_kbps}k",
+            "-maxrate", f"{target_kbps}k",
+            "-bufsize", f"{target_kbps * 2}k",
+            "-preset", "veryfast",
             "-c:a", "aac", "-b:a", "64k",
             "-movflags", "+faststart",
             str(dst),
         ]
     else:
-        # Fallback: fixed CRF (no duration info)
+        # Fallback: fixed CRF with downscaling (no duration info)
         cmd = [
             "ffmpeg", "-y", "-i", str(src),
-            "-c:v", "libx264", "-crf", "28",
+            "-vf", "scale=-2:'min(480,ih)'",
+            "-c:v", "libx264", "-crf", "30",
+            "-preset", "veryfast",
             "-c:a", "aac", "-b:a", "64k",
             "-movflags", "+faststart",
             str(dst),
         ]
 
     try:
-        result = subprocess.run(cmd, capture_output=True, timeout=600)
+        # Increase timeout to 900 seconds (15 minutes) for safety
+        result = subprocess.run(cmd, capture_output=True, timeout=900)
         if result.returncode != 0:
             print(f"[telegram] ffmpeg compress failed:\n{result.stderr[-500:]}", file=sys.stderr)
             return False

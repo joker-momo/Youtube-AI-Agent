@@ -1443,10 +1443,11 @@ async def auto_thumbnail_image_stage(
             "All thumbnail variants failed: " + "; ".join(errors)
         )
 
-    # thumbnail.jpg = alias of thumbnail_1.jpg (backward compat for Telegram, operator UI)
-    primary = job_dir / "thumbnail_1.jpg"
-    if primary.exists():
-        _shutil.copy2(primary, job_dir / "thumbnail.jpg")
+    # thumbnail.jpg = alias of the FIRST successfully generated variant.
+    # Uses generated[0] (not hardcoded thumbnail_1.jpg) so that if variant 1
+    # failed but variant 2+ succeeded, thumbnail.jpg is still populated.
+    primary = generated[0]
+    _shutil.copy2(primary, job_dir / "thumbnail.jpg")
 
     # Copy all generated thumbnails to remotion/public/ so Remotion Studio
     # and the Thumbnail.tsx preview component can load them via staticFile().
@@ -1454,14 +1455,11 @@ async def auto_thumbnail_image_stage(
     public_job_dir.mkdir(parents=True, exist_ok=True)
     for jpg in generated:
         _shutil.copy2(jpg, public_job_dir / jpg.name)
-    # Also copy the backward-compat alias
-    thumb_alias = job_dir / "thumbnail.jpg"
-    if thumb_alias.exists():
-        _shutil.copy2(thumb_alias, public_job_dir / "thumbnail.jpg")
+    _shutil.copy2(primary, public_job_dir / "thumbnail.jpg")
 
-    # seo.thumbnail_path: use public-relative path (jobs/<id>/thumbnail_1.jpg)
-    # so Thumbnail.tsx can load it via staticFile() in Remotion Studio.
-    public_ref = f"jobs/{job_dir.name}/thumbnail_1.jpg"
+    # seo.thumbnail_path: use public-relative path of the primary thumbnail.
+    # staticFile()-compatible so Remotion Studio can load it in Thumbnail.tsx.
+    public_ref = f"jobs/{job_dir.name}/{primary.name}"
     seo["thumbnail_path"] = public_ref
     _write_json(seo_path, seo)
 

@@ -117,56 +117,6 @@ const FontLoader: React.FC = () => (
   </style>
 );
 
-const SocialPulse: React.FC<{accent: string; active: boolean}> = ({accent, active}) => {
-  const frame = useCurrentFrame();
-  
-  // Slide in/out dynamically
-  const slideY = interpolate(
-    frame,
-    [30, 48, 150, 168],
-    [120, 0, 0, 120],
-    {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'}
-  );
-  
-  if (!active) return null;
-  
-  return (
-    <div style={{
-      position: 'absolute',
-      bottom: 48,
-      left: 56,
-      transform: `translateY(${slideY}px)`,
-      display: 'flex',
-      alignItems: 'center',
-      gap: 12,
-      backgroundColor: 'rgba(12, 16, 13, 0.78)',
-      backdropFilter: 'blur(12px)',
-      borderRadius: '30px',
-      padding: '10px 20px',
-      border: '1px solid rgba(255,255,255,0.08)',
-      boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
-      zIndex: 25,
-    }}>
-      <div style={{
-        width: 10,
-        height: 10,
-        borderRadius: '50%',
-        backgroundColor: accent,
-        boxShadow: `0 0 10px ${accent}`,
-      }} />
-      <span style={{
-        color: '#fff',
-        fontSize: 16,
-        fontWeight: 700,
-        letterSpacing: 1.0,
-        fontFamily: 'Montserrat, sans-serif',
-        textTransform: 'uppercase',
-      }}>
-        Suscríbete a @VidaPlena
-      </span>
-    </div>
-  );
-};
 
 const SceneView: React.FC<{
   scene: Scene;

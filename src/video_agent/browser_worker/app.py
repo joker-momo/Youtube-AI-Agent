@@ -24,6 +24,14 @@ def _safe_asset_path(out_path: str) -> Path:
     if not out_path:
         raise HTTPException(status_code=400, detail="out_path required")
     root = _assets_root()
+
+    # If the path is absolute and contains 'jobs/' (e.g. host absolute path),
+    # convert it to a relative path starting from the segment after 'jobs/'
+    # so it maps correctly into the container's root.
+    if Path(out_path).is_absolute() and "jobs/" in out_path:
+        parts = out_path.split("jobs/", 1)
+        out_path = parts[1]
+
     candidate = (root / out_path).resolve() if not Path(out_path).is_absolute() else Path(out_path).resolve()
     try:
         candidate.relative_to(root)
@@ -605,6 +613,82 @@ async def chatgpt_image(payload: ImagePromptRequest) -> dict:
                     response_timeout_ms=payload.response_timeout_ms,
                 )
                 return result
+            except LoginRequiredError as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": str(exc),
+                        "screenshot": exc.screenshot_path or "",
+                        "login_required": True,
+                    },
+                ) from exc
+            except BrowserDriverError as exc:
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "error": str(exc),
+                        "screenshot": exc.screenshot_path or "",
+                    },
+                ) from exc
+            finally:
+                try:
+                    await human_pause(page, min_ms=400, max_ms=900)
+                except Exception:
+                    pass
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+        finally:
+            await browser.close()
+
+
+class BatchImagePromptRequest(BaseModel):
+    prompts: list[str]
+    project_name: str
+    out_paths: list[str]
+    response_timeout_ms: int = 240_000
+
+
+@app.post("/chatgpt/image/batch")
+async def chatgpt_image_batch(payload: BatchImagePromptRequest) -> dict:
+    """Sequential ChatGPT image generation in a single project chat session."""
+    from playwright.async_api import async_playwright
+
+    from video_agent.browser_worker.drivers import ChatGPTImageDriver
+
+    safe_out_paths = [_safe_asset_path(p) for p in payload.out_paths]
+    for p in safe_out_paths:
+        p.parent.mkdir(parents=True, exist_ok=True)
+
+    cdp_url = _cdp_url()
+    try:
+        ws_endpoint = await _resolve_browser_ws(cdp_url)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"cdp_url": cdp_url, "error": str(exc)},
+        ) from exc
+
+    async with async_playwright() as pw:
+        browser = await pw.chromium.connect_over_cdp(ws_endpoint)
+        try:
+            context = (
+                browser.contexts[0]
+                if browser.contexts
+                else await browser.new_context()
+            )
+            page = await context.new_page()
+            await human_pause(page, min_ms=400, max_ms=900)
+            try:
+                driver = ChatGPTImageDriver(page)
+                results = await driver.generate_images(
+                    payload.prompts,
+                    project_name=payload.project_name,
+                    out_paths=safe_out_paths,
+                    response_timeout_ms=payload.response_timeout_ms,
+                )
+                return {"ok": True, "results": results}
             except LoginRequiredError as exc:
                 raise HTTPException(
                     status_code=409,

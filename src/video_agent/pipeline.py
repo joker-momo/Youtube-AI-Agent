@@ -608,7 +608,12 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
     video_path = None
     if options.render:
         video_path = job_dir / ARTIFACT_VIDEO
-        render_with_remotion(job_dir / ARTIFACT_RENDER_PROPS, video_path, job_dir / "thumbnail.jpg")
+        render_with_remotion(
+            job_dir / ARTIFACT_RENDER_PROPS,
+            video_path,
+            job_dir / "thumbnail.jpg",
+            stop_request_path=options.stop_request_path,
+        )
         logger.log("RENDERED", {"job_id": job_id, "video_path": str(video_path), "cost_usd": 0})
 
     idea = {"topic": seo.get("title") or job_id}

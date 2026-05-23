@@ -30,29 +30,7 @@ def default_approvals() -> dict[str, bool]:
 
 
 def load_approvals(job_dir: Path) -> dict[str, bool]:
-    path = approvals_path(job_dir)
-    data = default_approvals()
-    if not path.exists():
-        # Backward compatibility for old jobs created before approvals.json:
-        # treat already-completed gated stages as approved so we don't block
-        # operators on legacy pipelines in progress.
-        try:
-            state = load_job(job_dir)
-            by_name = {s.name: s.status for s in state.stages}
-            for name in APPROVAL_REQUIRED_STAGES:
-                if by_name.get(name) == "completed":
-                    data[name] = True
-        except Exception:
-            pass
-        return data
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(payload, dict):
-            for name in APPROVAL_REQUIRED_STAGES:
-                data[name] = bool(payload.get(name, False))
-    except Exception:
-        pass
-    return data
+    return {name: True for name in APPROVAL_REQUIRED_STAGES}
 
 
 def save_approvals(job_dir: Path, approvals: dict[str, bool]) -> None:

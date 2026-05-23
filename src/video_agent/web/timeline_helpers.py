@@ -53,7 +53,14 @@ STAGE_ARTIFACTS = {
     },
     "thumbnail_image": {
         "input": ["seo.json"],
-        "output": ["assets/thumbnail_bg.png", "seo.json"],
+        "output": [
+            "assets/thumbnail_bg.png",
+            "seo.json",
+            "thumbnail.jpg",
+            "thumbnail_1.jpg",
+            "thumbnail_2.jpg",
+            "thumbnail_3.jpg",
+        ],
     },
     "assets_chatgpt": {
         "input": ["scenes.json"],

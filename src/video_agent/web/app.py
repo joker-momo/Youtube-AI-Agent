@@ -2043,7 +2043,7 @@ async function previewArtifact(jobId, path) {
     if (m.parentElement.parentElement.innerHTML.includes(path)) mount = m;
   });
   if (!mount) return;
-  const url = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(path);
+  const url = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(path) + '&t=' + Date.now();
   const name = path.split('/').pop();
   if (/\.(png|jpe?g|gif|webp)$/i.test(path)) {
     mount.innerHTML = `<div class="preview"><div class="preview-head"><span><b>${escapeHtml(name)}</b> · ${escapeHtml(path)}</span><button class="preview-close" onclick="this.closest('.preview').remove()">x</button></div><img src="${url}" alt="${escapeHtml(name)}"></div>`;
@@ -2419,14 +2419,7 @@ async function renderStageExtras(jobId, s) {
   const hasOutput = (path) => Array.isArray(s.outputs) && s.outputs.some(o => o.path === path && o.exists);
 
   if (isStageApprovalRequired(s.name) && s.status === 'completed') {
-    const approved = isStageApproved(s.name);
-    const stageLabel = STAGE_LABEL[s.name] || s.name;
-    actions.innerHTML = `
-      ${approved ? '<span class="gate-note">Confirmed. You can continue.</span>' : `<span class="gate-note">Confirm ${escapeHtml(stageLabel)} before running next stages.</span>`}
-      <button class="action-btn primary" onclick="confirmStageAndMaybeContinue('${escapeJs(jobId)}','${escapeJs(s.name)}')">Confirm</button>
-      <button class="action-btn warn" onclick="regenerateStageAndRun('${escapeJs(jobId)}','${escapeJs(s.name)}')">Regenerate</button>
-      ${approved ? `<button class="action-btn" onclick="clearStageApprovalOnly('${escapeJs(jobId)}','${escapeJs(s.name)}')">Clear confirm</button>` : ''}
-    `;
+    actions.innerHTML = ``;
   }
 
   try {
@@ -2464,17 +2457,48 @@ async function renderStageExtras(jobId, s) {
       insight.innerHTML = renderSeoVidiqInsight(await fetchArtifactJson(jobId, 'seo_vidiq_report.json'));
       rendered = true;
     } else if (s.name === 'thumbnail_image') {
-      if (!hasOutput('thumbnail_bg.png')) return;
-      // Show generated thumbnail background
-      const bgUrl = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=thumbnail_bg.png';
-      insight.innerHTML = `
-        <div class="insight">
-          <div class="insight-section">Generated thumbnail background</div>
-          <img class="thumb-preview" src="${bgUrl}" alt="thumbnail background"
-               onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
-          <div style="display:none;color:var(--muted);font-size:12px;padding:8px">Image not ready yet</div>
-        </div>`;
-      rendered = true;
+      if (!hasOutput('thumbnail_bg.png') && !hasOutput('thumbnail_1.jpg') && !hasOutput('thumbnail_2.jpg') && !hasOutput('thumbnail_3.jpg') && !hasOutput('thumbnail.jpg')) return;
+      if (hasOutput('thumbnail_1.jpg') || hasOutput('thumbnail_2.jpg') || hasOutput('thumbnail_3.jpg') || hasOutput('thumbnail.jpg')) {
+        let seo = {};
+        try {
+          if (hasOutput('seo.json')) seo = await fetchArtifactJson(jobId, 'seo.json');
+        } catch(e) {}
+        const variants = Array.isArray(seo.title_variants) && seo.title_variants.length
+          ? seo.title_variants
+          : [{title: seo.title || '', thumbnail_text: seo.thumbnail_text || '', score: null}];
+        function thumbUrl(idx) {
+          return '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent('thumbnail_' + (idx+1) + '.jpg') + '&t=' + Date.now();
+        }
+        function fallbackThumb(idx) {
+          return '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=thumbnail.jpg' + '&t=' + Date.now();
+        }
+        const cards = variants.slice(0,3).map((v, i) => {
+          const isWinner = i === 0;
+          const score = v.score != null ? ` · ${v.score}pt` : '';
+          const badge = isWinner ? `⭐ Best${score}` : `Variant ${i+1}${score}`;
+          return `
+            <div class="ab-card${isWinner?' ab-winner':''}">
+              <div class="ab-badge${isWinner?' winner':''}">${badge}</div>
+              <img class="thumb-img" src="${thumbUrl(i)}" alt="thumbnail ${i+1}"
+                   onerror="this.src='${fallbackThumb(i)}';this.onerror=null">
+              <div class="ab-title">${escapeHtml(v.title || '')}</div>
+              ${v.thumbnail_text ? `<div class="ab-hook">${escapeHtml(v.thumbnail_text)}</div>` : ''}
+              <button class="copy-btn" data-clip="${escapeHtml(v.title||'')}" onclick="copyText(this,this.dataset.clip)">copy title</button>
+            </div>`;
+        }).join('');
+        insight.innerHTML = `<div class="insight"><div class="insight-section">Generated Thumbnails (ChatGPT Image)</div><div class="ab-grid">${cards}</div></div>`;
+        rendered = true;
+      } else {
+        const bgUrl = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=thumbnail_bg.png';
+        insight.innerHTML = `
+          <div class="insight">
+            <div class="insight-section">Generated thumbnail background</div>
+            <img class="thumb-preview" src="${bgUrl}" alt="thumbnail background"
+                 onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
+            <div style="display:none;color:var(--muted);font-size:12px;padding:8px">Image not ready yet</div>
+          </div>`;
+        rendered = true;
+      }
     } else if (s.name === 'render') {
       if (!hasOutput('video.mp4') && !hasOutput('thumbnail.jpg') && !hasOutput('thumbnail_1.jpg')) return;
       // Show all 3 rendered thumbnails + title variants from seo.json
@@ -2486,10 +2510,10 @@ async function renderStageExtras(jobId, s) {
         ? seo.title_variants
         : [{title: seo.title || '', thumbnail_text: seo.thumbnail_text || '', score: null}];
       function thumbUrl(idx) {
-        return '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent('thumbnail_' + (idx+1) + '.jpg');
+        return '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent('thumbnail_' + (idx+1) + '.jpg') + '&t=' + Date.now();
       }
       function fallbackThumb(idx) {
-        return '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=thumbnail.jpg';
+        return '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=thumbnail.jpg' + '&t=' + Date.now();
       }
       const cards = variants.slice(0,3).map((v, i) => {
         const isWinner = i === 0;
@@ -2622,10 +2646,10 @@ async function renderFinal(t) {
   const variants = (seo.title_variants && seo.title_variants.length >= 1) ? seo.title_variants : [{title: seo.title || '', thumbnail_text: seo.thumbnail_text || '', score: null}];
   const tags = (seo.tags || []).map(tag => `<span class="tag-chip">${escapeHtml(tag)}</span>`).join('');
 
-  const fallbackThumbUrl = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=thumbnail.jpg';
+  const fallbackThumbUrl = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=thumbnail.jpg' + '&t=' + Date.now();
   function variantCard(v, idx) {
     const thumbPath = 'thumbnail_' + (idx + 1) + '.jpg';
-    const thumbUrl = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(thumbPath);
+    const thumbUrl = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(thumbPath) + '&t=' + Date.now();
     const isWinner = idx === 0;
     const score = (v.score !== undefined && v.score !== null) ? v.score + 'pt' : '';
     const badgeLabel = isWinner

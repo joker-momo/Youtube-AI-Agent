@@ -1405,38 +1405,79 @@ async def auto_thumbnail_image_stage(
     generated: list[Path] = []   # successfully created .jpg files
     errors: list[str] = []
 
-    for i, thumb_text in enumerate(variants, start=1):
-        if i > 1:
-            await asyncio.sleep(throttle_sec)
-
-        prompt = _build_thumbnail_prompt(title, thumb_text, accent_color, channel_description)
-        project_name = f"{state.job_id[:30]}-thumb{i}"[:45]
-        png_path = assets_dir / f"thumbnail_{i}.png"
-        jpg_path = job_dir / f"thumbnail_{i}.jpg"
+    has_batch = hasattr(image_fn, "generate_images")
+    if has_batch:
+        prompts = []
+        png_paths = []
+        jpg_paths = []
+        project_name = f"{state.job_id[:30]}-thumbnails"[:45]
+        for i, thumb_text in enumerate(variants, start=1):
+            prompt = _build_thumbnail_prompt(title, thumb_text, accent_color, channel_description)
+            prompts.append(prompt)
+            png_paths.append(assets_dir / f"thumbnail_{i}.png")
+            jpg_paths.append(job_dir / f"thumbnail_{i}.jpg")
 
         try:
-            await image_fn(
-                prompt=prompt,
+            await image_fn.generate_images(
+                prompts=prompts,
                 project_name=project_name,
-                out_path=str(png_path),
+                out_paths=[str(p) for p in png_paths],
             )
-
-            # Convert PNG → JPG (Pillow — already a project dependency)
-            img = _PilImage.open(png_path).convert("RGB")
-            img.save(jpg_path, "JPEG", quality=92, optimize=True)
-            png_path.unlink(missing_ok=True)  # remove intermediate PNG
-
-            generated.append(jpg_path)
-            logger.log(
-                "THUMBNAIL_IMAGE_GENERATED",
-                {"job_id": state.job_id, "variant": i, "path": str(jpg_path), "text": thumb_text},
-            )
+            for i, (png_path, jpg_path, thumb_text) in enumerate(zip(png_paths, jpg_paths, variants), start=1):
+                if png_path.exists():
+                    img = _PilImage.open(png_path).convert("RGB")
+                    img.save(jpg_path, "JPEG", quality=92, optimize=True)
+                    png_path.unlink(missing_ok=True)  # remove intermediate PNG
+                    generated.append(jpg_path)
+                    logger.log(
+                        "THUMBNAIL_IMAGE_GENERATED",
+                        {"job_id": state.job_id, "variant": i, "path": str(jpg_path), "text": thumb_text},
+                    )
+                else:
+                    errors.append(f"variant {i} ('{thumb_text}'): Output image file not found.")
+                    logger.log(
+                        "THUMBNAIL_IMAGE_FAILED",
+                        {"job_id": state.job_id, "variant": i, "error": "Output image file missing"},
+                    )
         except Exception as exc:
-            errors.append(f"variant {i} ('{thumb_text}'): {exc}")
+            errors.append(f"Batch generation failed: {exc}")
             logger.log(
-                "THUMBNAIL_IMAGE_FAILED",
-                {"job_id": state.job_id, "variant": i, "error": str(exc)},
+                "THUMBNAIL_IMAGE_BATCH_FAILED",
+                {"job_id": state.job_id, "error": str(exc)},
             )
+    else:
+        for i, thumb_text in enumerate(variants, start=1):
+            if i > 1:
+                await asyncio.sleep(throttle_sec)
+
+            prompt = _build_thumbnail_prompt(title, thumb_text, accent_color, channel_description)
+            project_name = f"{state.job_id[:30]}-thumb{i}"[:45]
+            png_path = assets_dir / f"thumbnail_{i}.png"
+            jpg_path = job_dir / f"thumbnail_{i}.jpg"
+
+            try:
+                await image_fn(
+                    prompt=prompt,
+                    project_name=project_name,
+                    out_path=str(png_path),
+                )
+
+                # Convert PNG → JPG (Pillow — already a project dependency)
+                img = _PilImage.open(png_path).convert("RGB")
+                img.save(jpg_path, "JPEG", quality=92, optimize=True)
+                png_path.unlink(missing_ok=True)  # remove intermediate PNG
+
+                generated.append(jpg_path)
+                logger.log(
+                    "THUMBNAIL_IMAGE_GENERATED",
+                    {"job_id": state.job_id, "variant": i, "path": str(jpg_path), "text": thumb_text},
+                )
+            except Exception as exc:
+                errors.append(f"variant {i} ('{thumb_text}'): {exc}")
+                logger.log(
+                    "THUMBNAIL_IMAGE_FAILED",
+                    {"job_id": state.job_id, "variant": i, "error": str(exc)},
+                )
 
     if not generated:
         raise RuntimeError(

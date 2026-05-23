@@ -109,7 +109,7 @@ class ChatGPTImageDriver:
                 await self._ensure_projects_expanded()
                 new_btn = self.page.locator(NEW_PROJECT_BUTTON_SELECTOR).first
                 try:
-                    await new_btn.wait_for(state="visible", timeout=5_000)
+                    await new_btn.wait_for(state="visible", timeout=15_000)
                 except Exception:
                     # Double-check if dialog appeared while expanding sidebar
                     try:
@@ -128,7 +128,7 @@ class ChatGPTImageDriver:
                     await human_pause(self.page, min_ms=600, max_ms=1200)
 
             try:
-                await name_input.wait_for(state="visible", timeout=5_000)
+                await name_input.wait_for(state="visible", timeout=30_000)
             except Exception:
                 shot = await save_trace_screenshot(self.page, prefix="chatgpt-image-no-name-input")
                 raise BrowserDriverError(
@@ -156,7 +156,7 @@ class ChatGPTImageDriver:
 
             create_btn = self.page.locator(CREATE_PROJECT_BUTTON_SELECTOR).first
             try:
-                await create_btn.wait_for(state="visible", timeout=5_000)
+                await create_btn.wait_for(state="visible", timeout=15_000)
             except Exception:
                 shot = await save_trace_screenshot(self.page, prefix="chatgpt-image-no-create-btn")
                 raise BrowserDriverError(
@@ -167,7 +167,7 @@ class ChatGPTImageDriver:
             
             # Wait for URL change to /g/g-p-<id>
             try:
-                await self.page.wait_for_url(re.compile(r"/g/g-p-"), timeout=15_000)
+                await self.page.wait_for_url(re.compile(r"/g/g-p-"), timeout=30_000)
             except Exception:
                 # Project may still have created even if URL pattern differs.
                 pass
@@ -216,16 +216,18 @@ class ChatGPTImageDriver:
                 continue
         raise BrowserDriverError("ChatGPT send button not found.")
 
-    async def _wait_for_image(self, response_timeout_ms: int) -> str:
+    async def _wait_for_image(self, response_timeout_ms: int, exclude_urls: list[str] | None = None) -> str:
         """Poll the assistant turn until an <img> with a real src appears.
 
         Returns the image src URL.
         """
         deadline = time.monotonic() + response_timeout_ms / 1000.0
         last_logged = 0
+        exclude_list = exclude_urls or []
         while time.monotonic() < deadline:
             src = await self.page.evaluate(
-                """() => {
+                """(excludeList) => {
+                    const exclude = new Set(excludeList || []);
                     const containers = [
                         "[data-message-author-role='assistant'] img",
                         "main img",
@@ -236,13 +238,15 @@ class ChatGPTImageDriver:
                         for (let i = imgs.length - 1; i >= 0; i--) {
                             const s = imgs[i].src || '';
                             if (!s.startsWith('http')) continue;
+                            if (exclude.has(s)) continue;
                             if (s.includes('avatar') || s.includes('icon')) continue;
                             if (imgs[i].naturalWidth < 256) continue;
                             return s;
                         }
                     }
                     return '';
-                }"""
+                }""",
+                exclude_list
             )
             if src:
                 return src
@@ -325,3 +329,63 @@ class ChatGPTImageDriver:
             "project_name": project_name,
             "bytes": out_path.stat().st_size,
         }
+
+    async def generate_images(
+        self,
+        prompts: list[str],
+        *,
+        project_name: str,
+        out_paths: list[Path],
+        response_timeout_ms: int = 240_000,
+    ) -> list[dict]:
+        """Generate multiple photorealistic images sequentially in the same ChatGPT project chat session."""
+        if not self._opened:
+            await self.open()
+        if not prompts:
+            raise BrowserDriverError("Empty prompts list")
+        if len(prompts) != len(out_paths):
+            raise BrowserDriverError("Prompts and out_paths length mismatch")
+
+        await self._create_project(project_name)
+
+        results = []
+        exclude_urls = []
+        for i, (prompt, out_path) in enumerate(zip(prompts, out_paths), start=1):
+            if not prompt.strip():
+                raise BrowserDriverError(f"Empty prompt at index {i}")
+
+            await self._focus_composer()
+            full_prompt = (
+                "Generate one photorealistic image (16:9), no commentary, no "
+                "text overlays, no watermark.\n\n" + prompt.strip()
+            )
+            await human_type(self.page, full_prompt)
+            await human_pause(self.page, min_ms=500, max_ms=1200)
+            await self._click_send()
+
+            # Wait for the stop button to disappear (best-effort), then for
+            # an assistant image.
+            try:
+                for sel in STOP_BUTTON_SELECTORS:
+                    stop = self.page.locator(sel).first
+                    try:
+                        if await stop.is_visible(timeout=2_000):
+                            await stop.wait_for(state="hidden", timeout=response_timeout_ms)
+                            break
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+            src = await self._wait_for_image(response_timeout_ms, exclude_urls=exclude_urls)
+            await self._download_image(src, out_path)
+            exclude_urls.append(src)
+            results.append({
+                "src": src,
+                "local_path": str(out_path),
+                "project_name": project_name,
+                "bytes": out_path.stat().st_size,
+            })
+            await human_pause(self.page, min_ms=1500, max_ms=3000)
+
+        return results

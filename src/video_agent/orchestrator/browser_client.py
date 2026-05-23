@@ -73,7 +73,7 @@ class BrowserClient:
         """Drive ChatGPT image generation via /chatgpt/image.
 
         Returns the worker's payload: ``{src, local_path, project_name, bytes}``.
-        Raises LoginRequiredFromWorker on signed-out profile or
+        "Raise LoginRequiredFromWorker on signed-out profile or
         BrowserClientError on driver/HTTP failure.
         """
         body = {
@@ -102,6 +102,48 @@ class BrowserClient:
             )
         raise BrowserClientError(
             f"browser-worker /chatgpt/image returned HTTP {response.status_code}",
+            status_code=response.status_code,
+            detail=detail,
+        )
+
+    async def generate_images(
+        self,
+        prompts: list[str],
+        *,
+        project_name: str,
+        out_paths: list[str],
+        response_timeout_ms: int = 360_000,
+    ) -> dict:
+        """Drive ChatGPT batch image generation via /chatgpt/image/batch.
+
+        Returns the worker's payload: ``{ok: True, results: [...]}``.
+        """
+        body = {
+            "prompts": prompts,
+            "project_name": project_name,
+            "out_paths": out_paths,
+            "response_timeout_ms": response_timeout_ms,
+        }
+        async with httpx.AsyncClient(
+            timeout=self._timeout_for_response(response_timeout_ms * len(prompts))
+        ) as http:
+            response = await http.post(f"{self.base_url}/chatgpt/image/batch", json=body)
+        if response.status_code in (200, 201):
+            return response.json()
+        try:
+            detail = response.json().get("detail", response.text)
+        except Exception:
+            detail = response.text
+        if response.status_code == 409 and isinstance(detail, dict) and detail.get(
+            "login_required"
+        ):
+            raise LoginRequiredFromWorker(
+                detail.get("error", "Login required"),
+                status_code=response.status_code,
+                detail=detail,
+            )
+        raise BrowserClientError(
+            f"browser-worker /chatgpt/image/batch returned HTTP {response.status_code}",
             status_code=response.status_code,
             detail=detail,
         )

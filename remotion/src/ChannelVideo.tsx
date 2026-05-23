@@ -29,11 +29,11 @@ const ProgressBar: React.FC<{active: number; total: number; accent: string}> = (
 );
 
 const LogoWatermark: React.FC<{logoPath: string}> = ({logoPath}) => (
-  <div style={{position: 'absolute', top: 24, right: 28, zIndex: 20}}>
+  <div style={{position: 'absolute', top: 36, right: 56, zIndex: 20}}>
     <Img
       src={mediaSrc(logoPath)}
       style={{
-        height: 78,
+        height: 110,
         width: 'auto',
         objectFit: 'contain',
         filter: 'drop-shadow(0 8px 18px rgba(0,0,0,0.55))',
@@ -235,11 +235,11 @@ const SceneView: React.FC<{
 
       {/* Channel name — small, top-left */}
       <div style={{
-        position: 'absolute', top: 24, left: 56,
-        fontSize: 14, fontWeight: 700, letterSpacing: 1.8, textTransform: 'uppercase',
+        position: 'absolute', top: 36, left: 64,
+        fontSize: 24, fontWeight: 700, letterSpacing: 2.2, textTransform: 'uppercase',
         color: '#F2F4EF',
-        textShadow: '0 1px 6px rgba(0,0,0,0.55)',
-        opacity: headlineAlpha * 0.55,
+        textShadow: '0 2px 8px rgba(0,0,0,0.6)',
+        opacity: headlineAlpha * 0.75,
       }}>
         {channelName}
       </div>

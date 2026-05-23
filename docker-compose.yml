@@ -22,6 +22,7 @@ services:
       - ./asset_library:/app/asset_library
       - ./configs:/app/configs
       - ./src:/app/src
+      - ./remotion/public:/app/remotion/public
     command:
       - python
       - -m
@@ -53,6 +54,7 @@ services:
       - ./src:/app/src
       - ./tests:/app/tests
       - ./remotion/src:/app/remotion/src
+      - ./remotion/public:/app/remotion/public
     networks:
       - appliance_net
     command:
@@ -86,6 +88,7 @@ services:
       - ./src:/app/src
       - ./tests:/app/tests
       - ./remotion/src:/app/remotion/src
+      - ./remotion/public:/app/remotion/public
     networks:
       - appliance_net
     depends_on:

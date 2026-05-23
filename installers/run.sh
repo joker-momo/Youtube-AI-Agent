@@ -147,7 +147,7 @@ if [ "$USE_NATIVE_WORKER" = true ]; then
   # Run the native worker in the background
   echo -e "${CYAN}Launching Native Worker on host Mac (3x speedup)...${NC}"
   mkdir -p logs
-  nohup python -m video_agent.cli worker --db-path jobs/queue.db > logs/native_worker.log 2>&1 &
+  nohup env PYTHONPATH=src python -m video_agent.cli worker --db-path jobs/queue.db > logs/native_worker.log 2>&1 &
   echo -e "${GREEN}✅ Native Worker started in the background (PID: $!). Logs: logs/native_worker.log${NC}"
 else
   # Standard Docker startup

@@ -7,3 +7,9 @@ node_modules/
 .pytest_cache/
 __pycache__/
 *.pyc
+asset_library/
+browser_profiles/
+browser_trace/
+caches/
+.venv/
+

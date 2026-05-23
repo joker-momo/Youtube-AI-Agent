@@ -76,6 +76,9 @@ def synthesize_scene_track(
     chunks = []
     hcfg = _humanize_cfg(config)
     base_speed = float(config.get("speed", 1.0))
+    # Enable dynamic sync by default for optimal audio/video seamlessness
+    dynamic_sync = bool(config.get("dynamic_sync", True))
+
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_root = Path(temp_dir)
         for index, scene in enumerate(scene_doc["scenes"], start=1):
@@ -112,13 +115,27 @@ def synthesize_scene_track(
             if scene_audio:
                 audio = np.concatenate(scene_audio)
             else:
-                audio = np.zeros(max(1, int(float(scene["duration_sec"]) * sample_rate)), dtype=np.float32)
-            target_frames = max(1, int(float(scene["duration_sec"]) * sample_rate))
-            if len(audio) < target_frames:
-                audio = np.pad(audio, (0, target_frames - len(audio)))
+                # If no audio (silent scene), fall back to original duration or 5s default
+                fallback_dur = float(scene.get("duration_sec") or 5.0)
+                audio = np.zeros(max(1, int(fallback_dur * sample_rate)), dtype=np.float32)
+
+            if dynamic_sync:
+                # Dynamically set scene duration in seconds to perfectly match voice duration
+                actual_duration = len(audio) / sample_rate
+                # Update individual scene duration precisely (e.g. 12.35)
+                scene["duration_sec"] = float(round(actual_duration, 2))
             else:
-                audio = audio[:target_frames]
+                target_frames = max(1, int(float(scene["duration_sec"]) * sample_rate))
+                if len(audio) < target_frames:
+                    audio = np.pad(audio, (0, target_frames - len(audio)))
+                else:
+                    audio = audio[:target_frames]
             chunks.append(audio)
+
+    if dynamic_sync:
+        # Update overall total_duration_sec as integer for schema validation compatibility
+        scene_doc["total_duration_sec"] = int(round(sum(float(s["duration_sec"]) for s in scene_doc["scenes"])))
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     sf.write(output_path, np.concatenate(chunks), sample_rate)
     return {

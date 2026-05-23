@@ -369,6 +369,9 @@ def prepare_assets(
         else:
             audio_metadata = {**audio_metadata, "mix": {"bgm_enabled": False, "error": "ffmpeg_mix_failed"}}
 
+    # Write the dynamically updated scene durations back to scenes.json
+    write_json(job_dir / "scenes.json", scene_doc)
+
     manifest = {
         "audio": {"narration": public_narration_ref, "music": public_music_ref, **audio_metadata},
         "scenes": scene_assets,

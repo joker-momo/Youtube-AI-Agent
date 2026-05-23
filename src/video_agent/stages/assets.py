@@ -288,20 +288,37 @@ def prepare_assets(
     music_cfg = (tts_config.get("music") or {}) if isinstance(tts_config, dict) else {}
     tts_provider = tts_config.get("provider", "mock-local")
     narration_path = assets_dir / "narration.wav"
+    tts_durations_path = assets_dir / "tts_durations.json"
     audio_metadata = {"provider": "mock-local", "source": "silent_placeholder", "sample_rate": 44100}
     if tts_provider == "mock-local":
         _write_silent_wav(narration_path, int(scene_doc["total_duration_sec"]))
     elif narration_path.exists() and narration_path.stat().st_size > 0:
-        # Narration already synthesized (e.g., by assets_chatgpt stage) — skip re-synthesis.
+        # Narration already synthesized — skip re-synthesis, but restore per-scene durations.
         audio_metadata = {
             "provider": tts_provider,
             "source": "tts_cached",
             "sample_rate": tts_config.get("sample_rate", 24000),
         }
+        # Restore per-scene duration_sec from saved file so scene timings match speech exactly.
+        if tts_durations_path.exists():
+            try:
+                from video_agent.utils.json_io import read_json as _rj
+                saved = _rj(tts_durations_path)  # {scene_id: duration_sec}
+                for scene in scene_doc["scenes"]:
+                    if scene["id"] in saved:
+                        scene["duration_sec"] = saved[scene["id"]]
+                scene_doc["total_duration_sec"] = int(
+                    round(sum(float(s["duration_sec"]) for s in scene_doc["scenes"]))
+                )
+            except Exception:
+                pass  # Non-fatal: fall back to original durations
     else:
         client = tts_client or build_tts_client(tts_config)
         try:
             audio_metadata = synthesize_scene_track(scene_doc, narration_path, tts_config, client) | {"source": "tts"}
+            # Persist per-scene durations so future re-renders (tts_cached) stay in sync.
+            from video_agent.utils.json_io import write_json as _wj
+            _wj(tts_durations_path, {s["id"]: s["duration_sec"] for s in scene_doc["scenes"]})
         except Exception:
             # Fallback for environments without optional TTS runtime deps
             # or network/model bootstrap failures in external providers.

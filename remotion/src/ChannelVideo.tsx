@@ -318,8 +318,6 @@ const SceneView: React.FC<{
         zIndex: 15,
       }} />
 
-      {/* Animated Social Branding lower-third (slides in on specific scenes) */}
-      <SocialPulse accent={palette.accent} active={sceneIndex % 5 === 1} />
 
       {/* Scene-to-scene fade-out: solid black overlay fades in over final FADE_OUT frames.
           Must be the LAST child so it composites on top of everything. */}

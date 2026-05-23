@@ -388,43 +388,25 @@ def run_whisper_timestamps_stage(job_dir: Path) -> Path:
         for w in seg.get("words") or []:
             all_words.append({"word": w["word"].strip(), "start": float(w["start"]), "end": float(w["end"])})
 
-    # Group words into ~7-word chunks with text+start+end
-    CHUNK_SIZE = 7
-
-    def _group_chunks(words: list[dict]) -> list[dict]:
-        chunks = []
-        for i in range(0, len(words), CHUNK_SIZE):
-            group = words[i : i + CHUNK_SIZE]
-            text = " ".join(w["word"] for w in group).strip()
-            if text:
-                chunks.append({
-                    "text": text,
-                    "start": group[0]["start"],
-                    "end": group[-1]["end"],
-                })
-        return chunks
-
-    all_chunks = _group_chunks(all_words)
-
-    # Map chunks to scenes by cumulative audio offset
+    # Map individual rebased words to scenes by cumulative audio offset
     scene_data = []
     offset = 0.0
     for scene in scenes:
         dur = float(scene.get("duration_sec") or 15)
         scene_end = offset + dur
-        # Chunks whose midpoint falls within [offset, scene_end)
-        scene_chunks = [
-            c for c in all_chunks
-            if offset <= (c["start"] + c["end"]) / 2 < scene_end
+        # Words whose midpoint falls within [offset, scene_end)
+        scene_words = [
+            w for w in all_words
+            if offset <= (w["start"] + w["end"]) / 2 < scene_end
         ]
         # Rebase timestamps relative to this scene's audio offset
         rebased = [
             {
-                "text": c["text"],
-                "start": round(c["start"] - offset, 4),
-                "end": round(c["end"] - offset, 4),
+                "text": w["word"],
+                "start": round(w["start"] - offset, 4),
+                "end": round(w["end"] - offset, 4),
             }
-            for c in scene_chunks
+            for w in scene_words
         ]
         scene_data.append({
             "scene_id": scene["id"],

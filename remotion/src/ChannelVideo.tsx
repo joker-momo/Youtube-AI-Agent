@@ -89,6 +89,20 @@ const BridgeFade: React.FC<{mode: 'out' | 'in'}> = ({mode}) => {
   );
 };
 
+
+const FontLoader: React.FC = () => (
+  <style>
+    {`
+      @import url('https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,600;0,800;0,900;1,600;1,800;1,900&family=Manrope:wght@600;800;900&display=swap');
+      
+      .premium-subtitle-span {
+        font-family: 'Montserrat', 'Manrope', "Helvetica Neue", sans-serif;
+        letter-spacing: 0.5px;
+      }
+    `}
+  </style>
+);
+
 const SceneView: React.FC<{
   scene: Scene;
   totalFrames: number;
@@ -114,44 +128,35 @@ const SceneView: React.FC<{
       end: Math.max(0.001, s.end),
     }))
     .sort((a, b) => a.start - b.start);
-  const activeSegmentIdx = segments.findIndex(s => localTimeSec >= s.start && localTimeSec < s.end);
-  const activeSegment: WordSegment | null = activeSegmentIdx >= 0 ? segments[activeSegmentIdx] : null;
 
-  // Between chunks: show last-passed segment text instead of falling back to
-  // scene.caption to prevent abrupt text flicker on gap frames.
-  const prevSegment: WordSegment | null = activeSegment
-    ? null
-    : ([...segments].reverse().find(s => localTimeSec >= s.end) ?? null);
-  const displaySegment = activeSegment ?? prevSegment;
-  const captionText = displaySegment ? displaySegment.text : scene.caption;
+  const words = segments;
+  const hasWords = words.length > 0;
 
-  // Caption chunk fade: fade in at chunk start, hold, fade out at chunk end.
-  const CHUNK_FADE = 5; // frames
-  let captionChunkAlpha = 1;
-  if (activeSegment) {
-    const chunkStartFrame = Math.round(activeSegment.start * fps);
-    const chunkEndFrame   = Math.round(activeSegment.end   * fps);
-    const safeStart = Math.max(0, chunkStartFrame);
-    const safeEnd = Math.max(safeStart + 1, chunkEndFrame);
-    const chunkFrames = Math.max(1, safeEnd - safeStart);
-    const fadeFrames = Math.min(CHUNK_FADE, Math.max(1, Math.floor(chunkFrames / 2)));
-    const fadeInEnd = safeStart + fadeFrames;
-    const fadeOutStart = Math.max(fadeInEnd, safeEnd - fadeFrames);
-    if (frame <= safeStart) {
-      captionChunkAlpha = 0;
-    } else if (frame < fadeInEnd) {
-      captionChunkAlpha = (frame - safeStart) / Math.max(1, fadeInEnd - safeStart);
-    } else if (frame <= fadeOutStart) {
-      captionChunkAlpha = 1;
-    } else if (frame < safeEnd) {
-      captionChunkAlpha = 1 - (frame - fadeOutStart) / Math.max(1, safeEnd - fadeOutStart);
-    } else {
-      captionChunkAlpha = 0;
-    }
-  } else if (prevSegment) {
-    // Between chunks: dim slightly to signal "gap" without jarring text switch.
-    captionChunkAlpha = 0.65;
+  // Group words into logical pages of 10 words for high legibility (max 2 lines of 5 words)
+  const wordsPerPage = 10;
+  const pages: WordSegment[][] = [];
+  for (let i = 0; i < words.length; i += wordsPerPage) {
+    pages.push(words.slice(i, i + wordsPerPage));
   }
+
+  // Find currently active word, or fall back strictly to the last spoken word during gaps to prevent snapping back
+  const activeWordIdx = words.findIndex(w => localTimeSec >= w.start && localTimeSec < w.end);
+  let targetWordIdx = 0;
+  if (activeWordIdx !== -1) {
+    targetWordIdx = activeWordIdx;
+  } else {
+    // Find the latest word that ended before current local time
+    let lastEndedIdx = -1;
+    for (let i = 0; i < words.length; i++) {
+      if (localTimeSec >= words[i].end) {
+        lastEndedIdx = i;
+      }
+    }
+    targetWordIdx = lastEndedIdx !== -1 ? lastEndedIdx : 0;
+  }
+
+  const activePageIdx = Math.floor(targetWordIdx / wordsPerPage);
+  const displayLine = pages[activePageIdx] || [];
 
   const opacity       = interpolate(frame, [0, FADE_IN], [0, 1], {extrapolateRight: 'clamp'});
   const headlineY     = interpolate(frame, [4, FADE_IN + 8], [20, 0], {extrapolateRight: 'clamp'});
@@ -163,11 +168,10 @@ const SceneView: React.FC<{
   const headlineRight = layoutVariant === 2 ? 56 : undefined;
   const headlineCenter = layoutVariant === 1;
   const headlineBottom = layoutVariant === 1 ? 200 : 190;
-  const captionLeft = layoutVariant === 2 ? 80 : 56;
-  const captionRight = layoutVariant === 2 ? 56 : 80;
 
   return (
     <AbsoluteFill style={{...fullFrame, opacity}}>
+      <FontLoader />
 
       {/* Full-bleed background — video clip or photo */}
       {scene.asset_refs.background.endsWith('.mp4') ? (
@@ -177,7 +181,6 @@ const SceneView: React.FC<{
         <OffthreadVideo
           src={mediaSrc(scene.asset_refs.background)}
           muted
-          loop
           style={{
             position: 'absolute', width: '100%', height: '100%',
             objectFit: 'cover',
@@ -249,20 +252,68 @@ const SceneView: React.FC<{
         </div>
       </div>
 
-      {/* Caption — lower-third, no box, text + left accent bar */}
+      {/* Caption — Centered lower-third, completely stable positioning and sizing */}
       <div style={{
-        position: 'absolute', left: captionLeft, right: captionRight, bottom: 58,
-        display: 'flex', alignItems: 'flex-start', gap: 18,
-        opacity: captionAlpha * (displaySegment ? captionChunkAlpha : 1),
+        position: 'absolute', 
+        left: 100, 
+        right: 100, 
+        bottom: 70,
+        display: 'flex', 
+        justifyContent: 'center', 
+        alignItems: 'center',
+        minHeight: 140,
+        opacity: captionAlpha,
+        zIndex: 30,
       }}>
-        <div style={{width: 5, minHeight: 44, backgroundColor: palette.accent, borderRadius: 3, flexShrink: 0, marginTop: 4}} />
-        <div style={{
-          fontSize: 38, fontWeight: 600, lineHeight: 1.34, color: 'rgba(255,255,255,0.93)',
-          textShadow: '0 1px 14px rgba(0,0,0,0.95)',
-          maxWidth: 1080,
-        }}>
-          {captionText}
-        </div>
+        {hasWords ? (
+          <div style={{
+            display: 'flex', 
+            flexWrap: 'wrap', 
+            justifyContent: 'center', 
+            rowGap: 12,
+            columnGap: 18,
+            width: '100%',
+            maxWidth: 1100,
+            margin: '0 auto',
+          }}>
+            {displayLine.map((w, idx) => {
+              const isActive = localTimeSec >= w.start && localTimeSec < w.end;
+              return (
+                <span
+                  key={idx}
+                  className="premium-subtitle-span"
+                  style={{
+                    color: isActive ? '#FFD700' : '#FFFFFF',
+                    opacity: isActive ? 1.0 : 0.55,
+                    transform: `scale(${isActive ? 1.08 : 1.0})`,
+                    transition: 'transform 0.1s cubic-bezier(0.2, 0.8, 0.2, 1), color 0.08s ease, opacity 0.08s ease',
+                    fontWeight: isActive ? 900 : 700,
+                    fontSize: 42,
+                    textShadow: isActive
+                      ? '0 2px 4px rgba(0,0,0,0.9), 0 4px 10px rgba(0,0,0,0.8), 0 0 12px rgba(255, 215, 0, 0.45)'
+                      : '0 2px 4px rgba(0,0,0,0.9), 0 4px 10px rgba(0,0,0,0.8)',
+                    display: 'inline-block',
+                    textTransform: 'uppercase',
+                  }}
+                >
+                  {w.text}
+                </span>
+              );
+            })}
+          </div>
+        ) : (
+          <div style={{
+            fontSize: 38, 
+            fontWeight: 600, 
+            lineHeight: 1.34, 
+            color: 'rgba(255,255,255,0.93)',
+            textShadow: '0 1px 14px rgba(0,0,0,0.95)',
+            textAlign: 'center', 
+            width: '100%'
+          }}>
+            {scene.caption}
+          </div>
+        )}
       </div>
 
     </AbsoluteFill>

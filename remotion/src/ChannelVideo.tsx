@@ -327,172 +327,7 @@ const SceneView: React.FC<{
         <AbsoluteFill style={{background: '#0C100D', opacity: fadeOutAlpha, zIndex: 100, pointerEvents: 'none'}} />
       ) : null}
 
-
     </AbsoluteFill>
-  );
-};
-
-const AnimatedCTA: React.FC<{
-  outroFrames: number;
-  palette: RenderProps['style']['palette'];
-  channelName: string;
-}> = ({outroFrames, palette, channelName}) => {
-  const frame = useCurrentFrame();
-
-  // Mouse pointer trajectory:
-  // Starts off-screen (bottom-right: x=500, y=400)
-  // Frame 0 -> 28: Moves towards Subscribe button (center: x=10, y=15)
-  // Frame 28 -> 32: Stays on Subscribe button (click!)
-  // Frame 32 -> 58: Moves to Bell icon (x=150, y=15)
-  // Frame 58 -> 64: Stays on Bell icon (click!)
-  // Frame 64 -> 85: Moves off-screen (x=600, y=400)
-
-  const cursorX = interpolate(
-    frame,
-    [0, 28, 32, 58, 64, 85],
-    [500, 10, 10, 150, 150, 600],
-    {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'}
-  );
-
-  const cursorY = interpolate(
-    frame,
-    [0, 28, 32, 58, 64, 85],
-    [400, 15, 15, 15, 15, 400],
-    {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'}
-  );
-
-  // Cursor click scale down
-  const cursorScale = interpolate(
-    frame,
-    [27, 30, 33, 57, 60, 63],
-    [1, 0.78, 1, 1, 0.78, 1],
-    {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'}
-  );
-
-  // Subscribe button state:
-  // Red/Accent initially, turns grey/Suscrito after frame 30
-  const isSubscribed = frame >= 30;
-  const buttonScale = interpolate(
-    frame,
-    [28, 30, 32],
-    [1, 0.93, 1],
-    {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'}
-  );
-
-  // Bell state:
-  // Grey initially, turns Gold (or accent) after frame 60
-  const isBellClicked = frame >= 60;
-  
-  // Bell shake animation from frame 60 to 80
-  let bellRotate = 0;
-  if (frame >= 60 && frame < 80) {
-    // Oscillate: -15deg to 15deg
-    bellRotate = Math.sin((frame - 60) * 0.8) * 18;
-  }
-
-  const bellScale = interpolate(
-    frame,
-    [58, 60, 62],
-    [1, 0.88, 1.2],
-    {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'}
-  );
-
-  // Fade-in the whole CTA block from frame 10 to 22
-  const opacity = interpolate(frame, [10, 22], [0, 1], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-  });
-
-  return (
-    <div style={{
-      position: 'absolute',
-      inset: 0,
-      display: 'flex',
-      flexDirection: 'column',
-      justifyContent: 'center',
-      alignItems: 'center',
-      pointerEvents: 'none',
-      opacity,
-      zIndex: 50,
-    }}>
-      {/* Play Audio chime-click SFX exactly at frame 27 (matches click) */}
-      {frame >= 27 ? (
-        <Sequence from={27} durationInFrames={45}>
-          <Audio src={mediaSrc("sfx/cta_click_bell.wav")} volume={0.8} />
-        </Sequence>
-      ) : null}
-
-      <div style={{
-        position: 'relative',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 16,
-        backgroundColor: 'rgba(12, 16, 13, 0.85)',
-        backdropFilter: 'blur(16px)',
-        borderRadius: '50px',
-        padding: '16px 32px',
-        border: '2px solid rgba(255,255,255,0.12)',
-        boxShadow: '0 20px 50px rgba(0,0,0,0.65)',
-        transform: 'translateY(160px) scale(1.1)',
-      }}>
-        {/* Subscribe Button */}
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          backgroundColor: isSubscribed ? '#3A423F' : '#E63946',
-          color: '#fff',
-          fontSize: 22,
-          fontWeight: 800,
-          fontFamily: 'Montserrat, sans-serif',
-          letterSpacing: 1.5,
-          textTransform: 'uppercase',
-          padding: '12px 28px',
-          borderRadius: '30px',
-          transition: 'background-color 0.2s ease',
-          transform: `scale(${buttonScale})`,
-          boxShadow: isSubscribed ? 'none' : '0 4px 15px rgba(230, 57, 70, 0.4)',
-        }}>
-          {isSubscribed ? 'Suscrito' : 'Suscribirse'}
-        </div>
-
-        {/* Notification Bell */}
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: isBellClicked ? 'rgba(255, 215, 0, 0.15)' : 'rgba(255,255,255,0.08)',
-          border: `1.5px solid ${isBellClicked ? '#FFD700' : 'rgba(255,255,255,0.15)'}`,
-          padding: '12px',
-          borderRadius: '50%',
-          transform: `scale(${bellScale}) rotate(${bellRotate}deg)`,
-          transition: 'all 0.2s ease',
-        }}>
-          <svg
-            viewBox="0 0 24 24"
-            width="28"
-            height="28"
-            fill={isBellClicked ? '#FFD700' : 'rgba(255,255,255,0.7)'}
-            style={{transition: 'fill 0.2s ease'}}
-          >
-            <path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2zm-2 1H8v-6c0-2.48 1.51-4.5 4-4.5s4 2.02 4 4.5v6z"/>
-          </svg>
-        </div>
-
-        {/* Animated Mouse Pointer */}
-        <div style={{
-          position: 'absolute',
-          left: cursorX,
-          top: cursorY,
-          transform: `scale(${cursorScale})`,
-          zIndex: 60,
-          filter: 'drop-shadow(0 4px 8px rgba(0,0,0,0.4))',
-        }}>
-          <svg viewBox="0 0 24 24" width="36" height="36" fill="#fff" stroke="#000" strokeWidth="1.5">
-            <path d="M4.5 2.5v15.75l4.5-4.5h6.75l-11.25-11.25z"/>
-          </svg>
-        </div>
-      </div>
-    </div>
   );
 };
 
@@ -557,7 +392,6 @@ export const ChannelVideo: React.FC<RenderProps> = (props) => {
               src={mediaSrc(outroVideoPath)}
               style={{position: 'absolute', width: '100%', height: '100%', objectFit: 'cover'}}
             />
-            <AnimatedCTA outroFrames={outroFrames} palette={props.style.palette} channelName={props.channel.name} />
           </Sequence>
         ) : (
         <Sequence from={start} durationInFrames={outroFrames}>
@@ -567,11 +401,9 @@ export const ChannelVideo: React.FC<RenderProps> = (props) => {
             subtitle={props.channel.name}
             palette={props.style.palette}
           />
-          <AnimatedCTA outroFrames={outroFrames} palette={props.style.palette} channelName={props.channel.name} />
         </Sequence>
         )
       ) : null}
-
 
       {introFrames > 0 ? (
         <>

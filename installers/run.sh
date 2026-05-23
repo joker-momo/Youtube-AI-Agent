@@ -133,9 +133,9 @@ if [ "$USE_NATIVE_WORKER" = true ]; then
   fi
   source .venv/bin/activate
   echo -e "${BLUE}Upgrading pip...${NC}"
-  pip install --quiet --upgrade pip
+  pip install --quiet --timeout 100 --retries 10 --upgrade pip
   echo -e "${BLUE}Installing Python dependencies (this might take a minute)...${NC}"
-  pip install --quiet -r requirements.txt
+  pip install --quiet --timeout 100 --retries 10 -r requirements.txt
   
   # Start app and browser containers in Docker, but exclude the docker worker
   echo -e "${CYAN}Starting App & Browser containers in Docker...${NC}"

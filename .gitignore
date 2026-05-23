@@ -29,3 +29,4 @@ browser_trace/
 /.cache
 /.remotion
 /logs
+/.venv

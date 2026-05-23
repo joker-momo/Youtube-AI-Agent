@@ -106,12 +106,35 @@ if [[ "$OS" == "Darwin" ]]; then
 fi
 
 if [ "$USE_NATIVE_WORKER" = true ]; then
+  # Find best python command (prefer homebrew python3.11/3.12/3.10 over older system python3)
+  PYTHON_CMD="python3"
+  if command -v python3.11 &>/dev/null; then
+    PYTHON_CMD="python3.11"
+  elif command -v python3.12 &>/dev/null; then
+    PYTHON_CMD="python3.12"
+  elif command -v python3.10 &>/dev/null; then
+    PYTHON_CMD="python3.10"
+  fi
+
+  echo -e "${CYAN}Using Python interpreter: ${PYTHON_CMD}${NC}"
+
+  # If .venv exists, verify its python version is >= 3.10
+  if [[ -d ".venv" ]]; then
+    IS_COMPATIBLE=$(.venv/bin/python -c "import sys; print(sys.version_info >= (3, 10))" 2>/dev/null || echo "False")
+    if [[ "$IS_COMPATIBLE" == "False" ]]; then
+      echo -e "${YELLOW}Existing .venv is using an incompatible Python version. Recreating...${NC}"
+      rm -rf .venv
+    fi
+  fi
+
   echo -e "${CYAN}Setting up native Python virtual environment on host Mac...${NC}"
   if [[ ! -d ".venv" ]]; then
-    python3 -m venv .venv
+    $PYTHON_CMD -m venv .venv
   fi
   source .venv/bin/activate
-  echo -e "${BLUE}Installing Python dependencies...${NC}"
+  echo -e "${BLUE}Upgrading pip...${NC}"
+  pip install --quiet --upgrade pip
+  echo -e "${BLUE}Installing Python dependencies (this might take a minute)...${NC}"
   pip install --quiet -r requirements.txt
   
   # Start app and browser containers in Docker, but exclude the docker worker

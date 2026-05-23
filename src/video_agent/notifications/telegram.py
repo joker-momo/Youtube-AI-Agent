@@ -124,8 +124,8 @@ def _compress_video(src: Path, dst: Path, target_mb: float = 45.0) -> bool:
     """Re-encode src → dst targeting ~target_mb using ffmpeg downscaling and fast rate-control.
 
     Returns True on success. Original file is never modified.
-    Downscales to 480p to reduce file size and encode time, uses preset 'veryfast'
-    to prevent timeouts, and applies strict maxrate/bufsize limits to avoid overshooting.
+    Downscales to 480p (or 360p for >20min videos) to reduce file size and encode time,
+    uses preset 'veryfast' to prevent timeouts, and applies strict maxrate/bufsize limits.
     """
     try:
         # Get duration via ffprobe
@@ -142,19 +142,31 @@ def _compress_video(src: Path, dst: Path, target_mb: float = 45.0) -> bool:
     except Exception:
         duration = 0.0
 
+    # Choose downscale resolution based on duration (extra speed & efficiency for long videos)
+    if duration > 1200:
+        scale_filter = "scale=-2:'min(360,ih)'"
+    else:
+        scale_filter = "scale=-2:'min(480,ih)'"
+
     if duration > 0:
-        # target_mb → kbps (reserve ~64 kbps for audio)
-        target_kbps = int((target_mb * 1024 * 8) / duration) - 64
-        target_kbps = max(200, target_kbps)
+        # Dynamically balance video and audio bitrates for extremely long videos
+        audio_kbps = 64
+        video_kbps = int((target_mb * 1024 * 8) / duration) - audio_kbps
+        if video_kbps < 120:
+            audio_kbps = 48  # Save bit budget on audio
+            video_kbps = int((target_mb * 1024 * 8) / duration) - audio_kbps
+        
+        video_kbps = max(80, video_kbps)  # Floor at 80kbps to maintain basic visibility
+        
         cmd = [
             "ffmpeg", "-y", "-i", str(src),
-            "-vf", "scale=-2:'min(480,ih)'",
+            "-vf", scale_filter,
             "-c:v", "libx264",
-            "-b:v", f"{target_kbps}k",
-            "-maxrate", f"{target_kbps}k",
-            "-bufsize", f"{target_kbps * 2}k",
+            "-b:v", f"{video_kbps}k",
+            "-maxrate", f"{video_kbps}k",
+            "-bufsize", f"{video_kbps * 2}k",
             "-preset", "veryfast",
-            "-c:a", "aac", "-b:a", "64k",
+            "-c:a", "aac", "-b:a", f"{audio_kbps}k",
             "-movflags", "+faststart",
             str(dst),
         ]
@@ -162,7 +174,7 @@ def _compress_video(src: Path, dst: Path, target_mb: float = 45.0) -> bool:
         # Fallback: fixed CRF with downscaling (no duration info)
         cmd = [
             "ffmpeg", "-y", "-i", str(src),
-            "-vf", "scale=-2:'min(480,ih)'",
+            "-vf", scale_filter,
             "-c:v", "libx264", "-crf", "30",
             "-preset", "veryfast",
             "-c:a", "aac", "-b:a", "64k",

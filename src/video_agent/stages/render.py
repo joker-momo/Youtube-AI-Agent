@@ -109,6 +109,8 @@ def build_remotion_commands(render_props_path: Path, video_path: Path, thumbnail
             str(public_dir),
             "--concurrency",
             concurrency,
+            "--hardware-acceleration",
+            "if-possible",
         ],
         thumbnail=[
             *base,
@@ -120,6 +122,8 @@ def build_remotion_commands(render_props_path: Path, video_path: Path, thumbnail
             input_props,
             "--public-dir",
             str(public_dir),
+            "--hardware-acceleration",
+            "if-possible",
         ],
     )
 
@@ -158,6 +162,7 @@ def build_thumbnail_commands(render_props_path: Path, out_dir: Path) -> list[lis
             *base, "still", str(entry), "ThumbnailStandard", str(out_path),
             "--props", json.dumps(props, ensure_ascii=False),
             "--public-dir", str(public_dir),
+            "--hardware-acceleration", "if-possible",
         ])
     return cmds
 

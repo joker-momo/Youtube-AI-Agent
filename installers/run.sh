@@ -58,20 +58,106 @@ if [[ ! -f ".env" ]]; then
   cp .env.example .env
 fi
 
-# 3. Start Containers
-echo -e "${CYAN}Starting YouTube AI Agent services...${NC}"
-docker compose up -d app worker browser-worker browser-runtime
+# 3. Detect hardware and configure Docker Compose
+COMPOSE_ARGS="-f docker-compose.yml"
+HAS_GPU=false
+GPU_TYPE=""
+OS="$(uname -s)"
 
-# 4. Check Health
+if [[ "$OS" == "Linux" ]]; then
+  # Check for NVIDIA GPU
+  if command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null; then
+    HAS_GPU=true
+    GPU_TYPE="NVIDIA"
+    COMPOSE_ARGS="${COMPOSE_ARGS} -f docker-compose.nvidia.yml"
+  # Check for AMD GPU on Linux
+  elif [[ -e /dev/dri ]] && command -v lspci &>/dev/null && lspci | grep -qi "amd\|ati\|radeon"; then
+    HAS_GPU=true
+    GPU_TYPE="AMD"
+    COMPOSE_ARGS="${COMPOSE_ARGS} -f docker-compose.amd.yml"
+  fi
+fi
+
+# Print GPU status
+if [ "$HAS_GPU" = true ]; then
+  echo -e "${GREEN}✅ Detected ${GPU_TYPE} GPU! Configuring Docker for GPU acceleration...${NC}"
+else
+  echo -e "${BLUE}ℹ️  No compatible Linux GPU detected. Running in standard CPU mode.${NC}"
+fi
+
+# 4. Handle macOS Native Worker Speedup Option
+USE_NATIVE_WORKER=false
+if [[ "$OS" == "Darwin" ]]; then
+  echo -e "\n${BOLD}${YELLOW}================ macOS Performance Optimization =================${NC}"
+  echo -e "Docker on macOS runs inside a Linux VM and cannot use your Mac's hardware GPU/VideoToolbox."
+  echo -e "Running the Worker natively on your Mac provides a ${BOLD}3x+ render speedup${NC}."
+  echo -e "Would you like to run the Webapp/Browser inside Docker but run the Worker natively?"
+  echo -ne "👉 Run Worker natively on host Mac? (y/N): "
+  
+  # Read user input with 5 second timeout defaulting to No (n) for automated runs
+  if read -t 5 -r REPLY; then
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+      USE_NATIVE_WORKER=true
+    fi
+  else
+    REPLY="n"
+  fi
+  echo -e "${BOLD}${YELLOW}=================================================================${NC}\n"
+fi
+
+if [ "$USE_NATIVE_WORKER" = true ]; then
+  echo -e "${CYAN}Setting up native Python virtual environment on host Mac...${NC}"
+  if [[ ! -d ".venv" ]]; then
+    python3 -m venv .venv
+  fi
+  source .venv/bin/activate
+  echo -e "${BLUE}Installing Python dependencies...${NC}"
+  pip install --quiet -r requirements.txt
+  
+  # Start app and browser containers in Docker, but exclude the docker worker
+  echo -e "${CYAN}Starting App & Browser containers in Docker...${NC}"
+  docker compose up -d app browser-worker browser-runtime
+  
+  # Ensure the docker worker is stopped to prevent conflicts
+  docker compose stop worker &>/dev/null || true
+  
+  # Run the native worker in the background
+  echo -e "${CYAN}Launching Native Worker on host Mac (3x speedup)...${NC}"
+  mkdir -p logs
+  nohup python -m video_agent.cli worker --db-path jobs/queue.db > logs/native_worker.log 2>&1 &
+  echo -e "${GREEN}✅ Native Worker started in the background (PID: $!). Logs: logs/native_worker.log${NC}"
+else
+  # Standard Docker startup
+  echo -e "${CYAN}Starting YouTube AI Agent services in Docker...${NC}"
+  docker compose ${COMPOSE_ARGS} up -d app worker browser-worker browser-runtime
+fi
+
+# 5. Check Health
 echo -e "\n${GREEN}✅ Services started successfully!${NC}"
 echo -e "${BOLD}${CYAN}=====================================================${NC}"
 echo -e "  - ${BOLD}Dashboard URL:${NC}      ${GREEN}http://localhost:8000${NC}"
 echo -e "  - ${BOLD}VNC Browser URL:${NC}    ${GREEN}http://localhost:7900${NC} (Manual ChatGPT/Claude Logins)"
+if [ "$USE_NATIVE_WORKER" = true ]; then
+  echo -e "  - ${BOLD}Worker Status:${NC}      ${GREEN}NATIVE HOST (GPU Enabled)${NC}"
+else
+  echo -e "  - ${BOLD}Worker Status:${NC}      ${GREEN}DOCKER CONTAINER (CPU Mode)${NC}"
+fi
 echo -e "${BOLD}${CYAN}=====================================================${NC}"
 echo ""
-echo -e "To view realtime logs, run:"
-echo -e "  ${BOLD}docker compose logs -f${NC}"
+echo -e "To view web logs, run:"
+echo -e "  ${BOLD}docker compose logs -f app${NC}"
+if [ "$USE_NATIVE_WORKER" = true ]; then
+  echo -e "To view native worker logs, run:"
+  echo -e "  ${BOLD}tail -f logs/native_worker.log${NC}"
+else
+  echo -e "To view worker logs, run:"
+  echo -e "  ${BOLD}docker compose logs -f worker${NC}"
+fi
 echo ""
 echo -e "To stop all services, run:"
-echo -e "  ${BOLD}docker compose down${NC}"
+if [ "$USE_NATIVE_WORKER" = true ]; then
+  echo -e "  ${BOLD}docker compose down && pkill -f \"video_agent.cli worker\"${NC}"
+else
+  echo -e "  ${BOLD}docker compose down${NC}"
+fi
 echo -e "${BOLD}${CYAN}=====================================================${NC}"

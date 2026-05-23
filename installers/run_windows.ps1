@@ -63,9 +63,20 @@ if (-not (Test-Path ".env")) {
     Copy-Item .env.example .env
 }
 
-# 3. Start Containers
+# 3. Start Containers with optional GPU configurations
+$composeArgs = @("-f", "docker-compose.yml")
+
+Write-Host "Checking for GPU hardware..." -ForegroundColor Cyan
+$nvidiaExists = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+if ($nvidiaExists) {
+    Show-Success "Detected NVIDIA GPU! Configuring Docker for GPU acceleration..."
+    $composeArgs += @("-f", "docker-compose.nvidia.yml")
+} else {
+    Write-Host "ℹ️ No NVIDIA GPU detected. Running in standard CPU mode." -ForegroundColor Gray
+}
+
 Write-Host "Starting YouTube AI Agent services..." -ForegroundColor Cyan
-docker compose up -d app worker browser-worker browser-runtime
+& docker compose $composeArgs up -d app worker browser-worker browser-runtime
 
 # 4. Check Health
 Write-Host ""

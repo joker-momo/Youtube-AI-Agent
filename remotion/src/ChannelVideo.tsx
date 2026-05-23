@@ -206,9 +206,6 @@ const SceneView: React.FC<{
         background: 'linear-gradient(to right, rgba(10,16,13,0.42) 0%, transparent 52%)',
       }} />
 
-      {/* Progress bar */}
-      <ProgressBar active={sceneIndex} total={totalScenes} accent={palette.accent} />
-
       {/* Channel name — small, top-left */}
       <div style={{
         position: 'absolute', top: 24, left: 56,

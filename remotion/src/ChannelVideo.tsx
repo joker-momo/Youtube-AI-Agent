@@ -99,9 +99,73 @@ const FontLoader: React.FC = () => (
         font-family: 'Montserrat', 'Manrope', "Helvetica Neue", sans-serif;
         letter-spacing: 0.5px;
       }
+
+      @keyframes grain {
+        0%, 100% { transform:translate(0, 0); }
+        10% { transform:translate(-1%, -2%); }
+        20% { transform:translate(-3%, 1%); }
+        30% { transform:translate(2%, -4%); }
+        40% { transform:translate(-1%, 4%); }
+        50% { transform:translate(-3%, 2%); }
+        60% { transform:translate(3%, 0); }
+        70% { transform:translate(0, 2%); }
+        80% { transform:translate(1%, 4%); }
+        90% { transform:translate(-2%, 2%); }
+      }
     `}
   </style>
 );
+
+const SocialPulse: React.FC<{accent: string; active: boolean}> = ({accent, active}) => {
+  const frame = useCurrentFrame();
+  
+  // Slide in/out dynamically
+  const slideY = interpolate(
+    frame,
+    [30, 48, 150, 168],
+    [120, 0, 0, 120],
+    {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'}
+  );
+  
+  if (!active) return null;
+  
+  return (
+    <div style={{
+      position: 'absolute',
+      bottom: 48,
+      left: 56,
+      transform: `translateY(${slideY}px)`,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12,
+      backgroundColor: 'rgba(12, 16, 13, 0.78)',
+      backdropFilter: 'blur(12px)',
+      borderRadius: '30px',
+      padding: '10px 20px',
+      border: '1px solid rgba(255,255,255,0.08)',
+      boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+      zIndex: 25,
+    }}>
+      <div style={{
+        width: 10,
+        height: 10,
+        borderRadius: '50%',
+        backgroundColor: accent,
+        boxShadow: `0 0 10px ${accent}`,
+      }} />
+      <span style={{
+        color: '#fff',
+        fontSize: 16,
+        fontWeight: 700,
+        letterSpacing: 1.0,
+        fontFamily: 'Montserrat, sans-serif',
+        textTransform: 'uppercase',
+      }}>
+        Suscríbete a @VidaPlena
+      </span>
+    </div>
+  );
+};
 
 const SceneView: React.FC<{
   scene: Scene;
@@ -184,6 +248,7 @@ const SceneView: React.FC<{
           style={{
             position: 'absolute', width: '100%', height: '100%',
             objectFit: 'cover',
+            filter: 'contrast(1.05) saturate(1.03) sepia(0.04) brightness(0.96)',
           }}
         />
       ) : (
@@ -193,6 +258,7 @@ const SceneView: React.FC<{
             position: 'absolute', width: '100%', height: '100%',
             objectFit: 'cover',
             transform: motionTransform(scene.motion, progress),
+            filter: 'contrast(1.05) saturate(1.03) sepia(0.04) brightness(0.96)',
           }}
         />
       )}
@@ -222,7 +288,30 @@ const SceneView: React.FC<{
 
       {logoPath ? <LogoWatermark logoPath={logoPath} /> : null}
 
+      {/* Cinematic Color Grading Overlay (warm sepia + teal-green shadow) */}
+      <div style={{
+        position: 'absolute', inset: 0,
+        background: 'linear-gradient(135deg, rgba(217, 140, 95, 0.08) 0%, rgba(47, 107, 87, 0.05) 100%)',
+        mixBlendMode: 'overlay',
+        pointerEvents: 'none', zIndex: 14
+      }} />
 
+      {/* Cinematic Procedural Film Grain Overlay */}
+      <div style={{
+        position: 'absolute',
+        inset: '-50%',
+        width: '200%',
+        height: '200%',
+        backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E")`,
+        opacity: 0.045,
+        mixBlendMode: 'overlay',
+        pointerEvents: 'none',
+        animation: 'grain 0.4s steps(6) infinite',
+        zIndex: 15,
+      }} />
+
+      {/* Animated Social Branding lower-third (slides in on specific scenes) */}
+      <SocialPulse accent={palette.accent} active={sceneIndex % 5 === 1} />
 
     </AbsoluteFill>
   );

@@ -14,7 +14,7 @@ audience:
 brand_voice_path: configs/vida-plena-45/brand-voice.md
 branding:
   intro_sec: 3.0
-  logo_path: jobs/test-subtitle-render/assets/logo.jpg
+  logo_path: asset_library/source/Logo.png
   outro_sec: 3.0
 budget:
   max_cost_per_video_usd: 0

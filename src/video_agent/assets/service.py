@@ -40,6 +40,33 @@ from video_agent.assets.query_cache import QueryCache
 from video_agent.contracts import repo_root
 
 
+def _force_elderly_demographic(query: str) -> str:
+    lower_q = query.lower()
+    people_words = [
+        "person", "woman", "man", "adult", "couple", "people", "insomniac", "family", 
+        "doctor", "parent", "senior", "elderly", "grandmother", "grandfather", 
+        "grandparent", "lady", "gentleman", "individual", "sleeper", "someone", "patient"
+    ]
+    has_people = any(word in lower_q for word in people_words)
+    
+    if has_people:
+        # Replace weak terms like middle aged, adult with strong senior/elderly terms
+        q = query
+        q = q.replace("Middle aged", "Elderly senior")
+        q = q.replace("middle aged", "elderly senior")
+        q = q.replace("Middle-aged", "Elderly senior")
+        q = q.replace("middle-aged", "elderly senior")
+        q = q.replace("Adult", "Elderly")
+        q = q.replace("adult", "elderly")
+        
+        # Enforce European / Latin American / Hispanic / Caucasian
+        if not any(w in lower_q for w in ["european", "latin", "hispanic", "caucasian"]):
+            q = f"{q} european latin american senior"
+        return q.strip()
+    return query
+
+
+
 class DownloadClient(Protocol):
     def download(self, url: str, output_path: Path) -> None: ...
 
@@ -235,7 +262,8 @@ class StockAssetService:
         return None
 
     def get_scene_asset(self, scene: dict[str, Any], channel_id: str, job_id: str) -> dict[str, Any] | None:
-        query = scene.get("visual_prompt") or scene.get("on_screen_text") or ""
+        raw_query = scene.get("visual_prompt") or scene.get("on_screen_text") or ""
+        query = _force_elderly_demographic(raw_query)
         scene_dur = int(scene.get("duration_sec") or 30)
         filters = _stock_filters(self.visual_config, scene_duration_sec=scene_dur)
         ttl_hours = int(self.visual_config.get("query_cache_ttl_hours", 24))

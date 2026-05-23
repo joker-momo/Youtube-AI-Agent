@@ -131,6 +131,12 @@ Write-Host "=====================================================" -ForegroundCo
 Write-Host "      ✨ Setup Completed Successfully! ✨            " -ForegroundColor Green -FontWeight Bold
 Write-Host "=====================================================" -ForegroundColor Green -FontWeight Bold
 Write-Host ""
+Write-Host "⚠️  CRITICAL ACTION REQUIRED ON NEW MACHINE:" -ForegroundColor Yellow -FontWeight Bold
+Write-Host "You must configure the .env file in the repository root before running jobs."
+Write-Host "Open the .env file and fill in your keys:"
+Write-Host "  - TELEGRAM_BOT_TOKEN & TELEGRAM_CHAT_ID (For status/progress alerts)"
+Write-Host "  - PEXELS_API_KEY & PIXABAY_API_KEY (For stock video/image downloads)"
+Write-Host ""
 Write-Host "You can now access the following endpoints in your browser:"
 Write-Host "  - Web Dashboard:    http://localhost:8000" -ForegroundColor Cyan
 Write-Host "  - Browser Runtime (VNC): http://localhost:7900 (For manual ChatGPT/Claude logins)" -ForegroundColor Cyan

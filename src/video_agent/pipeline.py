@@ -421,6 +421,121 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
     )
 
 
+def _sync_scene_durations_from_audio(job_dir: Path, scene_doc: dict) -> None:
+    """Recalculate each scene's duration_sec from the actual synthesized audio.
+
+    When TTS is cached (audio already exists), prepare_assets skips dynamic_sync
+    so scene durations stay as the LLM-estimated values from scenes.json (e.g. 10-11s
+    uniform blocks). This function corrects them before render_props is written.
+
+    Strategy A — whisper_timestamps.json exists (most accurate):
+      The whisper stage records the audio_offset_sec for every scene.
+      Duration of scene[i] = offset[i+1] - offset[i].
+      Duration of the last scene = total_audio_duration - offset[last].
+
+    Strategy B — no whisper but narration audio exists:
+      Read total audio duration from the narration WAV.
+      Distribute proportionally based on original scene durations.
+
+    Both strategies add a 0.35 s tail pause after the last word so the
+    last frame doesn't cut off mid-sentence.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+
+    scenes = scene_doc.get("scenes") or []
+    if not scenes:
+        return
+
+    TAIL_PAD_SEC = 0.35  # breathing room after last spoken word
+
+    # ── Strategy A: derive from whisper offsets ──────────────────────────────────
+    whisper_path = job_dir / "whisper_timestamps.json"
+    if whisper_path.exists():
+        try:
+            from video_agent.utils.json_io import read_json as _rj
+            w_data = _rj(whisper_path)
+            w_scenes = w_data.get("scenes") or []
+            offsets = {s["scene_id"]: float(s["audio_offset_sec"]) for s in w_scenes}
+
+            # Measure total audio duration from the narration file
+            total_audio = None
+            for fname in ("narration_mixed.m4a", "narration.wav"):
+                p = job_dir / "assets" / fname
+                if p.exists() and p.stat().st_size > 0:
+                    try:
+                        import soundfile as sf
+                        info = sf.info(str(p))
+                        total_audio = float(info.duration)
+                        break
+                    except Exception:
+                        pass
+
+            if total_audio is None:
+                total_audio = float(scene_doc.get("total_duration_sec") or 60)
+
+            updated = False
+            for idx, scene in enumerate(scenes):
+                sid = scene["id"]
+                if sid not in offsets:
+                    continue
+                my_offset = offsets[sid]
+                if idx + 1 < len(scenes):
+                    next_sid = scenes[idx + 1]["id"]
+                    next_offset = offsets.get(next_sid, total_audio)
+                    dur = next_offset - my_offset
+                else:
+                    dur = total_audio - my_offset + TAIL_PAD_SEC
+                scene["duration_sec"] = round(max(3.0, dur), 3)
+                updated = True
+
+            if updated:
+                scene_doc["total_duration_sec"] = int(
+                    round(sum(float(s["duration_sec"]) for s in scenes))
+                )
+                log.info(
+                    "Duration sync (whisper): %s",
+                    [(s["id"], s["duration_sec"]) for s in scenes],
+                )
+                return
+        except Exception as exc:
+            log.warning("Duration sync strategy A failed: %s", exc)
+
+    # ── Strategy B: proportional split from total audio duration ─────────────────
+    narration_path = None
+    for fname in ("narration_mixed.m4a", "narration.wav"):
+        p = job_dir / "assets" / fname
+        if p.exists() and p.stat().st_size > 0:
+            narration_path = p
+            break
+
+    if narration_path is None:
+        return  # nothing to measure — let existing values stand
+
+    try:
+        import soundfile as sf
+        info = sf.info(str(narration_path))
+        total_audio = float(info.duration)
+    except Exception as exc:
+        log.warning("Duration sync strategy B: cannot read audio (%s)", exc)
+        return
+
+    original_total = sum(float(s.get("duration_sec") or 1) for s in scenes)
+    if original_total <= 0:
+        return
+
+    for scene in scenes:
+        ratio = float(scene.get("duration_sec") or 1) / original_total
+        scene["duration_sec"] = round(max(3.0, ratio * total_audio), 3)
+
+    scene_doc["total_duration_sec"] = int(round(total_audio))
+    log.info(
+        "Duration sync (proportional): total=%.1fs, scenes=%s",
+        total_audio,
+        [(s["id"], s["duration_sec"]) for s in scenes],
+    )
+
+
 def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
     root = repo_root()
     channel_config = read_yaml(options.channel_path)
@@ -455,6 +570,15 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
             if ws:
                 scene["audio_offset_sec"] = ws["audio_offset_sec"]
                 scene["word_segments"] = ws["word_segments"]
+
+    # ── Duration sync: recalculate scene duration_sec from actual audio ──────────
+    # When TTS was already synthesized (tts_cached), prepare_assets skips
+    # dynamic_sync so scene durations stay at the LLM-estimated values (10-11s).
+    # We fix this here, before render_props is assembled, by deriving the true
+    # per-scene durations from:
+    #   a) whisper offset table (most accurate), or
+    #   b) actual narration audio file duration split proportionally.
+    _sync_scene_durations_from_audio(job_dir, scene_doc)
 
     assets = prepare_assets(
         job_dir,

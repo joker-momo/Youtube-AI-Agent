@@ -43,12 +43,14 @@ from video_agent.contracts import repo_root
 def _force_elderly_demographic(query: str) -> str:
     lower_q = query.lower()
     people_words = [
-        "person", "woman", "man", "adult", "couple", "people", "insomniac", "family", 
-        "doctor", "parent", "senior", "elderly", "grandmother", "grandfather", 
-        "grandparent", "lady", "gentleman", "individual", "sleeper", "someone", "patient"
+        "person", "woman", "man", "adult", "adults", "couple", "people", "insomniac", "family",
+        "doctor", "parent", "senior", "elderly", "grandmother", "grandfather",
+        "grandparent", "lady", "gentleman", "individual", "sleeper", "someone", "patient",
+        # common visual_prompt patterns used by this pipeline
+        "wellness", "photo", "realistic", "lifestyle",
     ]
     has_people = any(word in lower_q for word in people_words)
-    
+
     if has_people:
         # Replace weak terms like middle aged, adult with strong senior/elderly terms
         q = query
@@ -58,10 +60,14 @@ def _force_elderly_demographic(query: str) -> str:
         q = q.replace("middle-aged", "elderly senior")
         q = q.replace("Adult", "Elderly")
         q = q.replace("adult", "elderly")
-        
+        # Replace '45+' phrasing with explicit elderly
+        q = re.sub(r'\b45\+?\b', 'elderly senior 55+', q)
+
         # Enforce European / Latin American / Hispanic / Caucasian
-        if not any(w in lower_q for w in ["european", "latin", "hispanic", "caucasian"]):
-            q = f"{q} european latin american senior"
+        if not any(w in lower_q for w in ["european", "latin", "hispanic", "caucasian", "elderly", "senior"]):
+            q = f"{q} elderly european senior"
+        elif not any(w in lower_q for w in ["european", "latin", "hispanic", "caucasian"]):
+            q = f"{q} european latin american"
         return q.strip()
     return query
 
@@ -261,6 +267,27 @@ class StockAssetService:
             return asset
         return None
 
+    # Demographic keywords that require a fresh API search (skip library cache to avoid
+    # returning old videos of young people that were cached before this constraint existed).
+    _DEMOGRAPHIC_KEYWORDS = {
+        "elderly", "senior", "european", "latin", "hispanic", "caucasian",
+        "grandmother", "grandfather", "grandparent",
+        # pipeline-specific visual_prompt patterns that will be rewritten
+        "wellness", "adults", "realistic", "lifestyle", "photo",
+    }
+
+    def _query_requires_fresh_search(self, query: str) -> bool:
+        """Return True when the query contains demographic enforcement keywords.
+
+        The library cache uses token-overlap matching and cannot discriminate between
+        'young woman in bed' and 'elderly European woman in bed' — it will always return
+        the first token-match regardless of demographic constraints.  To guarantee we
+        fetch fresh stock footage that actually shows elderly / European / Latin-American
+        subjects, we bypass the library cache entirely for such queries.
+        """
+        tokens = set(re.findall(r"[a-z]+", query.lower()))
+        return bool(tokens & self._DEMOGRAPHIC_KEYWORDS)
+
     def get_scene_asset(self, scene: dict[str, Any], channel_id: str, job_id: str) -> dict[str, Any] | None:
         raw_query = scene.get("visual_prompt") or scene.get("on_screen_text") or ""
         query = _force_elderly_demographic(raw_query)
@@ -273,9 +300,12 @@ class StockAssetService:
         media_type_hint = "video" if prefers_video else "photo"
 
         # --- Library cache hit: skip API + download entirely ---
-        cached = self._try_library_cache(query, media_type_hint, channel_id, job_id, scene)
-        if cached is not None:
-            return cached
+        # BYPASS cache when demographic keywords are present — the library token-overlap
+        # search cannot enforce demographic constraints, so we must hit the API fresh.
+        if not self._query_requires_fresh_search(query):
+            cached = self._try_library_cache(query, media_type_hint, channel_id, job_id, scene)
+            if cached is not None:
+                return cached
 
         ranked_candidates = []
         self.last_errors = []

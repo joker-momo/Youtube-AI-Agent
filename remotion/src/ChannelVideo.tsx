@@ -4,8 +4,9 @@ import {WordSegment} from './render-props';
 import {mediaSrc, RenderProps, Scene} from './render-props';
 import {fitHeadline, fullFrame} from './styles';
 
-const FADE_IN = 18; // 0.6 s fade-in per scene
-const BRIDGE_FRAMES = 18; // 0.6 s bridge transition between intro/main/outro
+const FADE_IN = 18;          // 0.6 s fade-in per scene
+const FADE_OUT = 18;         // 0.6 s fade-out per scene (for scene-to-scene transition)
+const BRIDGE_FRAMES = 18;    // 0.6 s bridge between intro/main/outro
 
 const motionTransform = (motion: string, progress: number) => {
   const s = motion === 'slow_zoom'
@@ -175,7 +176,9 @@ const SceneView: React.FC<{
   palette: RenderProps['style']['palette'];
   channelName: string;
   logoPath?: string | null;
-}> = ({scene, totalFrames, sceneIndex, totalScenes, palette, channelName, logoPath}) => {
+  isFirst?: boolean;
+  isLast?: boolean;
+}> = ({scene, totalFrames, sceneIndex, totalScenes, palette, channelName, logoPath, isFirst = false, isLast = false}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
   const progress = frame / Math.max(totalFrames - 1, 1);
@@ -226,6 +229,11 @@ const SceneView: React.FC<{
   const headlineY     = interpolate(frame, [4, FADE_IN + 8], [20, 0], {extrapolateRight: 'clamp'});
   const headlineAlpha = interpolate(frame, [4, FADE_IN + 8], [0, 1], {extrapolateRight: 'clamp'});
   const captionAlpha  = interpolate(frame, [FADE_IN, FADE_IN + 14], [0, 1], {extrapolateRight: 'clamp'});
+
+  // Scene-to-scene fade: fade-out black overlay appears in final FADE_OUT frames
+  const fadeOutAlpha = !isLast
+    ? interpolate(frame, [totalFrames - FADE_OUT, totalFrames - 1], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'})
+    : 0;
 
   const layoutVariant = sceneIndex % 3;
   const headlineLeft = layoutVariant === 2 ? undefined : 56;
@@ -313,6 +321,12 @@ const SceneView: React.FC<{
       {/* Animated Social Branding lower-third (slides in on specific scenes) */}
       <SocialPulse accent={palette.accent} active={sceneIndex % 5 === 1} />
 
+      {/* Scene-to-scene fade-out: solid black overlay fades in over final FADE_OUT frames.
+          Must be the LAST child so it composites on top of everything. */}
+      {fadeOutAlpha > 0 ? (
+        <AbsoluteFill style={{background: '#0C100D', opacity: fadeOutAlpha, zIndex: 100, pointerEvents: 'none'}} />
+      ) : null}
+
     </AbsoluteFill>
   );
 };
@@ -365,6 +379,8 @@ export const ChannelVideo: React.FC<RenderProps> = (props) => {
               palette={props.style.palette}
               channelName={props.channel.name}
               logoPath={logoPath}
+              isFirst={i === 0}
+              isLast={i === props.scenes.length - 1}
             />
           </Sequence>
         );

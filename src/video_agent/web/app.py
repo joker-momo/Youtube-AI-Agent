@@ -13,7 +13,9 @@ from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconn
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
-from video_agent.contracts import EVENT_LOG, repo_root
+from video_agent.contracts import EVENT_LOG, repo_root, load_env
+load_env()
+
 from video_agent.orchestrator import (
     JobAlreadyExistsError,
     JobNotFoundError,

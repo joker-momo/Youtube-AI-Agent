@@ -268,6 +268,8 @@ def _dispatch(args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    from video_agent.contracts import load_env
+    load_env()
     parser = build_parser()
     args = parser.parse_args(argv)
     jobs_root = getattr(args, "jobs_dir", Path("jobs"))

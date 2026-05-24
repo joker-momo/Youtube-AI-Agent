@@ -9,12 +9,21 @@ from fastapi.testclient import TestClient
 
 from video_agent.contracts import repo_root
 from video_agent.orchestrator.idea_generator import (
+    DEFAULT_CHANNEL_KEYWORD_CONFIG,
     _idea_gen_prompt,
     _slug,
+    assign_bucket,
+    calculate_final_score,
+    classify_intent_cluster,
+    dedupe_by_normalized_keyword_and_intent,
+    detect_language_fit,
     generate_ideas,
+    normalize_keyword,
     parse_ideas,
     save_ideas,
+    score_audience_fit,
 )
+from video_agent.web.app import flatten_keyword_result_for_ui
 from video_agent.orchestrator.browser_client import BrowserClientError
 from video_agent.web.app import app, get_browser_client, get_inputs_root
 
@@ -155,6 +164,128 @@ def test_idea_gen_prompt_forbidden_phrases_included(channel_path: Path):
     cfg = read_yaml(channel_path)
     prompt = _idea_gen_prompt(cfg, [], 5)
     assert "adultos mayores" in prompt  # in forbidden_phrases
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: keyword scoring V2
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_keyword_v2():
+    assert normalize_keyword("  Cómo comer mejor DESPUÉS   de los 45  ") == "como comer mejor despues de los 45"
+    assert normalize_keyword("Alimentación para mayores de 45") == "alimentacion para despues de los 45"
+    assert normalize_keyword("Salud 45 Plus") == "salud 45+"
+
+
+def test_language_guardrail_portuguese():
+    score, notes = detect_language_fit("como comer bem depois dos 45", "spanish")
+    assert score < 70
+    assert "language_mismatch_portuguese" in notes
+
+
+def test_language_guardrail_spanish_ok():
+    score, notes = detect_language_fit("como comer mejor despues de los 45 sin culpa", "spanish")
+    assert score >= 80
+    assert "spanish_language_ok" in notes
+
+
+def test_audience_fit_45_plus_high():
+    score = score_audience_fit(
+        "como comer mejor despues de los 45 sin dietas",
+        DEFAULT_CHANNEL_KEYWORD_CONFIG,
+    )
+    assert score >= 80
+
+
+def test_audience_fit_generic_lower():
+    score = score_audience_fit("nutricion", DEFAULT_CHANNEL_KEYWORD_CONFIG)
+    assert score < 70
+
+
+def test_intent_cluster_nutrition():
+    assert classify_intent_cluster("como comer mejor despues de los 45") == "nutrition_after_45"
+
+
+def test_composite_final_score_with_language_penalty():
+    item = {
+        "keyword": "como comer bem depois dos 45",
+        "vidiq_score": 85,
+        "audience_fit": 80,
+        "intent_strength": 80,
+        "content_fit": 80,
+        "language_fit": 40,
+        "serp_opportunity": 50,
+        "notes": [],
+        "rejection_reasons": [],
+    }
+    assert calculate_final_score(item) < 70
+    assert "language_penalty_high" in item["notes"]
+
+
+def test_bucket_assignment_top_opportunity():
+    item = {
+        "keyword": "como comer mejor despues de los 45",
+        "final_score": 82,
+        "language_fit": 100,
+        "audience_fit": 90,
+        "intent_strength": 80,
+        "content_fit": 80,
+        "vidiq_score": 75,
+        "rejection_reasons": [],
+    }
+    assert assign_bucket(item) == "top_opportunity_keywords"
+
+
+def test_bucket_assignment_long_tail_not_enough_data():
+    item = {
+        "keyword": "bajones de energia despues de comer 45",
+        "vidiq_score": None,
+        "score": None,
+        "notes": ["not_enough_search_data"],
+        "final_score": 65,
+        "language_fit": 100,
+        "audience_fit": 85,
+        "intent_strength": 80,
+        "content_fit": 75,
+        "rejection_reasons": [],
+    }
+    assert assign_bucket(item) == "long_tail_test_keywords"
+
+
+def test_bucket_assignment_rejected_language():
+    item = {
+        "keyword": "como comer bem depois dos 45",
+        "final_score": 75,
+        "language_fit": 50,
+        "audience_fit": 80,
+        "intent_strength": 80,
+        "content_fit": 80,
+        "vidiq_score": 90,
+        "rejection_reasons": [],
+    }
+    assert assign_bucket(item) == "rejected_keywords"
+    assert "language_mismatch" in item["rejection_reasons"]
+
+
+def test_dedupe_keeps_highest_final_score():
+    items = [
+        {"keyword": "A", "normalized_keyword": "a", "intent_cluster": "nutrition_after_45", "final_score": 60, "vidiq_score": 90, "notes": [], "rejection_reasons": []},
+        {"keyword": "Á", "normalized_keyword": "a", "intent_cluster": "nutrition_after_45", "final_score": 70, "vidiq_score": 50, "notes": ["x"], "rejection_reasons": []},
+    ]
+    result = dedupe_by_normalized_keyword_and_intent(items)
+    assert len(result) == 1
+    assert result[0]["final_score"] == 70
+
+
+def test_flatten_keyword_result_for_ui_legacy_and_v2():
+    legacy = [{"keyword": "a"}]
+    v2 = {
+        "top_opportunity_keywords": [{"keyword": "b"}],
+        "long_tail_test_keywords": [{"keyword": "c"}],
+        "rejected_keywords": [{"keyword": "d"}],
+    }
+    assert flatten_keyword_result_for_ui(legacy) == legacy
+    assert [item["keyword"] for item in flatten_keyword_result_for_ui(v2)] == ["b", "c"]
 
 
 # ---------------------------------------------------------------------------

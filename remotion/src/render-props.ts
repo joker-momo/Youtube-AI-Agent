@@ -2,6 +2,27 @@ import {staticFile} from 'remotion';
 
 export type WordSegment = {text: string; start: number; end: number};
 
+export type SubtitleConfig = {
+  enabled?: boolean;
+  mode?: 'word_highlight';
+  words_per_page?: number;
+  max_lines?: number;
+  position?: 'bottom';
+  offset_sec?: number;
+  font_size?: number;
+  active_scale?: number;
+  background_opacity?: number;
+};
+
+export type SceneLayout = 'hook' | 'subtitle' | 'checklist' | 'warning' | 'quote' | 'cta';
+
+export type LayoutPayload = {
+  title?: string;
+  body?: string;
+  bullets?: string[];
+  cta?: string;
+};
+
 export type Scene = {
   id: string;
   duration_sec: number;
@@ -14,6 +35,10 @@ export type Scene = {
   asset_refs: {background: string};
   audio_offset_sec?: number;
   word_segments?: WordSegment[];
+  layout?: SceneLayout;
+  layout_payload?: LayoutPayload;
+  layout_reason?: string;
+  planner_warnings?: string[];
 };
 
 export type RenderProps = {
@@ -27,7 +52,7 @@ export type RenderProps = {
       text: string;
     };
   };
-  render: {fps: number; resolution: string; duration_sec: number};
+  render: {fps: number; resolution: string; duration_sec: number; subtitles?: SubtitleConfig};
   scenes: Scene[];
   audio: {narration: string | null; music: string | null};
   seo: {
@@ -70,7 +95,22 @@ export const defaultRenderProps: RenderProps = {
       text: '#26332F',
     },
   },
-  render: {fps: 30, resolution: '1920x1080', duration_sec: 54},
+  render: {
+    fps: 30,
+    resolution: '1920x1080',
+    duration_sec: 54,
+    subtitles: {
+      enabled: true,
+      mode: 'word_highlight',
+      words_per_page: 10,
+      max_lines: 2,
+      position: 'bottom',
+      offset_sec: 0,
+      font_size: 54,
+      active_scale: 1.08,
+      background_opacity: 0.58,
+    },
+  },
   scenes: [
     {
       id: 'scene-01',
@@ -82,6 +122,10 @@ export const defaultRenderProps: RenderProps = {
       caption: 'Demo scene',
       motion: 'slow_push',
       asset_refs: {background: staticFile('fallback.jpg')},
+      layout: 'subtitle',
+      layout_payload: {title: '', body: '', bullets: [], cta: ''},
+      layout_reason: '',
+      planner_warnings: [],
     },
   ],
   audio: {narration: null, music: null},

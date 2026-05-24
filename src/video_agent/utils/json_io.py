@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+from video_agent.storage.atomic import atomic_write_json
 
 
 def read_json(path: Path) -> Any:
@@ -19,23 +19,7 @@ def write_json(path: Path, data: Any) -> None:
     Writes to a sibling tempfile then renames via ``os.replace`` so a crash
     mid-write cannot leave callers reading a truncated file.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
-    fd, tmp_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp_name, path)
-    except Exception:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
+    atomic_write_json(path, data)
 
 
 def read_yaml(path: Path) -> Any:

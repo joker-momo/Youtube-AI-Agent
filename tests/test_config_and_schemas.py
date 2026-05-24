@@ -27,3 +27,31 @@ def test_manual_idea_matches_schema():
     Draft202012Validator(schema).validate(data)
     assert 45 <= data["target_duration_sec"] <= 60
     assert len(data["key_points"]) >= 4
+
+
+def test_render_props_schema_accepts_subtitles():
+    schema = load_json("schemas/render-props.schema.json")
+    data = {
+        "channel": {"id": "vida-plena-45", "name": "Vida Plena 45+", "description": ""},
+        "style": {"palette": {"accent": "#F2C94C"}},
+        "render": {
+            "fps": 30,
+            "resolution": "1920x1080",
+            "duration_sec": 12,
+            "subtitles": {
+                "enabled": True,
+                "mode": "word_highlight",
+                "words_per_page": 10,
+                "max_lines": 2,
+                "position": "bottom",
+                "offset_sec": 0,
+                "font_size": 54,
+                "active_scale": 1.08,
+                "background_opacity": 0.58,
+            },
+        },
+        "scenes": [],
+        "audio": {"narration": None, "music": None},
+        "seo": {"title": "", "description": "", "thumbnail_path": ""},
+    }
+    Draft202012Validator(schema).validate(data)

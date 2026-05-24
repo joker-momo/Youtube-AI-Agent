@@ -1,12 +1,42 @@
 import React from 'react';
 import {AbsoluteFill, Audio, Img, interpolate, OffthreadVideo, Sequence, useCurrentFrame, useVideoConfig} from 'remotion';
-import {WordSegment} from './render-props';
+import {SubtitleConfig, WordSegment} from './render-props';
 import {mediaSrc, RenderProps, Scene} from './render-props';
 import {fitHeadline, fullFrame} from './styles';
 
 const FADE_IN = 18;          // 0.6 s fade-in per scene
 const FADE_OUT = 18;         // 0.6 s fade-out per scene (for scene-to-scene transition)
 const BRIDGE_FRAMES = 18;    // 0.6 s bridge between intro/main/outro
+
+const defaultSubtitles: Required<SubtitleConfig> = {
+  enabled: true,
+  mode: 'word_highlight',
+  words_per_page: 10,
+  max_lines: 2,
+  position: 'bottom',
+  offset_sec: 0,
+  font_size: 54,
+  active_scale: 1.08,
+  background_opacity: 0.58,
+};
+
+const clampNumber = (value: number | undefined, min: number, max: number, fallback: number) => {
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, value as number));
+};
+
+const resolveSubtitles = (config?: SubtitleConfig): Required<SubtitleConfig> => ({
+  ...defaultSubtitles,
+  ...(config ?? {}),
+  words_per_page: Math.round(clampNumber(config?.words_per_page, 4, 14, defaultSubtitles.words_per_page)),
+  max_lines: Math.round(clampNumber(config?.max_lines, 1, 3, defaultSubtitles.max_lines)),
+  offset_sec: clampNumber(config?.offset_sec, -0.5, 0.5, defaultSubtitles.offset_sec),
+  font_size: Math.round(clampNumber(config?.font_size, 28, 96, defaultSubtitles.font_size)),
+  active_scale: clampNumber(config?.active_scale, 1, 1.4, defaultSubtitles.active_scale),
+  background_opacity: clampNumber(config?.background_opacity, 0, 1, defaultSubtitles.background_opacity),
+});
 
 const motionTransform = (motion: string, progress: number) => {
   const s = motion === 'slow_zoom'
@@ -42,6 +72,154 @@ const LogoWatermark: React.FC<{logoPath: string}> = ({logoPath}) => (
     />
   </div>
 );
+
+const CaptionBlock: React.FC<{
+  line: WordSegment[];
+  activeText: string | null;
+  fallbackText: string;
+  palette: RenderProps['style']['palette'];
+  subtitles: Required<SubtitleConfig>;
+  opacity: number;
+}> = ({line, activeText, fallbackText, palette, subtitles, opacity}) => {
+  const words = line.length > 0 ? line : fallbackText.split(/\s+/).filter(Boolean).slice(0, subtitles.words_per_page).map((text, i) => ({
+    text,
+    start: i,
+    end: i + 0.5,
+  }));
+  if (!subtitles.enabled || words.length === 0) {
+    return null;
+  }
+
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        left: 120,
+        right: 120,
+        bottom: 86,
+        zIndex: 30,
+        display: 'flex',
+        justifyContent: 'center',
+        opacity,
+      }}
+    >
+      <div
+        style={{
+          maxWidth: 1280,
+          padding: '24px 34px',
+          borderRadius: 22,
+          background: `rgba(8, 12, 10, ${subtitles.background_opacity})`,
+          boxShadow: '0 18px 52px rgba(0,0,0,0.38)',
+          textAlign: 'center',
+          lineHeight: 1.18,
+        }}
+      >
+        {words.map((word, index) => {
+          const isActive = activeText !== null && word.text === activeText;
+          return (
+            <span
+              key={`${word.text}-${index}`}
+              className="premium-subtitle-span"
+              style={{
+                display: 'inline-block',
+                margin: '0 9px 8px',
+                color: isActive ? palette.accent : '#FFFFFF',
+                fontSize: isActive ? subtitles.font_size * subtitles.active_scale : subtitles.font_size,
+                fontWeight: isActive ? 900 : 800,
+                textShadow: '0 4px 16px rgba(0,0,0,0.72)',
+                transform: isActive ? `scale(${subtitles.active_scale})` : 'scale(1)',
+                transformOrigin: 'center bottom',
+              }}
+            >
+              {word.text}
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+const RetentionOverlay: React.FC<{
+  scene: Scene;
+  palette: RenderProps['style']['palette'];
+  opacity: number;
+  isLast: boolean;
+}> = ({scene, palette, opacity, isLast}) => {
+  const layout = scene.layout ?? 'subtitle';
+  const payload = scene.layout_payload ?? {};
+  const title = payload.title || scene.on_screen_text || scene.caption;
+  const body = payload.body || scene.caption || scene.narration;
+  const bullets = (payload.bullets ?? []).slice(0, 4);
+  const cta = payload.cta || scene.on_screen_text || 'Comienza hoy';
+
+  if (layout === 'subtitle') {
+    return null;
+  }
+
+  const panelStyle: React.CSSProperties = {
+    position: 'absolute',
+    zIndex: 28,
+    left: 92,
+    right: 92,
+    bottom: layout === 'hook' ? 132 : 118,
+    opacity,
+    color: '#FFFFFF',
+    textShadow: '0 5px 22px rgba(0,0,0,0.72)',
+  };
+
+  if (layout === 'checklist') {
+    return (
+      <div style={{...panelStyle, maxWidth: 900}}>
+        <div style={{fontSize: 58, fontWeight: 900, marginBottom: 24}}>{title}</div>
+        <div style={{display: 'flex', flexDirection: 'column', gap: 18}}>
+          {bullets.map((bullet, index) => (
+            <div key={`${bullet}-${index}`} style={{display: 'flex', alignItems: 'center', gap: 18, fontSize: 42, fontWeight: 800}}>
+              <span style={{width: 34, height: 34, borderRadius: 17, background: palette.accent, color: '#102018', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, fontWeight: 900}}>
+                {index + 1}
+              </span>
+              <span>{bullet}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (layout === 'warning') {
+    return (
+      <div style={{...panelStyle, maxWidth: 980, bottom: 140}}>
+        <div style={{fontSize: 38, fontWeight: 900, color: palette.accent, marginBottom: 16}}>ATENCION</div>
+        <div style={{fontSize: 66, fontWeight: 900, lineHeight: 1.05}}>{title}</div>
+        <div style={{fontSize: 34, fontWeight: 800, marginTop: 18, maxWidth: 900}}>{body}</div>
+      </div>
+    );
+  }
+
+  if (layout === 'quote') {
+    return (
+      <div style={{...panelStyle, left: 180, right: 180, bottom: 150, textAlign: 'center'}}>
+        <div style={{fontSize: 66, fontWeight: 900, lineHeight: 1.12}}>"{body}"</div>
+      </div>
+    );
+  }
+
+  if (layout === 'cta' && isLast) {
+    return (
+      <div style={{...panelStyle, textAlign: 'center', bottom: 128}}>
+        <div style={{fontSize: 70, fontWeight: 900, lineHeight: 1.05}}>{cta}</div>
+        <div style={{fontSize: 34, fontWeight: 800, marginTop: 18, color: palette.accent}}>{body}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{...panelStyle, maxWidth: 1040}}>
+      <div style={{fontSize: 76, fontWeight: 900, lineHeight: 1.02}}>{title}</div>
+      <div style={{fontSize: 36, fontWeight: 800, marginTop: 20, maxWidth: 900}}>{body}</div>
+    </div>
+  );
+};
 
 const BrandCard: React.FC<{
   logoPath: string;
@@ -126,9 +304,10 @@ const SceneView: React.FC<{
   palette: RenderProps['style']['palette'];
   channelName: string;
   logoPath?: string | null;
+  subtitles: Required<SubtitleConfig>;
   isFirst?: boolean;
   isLast?: boolean;
-}> = ({scene, totalFrames, sceneIndex, totalScenes, palette, channelName, logoPath, isFirst = false, isLast = false}) => {
+}> = ({scene, totalFrames, sceneIndex, totalScenes, palette, channelName, logoPath, subtitles, isFirst = false, isLast = false}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
   const progress = frame / Math.max(totalFrames - 1, 1);
@@ -136,7 +315,7 @@ const SceneView: React.FC<{
   // Animated caption: find active word segment by local scene time.
   // word_segments are rebased to scene-local time (start=0), so compare
   // against frame/fps directly — NOT audio_offset_sec + frame/fps.
-  const localTimeSec = frame / fps;
+  const localTimeSec = frame / fps + subtitles.offset_sec;
   const segments = (scene.word_segments ?? [])
     .filter((s) => Number.isFinite(s.start) && Number.isFinite(s.end) && s.end > s.start)
     .map((s) => ({
@@ -150,7 +329,7 @@ const SceneView: React.FC<{
   const hasWords = words.length > 0;
 
   // Group words into logical pages of 10 words for high legibility (max 2 lines of 5 words)
-  const wordsPerPage = 10;
+  const wordsPerPage = subtitles.words_per_page;
   const pages: WordSegment[][] = [];
   for (let i = 0; i < words.length; i += wordsPerPage) {
     pages.push(words.slice(i, i + wordsPerPage));
@@ -174,6 +353,8 @@ const SceneView: React.FC<{
 
   const activePageIdx = Math.floor(targetWordIdx / wordsPerPage);
   const displayLine = pages[activePageIdx] || [];
+  const activeWord = activeWordIdx !== -1 ? words[activeWordIdx]?.text ?? null : null;
+  const shouldShowWordCaption = subtitles.enabled && (scene.layout ?? 'subtitle') === 'subtitle';
 
   const opacity       = interpolate(frame, [0, FADE_IN], [0, 1], {extrapolateRight: 'clamp'});
   const headlineY     = interpolate(frame, [4, FADE_IN + 8], [20, 0], {extrapolateRight: 'clamp'});
@@ -268,6 +449,17 @@ const SceneView: React.FC<{
         zIndex: 15,
       }} />
 
+      <RetentionOverlay scene={scene} palette={palette} opacity={headlineAlpha} isLast={isLast} />
+      {shouldShowWordCaption ? (
+        <CaptionBlock
+          line={displayLine}
+          activeText={activeWord}
+          fallbackText={scene.on_screen_text || scene.caption || scene.narration}
+          palette={palette}
+          subtitles={subtitles}
+          opacity={captionAlpha}
+        />
+      ) : null}
 
       {/* Scene-to-scene fade-out: solid black overlay fades in over final FADE_OUT frames.
           Must be the LAST child so it composites on top of everything. */}
@@ -286,6 +478,7 @@ export const ChannelVideo: React.FC<RenderProps> = (props) => {
   const outroVideoPath = props.branding?.outro_video_path ?? null;
   const introFrames = Math.max(0, Math.round((props.branding?.intro_sec ?? 0) * fps));
   const outroFrames = Math.max(0, Math.round((props.branding?.outro_sec ?? 0) * fps));
+  const subtitles = resolveSubtitles(props.render.subtitles);
   let start = introFrames;
   const totalSceneFrames = props.scenes.reduce((acc, s) => acc + Math.round(s.duration_sec * fps), 0);
   const outroFrom = start + totalSceneFrames;
@@ -327,6 +520,7 @@ export const ChannelVideo: React.FC<RenderProps> = (props) => {
               palette={props.style.palette}
               channelName={props.channel.name}
               logoPath={logoPath}
+              subtitles={subtitles}
               isFirst={i === 0}
               isLast={i === props.scenes.length - 1}
             />

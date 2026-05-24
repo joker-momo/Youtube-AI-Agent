@@ -5,8 +5,68 @@
   "properties": {
     "channel": { "type": "object" },
     "style": { "type": "object" },
-    "render": { "type": "object" },
-    "scenes": { "type": "array", "items": { "type": "object" } },
+    "render": {
+      "type": "object",
+      "properties": {
+        "fps": { "type": "number", "minimum": 1 },
+        "resolution": { "type": "string" },
+        "duration_sec": { "type": "number", "minimum": 0 },
+        "subtitles": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "mode": { "const": "word_highlight" },
+            "words_per_page": { "type": "integer", "minimum": 4, "maximum": 14 },
+            "max_lines": { "type": "integer", "minimum": 1, "maximum": 3 },
+            "position": { "const": "bottom" },
+            "offset_sec": { "type": "number" },
+            "font_size": { "type": "integer", "minimum": 28, "maximum": 96 },
+            "active_scale": { "type": "number", "minimum": 1, "maximum": 1.4 },
+            "background_opacity": { "type": "number", "minimum": 0, "maximum": 1 }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "scenes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "layout": {
+            "enum": ["hook", "subtitle", "checklist", "warning", "quote", "cta"]
+          },
+          "layout_payload": {
+            "type": "object",
+            "properties": {
+              "title": { "type": "string" },
+              "body": { "type": "string" },
+              "bullets": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "cta": { "type": "string" }
+            },
+            "additionalProperties": true
+          },
+          "word_segments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["text", "start", "end"],
+              "properties": {
+                "text": { "type": "string" },
+                "start": { "type": "number", "minimum": 0 },
+                "end": { "type": "number", "minimum": 0 }
+              },
+              "additionalProperties": true
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
     "audio": { "type": "object" },
     "seo": { "type": "object" }
   }

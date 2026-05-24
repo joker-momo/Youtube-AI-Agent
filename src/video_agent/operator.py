@@ -175,6 +175,8 @@ def _normalize_script_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
 
 def _normalize_scenes_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
     """Normalize scenes outputs from alternate model formats."""
+    from video_agent.retention.layout_planner import apply_retention_layouts, normalize_payload
+
     parsed = dict(candidate)
     scenes = parsed.get("scenes")
     if not isinstance(scenes, list):
@@ -210,20 +212,24 @@ def _normalize_scenes_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(asset_refs, dict):
             asset_refs = {}
 
-        normalized_scenes.append(
-            {
-                "id": scene_id,
-                "duration_sec": duration,
-                "narration": narration,
-                "on_screen_text": on_screen_text,
-                "caption": caption,
-                "visual_prompt": visual_prompt,
-                "motion": motion,
-                "asset_refs": asset_refs,
-            }
-        )
+        normalized = {
+            **current,
+            "id": scene_id,
+            "duration_sec": duration,
+            "narration": narration,
+            "on_screen_text": on_screen_text,
+            "caption": caption,
+            "visual_prompt": visual_prompt,
+            "motion": motion,
+            "asset_refs": asset_refs,
+            "layout": str(current.get("layout") or "subtitle").strip().lower(),
+            "layout_payload": normalize_payload(current.get("layout_payload")),
+            "layout_reason": str(current.get("layout_reason") or "").strip(),
+            "planner_warnings": list(current.get("planner_warnings") or []),
+        }
+        normalized_scenes.append(normalized)
 
-    parsed["scenes"] = normalized_scenes
+    parsed["scenes"] = apply_retention_layouts(normalized_scenes, script=None)
     if not isinstance(parsed.get("total_duration_sec"), int):
         parsed["total_duration_sec"] = sum(
             int(item.get("duration_sec", 0)) for item in normalized_scenes
@@ -420,6 +426,174 @@ def _chatgpt_scenes_prompt(
     ])
     
     return "\n".join(prompt_parts)
+
+
+def _chatgpt_scenes_plan_prompt(channel_config: dict[str, Any], script: dict[str, Any]) -> str:
+    cf = channel_config.get("content_format", {})
+    scenes_min = int(cf.get("scenes_count_min", 40))
+    scenes_max = int(cf.get("scenes_count_max", 55))
+    target_scene_count = round((scenes_min + scenes_max) / 2)
+    target_sec = int(cf.get("target_duration_sec", 840))
+    channel_id = (
+        channel_config.get("channel", {}).get("id")
+        or script.get("channel_id")
+        or "vida-plena-45"
+    )
+    job_id = script.get("job_id", "")
+    return "\n".join(
+        [
+            "You are planning sharded SCENES generation for a YouTube channel pipeline.",
+            "Return exactly one JSON envelope. No markdown. No commentary.",
+            "",
+            "Required envelope shape:",
+            "{",
+            '  "artifact_type": "scenes_plan",',
+            '  "schema_version": "2026-05-json-shards-v1",',
+            f'  "job_id": "{job_id}",',
+            f'  "channel_id": "{channel_id}",',
+            '  "status": "complete",',
+            '  "batch_index": null,',
+            '  "batch_total": null,',
+            '  "data": {',
+            f'    "target_scene_count": {target_scene_count},',
+            f'    "target_total_duration_sec": {target_sec},',
+            '    "batch_size": 6,',
+            '    "batches": []',
+            "  },",
+            '  "warnings": []',
+            "}",
+            "",
+            "Plan rules:",
+            "- batch_size must be between 6 and 8 scenes.",
+            "- scene ranges must cover the full target_scene_count.",
+            "- scene IDs must be sequential: scene-01, scene-02, ...",
+            "- final batch must include the final scene.",
+            "- Use exactly one JSON object; no markdown fences.",
+            "",
+            "Channel config:",
+            _json_block(channel_config),
+            "",
+            "Approved script:",
+            _json_block(script),
+        ]
+    )
+
+
+def _chatgpt_scenes_batch_prompt(
+    channel_config: dict[str, Any],
+    script: dict[str, Any],
+    plan: dict[str, Any],
+    batch: dict[str, Any],
+    previous_batch_summary: str | None = None,
+) -> str:
+    channel_id = (
+        channel_config.get("channel", {}).get("id")
+        or script.get("channel_id")
+        or "vida-plena-45"
+    )
+    job_id = script.get("job_id", "")
+    batch_index = int(batch.get("batch_index") or 1)
+    batch_total = len((plan.get("data") or {}).get("batches") or []) or int(batch.get("batch_total") or 1)
+    scene_start = batch.get("scene_start", "scene-01")
+    scene_end = batch.get("scene_end", scene_start)
+    parts = [
+        "You are exporting one small SCENES batch for a YouTube channel pipeline.",
+        "Return exactly one JSON envelope. No markdown. No commentary.",
+        "",
+        "Required envelope:",
+        "{",
+        '  "artifact_type": "scenes_batch",',
+        '  "schema_version": "2026-05-json-shards-v1",',
+        f'  "job_id": "{job_id}",',
+        f'  "channel_id": "{channel_id}",',
+        '  "status": "complete",',
+        f'  "batch_index": {batch_index},',
+        f'  "batch_total": {batch_total},',
+        '  "data": {',
+        f'    "scene_start": "{scene_start}",',
+        f'    "scene_end": "{scene_end}",',
+        '    "scenes": []',
+        "  },",
+        '  "warnings": []',
+        "}",
+        "",
+        "Batch rules:",
+        f"- Generate only scenes {scene_start} through {scene_end}.",
+        "- Scene IDs must exactly match the requested range.",
+        "- Every scene must include: id, duration_sec, narration, on_screen_text, caption, visual_prompt, motion, asset_refs.",
+        "- asset_refs must be {}.",
+        "- visual_prompt must be English and stock-search friendly.",
+        "- narration must follow the approved script context.",
+        "- If layout fields are present, layout_payload must be supported by narration/caption/on_screen_text.",
+        "- Do not return markdown or more than one JSON object.",
+        "",
+    ]
+    if previous_batch_summary:
+        parts.extend(["Previous batch summary:", previous_batch_summary, ""])
+    parts.extend(
+        [
+            "Channel config:",
+            _json_block(channel_config),
+            "",
+            "Approved script:",
+            _json_block(script),
+            "",
+            "Scenes plan:",
+            _json_block(plan),
+            "",
+            "Requested batch:",
+            _json_block(batch),
+        ]
+    )
+    return "\n".join(parts)
+
+
+def _claude_scenes_qa_batch_prompt(
+    channel_config: dict[str, Any],
+    scenes_batch: dict[str, Any],
+    batch_index: int,
+    batch_total: int,
+) -> str:
+    channel_id = channel_config.get("channel", {}).get("id", "vida-plena-45")
+    job_id = scenes_batch.get("job_id", "")
+    return "\n".join(
+        [
+            "You are QA reviewer for one SCENES batch of a Spanish-language YouTube health channel.",
+            "Return exactly one JSON envelope. No markdown. No commentary.",
+            "",
+            "Required envelope:",
+            "{",
+            '  "artifact_type": "scenes_qa_batch",',
+            '  "schema_version": "2026-05-json-shards-v1",',
+            f'  "job_id": "{job_id}",',
+            f'  "channel_id": "{channel_id}",',
+            '  "status": "complete",',
+            f'  "batch_index": {batch_index},',
+            f'  "batch_total": {batch_total},',
+            '  "data": {',
+            '    "verdict": "PASS",',
+            '    "youtube_policy": {"compliant": true, "risk_level": "none", "violations": []},',
+            '    "scene_checks": [],',
+            '    "issues": [],',
+            '    "required_changes": [],',
+            '    "scores": {"schema_fit": 5, "channel_fit": 5, "safety": 5, "clarity": 5, "youtube_policy": 5}',
+            "  },",
+            '  "warnings": []',
+            "}",
+            "",
+            "QA rules:",
+            "- Review only this batch.",
+            "- Include scene_checks for every scene in the batch.",
+            "- If any scene has policy, safety, or schema issue, verdict must be NEEDS_REWORK.",
+            "- youtube_policy.compliant must be false if there is any concern.",
+            "",
+            "Channel config:",
+            _json_block(channel_config),
+            "",
+            "Scenes batch:",
+            _json_block(scenes_batch),
+        ]
+    )
 
 
 def _chatgpt_seo_prompt(channel_config: dict[str, Any], script: dict[str, Any], scenes: dict[str, Any]) -> str:
@@ -1019,3 +1193,31 @@ def write_operator_review(job_dir: Path, output_path: Path | None = None) -> Pat
 
 # Backward-compatible alias for callers not yet migrated.
 _gemini_qa_prompt = _claude_qa_prompt
+
+def _chatgpt_shorts_script_prompt(channel_config: dict[str, Any], long_script: dict[str, Any]) -> str:
+    from video_agent.operator import escape
+    from video_agent.utils.json_io import write_json
+    return f"""You are an expert YouTube Shorts creator.
+I have a script for a LONG YouTube video.
+Your task is to extract and generate exactly 4 short scripts (Vertical 9:16 format, under 60 seconds) based on the long video script.
+Each short should focus on ONE single sub-topic or highlight.
+End each short with a CTA (Call to action) pointing to the long video on the channel.
+
+The channel is:
+{channel_config.get('name', 'Unknown')}
+Topics: {', '.join(channel_config.get('content_topics', []))}
+
+The long video script is:
+{json.dumps(long_script, ensure_ascii=False, indent=2)}
+
+RETURN A VALID JSON ARRAY OF 4 OBJECTS.
+Schema for each object:
+{{
+  "title": "Short title",
+  "hook": "Strong 3-second hook text",
+  "narration": "Full narration script for the short...",
+  "cta": "Call to action text"
+}}
+
+Output ONLY the raw JSON array.
+"""

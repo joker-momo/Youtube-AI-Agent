@@ -33,6 +33,12 @@ from video_agent.notifications.telegram import (
     notify_job_failed,
     notify_stage_done,
 )
+from video_agent.orchestrator.shorts_stages import (
+    auto_shorts_script_stage,
+    auto_shorts_scenes_stage,
+    auto_shorts_tts_stage,
+    auto_shorts_render_stage,
+)
 from video_agent.utils.json_io import read_yaml
 from video_agent.web.approval_flow import (
     APPROVAL_REQUIRED_STAGES,
@@ -255,6 +261,7 @@ async def _execute_run_all_locked(
     qa_sender = None
     chatgpt_close = _noop_close
     qa_close = _noop_close
+    model_sessions_closed = False
 
     async def _open_with_retry(site: str, attempts: int = 3):
         last_exc: BrowserClientError | None = None
@@ -283,9 +290,27 @@ async def _execute_run_all_locked(
         assert last_exc is not None
         raise last_exc
 
+    async def _close_model_sessions() -> None:
+        nonlocal chatgpt_sender, qa_sender, chatgpt_close, qa_close, model_sessions_closed
+        if model_sessions_closed:
+            return
+        model_sessions_closed = True
+        try:
+            await chatgpt_close()
+        except Exception:
+            pass
+        try:
+            await qa_close()
+        except Exception:
+            pass
+        chatgpt_sender = None
+        qa_sender = None
+        chatgpt_close = _noop_close
+        qa_close = _noop_close
+
     need_writing_tab = any(
         s in remaining
-        for s in ("script", "script_promote", "scenes", "scenes_promote", "seo", "seo_promote")
+        for s in ("script", "script_promote", "scenes", "scenes_promote", "seo", "seo_promote", "shorts_script", "shorts_scenes")
     )
     need_qa_tab = any(s in remaining for s in ("script_qa", "scenes_qa", "seo_qa"))
 
@@ -378,6 +403,18 @@ async def _execute_run_all_locked(
                     "seo", job_dir, channel_path, chatgpt_fn, qa_fn
                 ),
             )
+        if any(
+            s in remaining
+            for s in (
+                "seo_vidiq",
+                "thumbnail_image",
+                "assets_chatgpt",
+                "whisper_timestamps",
+                "render",
+                "review",
+            )
+        ):
+            await _close_model_sessions()
         if "seo_vidiq" in remaining:
             _check_stop_requested()
             await _record(
@@ -411,6 +448,18 @@ async def _execute_run_all_locked(
         if "review" in remaining:
             _check_stop_requested()
             await _record("review", run_review_stage(job_dir))
+        if "shorts_script" in remaining:
+            _check_stop_requested()
+            await _record("shorts_script", await auto_shorts_script_stage(job_dir, channel_path, chatgpt_fn))
+        if "shorts_scenes" in remaining:
+            _check_stop_requested()
+            await _record("shorts_scenes", await auto_shorts_scenes_stage(job_dir, channel_path, chatgpt_fn))
+        if "shorts_tts" in remaining:
+            _check_stop_requested()
+            await _record("shorts_tts", await auto_shorts_tts_stage(job_dir, channel_path, chatgpt_fn))
+        if "shorts_render" in remaining:
+            _check_stop_requested()
+            await _record("shorts_render", await auto_shorts_render_stage(job_dir, channel_path, chatgpt_fn))
     except StageInputMissingError as exc:
         state = load_job(job_dir)
         await notify_job_failed(
@@ -448,14 +497,7 @@ async def _execute_run_all_locked(
     finally:
         # Always close the persistent tabs so a failure never leaks
         # browser-runtime pages.
-        try:
-            await chatgpt_close()
-        except Exception:
-            pass
-        try:
-            await qa_close()
-        except Exception:
-            pass
+        await _close_model_sessions()
 
     state = load_job(job_dir)
     wall = time.monotonic() - _start_time

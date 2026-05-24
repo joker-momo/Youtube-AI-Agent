@@ -10,9 +10,12 @@ from typing import Awaitable, Callable, Sequence
 
 from video_agent.contracts import EVENT_LOG, repo_root
 from video_agent.operator import (
+    _chatgpt_scenes_batch_prompt,
+    _chatgpt_scenes_plan_prompt,
     _chatgpt_scenes_prompt,
     _chatgpt_seo_prompt,
     _chatgpt_script_prompt,
+    _claude_scenes_qa_batch_prompt,
     _claude_qa_prompt,
     extract_json_object,
     extract_json_objects,
@@ -21,18 +24,30 @@ from video_agent.operator import (
     promote_operator_qa,
     write_operator_review,
 )
+from video_agent.operator_shards import (
+    ShardValidationError,
+    extract_json_envelope,
+    merge_scene_batches,
+    save_envelope,
+    validate_envelope,
+    validate_scenes_batch,
+    validate_scenes_plan,
+)
 from video_agent.utils.json_io import write_json as _write_json
 from video_agent.orchestrator.job_state import load_job, save_job
 from video_agent.orchestrator.orchestrator import _now
 from video_agent.pipeline import OperatorRenderOptions, render_operator_job
 from video_agent.utils.json_io import read_json, read_yaml
 from video_agent.utils.logging import EventLogger
+from video_agent.runtime.providers import AUDIO_SUBPROCESS_ENV, SubprocessAudioTaskProvider
 
 IDEA_FILE = "idea.json"
 SCRIPT_PROMPT_PATH = Path("operator/chatgpt/script_prompt.md")
 SCRIPT_RAW_PATH = Path("operator/chatgpt/script.raw.txt")
 SCENES_PROMPT_PATH = Path("operator/chatgpt/scenes_prompt.md")
 SCENES_RAW_PATH = Path("operator/chatgpt/scenes.raw.txt")
+SCENES_PLAN_PATH = Path("operator/chatgpt/scenes_plan.json")
+SCENES_BATCHES_DIR = Path("operator/chatgpt/scenes_batches")
 SEO_PROMPT_PATH = Path("operator/chatgpt/seo_prompt.md")
 SEO_RAW_PATH = Path("operator/chatgpt/seo.raw.txt")
 SCRIPT_QA_RAW_PATH = Path("operator/claude/script_qa.raw.txt")
@@ -42,6 +57,9 @@ SEO_QA_RAW_PATH = Path("operator/claude/seo_qa.raw.txt")
 
 class StageInputMissingError(Exception):
     pass
+
+
+_AUDIO_SUBPROCESS_ENV = AUDIO_SUBPROCESS_ENV
 
 
 def _run_blocking_with_timeout(
@@ -265,7 +283,29 @@ def promote_seo_stage(job_dir: Path, channel_path: Path, raw_response: str) -> P
     return result.output_path
 
 
+def _run_audio_subprocess(command: str, job_dir: Path) -> Path:
+    if command != "whisper-timestamps":
+        raise StageInputMissingError(
+            f"Unsupported audio subprocess command: {command}"
+        )
+    try:
+        return SubprocessAudioTaskProvider().run_whisper_timestamps(job_dir)
+    except RuntimeError as exc:
+        raise StageInputMissingError(str(exc)) from exc
+
+
 def run_whisper_timestamps_stage(job_dir: Path) -> Path:
+    state = load_job(job_dir)
+    if state.current_stage != "whisper_timestamps":
+        raise StageInputMissingError(
+            f"Cannot run whisper_timestamps stage from current_stage={state.current_stage!r}"
+        )
+    if os.environ.get(_AUDIO_SUBPROCESS_ENV) != "1":
+        return _run_audio_subprocess("whisper-timestamps", job_dir)
+    return _run_whisper_timestamps_stage_inline(job_dir)
+
+
+def _run_whisper_timestamps_stage_inline(job_dir: Path) -> Path:
     """Run Whisper on narration.wav and write per-scene word segments.
 
     Reads ``jobs/<id>/assets/narration.wav`` (produced by assets_chatgpt),
@@ -274,11 +314,6 @@ def run_whisper_timestamps_stage(job_dir: Path) -> Path:
     and writes ``jobs/<id>/whisper_timestamps.json``.
     """
     state = load_job(job_dir)
-    if state.current_stage != "whisper_timestamps":
-        raise StageInputMissingError(
-            f"Cannot run whisper_timestamps stage from current_stage={state.current_stage!r}"
-        )
-
     logger = EventLogger(job_dir / EVENT_LOG)
     logger.log("WHISPER_STAGE_PROGRESS", {"job_id": state.job_id, "step": "start"})
 
@@ -786,11 +821,133 @@ async def auto_script_stage(
     )
 
 
+async def _request_shard_envelope(
+    *,
+    session_fn: SessionFn,
+    prompt: str,
+    expected_artifact_type: str,
+    expected_job_id: str,
+    expected_channel_id: str,
+) -> dict:
+    last_error: Exception | None = None
+    for _attempt in range(2):
+        raw = await session_fn([prompt])
+        if not isinstance(raw, str) or not raw.strip():
+            last_error = StageInputMissingError(
+                f"Empty model response for {expected_artifact_type}"
+            )
+            continue
+        try:
+            envelope = extract_json_envelope(raw)
+            validate_envelope(
+                envelope,
+                expected_artifact_type=expected_artifact_type,
+                expected_job_id=expected_job_id,
+                expected_channel_id=expected_channel_id,
+            )
+            return envelope
+        except Exception as exc:
+            last_error = exc
+    raise StageInputMissingError(
+        f"{expected_artifact_type} failed validation after retry: {last_error}"
+    )
+
+
+async def auto_scenes_stage_sharded(
+    job_dir: Path,
+    channel_path: Path,
+    session_fn: SessionFn,
+) -> Path:
+    state = load_job(job_dir)
+    if state.current_stage != "scenes":
+        raise StageInputMissingError(
+            f"Cannot auto-run sharded scenes from current_stage={state.current_stage!r}"
+        )
+    script_path = job_dir / "script.json"
+    if not script_path.exists():
+        raise StageInputMissingError(f"Missing {script_path}")
+    if not channel_path.exists():
+        raise StageInputMissingError(f"Missing channel config {channel_path}")
+
+    script = read_json(script_path)
+    channel_config = read_yaml(channel_path)
+    job_id = state.job_id
+    channel_id = state.channel_id
+
+    plan_prompt = _chatgpt_scenes_plan_prompt(channel_config, script)
+    prompt_path = job_dir / SCENES_PROMPT_PATH
+    prompt_path.parent.mkdir(parents=True, exist_ok=True)
+    prompt_path.write_text(plan_prompt, encoding="utf-8")
+    _complete_stage(job_dir, "scenes", prompt_path)
+
+    try:
+        plan_envelope = await _request_shard_envelope(
+            session_fn=session_fn,
+            prompt=plan_prompt,
+            expected_artifact_type="scenes_plan",
+            expected_job_id=job_id,
+            expected_channel_id=channel_id,
+        )
+        validate_scenes_plan(plan_envelope)
+        save_envelope(job_dir / SCENES_PLAN_PATH, plan_envelope)
+
+        batches = (plan_envelope.get("data") or {}).get("batches") or []
+        if not isinstance(batches, list) or not batches:
+            raise ShardValidationError("scenes_plan returned no batches")
+
+        batch_envelopes: list[dict] = []
+        batch_total = len(batches)
+        for batch in batches:
+            if not isinstance(batch, dict):
+                raise ShardValidationError("Plan batch must be an object")
+            batch_index = int(batch.get("batch_index") or 0)
+            scene_start = str(batch.get("scene_start") or "")
+            scene_end = str(batch.get("scene_end") or "")
+            batch_prompt = _chatgpt_scenes_batch_prompt(
+                channel_config,
+                script,
+                plan_envelope,
+                batch,
+            )
+            batch_envelope = await _request_shard_envelope(
+                session_fn=session_fn,
+                prompt=batch_prompt,
+                expected_artifact_type="scenes_batch",
+                expected_job_id=job_id,
+                expected_channel_id=channel_id,
+            )
+            validate_scenes_batch(
+                batch_envelope,
+                expected_batch_index=batch_index,
+                expected_batch_total=batch_total,
+                scene_start=scene_start,
+                scene_end=scene_end,
+            )
+            batch_path = job_dir / SCENES_BATCHES_DIR / f"scenes_batch_{batch_index:02d}.json"
+            save_envelope(batch_path, batch_envelope)
+            batch_envelopes.append(batch_envelope)
+
+        merged = merge_scene_batches(
+            job_id=job_id,
+            channel_id=channel_id,
+            batch_envelopes=batch_envelopes,
+        )
+        scenes_path = job_dir / "scenes.json"
+        _write_json(scenes_path, merged)
+    except Exception as exc:
+        raise StageInputMissingError(str(exc)) from exc
+
+    _complete_stage(job_dir, "scenes_promote", scenes_path)
+    return scenes_path
+
+
 async def auto_scenes_stage(
     job_dir: Path,
     channel_path: Path,
     session_fn: SessionFn,
 ) -> Path:
+    if os.environ.get("SCENES_SHARDED_GENERATION", "").strip() == "1":
+        return await auto_scenes_stage_sharded(job_dir, channel_path, session_fn)
     return await _auto_run_then_promote(
         job_dir=job_dir,
         channel_path=channel_path,

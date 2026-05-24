@@ -6,8 +6,9 @@ from typing import Any
 
 
 class JobQueue:
-    def __init__(self, db_path: Path):
+    def __init__(self, db_path: Path, max_attempts: int = 3):
         self.db_path = db_path
+        self.max_attempts = max(1, int(max_attempts))
         self._init_db()
 
     def _init_db(self) -> None:
@@ -21,9 +22,17 @@ class JobQueue:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     started_at TIMESTAMP,
                     completed_at TIMESTAMP,
+                    attempts INTEGER NOT NULL DEFAULT 0,
                     error TEXT
                 )
             """)
+            existing = {
+                row[1] for row in conn.execute("PRAGMA table_info(job_queue)").fetchall()
+            }
+            if "attempts" not in existing:
+                conn.execute(
+                    "ALTER TABLE job_queue ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0"
+                )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_status ON job_queue(status)")
 
     def enqueue(self, job_id: str, enforce_approvals: bool) -> bool:
@@ -36,7 +45,7 @@ class JobQueue:
                 return True
             except sqlite3.IntegrityError:
                 conn.execute(
-                    "UPDATE job_queue SET status = 'pending', enforce_approvals = ?, error = NULL, started_at = NULL, completed_at = NULL WHERE job_id = ?",
+                    "UPDATE job_queue SET status = 'pending', enforce_approvals = ?, attempts = 0, error = NULL, started_at = NULL, completed_at = NULL WHERE job_id = ?",
                     (1 if enforce_approvals else 0, job_id)
                 )
                 return True
@@ -51,6 +60,15 @@ class JobQueue:
             if row:
                 return dict(row)
             return None
+
+    def get_job(self, job_id: str) -> dict[str, Any] | None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM job_queue WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+            return dict(row) if row else None
 
     def mark_running(self, job_id: str) -> None:
         with sqlite3.connect(self.db_path) as conn:
@@ -72,6 +90,28 @@ class JobQueue:
                 "UPDATE job_queue SET status = 'failed', completed_at = CURRENT_TIMESTAMP, error = ? WHERE job_id = ?",
                 (error, job_id)
             )
+
+    def mark_retry(self, job_id: str, error: str) -> bool:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT attempts FROM job_queue WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            attempts = int(row["attempts"]) + 1
+            if attempts >= self.max_attempts:
+                conn.execute(
+                    "UPDATE job_queue SET status = 'failed', attempts = ?, completed_at = CURRENT_TIMESTAMP, error = ? WHERE job_id = ?",
+                    (attempts, error, job_id),
+                )
+                return False
+            conn.execute(
+                "UPDATE job_queue SET status = 'pending', attempts = ?, started_at = NULL, completed_at = NULL, error = ? WHERE job_id = ?",
+                (attempts, error, job_id),
+            )
+            return True
 
     def requeue_running_jobs(self) -> int:
         """Recover jobs left in 'running' after worker crash/restart."""

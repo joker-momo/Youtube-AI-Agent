@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import os
 import shutil
 import subprocess
 import json
@@ -27,6 +28,9 @@ from video_agent.utils.json_io import read_json, read_yaml, write_json
 from video_agent.utils.logging import EventLogger
 from video_agent.utils.paths import create_job_dir
 from video_agent.utils.validation import validate_json
+from video_agent.runtime.providers import AUDIO_SUBPROCESS_ENV, SubprocessAudioTaskProvider
+
+_AUDIO_SUBPROCESS_ENV = AUDIO_SUBPROCESS_ENV
 
 
 @dataclass
@@ -562,6 +566,20 @@ def _sync_scene_durations_from_audio(job_dir: Path, scene_doc: dict) -> None:
     )
 
 
+def _run_prepare_assets_audio_subprocess(job_dir: Path, channel_path: Path) -> None:
+    SubprocessAudioTaskProvider().prepare_assets(job_dir, channel_path)
+
+
+def _should_prepare_audio_in_subprocess(job_dir: Path, channel_config: dict) -> bool:
+    if os.environ.get(_AUDIO_SUBPROCESS_ENV) == "1":
+        return False
+    tts_cfg = channel_config.get("tts") or {}
+    if tts_cfg.get("provider", "mock-local") == "mock-local":
+        return False
+    narration = job_dir / "assets" / "narration.wav"
+    return not (narration.exists() and narration.stat().st_size > 0)
+
+
 def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
     root = repo_root()
     channel_config = read_yaml(options.channel_path)
@@ -606,6 +624,10 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
     #   b) actual narration audio file duration split proportionally.
     _sync_scene_durations_from_audio(job_dir, scene_doc)
 
+    if _should_prepare_audio_in_subprocess(job_dir, channel_config):
+        _run_prepare_assets_audio_subprocess(job_dir, options.channel_path)
+        scene_doc = read_json(job_dir / "scenes.json")
+
     assets = prepare_assets(
         job_dir,
         style,
@@ -616,10 +638,15 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
         channel_id=channel_config["channel"]["id"],
     )
     branding = _prepare_branding(channel_config)
+
+    render_config = channel_config["render"].copy()
+    if job_dir.parent.name == "shorts":
+        render_config["resolution"] = "1080x1920"
+
     render_props = {
         "channel": channel_config["channel"],
         "style": style,
-        "render": channel_config["render"]
+        "render": render_config
         | {"duration_sec": scene_doc["total_duration_sec"] + branding["intro_sec"] + branding["outro_sec"]},
         "scenes": scene_doc["scenes"],
         "audio": assets["audio"],

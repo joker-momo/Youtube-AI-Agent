@@ -125,7 +125,17 @@ render:
   fps: 30
   codec: "h264"
   crf: 18
-  concurrency: 8
+  concurrency: 2
+  subtitles:
+    enabled: true
+    mode: "word_highlight"
+    words_per_page: 10
+    max_lines: 2
+    position: "bottom"
+    offset_sec: 0
+    font_size: 54
+    active_scale: 1.08
+    background_opacity: 0.58
   audio_loudness:
     enabled: true
     integrated_lufs: -14

@@ -6,6 +6,8 @@ import os
 import time
 from pathlib import Path
 
+from fastapi import HTTPException
+
 from video_agent.orchestrator.browser_client import BrowserClient
 from video_agent.orchestrator.queue import JobQueue
 from video_agent.web.run_all_pipeline import execute_run_all
@@ -24,6 +26,21 @@ def get_channel_path() -> Path:
             "/app/configs/vida-plena-45/channel.yaml",
         )
     )
+
+
+def _is_retryable_exception(exc: Exception) -> bool:
+    if isinstance(exc, HTTPException):
+        detail = exc.detail
+        if isinstance(detail, dict):
+            if detail.get("stop_requested"):
+                return False
+            if detail.get("approval_required"):
+                return False
+            if detail.get("login_required"):
+                return False
+        if exc.status_code in {401, 403, 404}:
+            return False
+    return True
 
 
 def run_worker_loop(db_path: Path) -> None:
@@ -71,7 +88,16 @@ def run_worker_loop(db_path: Path) -> None:
                     queue.mark_completed(job_id)
                 except Exception as e:
                     logger.error(f"Job {job_id} failed with exception: {e}", exc_info=True)
-                    queue.mark_failed(job_id, str(e))
+                    if _is_retryable_exception(e) and queue.mark_retry(job_id, str(e)):
+                        next_job = queue.get_job(job_id) or {}
+                        logger.warning(
+                            "Requeued job %s after retryable failure; attempt %s/%s.",
+                            job_id,
+                            next_job.get("attempts", "?"),
+                            queue.max_attempts,
+                        )
+                    else:
+                        queue.mark_failed(job_id, str(e))
             else:
                 time.sleep(2)
         except Exception as e:

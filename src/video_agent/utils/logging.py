@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from video_agent.storage.atomic import append_jsonl_locked
+
 
 @dataclass
 class EventLogger:
@@ -18,5 +20,4 @@ class EventLogger:
             "event": event,
             "data": data,
         }
-        with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        append_jsonl_locked(self.path, payload)

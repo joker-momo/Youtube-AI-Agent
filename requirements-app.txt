@@ -1,0 +1,9 @@
+fastapi==0.136.1
+uvicorn==0.47.0
+httpx==0.28.1
+python-telegram-bot==22.7
+jsonschema==4.26.0
+PyYAML==6.0.3
+defusedxml==0.7.1
+Pillow==12.2.0
+websockets==16.0

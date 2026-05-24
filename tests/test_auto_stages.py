@@ -125,6 +125,7 @@ class FakeBrowserClient:
     def __init__(self, queue: list[str] | None = None) -> None:
         self.queue = list(queue or [])
         self.sessions: list[list[str]] = []
+        self.events: list[str] = []
         self.error: Exception | None = None
 
     async def chatgpt_send(
@@ -140,6 +141,7 @@ class FakeBrowserClient:
         *,
         response_timeout_ms: int = 180_000,
     ) -> str:
+        self.events.append(f"send:{site}")
         self.sessions.append(list(messages))
         if self.error is not None:
             raise self.error
@@ -154,10 +156,13 @@ class FakeBrowserClient:
     async def open_persistent_session(self, site: str):
         # All persistent sends go into one "session" list per call
         # so the test still asserts each stage's [briefing, task].
+        self.events.append(f"open:{site}")
+
         async def sender(messages, *, response_timeout_ms: int = 180_000) -> str:
             return await self.run_session(site, messages)
 
         async def closer() -> None:
+            self.events.append(f"close:{site}")
             return None
 
         return sender, closer
@@ -170,6 +175,7 @@ class FakeBrowserClient:
         out_path: str,
         response_timeout_ms: int = 360_000,
     ) -> dict:
+        self.events.append("image")
         import os
         from PIL import Image
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
@@ -177,6 +183,7 @@ class FakeBrowserClient:
         return {"src": "https://example.com/img.png", "local_path": out_path, "project_name": project_name, "bytes": 9}
 
     async def run_vidiq_scores(self, keywords: list[str]) -> list[dict]:
+        self.events.append("vidiq")
         return [{"keyword": kw, "score": 55, "volume": "Medium", "competition": "Low", "related": []} for kw in keywords]
 
 
@@ -363,6 +370,74 @@ def test_auto_scenes_runs_after_script_promoted(
 
     assert output == job_dir / "scenes.json"
     assert (job_dir / SCENES_PROMPT_PATH).exists()
+    state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    assert state["current_stage"] == "scenes_qa"
+
+
+def test_auto_scenes_can_run_sharded_when_enabled(
+    tmp_path: Path,
+    channel_path: Path,
+    idea_payload: dict,
+    valid_script_payload: dict,
+    valid_scenes_payload: dict,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    job_dir = tmp_path / "job-auto"
+    _seed_script(job_dir, channel_path, idea_payload)
+    run_script_stage(job_dir, channel_path)
+    promote_script_stage(
+        job_dir,
+        channel_path,
+        raw_response=json.dumps(valid_script_payload, ensure_ascii=False),
+    )
+    _fake_pass_qa(job_dir, "script")
+    plan = {
+        "artifact_type": "scenes_plan",
+        "schema_version": "2026-05-json-shards-v1",
+        "job_id": "job-auto",
+        "channel_id": "vida-plena-45",
+        "status": "complete",
+        "batch_index": None,
+        "batch_total": None,
+        "data": {
+            "target_scene_count": 2,
+            "target_total_duration_sec": 48,
+            "batch_size": 2,
+            "batches": [
+                {
+                    "batch_index": 1,
+                    "scene_start": "scene-01",
+                    "scene_end": "scene-02",
+                    "purpose": "full test batch",
+                    "script_sections": ["section-01"],
+                }
+            ],
+        },
+        "warnings": [],
+    }
+    batch = {
+        "artifact_type": "scenes_batch",
+        "schema_version": "2026-05-json-shards-v1",
+        "job_id": "job-auto",
+        "channel_id": "vida-plena-45",
+        "status": "complete",
+        "batch_index": 1,
+        "batch_total": 1,
+        "data": {"scene_start": "scene-01", "scene_end": "scene-02", "scenes": valid_scenes_payload["scenes"]},
+        "warnings": [],
+    }
+    fake = FakeBrowserClient(queue=[json.dumps(plan), json.dumps(batch)])
+    monkeypatch.setenv("SCENES_SHARDED_GENERATION", "1")
+
+    output = asyncio.run(
+        auto_scenes_stage(job_dir, channel_path, lambda msgs: fake.run_session("chatgpt", msgs))
+    )
+
+    assert output == job_dir / "scenes.json"
+    assert (job_dir / "operator/chatgpt/scenes_plan.json").exists()
+    assert (job_dir / "operator/chatgpt/scenes_batches/scenes_batch_01.json").exists()
+    scenes = json.loads((job_dir / "scenes.json").read_text(encoding="utf-8"))
+    assert [s["id"] for s in scenes["scenes"]] == ["scene-01", "scene-02"]
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
     assert state["current_stage"] == "scenes_qa"
 
@@ -770,6 +845,9 @@ def test_http_run_all_success(
     # 2 briefing sends + 3 ChatGPT task sends + 3 Gemini task sends = 8
     # idea_research + seo_vidiq use run_vidiq_scores (not session queue)
     assert len(fake.calls) == 8
+    seo_vidiq_event = len(fake.events) - 1 - fake.events[::-1].index("vidiq")
+    assert fake.events.index("close:chatgpt") < seo_vidiq_event
+    assert fake.events.index("close:claude") < seo_vidiq_event
 
 
 def test_http_run_all_requires_idea_research_confirmation(
@@ -1022,6 +1100,71 @@ def test_http_run_all_stops_on_worker_error(
 def test_http_run_all_unknown_job_returns_404(http_client: TestClient):
     r = http_client.post("/jobs/missing/run-all")
     assert r.status_code == 404
+
+
+def test_run_whisper_timestamps_delegates_to_audio_subprocess(
+    tmp_path: Path,
+    monkeypatch,
+):
+    from video_agent.orchestrator import create_job
+    from video_agent.orchestrator.job_state import load_job
+    import video_agent.orchestrator.stages as stages_mod
+
+    job_dir = tmp_path / "job-whisper"
+    create_job(
+        job_dir,
+        job_id="job-whisper",
+        channel_id="vida-plena-45",
+        idea_path="idea.json",
+    )
+    _set_current_stage(job_dir, "whisper_timestamps")
+    (job_dir / "assets").mkdir(parents=True)
+    (job_dir / "assets" / "narration.wav").write_bytes(b"fake-wav")
+    (job_dir / "scenes.json").write_text(
+        json.dumps(
+            {
+                "channel_id": "vida-plena-45",
+                "job_id": "job-whisper",
+                "total_duration_sec": 3,
+                "scenes": [
+                    {
+                        "id": "scene-01",
+                        "duration_sec": 3,
+                        "narration": "hola mundo",
+                        "on_screen_text": "Hola",
+                        "caption": "Hola",
+                        "visual_prompt": "warm room",
+                        "motion": "slow",
+                        "asset_refs": {},
+                    }
+                ],
+                "qa": {"verdict": "PASS"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    calls: list[tuple[str, Path]] = []
+
+    def fake_audio_subprocess(command: str, delegated_job_dir: Path) -> Path:
+        calls.append((command, delegated_job_dir))
+        output = delegated_job_dir / "whisper_timestamps.json"
+        output.write_text('{"scenes":[]}', encoding="utf-8")
+        stages_mod._complete_stage(delegated_job_dir, "whisper_timestamps", output)
+        return output
+
+    monkeypatch.setattr(
+        stages_mod,
+        "_run_audio_subprocess",
+        fake_audio_subprocess,
+        raising=False,
+    )
+
+    output = stages_mod.run_whisper_timestamps_stage(job_dir)
+
+    assert output == job_dir / "whisper_timestamps.json"
+    assert calls == [("whisper-timestamps", job_dir)]
+    assert load_job(job_dir).stage("whisper_timestamps").status == "completed"
 
 
 # ---------- Gemini QA stages -----------------------------------------------

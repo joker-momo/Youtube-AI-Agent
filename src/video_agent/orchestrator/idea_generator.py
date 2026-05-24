@@ -246,6 +246,330 @@ _REQUIRED_FIELDS = {"topic", "angle", "target_duration_sec", "key_points", "titl
 
 
 # ---------------------------------------------------------------------------
+# Keyword scoring V2 helpers
+# ---------------------------------------------------------------------------
+
+DEFAULT_CHANNEL_KEYWORD_CONFIG = {
+    "channel_name": "Vida Plena 45+: Salud y Bienestar",
+    "target_language": "spanish",
+    "target_audience": "people_45_plus",
+    "audience_markers": [
+        "45", "45+", "despues de los 45", "después de los 45",
+        "mayores de 45", "a partir de los 45", "despues de los cuarenta",
+        "después de los cuarenta",
+    ],
+    "core_topics": [
+        "nutricion", "nutrición", "alimentacion", "alimentación",
+        "comer mejor", "comer bien", "salud", "bienestar",
+        "energia", "energía", "sueño", "dormir", "descanso",
+        "habitos", "hábitos", "movimiento", "caminar",
+        "estres", "estrés", "ansiedad", "peso", "metabolismo",
+    ],
+    "content_positioning": [
+        "sin dietas extremas", "sin culpa", "sin caos",
+        "simple", "practico", "práctico", "realista",
+        "calma", "vida plena",
+    ],
+    "enable_serp_inspection": False,
+    "serp_max_results": 10,
+    "max_keywords_per_intent_cluster": 3,
+}
+
+PORTUGUESE_MARKERS = [
+    "depois", "voce", "você", "saude", "saúde", "bem-estar",
+    "efeito sanfona", "comer bem", "sem culpa", "mais energia",
+    "dieta maluca", "emagrecer", "sono", "cafe da manha", "café da manhã",
+    "refeicao", "refeição", "almoco", "almoço", "jantar", "apos os 45",
+    "após os 45", "aos 45",
+]
+
+SPANISH_MARKERS = [
+    "despues", "después", "sin culpa", "salud", "bienestar",
+    "energia", "energía", "sueno", "sueño", "dormir",
+    "alimentacion", "alimentación", "nutricion", "nutrición",
+    "comer mejor", "habitos", "hábitos",
+]
+
+INTENT_KEYWORDS = [
+    ("nutrition_after_45", ["comer", "alimentacion", "nutricion", "plato", "comida", "dieta", "proteina", "fibra"]),
+    ("energy_after_45", ["energia", "cansancio", "fatiga", "bajones", "ritmo"]),
+    ("sleep_after_45", ["sueno", "dormir", "descanso", "insomnio", "noche"]),
+    ("movement_after_45", ["movimiento", "caminar", "ejercicio", "fuerza", "musculo", "articulaciones"]),
+    ("emotional_wellbeing_after_45", ["estres", "ansiedad", "calma", "emocional", "mente", "motivacion"]),
+    ("weight_management_after_45", ["peso", "adelgazar", "bajar de peso", "metabolismo", "efecto rebote", "efecto yoyo"]),
+    ("general_health_after_45", ["salud", "bienestar", "habitos"]),
+]
+
+UNSAFE_CLAIMS = ["cura", "curar", "garantizado", "milagro", "elimina para siempre"]
+GENERIC_KEYWORDS = {"salud", "bienestar", "nutricion", "dieta"}
+
+
+def _strip_accents(text: str) -> str:
+    return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+
+
+def _clamp(value: float, low: int = 0, high: int = 100) -> int:
+    return int(max(low, min(high, round(value))))
+
+
+def normalize_keyword(keyword: str) -> str:
+    text = _strip_accents(str(keyword or "").lower().strip())
+    text = re.sub(r"\b45\s+plus\b", "45+", text)
+    text = re.sub(r"\b(mas de 45|mayores de 45|a partir de los 45)\b", "despues de los 45", text)
+    text = re.sub(r"[^\w\s+]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def classify_intent_cluster(keyword: str) -> str:
+    norm = normalize_keyword(keyword)
+    for cluster, markers in INTENT_KEYWORDS:
+        if any(marker in norm for marker in markers):
+            return cluster
+    return "unknown"
+
+
+def detect_language_fit(keyword: str, target_language: str) -> tuple[int, list[str]]:
+    if not str(keyword or "").strip():
+        return 0, ["empty_keyword"]
+    if target_language != "spanish":
+        return 80, ["language_guardrail_not_configured"]
+    norm = normalize_keyword(keyword)
+    pt_hits = [marker for marker in PORTUGUESE_MARKERS if normalize_keyword(marker) in norm]
+    notes: list[str] = []
+    score = 100
+    if pt_hits:
+        score -= 30 * len(pt_hits)
+        if len(pt_hits) >= 2:
+            score -= 20
+        notes.append("language_mismatch_portuguese")
+    elif any(normalize_keyword(marker) in norm for marker in SPANISH_MARKERS):
+        notes.append("spanish_language_ok")
+    return _clamp(score), notes
+
+
+def _has_any(norm: str, words: list[str]) -> bool:
+    return any(normalize_keyword(word) in norm for word in words)
+
+
+def score_audience_fit(keyword: str, channel_config: dict) -> int:
+    norm = normalize_keyword(keyword)
+    score = 45
+    if _has_any(norm, ["45", "45+", "despues de los 45", "mayores de 45", "a partir de los 45"]):
+        score += 30
+    if _has_any(norm, ["salud", "bienestar", "comer", "alimentacion", "nutricion", "sueno", "energia", "habitos", "movimiento"]):
+        score += 15
+    if _has_any(norm, ["simple", "practico", "realista", "sin dietas", "sin culpa", "calma"]):
+        score += 10
+    if _has_any(norm, ["cansancio", "fatiga", "bajones", "peso", "metabolismo", "dormir", "insomnio", "estres"]):
+        score += 10
+    if norm in GENERIC_KEYWORDS and not _has_any(norm, ["45", "despues de los 45", "cansancio", "peso", "dormir"]):
+        score -= 20
+    if _has_any(norm, ["ninos", "adolescentes", "embarazo", "embarazada", "culturismo", "volumen muscular"]):
+        score -= 25
+    return _clamp(score)
+
+
+def score_intent_strength(keyword: str) -> int:
+    norm = normalize_keyword(keyword)
+    score = 40
+    if _has_any(norm, ["como", "evitar", "mejorar", "organizar", "recuperar", "dormir", "comer", "bajar", "cambiar"]):
+        score += 20
+    if _has_any(norm, ["culpa", "caos", "cansancio", "fatiga", "bajones", "insomnio", "ansiedad", "estres", "efecto rebote", "efecto yoyo"]):
+        score += 20
+    if _has_any(norm, ["mas energia", "dormir mejor", "comer mejor", "bajar de peso", "sin dietas"]):
+        score += 15
+    if _has_any(norm, ["despues de los 45", "45+", "mayores de 45"]):
+        score += 10
+    if len(norm.split()) < 3:
+        score -= 15
+    if norm in GENERIC_KEYWORDS:
+        score -= 10
+    return _clamp(score)
+
+
+def score_content_fit(keyword: str, channel_config: dict) -> int:
+    norm = normalize_keyword(keyword)
+    score = 50
+    if classify_intent_cluster(norm) in {
+        "nutrition_after_45", "energy_after_45", "sleep_after_45",
+        "movement_after_45", "emotional_wellbeing_after_45",
+    }:
+        score += 20
+    if _has_any(norm, ["culpa", "caos", "energia", "cansancio", "plato", "cuerpo", "dormir", "calma", "edad", "45"]):
+        score += 15
+    if _has_any(norm, ["simple", "practico", "organizar", "habitos", "rutina", "consejos"]):
+        score += 10
+    if _has_any(norm, ["diabetes", "hipertension", "tiroides", "colesterol", "menopausia", "osteoporosis"]):
+        score -= 20
+    if _has_any(norm, UNSAFE_CLAIMS):
+        score -= 30
+    return _clamp(score)
+
+
+def _is_too_generic(keyword: str) -> bool:
+    return normalize_keyword(keyword) in GENERIC_KEYWORDS
+
+
+def calculate_final_score(item: dict) -> float:
+    vidiq = item.get("vidiq_score")
+    vidiq_component = vidiq if isinstance(vidiq, (int, float)) else 35
+    score = (
+        0.40 * vidiq_component
+        + 0.22 * item["audience_fit"]
+        + 0.15 * item["intent_strength"]
+        + 0.10 * item["content_fit"]
+        + 0.08 * item["language_fit"]
+        + 0.05 * item["serp_opportunity"]
+    )
+    notes = item.setdefault("notes", [])
+    reasons = item.setdefault("rejection_reasons", [])
+    if item["language_fit"] < 60:
+        score -= 30
+        notes.append("language_penalty_high")
+    elif item["language_fit"] < 80:
+        score -= 20
+        notes.append("language_penalty_medium")
+    if item["audience_fit"] < 50:
+        score -= 20
+        reasons.append("audience_mismatch")
+    if item["content_fit"] < 50:
+        score -= 15
+        reasons.append("content_mismatch")
+    if item["intent_strength"] < 50:
+        score -= 10
+    if _is_too_generic(item.get("keyword", "")):
+        score -= 15
+    if _has_any(normalize_keyword(item.get("keyword", "")), UNSAFE_CLAIMS):
+        score -= 25
+        reasons.append("unsafe_health_claim_risk")
+    final = round(max(0, min(100, score)), 1)
+    item["final_score"] = final
+    return final
+
+
+def assign_bucket(item: dict) -> str:
+    reasons = item.setdefault("rejection_reasons", [])
+    if not str(item.get("keyword") or "").strip():
+        reasons.append("empty_keyword")
+    if item.get("language_fit", 0) < 70:
+        reasons.append("language_mismatch")
+    if item.get("audience_fit", 0) < 45:
+        reasons.append("audience_mismatch")
+    if item.get("content_fit", 0) < 40:
+        reasons.append("content_mismatch")
+    if item.get("final_score", 0) < 50:
+        reasons.append("low_final_score")
+    if reasons:
+        return "rejected_keywords"
+    if (
+        item.get("final_score", 0) >= 70
+        and item.get("language_fit", 0) >= 80
+        and item.get("audience_fit", 0) >= 70
+        and item.get("intent_strength", 0) >= 60
+        and item.get("content_fit", 0) >= 60
+        and item.get("vidiq_score") is not None
+    ):
+        return "top_opportunity_keywords"
+    if (
+        item.get("language_fit", 0) >= 80
+        and item.get("audience_fit", 0) >= 70
+        and item.get("intent_strength", 0) >= 60
+        and item.get("content_fit", 0) >= 55
+    ):
+        return "long_tail_test_keywords"
+    return "rejected_keywords"
+
+
+def generate_keyword_pack(item: dict) -> dict:
+    cluster = item.get("intent_cluster")
+    mapping = {
+        "nutrition_after_45": ("Comer mejor después de los 45 sin culpa ni dietas extremas", ["SIN CULPA", "COME CON CALMA", "TU PLATO BASE"]),
+        "energy_after_45": ("Evitar bajones de energía después de los 45 con comidas simples", ["MÁS ENERGÍA", "NO ES TU EDAD", "RECUPERA TU RITMO"]),
+        "sleep_after_45": ("Dormir mejor después de los 45 con una rutina realista", ["DUERME MEJOR", "DESCANSA HOY", "NOCHE EN CALMA"]),
+        "movement_after_45": ("Moverte más después de los 45 sin rutinas imposibles", ["MUÉVETE SIN DOLOR", "EMPIEZA SUAVE", "TU CUERPO PIDE MOVIMIENTO"]),
+        "emotional_wellbeing_after_45": ("Cuidar tu bienestar emocional después de los 45 con hábitos simples", ["MENTE EN CALMA", "MENOS ESTRÉS", "RESPIRA HOY"]),
+        "weight_management_after_45": ("Manejar el peso después de los 45 sin efecto rebote ni dietas extremas", ["SIN REBOTE", "NO MÁS YOYÓ", "SIN DIETAS LOCAS"]),
+    }
+    angle, hooks = mapping.get(cluster, ("Un hábito simple para sentirte mejor después de los 45", ["DESPUÉS DE LOS 45", "CAMBIO SIMPLE", "VIDA PLENA"]))
+    item["recommended_angle"] = angle
+    item["thumbnail_hook_options"] = hooks
+    return item
+
+
+def dedupe_by_normalized_keyword_and_intent(items: list[dict], max_per_cluster: int = 3) -> list[dict]:
+    best: dict[str, dict] = {}
+    for item in items:
+        key = item.get("normalized_keyword") or normalize_keyword(item.get("keyword", ""))
+        item["normalized_keyword"] = key
+        current = best.get(key)
+        if current is None:
+            best[key] = item
+            continue
+        cur_tuple = (current.get("final_score", 0), current.get("vidiq_score") or 0)
+        new_tuple = (item.get("final_score", 0), item.get("vidiq_score") or 0)
+        if new_tuple > cur_tuple:
+            item["notes"] = sorted(set((current.get("notes") or []) + (item.get("notes") or [])))
+            item["rejection_reasons"] = sorted(set((current.get("rejection_reasons") or []) + (item.get("rejection_reasons") or [])))
+            best[key] = item
+    grouped: dict[str, list[dict]] = {}
+    for item in best.values():
+        grouped.setdefault(item.get("intent_cluster", "unknown"), []).append(item)
+    output: list[dict] = []
+    for _cluster, cluster_items in grouped.items():
+        cluster_items.sort(key=lambda x: x.get("final_score", 0), reverse=True)
+        output.extend(cluster_items[:max_per_cluster])
+    output.sort(key=lambda x: x.get("final_score", 0), reverse=True)
+    return output
+
+
+def merge_keyword_channel_config(channel_config: dict | None) -> dict:
+    cfg = dict(DEFAULT_CHANNEL_KEYWORD_CONFIG)
+    if not channel_config:
+        return cfg
+    audience = channel_config.get("audience") or {}
+    channel = channel_config.get("channel") or {}
+    if channel.get("name"):
+        cfg["channel_name"] = channel["name"]
+    language = str(audience.get("language") or "").lower()
+    if language.startswith("es"):
+        cfg["target_language"] = "spanish"
+    keyword_cfg = channel_config.get("keyword_scoring") or {}
+    cfg.update({k: v for k, v in keyword_cfg.items() if v is not None})
+    return cfg
+
+
+def enrich_keyword_item(item: dict, channel_config: dict) -> dict:
+    keyword = str(item.get("keyword") or "").strip()
+    score = item.get("score")
+    vidiq_score = score if isinstance(score, (int, float)) else None
+    notes = list(item.get("notes") or [])
+    if item.get("note"):
+        notes.append(str(item["note"]))
+    language_fit, language_notes = detect_language_fit(keyword, channel_config["target_language"])
+    notes.extend(language_notes)
+    enriched = {
+        **item,
+        "keyword": keyword,
+        "normalized_keyword": normalize_keyword(keyword),
+        "intent_cluster": classify_intent_cluster(keyword),
+        "vidiq_score": vidiq_score,
+        "score": score if isinstance(score, (int, float)) else None,
+        "audience_fit": score_audience_fit(keyword, channel_config),
+        "intent_strength": score_intent_strength(keyword),
+        "content_fit": score_content_fit(keyword, channel_config),
+        "language_fit": language_fit,
+        "serp_opportunity": 50,
+        "notes": sorted(set(notes + ["serp_inspection_skipped"])),
+        "rejection_reasons": [],
+    }
+    calculate_final_score(enriched)
+    enriched["bucket"] = assign_bucket(enriched)
+    generate_keyword_pack(enriched)
+    return enriched
+
+
+# ---------------------------------------------------------------------------
 # vidIQ helpers
 # ---------------------------------------------------------------------------
 
@@ -267,7 +591,9 @@ async def _discover_top_keywords(
     vidiq_fn: Callable[[list[str]], Awaitable[list[dict]]],
     max_related: int = 15,
     top_n: int = 8,
-) -> list[dict]:
+    channel_config: dict | None = None,
+    use_v2: bool = True,
+) -> list[dict] | dict:
     """Score seeds + their related keywords, return top_n sorted by score DESC.
 
     Each returned dict: {keyword, score, volume, competition, related}
@@ -299,15 +625,53 @@ async def _discover_top_keywords(
         except Exception:
             related_results = []
 
-    # Merge and normalise
-    all_scored: list[dict] = []
+    raw_scored: list[dict] = []
     for r in (seed_results + related_results):
         kw = r.get("keyword", "")
-        score = r.get("score")
         if not kw:
             continue
-        all_scored.append({
+        raw_scored.append({
+            **r,
             "keyword": kw,
+        })
+
+    if use_v2:
+        cfg = merge_keyword_channel_config(channel_config)
+        enriched = [enrich_keyword_item(item, cfg) for item in raw_scored]
+        deduped = dedupe_by_normalized_keyword_and_intent(
+            enriched,
+            max_per_cluster=int(cfg.get("max_keywords_per_intent_cluster", 3)),
+        )
+        bucketed = {
+            "top_opportunity_keywords": [],
+            "long_tail_test_keywords": [],
+            "rejected_keywords": [],
+            "all_scored_keywords": [],
+            "metadata": {
+                "version": "keyword_scoring_v2",
+                "enable_serp_inspection": bool(cfg.get("enable_serp_inspection", False)),
+                "target_language": cfg.get("target_language", "spanish"),
+                "target_audience": cfg.get("target_audience", "people_45_plus"),
+            },
+        }
+        for item in deduped:
+            bucket = item["bucket"]
+            bucketed["all_scored_keywords"].append(item)
+            if bucket in bucketed:
+                bucketed[bucket].append(item)
+        for key in ("top_opportunity_keywords", "long_tail_test_keywords", "rejected_keywords"):
+            bucketed[key].sort(key=lambda x: x.get("final_score", 0), reverse=True)
+        bucketed["top_opportunity_keywords"] = bucketed["top_opportunity_keywords"][:top_n]
+        bucketed["long_tail_test_keywords"] = bucketed["long_tail_test_keywords"][: max(3, top_n // 2)]
+        bucketed["rejected_keywords"] = bucketed["rejected_keywords"][:20]
+        return bucketed
+
+    # Merge and normalise legacy output
+    all_scored: list[dict] = []
+    for r in raw_scored:
+        score = r.get("score")
+        all_scored.append({
+            "keyword": r["keyword"],
             "score": score if isinstance(score, (int, float)) else 0,
             "volume": r.get("volume", ""),
             "competition": r.get("competition", ""),
@@ -424,6 +788,19 @@ Rules:
 
 Return ONLY a valid JSON array of {count} objects — no markdown fences, no commentary.
 """
+
+
+def _select_keywords_for_prompt(keyword_result: list[dict] | dict, count: int) -> list[dict]:
+    if isinstance(keyword_result, list):
+        return keyword_result[: max(count, 8)]
+    selected = (
+        keyword_result.get("top_opportunity_keywords", [])
+        + keyword_result.get("long_tail_test_keywords", [])
+    )
+    if selected:
+        return selected[: max(count, 8)]
+    legacy = keyword_result.get("all_scored_keywords", [])
+    return legacy[: max(count, 8)]
 
 
 # ---------------------------------------------------------------------------
@@ -570,15 +947,16 @@ async def generate_ideas(
         print(f"[idea_generator] Seed source={seed_source}, seeds={seeds}", file=sys.stderr)
 
     if vidiq_fn is not None:
-        top_keywords = await _discover_top_keywords(seeds, vidiq_fn)
+        top_keywords = await _discover_top_keywords(seeds, vidiq_fn, channel_config=channel_config)
     else:
         # Fallback: no vidIQ — use seeds as pseudo-keywords
         top_keywords = [{"keyword": s, "score": None, "volume": "", "competition": ""} for s in seeds]
 
-    if not top_keywords:
+    selected_keywords = _select_keywords_for_prompt(top_keywords, count)
+    if not selected_keywords:
         raise ValueError("vidIQ returned no scoreable keywords from the given seeds. Try different topics.")
 
-    prompt = _idea_gen_prompt(channel_config, top_keywords, count)
+    prompt = _idea_gen_prompt(channel_config, selected_keywords, count)
     raw = await chatgpt_fn([prompt])
     ideas = parse_ideas(raw)
     if not ideas:

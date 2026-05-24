@@ -38,6 +38,7 @@ SCENE_ID_PATTERN = re.compile(r"^scene-\d{2}$")
 SPANISH_SPECIFIC_CHARS = set("áéíóúñ¿¡üÁÉÍÓÚÑÜ")
 ALLOWED_ASSET_REF_KEYS = {"background", "primary", "secondary", "bg", "overlay"}
 FORBIDDEN_QA_VALUES = {"PASS", "PASSED", "TRUE", "OK", "APPROVED", "VERIFIED"}
+ALLOWED_LAYOUTS = {"hook", "subtitle", "checklist", "warning", "quote", "cta"}
 
 
 def load_operator_channel_config(channel_path: Path | None, parsed: dict[str, Any]) -> dict[str, Any]:
@@ -106,10 +107,34 @@ def _validate_scenes(parsed: dict[str, Any]) -> ValidationResult:
             result.errors.append(f"Scene at index {index}: expected id '{expected}', got '{scene_id}'.")
         result.merge(_validate_asset_refs(scene, scene_id or f"index {index}"))
         result.merge(_validate_visual_prompt(scene, scene_id or f"index {index}"))
+        result.merge(_validate_scene_layout(scene, scene_id or f"index {index}"))
 
     duplicates = sorted({sid for sid, n in Counter(s for s in ids if s).items() if n > 1})
     if duplicates:
         result.errors.append(f"Duplicate scene IDs: {duplicates}")
+    return result
+
+
+def _validate_scene_layout(scene: dict[str, Any], scene_label: str) -> ValidationResult:
+    result = ValidationResult()
+    layout = str(scene.get("layout") or "subtitle").lower()
+    if layout not in ALLOWED_LAYOUTS:
+        result.errors.append(
+            f"Scene {scene_label}: invalid layout {layout!r}. Allowed: {sorted(ALLOWED_LAYOUTS)}"
+        )
+    payload = scene.get("layout_payload")
+    if payload is not None and not isinstance(payload, dict):
+        result.errors.append(f"Scene {scene_label}: layout_payload must be an object.")
+        return result
+    if layout == "checklist":
+        bullets = (payload or {}).get("bullets") if isinstance(payload, dict) else None
+        valid = [b for b in bullets or [] if str(b).strip()] if isinstance(bullets, list) else []
+        if len(valid) < 2:
+            result.warnings.append(f"Scene {scene_label}: checklist layout should have 2-4 bullets.")
+    if layout == "cta":
+        cta = (payload or {}).get("cta") if isinstance(payload, dict) else ""
+        if not str(cta or "").strip():
+            result.warnings.append(f"Scene {scene_label}: CTA layout should include layout_payload.cta.")
     return result
 
 

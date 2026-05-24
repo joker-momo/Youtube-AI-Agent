@@ -34,7 +34,9 @@ services:
       - inputs/manual_idea.json
 
   app:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.app
     working_dir: /app
     environment:
       TZ: ${TZ:-Asia/Ho_Chi_Minh}
@@ -121,7 +123,9 @@ services:
     # appliance_net Docker network from browser-worker.
 
   browser-worker:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.browser-worker
     working_dir: /app
     environment:
       TZ: ${TZ:-Asia/Ho_Chi_Minh}

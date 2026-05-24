@@ -27,8 +27,12 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from telegram import Bot
-from telegram.error import TelegramError
+try:
+    from telegram import Bot
+    from telegram.error import TelegramError
+except ImportError:  # pragma: no cover - exercised when optional package is absent
+    Bot = None  # type: ignore[assignment]
+    TelegramError = Exception  # type: ignore[misc,assignment]
 
 
 def _esc(value: Any) -> str:
@@ -51,7 +55,7 @@ def _configured() -> bool:
 
 def _bot() -> Bot | None:
     token = _bot_token()
-    if not token:
+    if not token or Bot is None:
         return None
     return Bot(token=token)
 

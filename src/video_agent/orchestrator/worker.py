@@ -10,6 +10,11 @@ from fastapi import HTTPException
 
 from video_agent.orchestrator.browser_client import BrowserClient
 from video_agent.orchestrator.queue import JobQueue
+from video_agent.orchestrator.stages import (
+    auto_thumbnail_image_stage,
+    run_render_stage,
+    run_whisper_timestamps_stage,
+)
 from video_agent.web.run_all_pipeline import execute_run_all
 
 logger = logging.getLogger("video_agent.worker")
@@ -41,6 +46,37 @@ def _is_retryable_exception(exc: Exception) -> bool:
         if exc.status_code in {401, 403, 404}:
             return False
     return True
+
+
+def _dispatch_queue_job(
+    job: dict,
+    *,
+    jobs_root: Path,
+    channel_path: Path,
+    client: BrowserClient,
+) -> None:
+    job_id = job["job_id"]
+    job_dir = jobs_root / job_id
+    command = job.get("command") or "run_all"
+    enforce_approvals = bool(job.get("enforce_approvals"))
+    if command == "run_all":
+        asyncio.run(execute_run_all(
+            job_dir=job_dir,
+            channel_path=channel_path,
+            client=client,
+            enforce_approvals=enforce_approvals,
+        ))
+        return
+    if command == "stage_render":
+        run_render_stage(job_dir, channel_path)
+        return
+    if command == "stage_whisper_timestamps":
+        run_whisper_timestamps_stage(job_dir)
+        return
+    if command == "stage_thumbnail_image_auto":
+        asyncio.run(auto_thumbnail_image_stage(job_dir, channel_path, client.generate_image))
+        return
+    raise ValueError(f"Unknown queue command: {command}")
 
 
 def run_worker_loop(db_path: Path) -> None:
@@ -77,13 +113,17 @@ def run_worker_loop(db_path: Path) -> None:
                 channel_path = get_channel_path()
 
                 try:
-                    logger.info(f"Executing pipeline for job {job_id}...")
-                    asyncio.run(execute_run_all(
-                        job_dir=job_dir,
+                    logger.info(
+                        "Executing queue command %s for job %s...",
+                        job.get("command") or "run_all",
+                        job_id,
+                    )
+                    _dispatch_queue_job(
+                        job,
+                        jobs_root=get_jobs_root(),
                         channel_path=channel_path,
                         client=client,
-                        enforce_approvals=enforce_approvals,
-                    ))
+                    )
                     logger.info(f"Successfully finished job {job_id}.")
                     queue.mark_completed(job_id)
                 except Exception as e:

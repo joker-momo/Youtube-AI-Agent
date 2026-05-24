@@ -3,8 +3,8 @@
 Correct flow:
   1. Score seed keywords on vidIQ.
   2. Collect ``related`` keywords from each result, score those too.
-  3. Merge all scored keywords, sort by score DESC.
-  4. Take the top-N high-opportunity keywords (high score = high volume / low competition).
+  3. Merge all scored keywords, enrich with V2 scoring signals, and assign buckets.
+  4. Select top-opportunity plus long-tail candidates for prompt input.
   5. Ask ChatGPT to flesh out one video idea per top keyword.
 
 This ensures every idea is anchored to a keyword that YouTube search data confirms
@@ -36,6 +36,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Awaitable, Callable
 
+from video_agent.storage.atomic import atomic_write_json
 from video_agent.utils.json_io import read_yaml
 
 IDEAS_SUBDIR = "ideas"
@@ -84,11 +85,13 @@ def sync_published_videos(channel_config: dict, configs_dir: Path) -> list[dict]
             videos.append({"id": vid_id, "title": title, "published": published})
 
     out_path = configs_dir / ch_id / PUBLISHED_VIDEOS_FILE
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(
-        json.dumps({"channel_id": channel_id, "videos": videos, "synced_at": datetime.now(timezone.utc).isoformat()},
-                   ensure_ascii=False, indent=2),
-        encoding="utf-8",
+    atomic_write_json(
+        out_path,
+        {
+            "channel_id": channel_id,
+            "videos": videos,
+            "synced_at": datetime.now(timezone.utc).isoformat(),
+        },
     )
     return videos
 
@@ -559,8 +562,10 @@ def enrich_keyword_item(item: dict, channel_config: dict) -> dict:
         "intent_strength": score_intent_strength(keyword),
         "content_fit": score_content_fit(keyword, channel_config),
         "language_fit": language_fit,
+        # SERP inspection is intentionally deferred. Browser SERP scraping is
+        # expensive for the local Mac appliance, so V2 keeps a neutral score.
         "serp_opportunity": 50,
-        "notes": sorted(set(notes + ["serp_inspection_skipped"])),
+        "notes": sorted(set(notes + ["serp_inspection_disabled"])),
         "rejection_reasons": [],
     }
     calculate_final_score(enriched)
@@ -594,9 +599,11 @@ async def _discover_top_keywords(
     channel_config: dict | None = None,
     use_v2: bool = True,
 ) -> list[dict] | dict:
-    """Score seeds + their related keywords, return top_n sorted by score DESC.
+    """Score seeds + related keywords and return bucketed V2 keyword data.
 
-    Each returned dict: {keyword, score, volume, competition, related}
+    With use_v2=True, returns top opportunity, long-tail, rejected, and all
+    scored keyword buckets. With use_v2=False, returns the legacy score-sorted
+    list for older callers.
     """
     # Phase 1: score seeds
     seed_results: list[dict] = []
@@ -650,6 +657,7 @@ async def _discover_top_keywords(
             "metadata": {
                 "version": "keyword_scoring_v2",
                 "enable_serp_inspection": bool(cfg.get("enable_serp_inspection", False)),
+                "serp_inspection": "disabled",
                 "target_language": cfg.get("target_language", "spanish"),
                 "target_audience": cfg.get("target_audience", "people_45_plus"),
             },
@@ -906,7 +914,7 @@ def save_ideas(ideas: list[dict], channel_id: str, out_dir: Path) -> list[Path]:
         slug = _slug(idea.get("topic", "idea"))
         filename = f"{now}-{i:02d}-{slug}.json"
         path = dest / filename
-        path.write_text(json.dumps(idea, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_json(path, idea)
         paths.append(path)
 
     return paths

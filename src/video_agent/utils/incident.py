@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from video_agent.contracts import repo_root
+from video_agent.storage.atomic import atomic_write_json
 
 
 def _now_iso() -> str:
@@ -112,7 +113,7 @@ class RunIncidentMonitor:
             "jobs_root": str(self.jobs_root),
             "recent_jobs": recent_job_snapshots(self.jobs_root),
         }
-        self.heartbeat_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_json(self.heartbeat_path, payload)
 
     def finish(self, ok: bool, error: BaseException | None = None) -> Path | None:
         self._stop.set()
@@ -140,9 +141,9 @@ class RunIncidentMonitor:
                 "message": str(error),
                 "traceback": traceback.format_exc(),
             }
-        self.summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_json(self.summary_path, summary)
         if ok:
             return None
         incident_path = self.incident_dir / f"{self.run_id}.incident.json"
-        incident_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_json(incident_path, summary)
         return incident_path

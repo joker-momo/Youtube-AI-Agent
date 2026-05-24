@@ -9,6 +9,7 @@ from typing import Any
 from video_agent.contracts import repo_root
 from video_agent.operator_validators import load_operator_channel_config, validate_operator_artifact
 from video_agent.utils.json_io import read_json, read_yaml, write_json
+from video_agent.storage.atomic import atomic_write_text
 from video_agent.utils.validation import validate_json
 
 ARTIFACT_SCHEMAS = {
@@ -787,7 +788,7 @@ def write_operator_prompts(
             raise ValueError(f"Unsupported operator prompt stage: {current_stage}")
 
         for path, text in paths_and_text:
-            path.write_text(text + "\n", encoding="utf-8")
+            atomic_write_text(path, text + "\n", encoding="utf-8")
             written.append(path)
 
     return PromptWriteResult(paths=written)
@@ -1184,10 +1185,10 @@ def write_operator_review(job_dir: Path, output_path: Path | None = None) -> Pat
     </section>
   </main>
 </body>
-</html>
+    </html>
 """
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(html, encoding="utf-8")
+    atomic_write_text(output_path, html, encoding="utf-8")
     return output_path
 
 

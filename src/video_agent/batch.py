@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from video_agent.contracts import ARTIFACT_VISUAL_REVIEW
+from video_agent.storage.atomic import atomic_write_text
 from video_agent.utils.json_io import read_json, write_json
 
 
@@ -75,6 +76,6 @@ def write_batch_audit(job_dirs: list[Path], audit_path: Path) -> str:
     rows = [build_audit_row(job_dir) for job_dir in job_dirs]
     markdown = format_audit_markdown(rows)
     audit_path.parent.mkdir(parents=True, exist_ok=True)
-    audit_path.write_text(markdown, encoding="utf-8")
+    atomic_write_text(audit_path, markdown, encoding="utf-8")
     write_json(audit_path.with_suffix(".json"), {"jobs": [row.__dict__ | {"job_dir": str(row.job_dir)} for row in rows]})
     return markdown

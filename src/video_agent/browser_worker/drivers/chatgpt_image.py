@@ -15,6 +15,7 @@ from video_agent.browser_worker.drivers.humanize import (
     human_pause,
     human_type,
 )
+from video_agent.storage.atomic import atomic_write_bytes
 
 if TYPE_CHECKING:
     from playwright.async_api import Page
@@ -278,7 +279,7 @@ class ChatGPTImageDriver:
                     )
                 body = await response.body()
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_bytes(body)
+                atomic_write_bytes(dest, body)
                 return dest
             except Exception as exc:
                 if attempt < max_attempts:

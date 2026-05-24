@@ -40,6 +40,7 @@ from video_agent.pipeline import OperatorRenderOptions, render_operator_job
 from video_agent.utils.json_io import read_json, read_yaml
 from video_agent.utils.logging import EventLogger
 from video_agent.runtime.providers import AUDIO_SUBPROCESS_ENV, SubprocessAudioTaskProvider
+from video_agent.storage.atomic import atomic_write_text
 
 IDEA_FILE = "idea.json"
 SCRIPT_PROMPT_PATH = Path("operator/chatgpt/script_prompt.md")
@@ -134,7 +135,7 @@ def run_script_stage(job_dir: Path, channel_path: Path) -> Path:
 
     output_path = job_dir / SCRIPT_PROMPT_PATH
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(prompt_text, encoding="utf-8")
+    atomic_write_text(output_path, prompt_text, encoding="utf-8")
 
     _complete_stage(job_dir, "script", output_path)
 
@@ -154,7 +155,7 @@ def promote_script_stage(job_dir: Path, channel_path: Path, raw_response: str) -
 
     raw_path = job_dir / SCRIPT_RAW_PATH
     raw_path.parent.mkdir(parents=True, exist_ok=True)
-    raw_path.write_text(raw_response, encoding="utf-8")
+    atomic_write_text(raw_path, raw_response, encoding="utf-8")
 
     try:
         result = promote_operator_artifact(
@@ -190,7 +191,7 @@ def run_scenes_stage(job_dir: Path, channel_path: Path) -> Path:
 
     output_path = job_dir / SCENES_PROMPT_PATH
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(prompt_text, encoding="utf-8")
+    atomic_write_text(output_path, prompt_text, encoding="utf-8")
 
     _complete_stage(job_dir, "scenes", output_path)
     return output_path
@@ -209,7 +210,7 @@ def promote_scenes_stage(job_dir: Path, channel_path: Path, raw_response: str) -
 
     raw_path = job_dir / SCENES_RAW_PATH
     raw_path.parent.mkdir(parents=True, exist_ok=True)
-    raw_path.write_text(raw_response, encoding="utf-8")
+    atomic_write_text(raw_path, raw_response, encoding="utf-8")
 
     try:
         result = promote_operator_artifact(
@@ -248,7 +249,7 @@ def run_seo_stage(job_dir: Path, channel_path: Path) -> Path:
 
     output_path = job_dir / SEO_PROMPT_PATH
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(prompt_text, encoding="utf-8")
+    atomic_write_text(output_path, prompt_text, encoding="utf-8")
 
     _complete_stage(job_dir, "seo", output_path)
     return output_path
@@ -267,7 +268,7 @@ def promote_seo_stage(job_dir: Path, channel_path: Path, raw_response: str) -> P
 
     raw_path = job_dir / SEO_RAW_PATH
     raw_path.parent.mkdir(parents=True, exist_ok=True)
-    raw_path.write_text(raw_response, encoding="utf-8")
+    atomic_write_text(raw_path, raw_response, encoding="utf-8")
 
     try:
         result = promote_operator_artifact(
@@ -658,7 +659,7 @@ def promote_qa_stage(job_dir: Path, artifact: str, raw_response: str) -> Path:
 
     raw_path = job_dir / _QA_RAW_PATH[artifact]
     raw_path.parent.mkdir(parents=True, exist_ok=True)
-    raw_path.write_text(raw_response, encoding="utf-8")
+    atomic_write_text(raw_path, raw_response, encoding="utf-8")
 
     qa_output = job_dir / "operator" / "claude" / f"{artifact}_qa.json"
 
@@ -877,7 +878,7 @@ async def auto_scenes_stage_sharded(
     plan_prompt = _chatgpt_scenes_plan_prompt(channel_config, script)
     prompt_path = job_dir / SCENES_PROMPT_PATH
     prompt_path.parent.mkdir(parents=True, exist_ok=True)
-    prompt_path.write_text(plan_prompt, encoding="utf-8")
+    atomic_write_text(prompt_path, plan_prompt, encoding="utf-8")
     _complete_stage(job_dir, "scenes", prompt_path)
 
     try:

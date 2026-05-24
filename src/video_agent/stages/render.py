@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from video_agent.contracts import repo_root
+from video_agent.storage.atomic import atomic_write_json, atomic_write_text
 from video_agent.utils.json_io import read_json
 
 
@@ -187,7 +188,7 @@ def _run_with_progress(
     ) as proc:
         if pid_file_path is not None:
             try:
-                pid_file_path.write_text(str(proc.pid), encoding="utf-8")
+                atomic_write_text(pid_file_path, str(proc.pid), encoding="utf-8")
             except OSError:
                 pass
         progress: dict = {"percent": 0, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""}
@@ -217,7 +218,7 @@ def _run_with_progress(
                         "eta": eta_m.group(1).strip() if eta_m else "",
                     }
                     try:
-                        progress_path.write_text(json.dumps(progress), encoding="utf-8")
+                        atomic_write_json(progress_path, progress, indent=0)
                     except OSError:
                         pass
         finally:
@@ -263,9 +264,10 @@ def render_with_remotion(
         )
     # Mark 100% on completion.
     try:
-        progress_path.write_text(
-            json.dumps({"percent": 100, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""}),
-            encoding="utf-8",
+        atomic_write_json(
+            progress_path,
+            {"percent": 100, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""},
+            indent=0,
         )
     except OSError:
         pass
@@ -305,4 +307,3 @@ def render_with_remotion(
             raise RuntimeError(
                 "All thumbnail variants failed: " + "; ".join(thumb_errors)
             )
-

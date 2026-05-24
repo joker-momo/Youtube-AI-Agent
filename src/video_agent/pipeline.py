@@ -29,6 +29,7 @@ from video_agent.utils.logging import EventLogger
 from video_agent.utils.paths import create_job_dir
 from video_agent.utils.validation import validate_json
 from video_agent.runtime.providers import AUDIO_SUBPROCESS_ENV, SubprocessAudioTaskProvider
+from video_agent.storage.atomic import atomic_write_text
 
 _AUDIO_SUBPROCESS_ENV = AUDIO_SUBPROCESS_ENV
 
@@ -348,7 +349,8 @@ def _write_report(
             pass
 
     report_path = job_dir / ARTIFACT_REPORT
-    report_path.write_text(
+    atomic_write_text(
+        report_path,
         "\n".join(
             [
                 f"# Job Report: {job_id}",

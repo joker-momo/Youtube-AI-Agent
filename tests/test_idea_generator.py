@@ -2,15 +2,19 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from video_agent.contracts import repo_root
+import video_agent.orchestrator.idea_generator as idea_generator
 from video_agent.orchestrator.idea_generator import (
     DEFAULT_CHANNEL_KEYWORD_CONFIG,
+    _discover_top_keywords,
     _idea_gen_prompt,
+    _select_keywords_for_prompt,
     _slug,
     assign_bucket,
     calculate_final_score,
@@ -115,6 +119,22 @@ def test_parse_ideas_missing_required_field_skipped():
 def test_parse_ideas_empty_string_returns_empty():
     result = parse_ideas("no json here at all")
     assert result == []
+
+
+def test_save_ideas_uses_atomic_json(monkeypatch, tmp_path: Path):
+    writes: list[tuple[Path, dict]] = []
+
+    def fake_atomic_write_json(path: Path, payload: dict, indent: int = 2) -> None:
+        writes.append((path, payload))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=indent) + "\n", encoding="utf-8")
+
+    monkeypatch.setattr(idea_generator, "atomic_write_json", fake_atomic_write_json)
+
+    paths = save_ideas([SAMPLE_IDEAS[0]], "vida-plena-45", tmp_path)
+
+    assert len(paths) == 1
+    assert writes == [(paths[0], SAMPLE_IDEAS[0])]
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +306,110 @@ def test_flatten_keyword_result_for_ui_legacy_and_v2():
     }
     assert flatten_keyword_result_for_ui(legacy) == legacy
     assert [item["keyword"] for item in flatten_keyword_result_for_ui(v2)] == ["b", "c"]
+
+
+def test_select_keywords_for_prompt_uses_top_opportunity_then_long_tail():
+    result = {
+        "top_opportunity_keywords": [{"keyword": "top"}],
+        "long_tail_test_keywords": [{"keyword": "tail"}],
+        "all_scored_keywords": [{"keyword": "fallback"}],
+    }
+
+    assert [item["keyword"] for item in _select_keywords_for_prompt(result, 2)] == ["top", "tail"]
+
+
+def test_discover_top_keywords_v2_returns_bucketed_dict():
+    async def fake_vidiq(keywords: list[str]) -> list[dict]:
+        return [
+            {
+                "keyword": keyword,
+                "score": 78,
+                "volume": "Medium",
+                "competition": "Low",
+                "related": [],
+            }
+            for keyword in keywords
+        ]
+
+    result = asyncio.run(
+        _discover_top_keywords(
+            ["como comer mejor despues de los 45"],
+            fake_vidiq,
+            channel_config={"audience": {"language": "es-419"}},
+        )
+    )
+
+    assert result["metadata"]["version"] == "keyword_scoring_v2"
+    assert result["metadata"]["enable_serp_inspection"] is False
+    assert result["metadata"]["serp_inspection"] == "disabled"
+    assert result["top_opportunity_keywords"]
+    assert "serp_inspection_disabled" in result["top_opportunity_keywords"][0]["notes"]
+
+
+def test_discover_top_keywords_v2_rejects_portuguese_even_with_high_vidiq_score():
+    async def fake_vidiq(keywords: list[str]) -> list[dict]:
+        return [
+            {
+                "keyword": keyword,
+                "score": 95,
+                "volume": "High",
+                "competition": "Low",
+                "related": [],
+            }
+            for keyword in keywords
+        ]
+
+    result = asyncio.run(
+        _discover_top_keywords(
+            ["como comer bem depois dos 45"],
+            fake_vidiq,
+            channel_config={"audience": {"language": "es-419"}},
+        )
+    )
+
+    assert not result["top_opportunity_keywords"]
+    assert result["rejected_keywords"]
+    assert result["rejected_keywords"][0]["keyword"] == "como comer bem depois dos 45"
+
+
+def test_generate_ideas_with_metadata_returns_v2_keywords_when_vidiq_available(channel_path: Path):
+    async def fake_vidiq(keywords: list[str]) -> list[dict]:
+        return [
+            {
+                "keyword": keyword,
+                "score": 78,
+                "volume": "Medium",
+                "competition": "Low",
+                "related": [],
+            }
+            for keyword in keywords
+        ]
+
+    async def fake_chatgpt(messages: list[str]) -> str:
+        return json.dumps(
+            [
+                {
+                    **SAMPLE_IDEAS[0],
+                    "target_keyword": "como comer mejor despues de los 45",
+                }
+            ],
+            ensure_ascii=False,
+        )
+
+    ideas, top_keywords, seed_source = asyncio.run(
+        generate_ideas(
+            channel_path,
+            fake_chatgpt,
+            vidiq_fn=fake_vidiq,
+            seed_topics=["como comer mejor despues de los 45"],
+            count=1,
+            with_metadata=True,
+        )
+    )
+
+    assert ideas[0]["target_keyword"] == "como comer mejor despues de los 45"
+    assert top_keywords["metadata"]["version"] == "keyword_scoring_v2"
+    assert seed_source == "user"
 
 
 # ---------------------------------------------------------------------------

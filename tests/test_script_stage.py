@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from video_agent.contracts import repo_root
 from video_agent.orchestrator import create_job
+from video_agent.orchestrator.queue import JobQueue
 from video_agent.orchestrator.stages import (
     SCENES_PROMPT_PATH,
     SCENES_RAW_PATH,
@@ -606,6 +607,45 @@ def test_post_idea_then_run_script_via_http(client: TestClient, tmp_path: Path, 
     script_stage = next(s for s in state["stages"] if s["name"] == "script")
     assert script_stage["status"] == "completed"
     assert state["current_stage"] == "script_promote"
+
+
+def test_post_render_async_enqueues_stage_command(client: TestClient, tmp_path: Path):
+    _create_job(client, "job-render-async")
+
+    response = client.post("/jobs/job-render-async/stages/render/run?async=true")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "enqueued"
+    assert response.json()["command"] == "stage_render"
+    queued = JobQueue(tmp_path / "queue.db").get_job("job-render-async")
+    assert queued is not None
+    assert queued["command"] == "stage_render"
+
+
+def test_post_whisper_async_enqueues_stage_command(client: TestClient, tmp_path: Path):
+    _create_job(client, "job-whisper-async")
+
+    response = client.post("/jobs/job-whisper-async/stages/whisper_timestamps/run?async=true")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "enqueued"
+    assert response.json()["command"] == "stage_whisper_timestamps"
+    queued = JobQueue(tmp_path / "queue.db").get_job("job-whisper-async")
+    assert queued is not None
+    assert queued["command"] == "stage_whisper_timestamps"
+
+
+def test_post_thumbnail_async_enqueues_stage_command(client: TestClient, tmp_path: Path):
+    _create_job(client, "job-thumbnail-async")
+
+    response = client.post("/jobs/job-thumbnail-async/stages/thumbnail_image/auto?async=true")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "enqueued"
+    assert response.json()["command"] == "stage_thumbnail_image_auto"
+    queued = JobQueue(tmp_path / "queue.db").get_job("job-thumbnail-async")
+    assert queued is not None
+    assert queued["command"] == "stage_thumbnail_image_auto"
 
 
 def test_post_promote_script_via_http(client: TestClient, tmp_path: Path, idea_payload: dict, valid_script_payload: dict):

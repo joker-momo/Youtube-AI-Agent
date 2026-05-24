@@ -6,6 +6,7 @@ from pathlib import Path
 
 from video_agent.orchestrator import DEFAULT_STAGES, load_job, save_job
 from video_agent.orchestrator.stages import StageInputMissingError
+from video_agent.storage.atomic import atomic_write_json
 
 APPROVALS_FILE = "approvals.json"
 APPROVAL_REQUIRED_STAGES: tuple[str, ...] = (
@@ -41,10 +42,7 @@ def load_approvals(job_dir: Path) -> dict[str, bool]:
 
 def save_approvals(job_dir: Path, approvals: dict[str, bool]) -> None:
     path = approvals_path(job_dir)
-    path.write_text(
-        json.dumps({k: bool(v) for k, v in approvals.items()}, indent=2),
-        encoding="utf-8",
-    )
+    atomic_write_json(path, {k: bool(v) for k, v in approvals.items()})
 
 
 def set_approval(job_dir: Path, stage_name: str, value: bool) -> None:

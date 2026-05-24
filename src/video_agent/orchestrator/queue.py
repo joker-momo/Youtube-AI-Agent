@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import json
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,8 @@ class JobQueue:
                     started_at TIMESTAMP,
                     completed_at TIMESTAMP,
                     attempts INTEGER NOT NULL DEFAULT 0,
+                    command TEXT NOT NULL DEFAULT 'run_all',
+                    payload TEXT,
                     error TEXT
                 )
             """)
@@ -33,20 +36,34 @@ class JobQueue:
                 conn.execute(
                     "ALTER TABLE job_queue ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0"
                 )
+            if "command" not in existing:
+                conn.execute(
+                    "ALTER TABLE job_queue ADD COLUMN command TEXT NOT NULL DEFAULT 'run_all'"
+                )
+            if "payload" not in existing:
+                conn.execute("ALTER TABLE job_queue ADD COLUMN payload TEXT")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_status ON job_queue(status)")
 
-    def enqueue(self, job_id: str, enforce_approvals: bool) -> bool:
+    def enqueue(
+        self,
+        job_id: str,
+        enforce_approvals: bool,
+        *,
+        command: str = "run_all",
+        payload: dict[str, Any] | None = None,
+    ) -> bool:
+        payload_text = json.dumps(payload, ensure_ascii=False) if payload is not None else None
         with sqlite3.connect(self.db_path) as conn:
             try:
                 conn.execute(
-                    "INSERT INTO job_queue (job_id, status, enforce_approvals) VALUES (?, 'pending', ?)",
-                    (job_id, 1 if enforce_approvals else 0)
+                    "INSERT INTO job_queue (job_id, status, enforce_approvals, command, payload) VALUES (?, 'pending', ?, ?, ?)",
+                    (job_id, 1 if enforce_approvals else 0, command or "run_all", payload_text)
                 )
                 return True
             except sqlite3.IntegrityError:
                 conn.execute(
-                    "UPDATE job_queue SET status = 'pending', enforce_approvals = ?, attempts = 0, error = NULL, started_at = NULL, completed_at = NULL WHERE job_id = ?",
-                    (1 if enforce_approvals else 0, job_id)
+                    "UPDATE job_queue SET status = 'pending', enforce_approvals = ?, command = ?, payload = ?, attempts = 0, error = NULL, started_at = NULL, completed_at = NULL WHERE job_id = ?",
+                    (1 if enforce_approvals else 0, command or "run_all", payload_text, job_id)
                 )
                 return True
 

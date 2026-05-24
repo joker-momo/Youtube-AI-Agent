@@ -8,6 +8,7 @@ import pytest
 
 from video_agent.storage.atomic import (
     append_jsonl_locked,
+    atomic_write_bytes,
     atomic_write_json,
     atomic_write_text,
 )
@@ -32,6 +33,15 @@ def test_atomic_write_text_replaces_existing_file(tmp_path):
     atomic_write_text(path, "new", encoding="utf-8")
 
     assert path.read_text(encoding="utf-8") == "new"
+
+
+def test_atomic_write_bytes_replaces_existing_file(tmp_path):
+    path = tmp_path / "image.bin"
+    path.write_bytes(b"old")
+
+    atomic_write_bytes(path, b"\x00\x01new")
+
+    assert path.read_bytes() == b"\x00\x01new"
 
 
 def test_atomic_write_json_replace_failure_preserves_existing_file(tmp_path, monkeypatch):

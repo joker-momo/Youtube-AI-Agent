@@ -15,6 +15,7 @@ from video_agent.operator import (
     write_operator_review,
 )
 from video_agent.pipeline import OperatorRenderOptions, PipelineOptions, render_operator_job, run_pipeline
+from video_agent.storage.atomic import atomic_write_text
 from video_agent.utils.incident import RunIncidentMonitor
 
 
@@ -254,7 +255,7 @@ def _dispatch(args: argparse.Namespace) -> int:
         markdown = format_audit_markdown(rows)
         if args.audit_path:
             args.audit_path.parent.mkdir(parents=True, exist_ok=True)
-            args.audit_path.write_text(markdown, encoding="utf-8")
+            atomic_write_text(args.audit_path, markdown, encoding="utf-8")
             print(f"audit.md: {args.audit_path}")
         print(markdown, end="")
         return 0

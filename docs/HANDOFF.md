@@ -22,7 +22,7 @@ Build a Docker-first standalone app that can produce one complete YouTube video 
 trend/data intake
 -> idea selection
 -> ChatGPT script/scenes/SEO
--> Gemini QA
+-> Claude QA
 -> images/assets
 -> TTS
 -> Remotion render
@@ -50,6 +50,7 @@ YouTube upload remains manual in Phase 1.
 | Browser control | Playwright CDP attach to host Chrome |
 | Chrome | Dedicated host Chrome profile on port `9222` |
 | Browser service | Separate `browser-worker` container |
+| QA provider | Claude through browser-worker; Gemini references are legacy unless explicitly marked |
 | Flow | Sequential, file-based state detection |
 | Failure mode | Fail-soft, retry, then manual prompt fallback |
 | YouTube upload | Manual in Phase 1 |

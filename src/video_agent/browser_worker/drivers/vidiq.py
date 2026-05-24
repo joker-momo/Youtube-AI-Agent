@@ -13,6 +13,7 @@ from video_agent.browser_worker.drivers.humanize import (
     human_click,
     human_pause,
 )
+from video_agent.storage.atomic import atomic_write_text
 
 if TYPE_CHECKING:
     from playwright.async_api import Page
@@ -201,7 +202,7 @@ class VidIQDriver:
                 from pathlib import Path as _P
                 dump = _P("/data/trace") / f"vidiq-raw-{keyword[:30].replace(' ', '_')}.txt"
                 dump.parent.mkdir(parents=True, exist_ok=True)
-                dump.write_text(text, encoding="utf-8")
+                atomic_write_text(dump, text, encoding="utf-8")
             except Exception:
                 pass
             if "not enough search data" in text.lower():

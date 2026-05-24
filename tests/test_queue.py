@@ -3,7 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from video_agent.orchestrator.queue import JobQueue
-from video_agent.orchestrator.worker import _is_retryable_exception
+import video_agent.orchestrator.worker as worker
+from video_agent.orchestrator.worker import _dispatch_queue_job, _is_retryable_exception
 from fastapi import HTTPException
 
 
@@ -50,6 +51,52 @@ def test_requeue_running_jobs_preserves_attempt_count(tmp_path: Path):
     assert job is not None
     assert job["job_id"] == "job-a"
     assert job["attempts"] == 1
+
+
+def test_enqueue_records_command_and_payload(tmp_path: Path):
+    queue = JobQueue(tmp_path / "queue.db", max_attempts=3)
+
+    queue.enqueue(
+        "job-a",
+        enforce_approvals=False,
+        command="stage_render",
+        payload={"reason": "manual"},
+    )
+
+    job = queue.get_next_job()
+    assert job is not None
+    assert job["command"] == "stage_render"
+    assert job["payload"] == '{"reason": "manual"}'
+
+
+def test_existing_queue_rows_default_to_run_all(tmp_path: Path):
+    queue = JobQueue(tmp_path / "queue.db", max_attempts=3)
+    queue.enqueue("job-a", enforce_approvals=False)
+
+    job = queue.get_next_job()
+
+    assert job is not None
+    assert job["command"] == "run_all"
+    assert job["payload"] is None
+
+
+def test_worker_dispatches_render_command(monkeypatch, tmp_path: Path):
+    calls: list[tuple[Path, Path]] = []
+
+    def fake_render(job_dir: Path, channel_path: Path) -> Path:
+        calls.append((job_dir, channel_path))
+        return job_dir / "video.mp4"
+
+    monkeypatch.setattr(worker, "run_render_stage", fake_render)
+
+    _dispatch_queue_job(
+        {"job_id": "job-a", "command": "stage_render", "enforce_approvals": 0},
+        jobs_root=tmp_path,
+        channel_path=tmp_path / "channel.yaml",
+        client=object(),
+    )
+
+    assert calls == [(tmp_path / "job-a", tmp_path / "channel.yaml")]
 
 
 def test_worker_retry_classification_skips_operator_blocks():

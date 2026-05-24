@@ -377,10 +377,34 @@ def _run_whisper_timestamps_stage_inline(job_dir: Path) -> Path:
     if not scenes_path.exists():
         raise StageInputMissingError(f"Missing {scenes_path}")
 
+    import threading
+    import time
+    import wave
     import whisper  # lazy import — heavy dep
 
     scene_doc = read_json(scenes_path)
     scenes = scene_doc["scenes"]
+
+    # --- Log audio file metadata ---
+    audio_size_bytes = narration_path.stat().st_size
+    audio_duration_sec: float | None = None
+    try:
+        with wave.open(str(narration_path), "rb") as wf:
+            audio_duration_sec = round(wf.getnframes() / wf.getframerate(), 2)
+    except Exception:
+        pass
+    logger.log(
+        "WHISPER_STAGE_PROGRESS",
+        {
+            "job_id": state.job_id,
+            "step": "audio_info",
+            "file": narration_path.name,
+            "size_bytes": audio_size_bytes,
+            "size_mb": round(audio_size_bytes / 1_048_576, 2),
+            "duration_sec": audio_duration_sec,
+            "scene_count": len(scenes),
+        },
+    )
 
     logger.log(
         "WHISPER_STAGE_PROGRESS",
@@ -400,33 +424,98 @@ def _run_whisper_timestamps_stage_inline(job_dir: Path) -> Path:
         "WHISPER_STAGE_PROGRESS",
         {
             "job_id": state.job_id,
-            "step": "transcribing_audio",
-            "timeout_sec": whisper_transcribe_timeout_sec,
+            "step": "whisper_model_loaded",
         },
-    )
-    result = _run_blocking_with_timeout(
-        label="Whisper transcription",
-        timeout_sec=whisper_transcribe_timeout_sec,
-        fn=model.transcribe,
-        audio=str(narration_path),
-        word_timestamps=True,
-        language="es",
-        fp16=False,
     )
     logger.log(
         "WHISPER_STAGE_PROGRESS",
-        {"job_id": state.job_id, "step": "transcription_complete"},
+        {
+            "job_id": state.job_id,
+            "step": "transcribing_audio",
+            "timeout_sec": whisper_transcribe_timeout_sec,
+            "audio_duration_sec": audio_duration_sec,
+        },
+    )
+
+    # --- Heartbeat thread: emit progress every 10s while transcribing ---
+    _transcribe_done = threading.Event()
+    _transcribe_start = time.monotonic()
+
+    def _heartbeat_thread():
+        heartbeat_interval = 10
+        while not _transcribe_done.wait(timeout=heartbeat_interval):
+            elapsed = round(time.monotonic() - _transcribe_start, 1)
+            pct: float | None = None
+            if audio_duration_sec and audio_duration_sec > 0:
+                # Whisper tiny ~10–15× realtime on CPU; estimate progress
+                estimated_total = audio_duration_sec / 12.0
+                pct = round(min(elapsed / estimated_total * 100, 99.0), 1)
+            logger.log(
+                "WHISPER_STAGE_PROGRESS",
+                {
+                    "job_id": state.job_id,
+                    "step": "transcribing_audio_heartbeat",
+                    "elapsed_sec": elapsed,
+                    "estimated_pct": pct,
+                },
+            )
+
+    hb = threading.Thread(target=_heartbeat_thread, daemon=True)
+    hb.start()
+    try:
+        result = _run_blocking_with_timeout(
+            label="Whisper transcription",
+            timeout_sec=whisper_transcribe_timeout_sec,
+            fn=model.transcribe,
+            audio=str(narration_path),
+            word_timestamps=True,
+            language="es",
+            fp16=False,
+        )
+    finally:
+        _transcribe_done.set()
+    elapsed_total = round(time.monotonic() - _transcribe_start, 1)
+    # --- Log transcription stats ---
+    segments = result.get("segments") or []
+    total_words_raw = sum(len(seg.get("words") or []) for seg in segments)
+    audio_covered_sec: float | None = None
+    if segments:
+        try:
+            audio_covered_sec = round(float(segments[-1]["end"]), 2)
+        except Exception:
+            pass
+    logger.log(
+        "WHISPER_STAGE_PROGRESS",
+        {
+            "job_id": state.job_id,
+            "step": "transcription_complete",
+            "elapsed_sec": elapsed_total,
+            "segment_count": len(segments),
+            "word_count": total_words_raw,
+            "audio_covered_sec": audio_covered_sec,
+        },
     )
 
     # Flatten all words from all segments (cast np.float64 → float for JSON)
     all_words: list[dict] = []
-    for seg in result.get("segments") or []:
+    for seg in segments:
         for w in seg.get("words") or []:
             all_words.append({"word": w["word"].strip(), "start": float(w["start"]), "end": float(w["end"])})
+    logger.log(
+        "WHISPER_STAGE_PROGRESS",
+        {
+            "job_id": state.job_id,
+            "step": "mapping_words_to_scenes",
+            "total_words": len(all_words),
+            "scene_count": len(scenes),
+        },
+    )
 
     # Map individual rebased words to scenes by cumulative audio offset
     scene_data = []
     offset = 0.0
+    scenes_with_words = 0
+    scenes_without_words = 0
     for scene in scenes:
         dur = float(scene.get("duration_sec") or 15)
         scene_end = offset + dur
@@ -435,6 +524,10 @@ def _run_whisper_timestamps_stage_inline(job_dir: Path) -> Path:
             w for w in all_words
             if offset <= (w["start"] + w["end"]) / 2 < scene_end
         ]
+        if scene_words:
+            scenes_with_words += 1
+        else:
+            scenes_without_words += 1
         # Rebase timestamps relative to this scene's audio offset
         rebased = [
             {
@@ -450,6 +543,17 @@ def _run_whisper_timestamps_stage_inline(job_dir: Path) -> Path:
             "word_segments": rebased,
         })
         offset = scene_end
+    logger.log(
+        "WHISPER_STAGE_PROGRESS",
+        {
+            "job_id": state.job_id,
+            "step": "scene_mapping_complete",
+            "scenes_with_words": scenes_with_words,
+            "scenes_without_words": scenes_without_words,
+            "total_scenes": len(scenes),
+            "total_audio_duration_sec": round(offset, 2),
+        },
+    )
 
     output = {"scenes": scene_data}
     output_path = job_dir / "whisper_timestamps.json"
@@ -773,7 +877,7 @@ async def _auto_run_then_promote(
 
     # Continuation loop: if the model truncated mid-JSON, send "Continúa"
     # and append until the JSON parses or we give up (max 4 continuations).
-    import json as _json
+    from video_agent.operator import extract_json_objects
 
     _CONTINUE_MSG = (
         "Continúa exactamente desde donde te quedaste, "
@@ -781,18 +885,16 @@ async def _auto_run_then_promote(
     )
     _max_continuations = 4
     for _attempt in range(_max_continuations):
-        try:
-            _json.loads(raw_response.strip())
-            break  # valid JSON — proceed to promote
-        except _json.JSONDecodeError:
-            # Check if there's any JSON start; if not, don't bother continuing
-            if "{" not in raw_response:
-                break
-            # Looks truncated — ask the model to continue
-            continuation = await session_fn([_CONTINUE_MSG])
-            if not isinstance(continuation, str) or not continuation.strip():
-                break
-            raw_response = raw_response + continuation
+        if extract_json_objects(raw_response):
+            break  # valid JSON extracted — proceed to promote
+        # Check if there's any JSON start; if not, don't bother continuing
+        if "{" not in raw_response:
+            break
+        # Looks truncated — ask the model to continue
+        continuation = await session_fn([_CONTINUE_MSG])
+        if not isinstance(continuation, str) or not continuation.strip():
+            break
+        raw_response = raw_response + continuation
     else:
         pass  # exhausted continuations — let promoter decide
 

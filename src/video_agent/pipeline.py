@@ -133,11 +133,25 @@ def _prepare_branding(channel_config: dict) -> dict:
     root = repo_root()
     channel_id = (channel_config.get("channel") or {}).get("id", "default")
     branding_cfg = channel_config.get("branding") or {}
-    intro_sec = max(0.0, float(branding_cfg.get("intro_sec", 2.0)))
-    outro_sec = max(0.0, float(branding_cfg.get("outro_sec", 2.0)))
+    # Intro/outro default OFF for maximum opening retention. YouTube viewers
+    # decide whether to keep watching within the first 5-15 seconds, so the
+    # video must start on the narration hook rather than a logo card. The
+    # legacy logo intro/outro is only re-enabled when ``branding.enable_intro_outro``
+    # is explicitly true in channel config.
+    enable_intro_outro = bool(branding_cfg.get("enable_intro_outro", False))
+    if enable_intro_outro:
+        intro_sec = max(0.0, float(branding_cfg.get("intro_sec", 2.0)))
+        outro_sec = max(0.0, float(branding_cfg.get("outro_sec", 2.0)))
+    else:
+        intro_sec = 0.0
+        outro_sec = 0.0
     logo_source = _resolve_brand_logo_source(channel_config)
-    intro_video_source = _resolve_brand_video_source(channel_config, "intro")
-    outro_video_source = _resolve_brand_video_source(channel_config, "outro")
+    intro_video_source = (
+        _resolve_brand_video_source(channel_config, "intro") if enable_intro_outro else None
+    )
+    outro_video_source = (
+        _resolve_brand_video_source(channel_config, "outro") if enable_intro_outro else None
+    )
     logo_public = None
     intro_video_public = None
     outro_video_public = None

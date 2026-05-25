@@ -4,6 +4,12 @@ channel:
   name: "Vida Plena 45+"
   youtube_channel_id: "UCKUswqsAaLsEkcsgzTuKAmw"
   description: "Salud y bienestar práctico para personas de más de 45 años en España. Consejos sencillos sobre alimentación, descanso, movimiento suave y hábitos diarios, sin dietas extremas ni promesas milagro."
+branding:
+  # Opening retention rule: skip the logo intro and outro by default. YouTube
+  # viewers decide whether to keep watching in the first 5-15 seconds; the
+  # video must start on the narration hook, not on a branded card. Set
+  # enable_intro_outro: true only for a one-off ceremonial cut.
+  enable_intro_outro: false
 audience:
   language: "es-ES"
   age_range: [45, 75]

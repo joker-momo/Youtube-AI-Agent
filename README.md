@@ -322,6 +322,23 @@ docker compose run --rm video-agent python -m video_agent.cli audit \
   --job jobs/<job_id_2>
 ```
 
+## Opening Retention Policy
+
+YouTube viewers decide whether to keep watching within the first 5–15 seconds. To protect that window we run with **no logo intro and no outro by default**:
+
+- `branding.enable_intro_outro` is `false` in `configs/vida-plena-45/channel.yaml`. The pipeline (`src/video_agent/pipeline.py::_prepare_branding`) reads this flag and clamps `intro_sec` / `outro_sec` to `0`, skipping the Remotion intro and outro sequences entirely. The first frame the viewer sees is `scene-01` narration.
+- The ChatGPT script prompt (`_chatgpt_script_prompt`) carries a top-priority `OPENING RETENTION RULES (FIRST 30 SECONDS)` block. It bans meta-introductions (`En este video`, `Hoy`, `Bienvenidos`, `Hola`, channel-name openers) and forces one of four punchy openers: specific pain symptom, contradiction / pattern interrupt, concrete number + promise, or vivid micro-scene. Section 1 must deliver the first concrete payoff in the first ~30 seconds.
+- The ChatGPT scenes prompt (`_chatgpt_scenes_prompt`) tells the model that `scene-01` is the first frame the viewer sees, caps scene-01 duration to 8–12 s, and demands that scenes 01–03 visuals show the pain/situation directly rather than a logo card or wide establishing shot.
+
+To re-enable the logo intro/outro for a one-off ceremonial cut, set:
+
+```yaml
+branding:
+  enable_intro_outro: true
+  intro_sec: 2.5
+  outro_sec: 2.5
+```
+
 ## Visual Assets
 
 The default channel uses `visuals.strategy: "auto"`:

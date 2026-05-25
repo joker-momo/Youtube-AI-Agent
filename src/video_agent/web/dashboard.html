@@ -594,7 +594,15 @@
     font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
     color: #475569;
   }
-  .channel-video-row .cv-dot { color: #cbd5e1; }
+  .channel-video-row .cv-views {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-weight: 600;
+    color: #334155;
+  }
+  .channel-video-row .cv-date { color: #64748b; }
+  .channel-video-row .cv-dot { color: #cbd5e1; margin: 0 4px; }
   /* ---- end Channel Videos rows ---- */
   .gate-note { font-size: 12px; color: #8a5a12; background: #fff7eb; border: 1px solid #f1d6af; border-radius: 6px; padding: 6px 8px; }
   .insight { margin-top: 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; padding: 14px; }
@@ -2908,7 +2916,15 @@ function _renderChannelVideos(payload) {
   } else {
     linkEl.style.display = 'none';
   }
-  const videos = payload.videos || [];
+  // Newest first, regardless of how the cache was written. Backend sorts
+  // already, but a defensive client-side sort means an older cache file
+  // still renders in the right order after upgrade.
+  const videos = (payload.videos || []).slice().sort((a, b) => {
+    const da = String(a && a.published || '');
+    const db = String(b && b.published || '');
+    if (da === db) return 0;
+    return da > db ? -1 : 1;
+  });
   if (videos.length === 0) {
     listEl.innerHTML = `
       <div style="text-align:center;padding:24px 16px;border:1px dashed var(--line-strong);border-radius:8px;background:#fafbfc;color:var(--muted);font-size:13px">
@@ -2923,18 +2939,22 @@ function _renderChannelVideos(payload) {
     const vid = String(v.id || '');
     const title = String(v.title || '(untitled)');
     const published = v.published ? new Date(v.published).toLocaleDateString() : '';
+    const views = (typeof v.views === 'number' && v.views >= 0) ? _formatViews(v.views) : null;
     const url = vid ? `https://www.youtube.com/watch?v=${encodeURIComponent(vid)}` : '#';
     const thumb = vid ? `https://i.ytimg.com/vi/${encodeURIComponent(vid)}/mqdefault.jpg` : '';
+    const subParts = [];
+    if (views !== null) subParts.push(`<span class="cv-views" title="View count from YouTube RSS">👁 ${escapeHtml(views)} views</span>`);
+    if (published) subParts.push(`<span class="cv-date">${escapeHtml(published)}</span>`);
+    const sub = subParts.length
+      ? subParts.join('<span class="cv-dot">·</span>')
+      : '';
     return `
       <div class="channel-video-row">
         <div class="cv-idx">${idx + 1}</div>
         ${thumb ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener" class="cv-thumb"><img loading="lazy" src="${escapeHtml(thumb)}" alt=""></a>` : ''}
         <div class="cv-meta">
           <a class="cv-title" href="${escapeHtml(url)}" target="_blank" rel="noopener" title="${escapeHtml(title)}">${escapeHtml(title)}</a>
-          <div class="cv-sub">
-            <span class="cv-id">${escapeHtml(vid)}</span>
-            ${published ? `<span class="cv-dot">·</span><span class="cv-date">${escapeHtml(published)}</span>` : ''}
-          </div>
+          ${sub ? `<div class="cv-sub">${sub}</div>` : ''}
         </div>
         <a class="action-btn primary" href="${escapeHtml(url)}" target="_blank" rel="noopener">▶ Open</a>
       </div>
@@ -2942,6 +2962,13 @@ function _renderChannelVideos(payload) {
   });
   listEl.innerHTML = rows.join('');
   statusEl.textContent = `${videos.length} video${videos.length === 1 ? '' : 's'} · last synced ${_formatSyncedAt(payload.synced_at) || 'never'}`;
+}
+
+function _formatViews(n) {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return (n / 1000).toFixed(n < 10_000 ? 1 : 0).replace(/\.0$/, '') + 'K';
+  if (n < 1_000_000_000) return (n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 0).replace(/\.0$/, '') + 'M';
+  return (n / 1_000_000_000).toFixed(1).replace(/\.0$/, '') + 'B';
 }
 
 async function loadChannelVideos() {

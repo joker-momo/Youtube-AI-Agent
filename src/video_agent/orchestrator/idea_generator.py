@@ -81,8 +81,30 @@ def sync_published_videos(channel_config: dict, configs_dir: Path) -> list[dict]
         vid_id = entry.findtext("yt:videoId", namespaces=ns) or ""
         title = entry.findtext("atom:title", namespaces=ns) or ""
         published = entry.findtext("atom:published", namespaces=ns) or ""
+        # YouTube RSS exposes ``media:community/media:statistics views="N"``
+        # for each entry. The feed always carries the metric (0 for fresh
+        # uploads) so we can render it in the dashboard without a second
+        # API call.
+        views: int | None = None
+        stats = entry.find("media:group/media:community/media:statistics", ns)
+        if stats is not None:
+            raw_views = stats.attrib.get("views")
+            if raw_views and raw_views.isdigit():
+                views = int(raw_views)
         if vid_id and title:
-            videos.append({"id": vid_id, "title": title, "published": published})
+            videos.append(
+                {
+                    "id": vid_id,
+                    "title": title,
+                    "published": published,
+                    "views": views,
+                }
+            )
+
+    # Sort newest first so the dashboard does not need to re-order on every
+    # render. ``published`` is ISO-8601 with timezone so a lexical reverse
+    # sort matches chronological order.
+    videos.sort(key=lambda v: str(v.get("published") or ""), reverse=True)
 
     out_path = configs_dir / ch_id / PUBLISHED_VIDEOS_FILE
     atomic_write_json(

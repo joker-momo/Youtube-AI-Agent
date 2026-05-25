@@ -322,6 +322,28 @@ docker compose run --rm video-agent python -m video_agent.cli audit \
   --job jobs/<job_id_2>
 ```
 
+## Browser Driver Speed Profile
+
+The ChatGPT / Claude / Gemini browser drivers run in **fast mode** by default. They still type and click with randomized cadence (real keystrokes, hover-before-click, occasional thinking pauses), but the long human-style waits between actions are trimmed because the browser is signed in with a real Chromium profile + persisted cookies + real WebGL fingerprints, so the LLM hosts do not throttle real accounts and the extra latency adds no anti-bot value.
+
+Switches (`src/video_agent/browser_worker/drivers/humanize.py`):
+
+| Env var | Fast default | Human-mode default |
+|---|---|---|
+| `BROWSER_HUMAN_MODE` | `fast` | `human` |
+| `BROWSER_HUMAN_PAUSE_MIN_MS` / `MAX_MS` | 100 / 400 | 400 / 1400 |
+| `BROWSER_HUMAN_TYPING_MIN_MS` / `MAX_MS` | 18 / 55 | 35 / 110 |
+| `BROWSER_HUMAN_THINK_PROB` | 0.02 | 0.04 |
+| `BROWSER_HUMAN_PASTE_THRESHOLD` (chars) | 100 | 200 |
+| `BROWSER_HUMAN_PASTE_PAUSE_MIN_MS` / `MAX_MS` | 400 / 1200 | 1500 / 3500 |
+| `BROWSER_HUMAN_POST_READ_PAUSE` | `0` (skip) | `1` (linger after response) |
+| `BROWSER_HUMAN_STABLE_MS` | 600 | 2000 |
+| `BROWSER_HUMAN_STABLE_POLL_MS` | 250 | 500 |
+
+The `_wait_for_stable_response` helper now derives `stable_ms` and `poll_ms` from these env defaults too. Because the stop button is already verified hidden before the helper runs, fast mode trims the post-stream defensive wait from 2 s to 600 ms while still re-checking the DOM at 250 ms intervals — net savings of ~1.5 s per ChatGPT / Claude turn.
+
+Set `BROWSER_HUMAN_MODE=human` to restore the slower, conspicuously-human cadence if a session ever needs extra trust-building (e.g. recovering from a rate-limit).
+
 ## Opening Retention Policy
 
 YouTube viewers decide whether to keep watching within the first 5–15 seconds. To protect that window we run with **no logo intro and no outro by default**:

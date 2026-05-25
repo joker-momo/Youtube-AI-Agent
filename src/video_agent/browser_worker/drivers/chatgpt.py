@@ -9,6 +9,8 @@ from video_agent.browser_worker.drivers.base import (
     save_trace_screenshot,
 )
 from video_agent.browser_worker.drivers.humanize import (
+    STABLE_MS,
+    STABLE_POLL_MS,
     estimate_read_pause_ms,
     human_click,
     human_pause,
@@ -61,10 +63,19 @@ async def _wait_for_stable_response(
     prior_text: str,
     *,
     response_timeout_ms: int,
-    poll_ms: int = 500,
-    stable_ms: int = 2_000,
+    poll_ms: int | None = None,
+    stable_ms: int | None = None,
     log_tag: str = "scrape",
 ) -> str | None:
+    # Tune both windows from ``BROWSER_HUMAN_MODE``. The stop-button
+    # already hid before this helper is called, so the "is response done"
+    # signal mostly serves to defend against ChatGPT's late edits to the
+    # finished assistant turn (e.g. citation rewrites). Fast mode shaves
+    # ~1.5 s per turn while keeping the defensive check.
+    if poll_ms is None:
+        poll_ms = STABLE_POLL_MS
+    if stable_ms is None:
+        stable_ms = STABLE_MS
     """Poll ``scrape_js`` until the result differs from ``prior_text`` AND
     has not changed for ``stable_ms``. Returns the stable text or None on
     timeout. Defends against scraping a partial streaming response.
@@ -334,11 +345,13 @@ class ChatGPTDriver:
                 "ChatGPT composer not found.", screenshot_path=shot
             )
 
-        await human_click(composer, hover_pause_min_ms=120, hover_pause_max_ms=320)
+        # Pause windows below intentionally use ``human_pause`` defaults
+        # so BROWSER_HUMAN_MODE can collapse them in fast pipeline mode.
+        await human_click(composer, hover_pause_min_ms=60, hover_pause_max_ms=200)
         await composer.focus()
-        await human_pause(self.page, min_ms=200, max_ms=600)
+        await human_pause(self.page)
         await human_type(self.page, prompt)
-        await human_pause(self.page, min_ms=500, max_ms=1300)
+        await human_pause(self.page)
 
         send_button = await _first_matching(self.page, SEND_BUTTON_SELECTORS, 5_000)
         if send_button is None:

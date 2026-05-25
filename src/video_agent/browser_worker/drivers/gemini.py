@@ -211,11 +211,13 @@ class GeminiDriver:
                 "Gemini composer not found.", screenshot_path=shot
             )
 
-        await human_click(composer, hover_pause_min_ms=120, hover_pause_max_ms=320)
+        # See chatgpt driver for rationale: use ``human_pause`` defaults so
+        # BROWSER_HUMAN_MODE controls the per-turn cadence centrally.
+        await human_click(composer, hover_pause_min_ms=60, hover_pause_max_ms=200)
         await composer.focus()
-        await human_pause(self.page, min_ms=200, max_ms=600)
+        await human_pause(self.page)
         await human_type(self.page, prompt)
-        await human_pause(self.page, min_ms=500, max_ms=1300)
+        await human_pause(self.page)
 
         send_button = await _first_matching(self.page, SEND_BUTTON_SELECTORS, 5_000)
         if send_button is None:

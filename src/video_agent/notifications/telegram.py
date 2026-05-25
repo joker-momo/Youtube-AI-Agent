@@ -249,18 +249,26 @@ async def _send_video_file(path: Path, caption: str = "") -> None:
         return
 
     send_path = path
+    tmp_path: Path | None = None
 
     size = path.stat().st_size
     if size > _TELEGRAM_FILE_LIMIT:
         mb = size / (1024 * 1024)
         print(f"[telegram] video {mb:.0f} MB > 50 MB — compressing for Telegram…", file=sys.stderr)
-        # Run blocking ffmpeg in a thread so we don't block the event loop
+        # Allocate the temp file outside the try so it is always reachable by
+        # the finally block, even if the compress call raises an unexpected
+        # error (timeout, OSError, etc.).
         tmp = tempfile.NamedTemporaryFile(suffix="_tg.mp4", delete=False)
         tmp.close()
         tmp_path = Path(tmp.name)
-        ok = await asyncio.get_running_loop().run_in_executor(
-            None, _compress_video, path, tmp_path
-        )
+        try:
+            ok = await asyncio.get_running_loop().run_in_executor(
+                None, _compress_video, path, tmp_path
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[telegram] ffmpeg compress raised: {exc}", file=sys.stderr)
+            tmp_path.unlink(missing_ok=True)
+            return
         if ok and tmp_path.stat().st_size <= _TELEGRAM_FILE_LIMIT:
             send_path = tmp_path
             print(f"[telegram] compressed to {tmp_path.stat().st_size / 1024 / 1024:.1f} MB", file=sys.stderr)
@@ -305,8 +313,11 @@ async def _send_video_file(path: Path, caption: str = "") -> None:
     except Exception as exc:  # noqa: BLE001
         print(f"[telegram] sendVideo failed (unexpected): {exc}", file=sys.stderr)
     finally:
-        if send_path != path:
-            send_path.unlink(missing_ok=True)  # delete temp, keep original
+        # Always clean up the temp compressed file. Use tmp_path (the file we
+        # actually allocated) instead of send_path so we still clean up when
+        # ``send_path`` was reset to ``path`` after compression failure.
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
 
 
 def notify_sync(text: str) -> None:

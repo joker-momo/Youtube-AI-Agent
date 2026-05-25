@@ -23,12 +23,16 @@ def test_detector_flags_accented_spanish():
     assert reason and "accent" in reason.lower()
 
 
-def test_detector_flags_unaccented_spanish_by_stopwords():
+def test_detector_flags_unaccented_spanish_by_lexical_signal():
     is_sp, reason = _looks_like_spanish_visual_prompt(
         "Persona acomoda una manta ligera junto a la cama"
     )
     assert is_sp
-    assert reason and "stopwords" in reason.lower()
+    # Detector may catch either a ≥5-char Spanish content word (e.g. "persona")
+    # or a Spanish-stopword pile-up — either signal proves the prompt is Spanish.
+    assert reason
+    lowered = reason.lower()
+    assert "content word" in lowered or "stopwords" in lowered
 
 
 def test_detector_passes_english_prompt():

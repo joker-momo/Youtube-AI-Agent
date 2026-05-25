@@ -35,6 +35,7 @@ from video_agent.operator_shards import (
     validate_scenes_plan,
 )
 from video_agent.utils.json_io import write_json as _write_json
+from video_agent.operator_validators import _looks_like_spanish_visual_prompt
 from video_agent.orchestrator.job_state import load_job, save_job
 from video_agent.orchestrator.orchestrator import _now
 from video_agent.pipeline import OperatorRenderOptions, render_operator_job
@@ -842,7 +843,13 @@ def _enforce_seo_language_qa(
     except json.JSONDecodeError:
         return
 
-    state = load_job(job_dir)
+    try:
+        state = load_job(job_dir)
+    except Exception:
+        # If job.json is missing or corrupted we cannot know which channel this
+        # belongs to. Skip the enforcement layer rather than aborting the QA
+        # promotion entirely — the artifact has already been written to disk.
+        return
     channel_config_path = repo_root() / "configs" / state.channel_id / "channel.yaml"
     channel_config = read_yaml(channel_config_path) if channel_config_path.exists() else {}
     expected_language = (
@@ -899,8 +906,6 @@ def _enforce_scenes_visual_prompt_english(
     This QA layer flips the verdict to NEEDS_REWORK with a per-scene list of
     offending visual_prompts so ChatGPT regenerates them in English.
     """
-    from video_agent.operator_validators import _looks_like_spanish_visual_prompt
-
     scenes_path = job_dir / "scenes.json"
     if not scenes_path.exists():
         return

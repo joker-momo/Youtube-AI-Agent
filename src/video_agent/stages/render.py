@@ -4,6 +4,7 @@ import json
 import os
 import re
 import signal
+import datetime
 import shutil
 import subprocess
 import time
@@ -303,8 +304,6 @@ def _mark_render_stage_completed(job_dir: Path) -> None:
     if not state_path.exists():
         return
     try:
-        import datetime
-
         data = json.loads(state_path.read_text(encoding="utf-8"))
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
         stages = data.get("stages") or []

@@ -160,34 +160,51 @@ def _validate_asset_refs(scene: dict[str, Any], scene_label: str) -> ValidationR
     return result
 
 
-# Common Spanish stopwords / function words that almost never appear in English
-# stock-search queries. Used to detect Spanish-language visual_prompt when ChatGPT
-# ignores the "visual_prompt must remain English" rule.
+# Spanish stopwords / function words that almost never appear in English
+# stock-search queries. 1-character tokens like "y" / "o" / "u" are excluded
+# because they collide with English filler ("a y b", "1 o 2"); 2-character
+# function words (el, la, en, de, etc.) need a stricter threshold to avoid
+# false-positives on technical English. Used to detect Spanish-language
+# visual_prompt when ChatGPT ignores the "visual_prompt must remain English"
+# rule.
 _SPANISH_STOPWORDS = {
+    # Articles / determiners (2-3 chars)
     "el", "la", "los", "las", "un", "una", "unos", "unas",
-    "de", "del", "en", "con", "sin", "por", "para", "sobre",
-    "y", "o", "u", "que", "qué", "como", "cómo", "cuando", "cuándo",
-    "esta", "este", "estos", "estas", "ese", "esa", "esos", "esas",
-    "su", "sus", "mi", "mis", "tu", "tus",
-    "se", "le", "lo", "les", "nos", "te", "me",
-    "muy", "mas", "más", "menos", "pero", "ya", "no", "sí",
+    "del", "este", "esta", "estos", "estas", "ese", "esa", "esos", "esas",
+    # Prepositions / conjunctions (≥2 chars)
+    "de", "en", "con", "sin", "por", "para", "sobre", "que", "qué",
+    "como", "cómo", "cuando", "cuándo", "pero", "ya", "muy",
+    # Pronouns (2-3 chars, less common in English filler)
+    "se", "le", "lo", "les", "nos", "te", "me", "su", "sus", "mi", "mis",
+    "tu", "tus",
+    # Spanish content words (≥4 chars) very rarely appear in English prompts
     "persona", "personas", "habitación", "cama", "noche", "tarde",
-    "casa", "calle", "mano", "manos", "luz", "agua", "comida",
+    "casa", "calle", "mano", "manos", "agua", "comida",
     "cena", "desayuno", "acomoda", "respira", "abre", "cierra",
-    "apaga", "enciende", "mira", "lee", "escribe", "camina",
+    "apaga", "enciende", "mira", "escribe", "camina",
     "siente", "ordenada", "limpio", "tranquilo", "calma", "ambiente",
     "mediana", "edad", "secuencia", "objetos", "reloj", "lámpara",
     "libro", "cortinas", "cocina", "ventana",
 }
 
+# Spanish content words flagged on a single hit because they have no plausible
+# English-stock-search reading. Used to short-circuit when ChatGPT outputs
+# a Spanish noun even without multiple stopwords.
+_SPANISH_CONTENT_HEADWORDS = frozenset(
+    word for word in _SPANISH_STOPWORDS if len(word) >= 5
+)
+
 
 def _looks_like_spanish_visual_prompt(prompt: str) -> tuple[bool, str | None]:
     """Detect Spanish-language visual_prompt.
 
-    Returns ``(is_spanish, reason)``. Triggers when either:
-    - Spanish-specific accented characters appear (á, é, í, ó, ú, ñ, ¿, ¡, ü), or
-    - Two or more Spanish stopwords appear in the prompt, which is very
-      uncharacteristic of an English stock-search query.
+    Returns ``(is_spanish, reason)``. Triggers when any of these hold:
+    - Spanish-specific accented characters appear (á, é, í, ó, ú, ñ, ¿, ¡, ü).
+    - At least one ≥5-char Spanish content word appears (e.g. ``habitación``,
+      ``persona``) — a single such hit is already proof.
+    - Three or more general Spanish stopwords appear (raised from two to
+      avoid false-positives on technical English prompts that happen to
+      contain isolated function words).
 
     The visual_prompt is fed to Pexels stock search; Pexels is English-keyword
     based, so Spanish text returns garbage results (Bellagio fountains for a
@@ -198,8 +215,11 @@ def _looks_like_spanish_visual_prompt(prompt: str) -> tuple[bool, str | None]:
     if any(char in SPANISH_SPECIFIC_CHARS for char in prompt):
         return True, "Spanish accent characters detected (á/é/í/ó/ú/ñ/¿/¡/ü)."
     tokens = re.findall(r"[A-Za-zÁÉÍÓÚÑÜáéíóúñü]+", prompt.lower())
+    content_hits = [t for t in tokens if t in _SPANISH_CONTENT_HEADWORDS]
+    if content_hits:
+        return True, f"Spanish content word detected: {sorted(set(content_hits))[:6]}."
     spanish_hits = [t for t in tokens if t in _SPANISH_STOPWORDS]
-    if len(spanish_hits) >= 2:
+    if len(spanish_hits) >= 3:
         return True, f"Spanish stopwords detected: {sorted(set(spanish_hits))[:6]}."
     return False, None
 

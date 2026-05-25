@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
@@ -25,7 +25,6 @@ from video_agent.orchestrator import (
     load_job,
 )
 from video_agent.utils.logging import EventLogger
-from video_agent.storage.atomic import atomic_write_text
 from video_agent.orchestrator.idea_generator import (
     find_duplicate,
     generate_ideas,
@@ -124,20 +123,12 @@ class RawScriptRequest(BaseModel):
     raw_response: str
 
 
-# EnvSaveRequest moved to video_agent.web.routes.config along with the
-# /config/env* handlers. Re-exported here for any external callers still
-# importing it from _legacy.
+# Backwards-compatible re-exports. The /config/env* handlers and env helpers
+# moved to ``video_agent.web.routes.config`` and ``video_agent.web.services.env_config``
+# in the Phase 2.1 refactor. Re-exporting the old private names keeps tests
+# that still patch ``_legacy._env_path`` (and external callers importing
+# ``EnvSaveRequest`` from this module) working without rewrites.
 from video_agent.web.routes.config import EnvSaveRequest  # noqa: E402,F401
-
-
-def get_jobs_root() -> Path:
-    return Path(os.environ.get("JOBS_DIR", "/app/jobs"))
-
-
-# Env editor helpers moved to video_agent.web.services.env_config in commit
-# extracting /config/env* routes. The names below are kept as thin aliases so
-# any test that still patches `_legacy._env_path` (or imports the helper from
-# app.py via re-export) keeps working without rewrites.
 from video_agent.web.services.env_config import (  # noqa: E402
     active_env_example_path as _active_env_example_path,
     active_env_path as _active_env_path,
@@ -148,6 +139,10 @@ from video_agent.web.services.env_config import (  # noqa: E402
     mask_env_value as _mask_env_value,
     require_env_editor as _require_env_editor,
 )
+
+
+def get_jobs_root() -> Path:
+    return Path(os.environ.get("JOBS_DIR", "/app/jobs"))
 
 
 _SAFE_JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")

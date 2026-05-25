@@ -113,6 +113,12 @@ def extract_json_objects(text: str) -> list[dict[str, Any]]:
                                     objects.append(parsed)
                                     index = idx + 1
                                     parsed_successfully = True
+                                    # Log so anomalies show up in operator
+                                    # output without needing a debugger.
+                                    print(
+                                        "[operator] extract_json_objects: repaired raw newlines in model output",
+                                        flush=True,
+                                    )
                                     break
                             except Exception:
                                 pass
@@ -378,8 +384,10 @@ def _compute_chapter_timestamps(
             if title:
                 section_titles.append(title)
 
-    # Target between 5 and 10 chapters depending on video length.
-    target_count = max(5, min(10, int(total_sec // 80) or 5))
+    # Target between 5 and 10 chapters depending on video length. Roughly one
+    # chapter per 80 seconds of narration; the max(5,...) floor handles very
+    # short videos and the min(10,...) ceiling handles long-form.
+    target_count = max(5, min(10, int(total_sec // 80)))
     if section_titles:
         target_count = max(5, min(target_count, len(section_titles) + 1))
 

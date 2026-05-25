@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import sys
 import tempfile
 import re
 from pathlib import Path
@@ -506,6 +507,13 @@ class StockAssetService:
                         "message": str(exc),
                         "stage": "fallback" if is_fallback else "primary",
                     }
+                )
+                # Surface provider failures to stderr so debugging stale
+                # ``last_errors`` payloads is easier when the manifest already
+                # captures them.
+                print(
+                    f"[stock] provider {provider!r} failed ({exc.__class__.__name__}): {exc}",
+                    file=sys.stderr,
                 )
                 continue
         ranked_candidates = sorted(

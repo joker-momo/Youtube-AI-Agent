@@ -73,6 +73,40 @@ def test_vida_plena_channel_config_has_intro_outro_disabled():
     )
 
 
+def test_prepare_branding_hides_channel_name_overlay_by_default():
+    branding = _prepare_branding({"channel": {"id": "vida-plena-45"}})
+    assert branding["show_channel_name_overlay"] is False
+
+
+def test_prepare_branding_honors_show_channel_name_overlay_flag(monkeypatch):
+    import video_agent.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "_resolve_brand_video_source", lambda *a, **kw: None)
+    monkeypatch.setattr(pipeline_module, "_resolve_brand_logo_source", lambda *a, **kw: None)
+
+    config = {
+        "channel": {"id": "no-such-channel-for-test"},
+        "branding": {"show_channel_name_overlay": True},
+    }
+    branding = _prepare_branding(config)
+    assert branding["show_channel_name_overlay"] is True
+
+
+def test_vida_plena_channel_config_hides_channel_name_overlay():
+    cfg = _load_vida_plena_config()
+    assert cfg.get("branding", {}).get("show_channel_name_overlay") is False, (
+        "channel.yaml must keep show_channel_name_overlay=false so the "
+        "opening frame stays uncluttered."
+    )
+
+
+def test_channel_video_tsx_gates_channel_name_label():
+    """Static smoke check: the channel-name label is wrapped in the flag."""
+    src = (repo_root() / "remotion/src/ChannelVideo.tsx").read_text(encoding="utf-8")
+    assert "showChannelNameOverlay ?" in src or "showChannelNameOverlay\n" in src
+    assert "show_channel_name_overlay" in src
+
+
 # ---------------- prompt retention guidance ----------------
 
 

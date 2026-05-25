@@ -181,6 +181,11 @@ def _prepare_branding(channel_config: dict) -> dict:
         "intro_sec": intro_sec,
         "outro_sec": outro_sec,
         "watermark_enabled": bool(logo_public),
+        # Channel-name label in the top-left corner of every scene. Defaults
+        # to OFF so the opening frame is clean. Toggle via
+        # ``branding.show_channel_name_overlay: true`` when a one-off cut
+        # needs the brand label visible.
+        "show_channel_name_overlay": bool(branding_cfg.get("show_channel_name_overlay", False)),
     }
 
 

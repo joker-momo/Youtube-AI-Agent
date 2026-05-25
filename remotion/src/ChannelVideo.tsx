@@ -366,11 +366,12 @@ const SceneView: React.FC<{
   totalScenes: number;
   palette: RenderProps['style']['palette'];
   channelName: string;
+  showChannelNameOverlay?: boolean;
   logoPath?: string | null;
   subtitles: Required<SubtitleConfig>;
   isFirst?: boolean;
   isLast?: boolean;
-}> = ({scene, totalFrames, sceneIndex, totalScenes, palette, channelName, logoPath, subtitles, isFirst = false, isLast = false}) => {
+}> = ({scene, totalFrames, sceneIndex, totalScenes, palette, channelName, showChannelNameOverlay = false, logoPath, subtitles, isFirst = false, isLast = false}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
   const progress = frame / Math.max(totalFrames - 1, 1);
@@ -477,16 +478,19 @@ const SceneView: React.FC<{
         background: 'linear-gradient(to right, rgba(10,16,13,0.42) 0%, transparent 52%)',
       }} />
 
-      {/* Channel name — small, top-left */}
-      <div style={{
-        position: 'absolute', top: 36, left: 64,
-        fontSize: 24, fontWeight: 700, letterSpacing: 2.2, textTransform: 'uppercase',
-        color: '#F2F4EF',
-        textShadow: '0 2px 8px rgba(0,0,0,0.6)',
-        opacity: headlineAlpha * 0.75,
-      }}>
-        {channelName}
-      </div>
+      {/* Channel name — small, top-left. Hidden by default; opt in via
+          branding.show_channel_name_overlay so the opening frame stays clean. */}
+      {showChannelNameOverlay ? (
+        <div style={{
+          position: 'absolute', top: 36, left: 64,
+          fontSize: 24, fontWeight: 700, letterSpacing: 2.2, textTransform: 'uppercase',
+          color: '#F2F4EF',
+          textShadow: '0 2px 8px rgba(0,0,0,0.6)',
+          opacity: headlineAlpha * 0.75,
+        }}>
+          {channelName}
+        </div>
+      ) : null}
 
       {logoPath ? <LogoWatermark logoPath={logoPath} /> : null}
 
@@ -582,6 +586,7 @@ export const ChannelVideo: React.FC<RenderProps> = (props) => {
               totalScenes={props.scenes.length}
               palette={props.style.palette}
               channelName={props.channel.name}
+              showChannelNameOverlay={props.branding?.show_channel_name_overlay ?? false}
               logoPath={logoPath}
               subtitles={subtitles}
               isFirst={i === 0}

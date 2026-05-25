@@ -35,6 +35,7 @@ brand_voice_path: configs/vida-plena-45/brand-voice.md
 branding:
   # Default OFF — opening retention beats logo intros for YouTube cold audience.
   enable_intro_outro: false
+  show_channel_name_overlay: false
   intro_sec: 3.0
   logo_path: asset_library/source/Logo.png
   outro_sec: 3.0

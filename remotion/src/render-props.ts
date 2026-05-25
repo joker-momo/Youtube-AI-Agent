@@ -74,6 +74,9 @@ export type RenderProps = {
     intro_sec?: number;
     outro_sec?: number;
     watermark_enabled?: boolean;
+    // Show the channel name in the top-left corner of every scene.
+    // Defaults to false to keep the opening frame clean.
+    show_channel_name_overlay?: boolean;
   };
 };
 

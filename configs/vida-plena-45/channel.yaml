@@ -10,6 +10,10 @@ branding:
   # video must start on the narration hook, not on a branded card. Set
   # enable_intro_outro: true only for a one-off ceremonial cut.
   enable_intro_outro: false
+  # Channel-name label in the top-left corner. Hidden by default to keep the
+  # opening frame clean. Flip to true when a special cut needs the brand
+  # text visible on every scene.
+  show_channel_name_overlay: false
 audience:
   language: "es-ES"
   age_range: [45, 75]

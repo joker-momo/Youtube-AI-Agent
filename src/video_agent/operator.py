@@ -332,21 +332,192 @@ def _score_and_sort_seo_variants(seo: dict[str, Any]) -> dict[str, Any]:
     return seo
 
 
+# A YouTube-chapter line looks like "00:00 - Section title". The first chapter
+# must start at exactly 00:00 for the player to enable chapters at all.
+_TIMESTAMP_TOKEN_RE = re.compile(r"\d{1,2}:\d{2}")
+
+
+def _format_mmss(seconds: float) -> str:
+    seconds = max(0, int(round(seconds)))
+    return f"{seconds // 60:02d}:{seconds % 60:02d}"
+
+
+def _compute_chapter_timestamps(
+    scene_doc: dict[str, Any] | None,
+    script: dict[str, Any] | None,
+) -> list[tuple[str, str]]:
+    """Compute up to ~10 YouTube chapter (timestamp, title) pairs from real scenes.
+
+    Strategy:
+    - Walk every scene in order; track cumulative offset using ``duration_sec``.
+    - Prefer chapter boundaries that align with script sections (when the
+      script provides ``sections``). Otherwise pick evenly spaced boundaries
+      across the scene list and use ``on_screen_text`` / first narration words
+      as the chapter title.
+    - Always emit a first chapter at ``00:00``. Cap at the actual total
+      duration so no chapter exceeds the video length.
+    """
+    if not isinstance(scene_doc, dict):
+        return []
+    scenes = scene_doc.get("scenes") or []
+    if not isinstance(scenes, list) or not scenes:
+        return []
+
+    total_sec = float(scene_doc.get("total_duration_sec") or 0)
+    if total_sec <= 0:
+        total_sec = sum(float(s.get("duration_sec") or 0) for s in scenes)
+    if total_sec <= 0:
+        return []
+
+    section_titles: list[str] = []
+    if isinstance(script, dict):
+        for section in script.get("sections") or []:
+            title = ""
+            if isinstance(section, dict):
+                title = str(section.get("title") or "").strip()
+            if title:
+                section_titles.append(title)
+
+    # Target between 5 and 10 chapters depending on video length.
+    target_count = max(5, min(10, int(total_sec // 80) or 5))
+    if section_titles:
+        target_count = max(5, min(target_count, len(section_titles) + 1))
+
+    # Build per-scene cumulative offsets.
+    offsets: list[tuple[float, dict[str, Any]]] = []
+    cursor = 0.0
+    for scene in scenes:
+        offsets.append((cursor, scene))
+        cursor += float(scene.get("duration_sec") or 0)
+
+    # Pick boundary indices evenly across the scene list.
+    boundary_indices: list[int] = []
+    if target_count == 1:
+        boundary_indices = [0]
+    else:
+        step = (len(scenes) - 1) / (target_count - 1) if len(scenes) > 1 else 0
+        for i in range(target_count):
+            idx = int(round(i * step))
+            if idx >= len(scenes):
+                idx = len(scenes) - 1
+            if idx not in boundary_indices:
+                boundary_indices.append(idx)
+    # Ensure first chapter is scene index 0.
+    if 0 not in boundary_indices:
+        boundary_indices.insert(0, 0)
+    boundary_indices.sort()
+
+    chapters: list[tuple[str, str]] = []
+    used_titles: set[str] = set()
+    for chapter_pos, scene_idx in enumerate(boundary_indices):
+        offset, scene = offsets[scene_idx]
+        # First chapter must be 00:00 regardless of rounding.
+        ts = "00:00" if chapter_pos == 0 else _format_mmss(offset)
+        title = ""
+        if chapter_pos < len(section_titles):
+            title = section_titles[chapter_pos]
+        if not title and isinstance(scene, dict):
+            title = str(scene.get("on_screen_text") or "").strip()
+            if not title:
+                narration = str(scene.get("narration") or "").strip()
+                # Take the first 4-7 words as a fallback chapter title.
+                title = " ".join(narration.split()[:6]) if narration else ""
+        if not title:
+            title = f"Capítulo {chapter_pos + 1}"
+        # Capitalize first letter for readability.
+        title = title.strip().rstrip(".:,;").strip()
+        if title and title.lower() in used_titles:
+            # Skip duplicate titles by tagging with chapter number.
+            title = f"{title} ({chapter_pos + 1})"
+        used_titles.add(title.lower())
+        chapters.append((ts, title))
+
+    return chapters
+
+
+def _rewrite_description_chapters(description: str, chapters: list[tuple[str, str]]) -> str:
+    """Replace the YouTube chapter block inside ``description`` with ``chapters``.
+
+    The block is detected as a contiguous run of lines that start with
+    ``MM:SS`` (possibly several timestamps glued on one line by ChatGPT).
+    If no existing block is found the chapters are inserted after the first
+    paragraph that does not itself contain a timestamp, so the resulting
+    description still flows: hook → summary → chapters → CTA.
+    """
+    if not chapters:
+        return description
+
+    chapter_block = "\n".join(f"{ts} - {title}" for ts, title in chapters)
+
+    lines = description.split("\n")
+    # Find the first and last line that contain a timestamp token.
+    first_ts_idx = next(
+        (i for i, line in enumerate(lines) if _TIMESTAMP_TOKEN_RE.search(line)),
+        None,
+    )
+    if first_ts_idx is None:
+        # No existing chapter block — insert after the first non-empty paragraph.
+        insert_at = 0
+        seen_text = False
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped:
+                seen_text = True
+            elif seen_text:
+                insert_at = i
+                break
+        else:
+            insert_at = len(lines)
+        prefix = lines[:insert_at]
+        suffix = lines[insert_at:]
+        rebuilt = prefix + ["", chapter_block, ""] + suffix
+        return "\n".join(rebuilt).strip() + "\n"
+
+    last_ts_idx = first_ts_idx
+    for i in range(first_ts_idx, len(lines)):
+        if _TIMESTAMP_TOKEN_RE.search(lines[i]):
+            last_ts_idx = i
+        elif lines[i].strip() == "":
+            break
+        else:
+            # Stop expanding the block as soon as we hit prose without a timestamp.
+            break
+
+    rebuilt = lines[:first_ts_idx] + [chapter_block] + lines[last_ts_idx + 1 :]
+    return "\n".join(rebuilt).strip() + "\n"
+
+
 def _normalize_seo_candidate(
     candidate: dict[str, Any],
     *,
     channel_config: dict[str, Any] | None = None,
+    scene_doc: dict[str, Any] | None = None,
+    script: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Backfill SEO fields for compatibility with older model/test payloads."""
+    """Backfill SEO fields for compatibility with older model/test payloads.
+
+    When ``scene_doc`` is provided the YouTube-chapter timestamps inside the
+    description are recomputed from real scene durations so they cannot drift
+    past the actual video length (a ChatGPT failure mode where it invents
+    timestamps such as ``13:20`` for a 9-minute video).
+    """
     parsed = dict(candidate)
     # Strip literal newlines from title
     if "title" in parsed and isinstance(parsed["title"], str):
         parsed["title"] = parsed["title"].replace("\n", " ").replace("\r", " ").strip()
         parsed["title"] = " ".join(parsed["title"].split())
 
-    # Normalize description while preserving YouTube chapter timestamp lines.
+    # Normalize description while preserving YouTube chapter timestamp lines,
+    # then rewrite the chapter block against the real scene timeline when we
+    # have scenes.json available.
     if "description" in parsed and isinstance(parsed["description"], str):
         parsed["description"] = _normalize_youtube_description(parsed["description"])
+        if scene_doc:
+            chapters = _compute_chapter_timestamps(scene_doc, script)
+            if chapters:
+                parsed["description"] = _rewrite_description_chapters(
+                    parsed["description"], chapters
+                )
 
     # Normalize title_variants
     if "title_variants" in parsed and isinstance(parsed["title_variants"], list):
@@ -1075,6 +1246,8 @@ def promote_operator_artifact(
             candidate = _normalize_seo_candidate(
                 candidate,
                 channel_config=load_operator_channel_config(channel_path, candidate),
+                scene_doc=_read_optional_json(job_dir / "scenes.json"),
+                script=_read_optional_json(job_dir / "script.json"),
             )
         try:
             validate_json(candidate, schema_path)

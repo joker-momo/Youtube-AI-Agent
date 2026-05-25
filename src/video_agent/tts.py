@@ -78,11 +78,14 @@ def synthesize_scene_track(
     base_speed = float(config.get("speed", 1.0))
     # Enable dynamic sync by default for optimal audio/video seamlessness
     dynamic_sync = bool(config.get("dynamic_sync", True))
+    scene_lead_in_sec = max(0.0, float(config.get("scene_lead_in_sec", 0.0)))
 
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_root = Path(temp_dir)
         for index, scene in enumerate(scene_doc["scenes"], start=1):
             scene_audio: list[np.ndarray] = []
+            if index > 1 and scene_lead_in_sec > 0:
+                scene_audio.append(np.zeros(int(round(sample_rate * scene_lead_in_sec)), dtype=np.float32))
             segments = _split_segments(str(scene["narration"]))
             if not segments:
                 segments = [(str(scene["narration"]), "")]
@@ -144,6 +147,7 @@ def synthesize_scene_track(
         "lang_code": config.get("lang_code"),
         "speed": base_speed,
         "humanize": hcfg,
+        "scene_lead_in_sec": round(scene_lead_in_sec, 3),
         "sample_rate": sample_rate,
         "duration_sec": round(sum(float(scene["duration_sec"]) for scene in scene_doc["scenes"]), 3),
     }

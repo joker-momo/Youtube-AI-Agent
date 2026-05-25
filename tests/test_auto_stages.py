@@ -19,6 +19,7 @@ from video_agent.orchestrator.stages import (
     SCRIPT_PROMPT_PATH,
     SEO_PROMPT_PATH,
     StageInputMissingError,
+    auto_scenes_qa_stage,
     auto_scenes_stage,
     auto_script_stage,
     auto_seo_stage,
@@ -440,6 +441,79 @@ def test_auto_scenes_can_run_sharded_when_enabled(
     assert [s["id"] for s in scenes["scenes"]] == ["scene-01", "scene-02"]
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
     assert state["current_stage"] == "scenes_qa"
+
+
+def test_auto_scenes_qa_can_run_sharded_when_enabled(
+    tmp_path: Path,
+    channel_path: Path,
+    idea_payload: dict,
+    valid_script_payload: dict,
+    valid_scenes_payload: dict,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    job_dir = tmp_path / "job-auto"
+    _seed_script(job_dir, channel_path, idea_payload)
+    run_script_stage(job_dir, channel_path)
+    promote_script_stage(
+        job_dir,
+        channel_path,
+        raw_response=json.dumps(valid_script_payload, ensure_ascii=False),
+    )
+    _fake_pass_qa(job_dir, "script")
+    run_scenes_stage(job_dir, channel_path)
+    many_scenes_payload = {
+        **valid_scenes_payload,
+        "total_duration_sec": 54,
+        "scenes": [
+            {
+                **valid_scenes_payload["scenes"][index % 2],
+                "id": f"scene-{index + 1:02d}",
+                "duration_sec": 6,
+            }
+            for index in range(9)
+        ],
+    }
+    promote_scenes_stage(
+        job_dir,
+        channel_path,
+        raw_response=json.dumps(many_scenes_payload, ensure_ascii=False),
+    )
+    qa_envelopes = [
+        {
+            "artifact_type": "scenes_qa_batch",
+            "schema_version": "2026-05-json-shards-v1",
+            "job_id": "job-auto",
+            "channel_id": "vida-plena-45",
+            "status": "complete",
+            "batch_index": index,
+            "batch_total": 2,
+            "data": {
+                "verdict": "PASS",
+                "youtube_policy": {"compliant": True, "risk_level": "none", "violations": []},
+                "scene_checks": [],
+                "issues": [],
+                "required_changes": [],
+                "scores": {"schema_fit": 5, "channel_fit": 5, "safety": 5, "clarity": 5, "youtube_policy": 5},
+            },
+            "warnings": [],
+        }
+        for index in (1, 2)
+    ]
+    fake = FakeBrowserClient(queue=[json.dumps(env) for env in qa_envelopes])
+    monkeypatch.setenv("SCENES_SHARDED_GENERATION", "1")
+
+    output = asyncio.run(
+        auto_scenes_qa_stage(job_dir, channel_path, lambda msgs: fake.run_session("claude", msgs))
+    )
+
+    assert output == job_dir / "operator/claude/scenes_qa.json"
+    assert (job_dir / "operator/claude/scenes_qa_batches/scenes_qa_batch_01.json").exists()
+    assert (job_dir / "operator/claude/scenes_qa_batches/scenes_qa_batch_02.json").exists()
+    merged = json.loads(output.read_text(encoding="utf-8"))
+    assert merged["verdict"] == "PASS"
+    assert [row["batch_index"] for row in merged["batch_results"]] == [1, 2]
+    state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    assert state["current_stage"] == "seo"
 
 
 def test_auto_seo_runs_after_scenes_promoted(
@@ -926,7 +1000,7 @@ def test_http_run_all_requires_idea_research_confirmation(
     monkeypatch.setattr(_asyncio, "sleep", _noop_sleep)
 
     try:
-        first = http_client.post("/jobs/job-auto/run-all")
+        first = http_client.post("/jobs/job-auto/run-all?enforce_approvals=true")
         assert first.status_code == 409
         detail = first.json()["detail"]
         assert detail["approval_required"] == "idea_research"
@@ -935,7 +1009,7 @@ def test_http_run_all_requires_idea_research_confirmation(
         confirm = http_client.post("/jobs/job-auto/approvals/idea_research/confirm")
         assert confirm.status_code == 200
 
-        second = http_client.post("/jobs/job-auto/run-all")
+        second = http_client.post("/jobs/job-auto/run-all?enforce_approvals=true")
     finally:
         app.dependency_overrides.pop(get_browser_client, None)
 
@@ -1165,6 +1239,28 @@ def test_run_whisper_timestamps_delegates_to_audio_subprocess(
     assert output == job_dir / "whisper_timestamps.json"
     assert calls == [("whisper-timestamps", job_dir)]
     assert load_job(job_dir).stage("whisper_timestamps").status == "completed"
+
+
+def test_rebase_words_to_scene_timestamps_clamps_boundary_words():
+    from video_agent.orchestrator.stages import _rebase_words_to_scene_timestamps
+
+    scenes = [
+        {"id": "scene-01", "duration_sec": 10.0},
+        {"id": "scene-02", "duration_sec": 10.0},
+    ]
+    words = [
+        {"word": "hola", "start": 9.95, "end": 10.57},
+        {"word": "mundo", "start": 10.6, "end": 11.0},
+    ]
+
+    scene_data = _rebase_words_to_scene_timestamps(scenes, words)
+
+    assert scene_data[1]["word_segments"][0] == {
+        "text": "hola",
+        "start": 0.0,
+        "end": 0.57,
+    }
+    assert scene_data[1]["word_segments"][1]["start"] == 0.6
 
 
 # ---------- Gemini QA stages -----------------------------------------------

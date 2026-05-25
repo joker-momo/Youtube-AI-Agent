@@ -111,6 +111,38 @@ def test_validate_scenes_plan_accepts_valid_plan():
     validate_scenes_plan(plan)
 
 
+def test_validate_scenes_plan_rejects_non_contiguous_ranges():
+    plan = _envelope(
+        artifact_type="scenes_plan",
+        batch_index=None,
+        batch_total=None,
+        data={
+            "target_scene_count": 3,
+            "target_total_duration_sec": 15,
+            "batch_size": 2,
+            "batches": [
+                {
+                    "batch_index": 1,
+                    "scene_start": "scene-01",
+                    "scene_end": "scene-01",
+                    "purpose": "opening",
+                    "script_sections": ["section-01"],
+                },
+                {
+                    "batch_index": 2,
+                    "scene_start": "scene-03",
+                    "scene_end": "scene-03",
+                    "purpose": "skip scene two",
+                    "script_sections": ["section-01"],
+                },
+            ],
+        },
+    )
+
+    with pytest.raises(ShardValidationError, match="contiguous"):
+        validate_scenes_plan(plan)
+
+
 def test_validate_scenes_batch_accepts_valid_batch():
     batch = _envelope(data={"scenes": [_scene("scene-01"), _scene("scene-02")]})
     validate_scenes_batch(
@@ -160,6 +192,57 @@ def test_merge_scene_batches_produces_canonical_scenes_doc():
     assert [scene["id"] for scene in merged["scenes"]] == ["scene-01", "scene-02"]
     assert merged["total_duration_sec"] == 10
     assert merged["qa"]["verdict"] == "PENDING_CLAUDE_QA"
+
+
+def test_merge_scene_batches_rejects_schema_invalid_final_doc():
+    batch = _envelope(
+        data={
+            "scenes": [
+                {
+                    **_scene("scene-01", 4.5),
+                }
+            ]
+        }
+    )
+
+    with pytest.raises(ShardValidationError, match="final scenes"):
+        merge_scene_batches(
+            job_id="job-a",
+            channel_id="vida-plena-45",
+            batch_envelopes=[batch],
+        )
+
+
+def test_merge_scene_batches_applies_retention_layout_planner_with_script_cta():
+    first = _envelope(
+        data={
+            "scenes": [
+                {
+                    **_scene("scene-01", 5),
+                    "layout": "checklist",
+                    "layout_payload": {"title": "BAD", "body": "", "bullets": ["Proteína"], "cta": ""},
+                }
+            ]
+        }
+    )
+    second = _envelope(
+        batch_index=2,
+        batch_total=2,
+        data={"scenes": [{**_scene("scene-02", 5), "layout": "subtitle"}]},
+    )
+    first["batch_total"] = 2
+
+    merged = merge_scene_batches(
+        job_id="job-a",
+        channel_id="vida-plena-45",
+        batch_envelopes=[first, second],
+        script={"cta": "Prueba esta rutina esta noche."},
+    )
+
+    assert merged["scenes"][0]["layout"] == "subtitle"
+    assert merged["scenes"][0]["planner_warnings"]
+    assert merged["scenes"][1]["layout"] == "cta"
+    assert merged["scenes"][1]["layout_payload"]["cta"] == "Prueba esta rutina esta noche."
 
 
 def test_merge_scenes_qa_batches_passes_when_all_pass():
@@ -246,3 +329,6 @@ def test_sharded_prompt_builders_require_json_envelopes():
     assert "exactly one JSON envelope" in plan_prompt
     assert "no markdown" in batch_prompt.lower()
     assert "scene_checks" in qa_prompt
+    assert "layout_payload" in batch_prompt
+    assert "layout_reason" in batch_prompt
+    assert 'layout="checklist"' in batch_prompt

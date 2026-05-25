@@ -30,6 +30,7 @@ from video_agent.orchestrator.idea_generator import (
     find_duplicate,
     generate_ideas,
     load_published_videos,
+    normalize_keyword,
     save_ideas,
     sync_published_videos,
 )
@@ -538,7 +539,7 @@ def dashboard() -> str:
     return _load_dashboard_html()
 
 
-_DASHBOARD_HTML_PATH = Path(__file__).with_name("dashboard.html")
+_DASHBOARD_HTML_PATH = Path(__file__).resolve().parents[1] / "dashboard.html"
 
 
 def _load_dashboard_html() -> str:
@@ -1115,8 +1116,72 @@ def flatten_keyword_result_for_ui(top_keywords):
         return (
             top_keywords.get("top_opportunity_keywords", [])
             + top_keywords.get("long_tail_test_keywords", [])
+            + top_keywords.get("rejected_keywords", [])
         )
     return []
+
+
+def keyword_result_summary(keyword_result) -> dict:
+    if isinstance(keyword_result, dict):
+        top = keyword_result.get("top_opportunity_keywords", [])
+        long_tail = keyword_result.get("long_tail_test_keywords", [])
+        rejected = keyword_result.get("rejected_keywords", [])
+        all_scored = keyword_result.get("all_scored_keywords", [])
+        metadata = keyword_result.get("metadata", {})
+        return {
+            "total_scanned": len(all_scored) or (len(top) + len(long_tail) + len(rejected)),
+            "total_top_opportunity": len(top),
+            "total_long_tail": len(long_tail),
+            "total_rejected": len(rejected),
+            "target_language": metadata.get("target_language", "spanish"),
+            "target_audience": metadata.get("target_audience", "people_45_plus"),
+            "keyword_scoring_version": metadata.get("version", "legacy"),
+            "serp_inspection": metadata.get("serp_inspection", "unknown"),
+        }
+    if isinstance(keyword_result, list):
+        return {
+            "total_scanned": len(keyword_result),
+            "total_top_opportunity": len(keyword_result),
+            "total_long_tail": 0,
+            "total_rejected": 0,
+            "target_language": "unknown",
+            "target_audience": "unknown",
+            "keyword_scoring_version": "legacy",
+            "serp_inspection": "unknown",
+        }
+    return {
+        "total_scanned": 0,
+        "total_top_opportunity": 0,
+        "total_long_tail": 0,
+        "total_rejected": 0,
+        "target_language": "unknown",
+        "target_audience": "unknown",
+        "keyword_scoring_version": "unknown",
+        "serp_inspection": "unknown",
+    }
+
+
+def keyword_score_payload(kw_data: dict, target_kw: str, summary: dict, match_source: str) -> dict:
+    return {
+        "target_keyword": kw_data.get("keyword", target_kw),
+        "vidiq_score": kw_data.get("vidiq_score", kw_data.get("score")),
+        "keyword_final_score": kw_data.get("final_score", kw_data.get("score")),
+        "vidiq_volume": kw_data.get("volume", ""),
+        "vidiq_competition": kw_data.get("competition", ""),
+        "intent_cluster": kw_data.get("intent_cluster"),
+        "audience_fit": kw_data.get("audience_fit"),
+        "intent_strength": kw_data.get("intent_strength"),
+        "content_fit": kw_data.get("content_fit"),
+        "language_fit": kw_data.get("language_fit"),
+        "serp_opportunity": kw_data.get("serp_opportunity"),
+        "bucket": kw_data.get("bucket"),
+        "recommended_angle": kw_data.get("recommended_angle"),
+        "thumbnail_hook_options": kw_data.get("thumbnail_hook_options", []),
+        "keyword_notes": kw_data.get("notes", []),
+        "keyword_rejection_reasons": kw_data.get("rejection_reasons", []),
+        "keyword_scoring_version": summary.get("keyword_scoring_version"),
+        "keyword_match_source": match_source,
+    }
 
 
 @router.get("/channels")
@@ -1304,21 +1369,30 @@ async def post_generate_ideas(
     published = load_published_videos(_read_yaml(channel_path), repo_root() / "configs")
 
     keywords_for_ui = flatten_keyword_result_for_ui(top_keywords)
+    summary = keyword_result_summary(top_keywords)
     kw_score_map = {
-        kw["keyword"].lower(): kw
+        normalize_keyword(kw["keyword"]): kw
         for kw in keywords_for_ui
         if isinstance(kw, dict) and kw.get("keyword")
     }
     ideas_with_scores = []
-    for idea in ideas:
+    used_fallback_keywords: set[str] = set()
+    for idx, idea in enumerate(ideas):
         enriched = dict(idea)
         target_kw = idea.get("target_keyword", "")
-        kw_data = kw_score_map.get(target_kw.lower(), {})
+        target_norm = normalize_keyword(target_kw)
+        kw_data = kw_score_map.get(target_norm, {})
+        match_source = "target_keyword"
+        if not kw_data and idx < len(keywords_for_ui):
+            fallback = keywords_for_ui[idx]
+            if isinstance(fallback, dict) and fallback.get("keyword"):
+                fallback_norm = normalize_keyword(fallback["keyword"])
+                if fallback_norm not in used_fallback_keywords:
+                    kw_data = fallback
+                    match_source = "ordered_fallback"
         if kw_data:
-            enriched["vidiq_score"] = kw_data.get("vidiq_score", kw_data.get("score"))
-            enriched["keyword_final_score"] = kw_data.get("final_score", kw_data.get("score"))
-            enriched["vidiq_volume"] = kw_data.get("volume", "")
-            enriched["vidiq_competition"] = kw_data.get("competition", "")
+            used_fallback_keywords.add(normalize_keyword(kw_data.get("keyword", "")))
+            enriched.update(keyword_score_payload(kw_data, target_kw, summary, match_source))
         # Duplicate check against published channel videos
         dup = find_duplicate(enriched, published)
         enriched["is_duplicate"] = dup is not None
@@ -1332,7 +1406,9 @@ async def post_generate_ideas(
         "channel_id": channel_id,
         "count": len(ideas_with_scores),
         "ideas": ideas_with_scores,
+        "keyword_result": top_keywords,
         "top_keywords": top_keywords,
+        "summary": summary,
         "seed_source": seed_source,
         "published_videos_checked": len(published),
         "saved": rel_paths,
@@ -1539,7 +1615,7 @@ async def post_generate_scene_asset(
 @router.post("/jobs/{job_id}/run-all")
 async def post_run_all(
     job_id: str,
-    enforce_approvals: bool = True,
+    enforce_approvals: bool = False,
     jobs_root: Path = Depends(get_jobs_root),
     channel_path: Path = Depends(get_channel_path),
     client: BrowserClient = Depends(get_browser_client),

@@ -739,14 +739,26 @@ def _idea_gen_prompt(
         if isinstance(kw, str):
             kw_lines.append(f'  {i}. "{kw}"')
             continue
-        score = kw.get("score", "?")
+        score = kw.get("final_score", kw.get("score", "?"))
+        vidiq_score = kw.get("vidiq_score", kw.get("score"))
         vol = kw.get("volume", "")
         comp = kw.get("competition", "")
-        meta = f"score {score}/100"
+        cluster = kw.get("intent_cluster", "")
+        angle = kw.get("recommended_angle", "")
+        hooks = kw.get("thumbnail_hook_options", [])
+        meta = f"final score {score}/100"
+        if vidiq_score is not None:
+            meta += f", vidIQ: {vidiq_score}/100"
         if vol:
             meta += f", volume: {vol}"
         if comp:
             meta += f", competition: {comp}"
+        if cluster:
+            meta += f", cluster: {cluster}"
+        if angle:
+            meta += f", recommended angle: {angle}"
+        if hooks:
+            meta += f", thumbnail hooks: {', '.join(hooks[:3])}"
         kw_lines.append(f"  {i}. \"{kw['keyword']}\" ({meta})")
 
     kw_block = "\n".join(kw_lines)

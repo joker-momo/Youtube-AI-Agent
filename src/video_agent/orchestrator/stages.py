@@ -27,6 +27,7 @@ from video_agent.operator import (
 from video_agent.operator_shards import (
     ShardValidationError,
     extract_json_envelope,
+    merge_scenes_qa_batches,
     merge_scene_batches,
     save_envelope,
     validate_envelope,
@@ -49,6 +50,7 @@ SCENES_PROMPT_PATH = Path("operator/chatgpt/scenes_prompt.md")
 SCENES_RAW_PATH = Path("operator/chatgpt/scenes.raw.txt")
 SCENES_PLAN_PATH = Path("operator/chatgpt/scenes_plan.json")
 SCENES_BATCHES_DIR = Path("operator/chatgpt/scenes_batches")
+SCENES_QA_BATCHES_DIR = Path("operator/claude/scenes_qa_batches")
 SEO_PROMPT_PATH = Path("operator/chatgpt/seo_prompt.md")
 SEO_RAW_PATH = Path("operator/chatgpt/seo.raw.txt")
 SCRIPT_QA_RAW_PATH = Path("operator/claude/script_qa.raw.txt")
@@ -306,6 +308,34 @@ def run_whisper_timestamps_stage(job_dir: Path) -> Path:
     return _run_whisper_timestamps_stage_inline(job_dir)
 
 
+def _rebase_words_to_scene_timestamps(scenes: list[dict], all_words: list[dict]) -> list[dict]:
+    scene_data = []
+    offset = 0.0
+    for scene in scenes:
+        dur = float(scene.get("duration_sec") or 15)
+        scene_end = offset + dur
+        scene_words = [
+            w for w in all_words
+            if offset <= (float(w["start"]) + float(w["end"])) / 2 < scene_end
+        ]
+        rebased = []
+        for w in scene_words:
+            start = max(0.0, float(w["start"]) - offset)
+            end = min(dur, max(start, float(w["end"]) - offset))
+            rebased.append({
+                "text": str(w["word"]).strip(),
+                "start": round(start, 4),
+                "end": round(end, 4),
+            })
+        scene_data.append({
+            "scene_id": scene["id"],
+            "audio_offset_sec": round(offset, 4),
+            "word_segments": rebased,
+        })
+        offset = scene_end
+    return scene_data
+
+
 def _run_whisper_timestamps_stage_inline(job_dir: Path) -> Path:
     """Run Whisper on narration.wav and write per-scene word segments.
 
@@ -511,38 +541,12 @@ def _run_whisper_timestamps_stage_inline(job_dir: Path) -> Path:
         },
     )
 
-    # Map individual rebased words to scenes by cumulative audio offset
-    scene_data = []
-    offset = 0.0
-    scenes_with_words = 0
-    scenes_without_words = 0
-    for scene in scenes:
-        dur = float(scene.get("duration_sec") or 15)
-        scene_end = offset + dur
-        # Words whose midpoint falls within [offset, scene_end)
-        scene_words = [
-            w for w in all_words
-            if offset <= (w["start"] + w["end"]) / 2 < scene_end
-        ]
-        if scene_words:
-            scenes_with_words += 1
-        else:
-            scenes_without_words += 1
-        # Rebase timestamps relative to this scene's audio offset
-        rebased = [
-            {
-                "text": w["word"],
-                "start": round(w["start"] - offset, 4),
-                "end": round(w["end"] - offset, 4),
-            }
-            for w in scene_words
-        ]
-        scene_data.append({
-            "scene_id": scene["id"],
-            "audio_offset_sec": round(offset, 4),
-            "word_segments": rebased,
-        })
-        offset = scene_end
+    # Map individual rebased words to scenes by cumulative audio offset.
+    # Boundary-spanning words can start slightly before a scene offset; clamp
+    # them to the scene range so render_props remains schema-valid.
+    scene_data = _rebase_words_to_scene_timestamps(scenes, all_words)
+    scenes_with_words = sum(1 for s in scene_data if s["word_segments"])
+    scenes_without_words = len(scene_data) - scenes_with_words
     logger.log(
         "WHISPER_STAGE_PROGRESS",
         {
@@ -551,7 +555,10 @@ def _run_whisper_timestamps_stage_inline(job_dir: Path) -> Path:
             "scenes_with_words": scenes_with_words,
             "scenes_without_words": scenes_without_words,
             "total_scenes": len(scenes),
-            "total_audio_duration_sec": round(offset, 2),
+            "total_audio_duration_sec": round(
+                sum(float(scene.get("duration_sec") or 15) for scene in scenes),
+                2,
+            ),
         },
     )
 
@@ -1034,6 +1041,7 @@ async def auto_scenes_stage_sharded(
             job_id=job_id,
             channel_id=channel_id,
             batch_envelopes=batch_envelopes,
+            script=script,
         )
         scenes_path = job_dir / "scenes.json"
         _write_json(scenes_path, merged)
@@ -1137,12 +1145,87 @@ async def auto_scenes_qa_stage(
     channel_path: Path,
     session_fn: SessionFn,
 ) -> Path:
+    if os.environ.get("SCENES_SHARDED_GENERATION", "").strip() == "1":
+        return await auto_scenes_qa_stage_sharded(job_dir, channel_path, session_fn)
     return await _auto_qa(
         job_dir=job_dir,
         channel_path=channel_path,
         artifact="scenes",
         session_fn=session_fn,
     )
+
+
+async def auto_scenes_qa_stage_sharded(
+    job_dir: Path,
+    channel_path: Path,
+    session_fn: SessionFn,
+) -> Path:
+    state = load_job(job_dir)
+    if state.current_stage != "scenes_qa":
+        raise StageInputMissingError(
+            f"Cannot auto-run sharded scenes_qa from current_stage={state.current_stage!r}"
+        )
+    scenes_path = job_dir / "scenes.json"
+    if not scenes_path.exists():
+        raise StageInputMissingError(f"Missing {scenes_path}")
+    if not channel_path.exists():
+        raise StageInputMissingError(f"Missing channel config {channel_path}")
+
+    scenes_doc = read_json(scenes_path)
+    channel_config = read_yaml(channel_path)
+    scenes = scenes_doc.get("scenes") or []
+    if not isinstance(scenes, list) or not scenes:
+        raise StageInputMissingError("scenes.json contains no scenes to QA")
+
+    batch_size = 8
+    scene_batches = [
+        scenes[index:index + batch_size]
+        for index in range(0, len(scenes), batch_size)
+    ]
+    qa_envelopes: list[dict] = []
+    batch_total = len(scene_batches)
+    try:
+        for batch_index, batch_scenes in enumerate(scene_batches, start=1):
+            batch_doc = {
+                "channel_id": state.channel_id,
+                "job_id": state.job_id,
+                "batch_index": batch_index,
+                "batch_total": batch_total,
+                "scenes": batch_scenes,
+            }
+            prompt = _claude_scenes_qa_batch_prompt(
+                channel_config,
+                batch_doc,
+                batch_index,
+                batch_total,
+            )
+            envelope = await _request_shard_envelope(
+                session_fn=session_fn,
+                prompt=prompt,
+                expected_artifact_type="scenes_qa_batch",
+                expected_job_id=state.job_id,
+                expected_channel_id=state.channel_id,
+            )
+            batch_path = job_dir / SCENES_QA_BATCHES_DIR / f"scenes_qa_batch_{batch_index:02d}.json"
+            save_envelope(batch_path, envelope)
+            qa_envelopes.append(envelope)
+
+        merged = merge_scenes_qa_batches(
+            job_id=state.job_id,
+            channel_id=state.channel_id,
+            qa_batch_envelopes=qa_envelopes,
+        )
+        output_path = job_dir / "operator" / "claude" / "scenes_qa.json"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_json(output_path, merged)
+    except Exception as exc:
+        raise StageInputMissingError(str(exc)) from exc
+
+    if str(merged.get("verdict") or "").upper() != "PASS":
+        issues = merged.get("issues") or merged.get("required_changes") or []
+        raise StageInputMissingError(f"Claude QA verdict for scenes is {merged.get('verdict')}: {issues}")
+    _complete_stage(job_dir, "scenes_qa", output_path)
+    return output_path
 
 
 async def auto_seo_qa_stage(

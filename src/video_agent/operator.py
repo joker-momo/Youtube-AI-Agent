@@ -102,7 +102,19 @@ def extract_json_objects(text: str) -> list[dict[str, Any]]:
                                 parsed_successfully = True
                                 break
                         except Exception:
-                            pass
+                            # ChatGPT sometimes emits literal newlines inside
+                            # JSON string values (invalid per JSON spec).
+                            # Retry after escaping them.
+                            try:
+                                repaired = chunk.replace("\r\n", "\\n").replace("\r", "\\n").replace("\n", "\\n")
+                                parsed = json.loads(repaired)
+                                if isinstance(parsed, dict):
+                                    objects.append(parsed)
+                                    index = idx + 1
+                                    parsed_successfully = True
+                                    break
+                            except Exception:
+                                pass
         
         if not parsed_successfully:
             index = start + 1
@@ -174,7 +186,11 @@ def _normalize_script_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
     return parsed
 
 
-def _normalize_scenes_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+def _normalize_scenes_candidate(
+    candidate: dict[str, Any],
+    *,
+    script: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Normalize scenes outputs from alternate model formats."""
     from video_agent.retention.layout_planner import apply_retention_layouts, normalize_payload
 
@@ -230,7 +246,7 @@ def _normalize_scenes_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
         }
         normalized_scenes.append(normalized)
 
-    parsed["scenes"] = apply_retention_layouts(normalized_scenes, script=None)
+    parsed["scenes"] = apply_retention_layouts(normalized_scenes, script=script)
     if not isinstance(parsed.get("total_duration_sec"), int):
         parsed["total_duration_sec"] = sum(
             int(item.get("duration_sec", 0)) for item in normalized_scenes
@@ -263,7 +279,41 @@ def _score_and_sort_seo_variants(seo: dict[str, Any]) -> dict[str, Any]:
 def _normalize_seo_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
     """Backfill SEO fields for compatibility with older model/test payloads."""
     parsed = dict(candidate)
+
+    # Strip literal newlines from title
+    if "title" in parsed and isinstance(parsed["title"], str):
+        parsed["title"] = parsed["title"].replace("\n", " ").replace("\r", " ").strip()
+        parsed["title"] = " ".join(parsed["title"].split())
+
+    # Normalize description: replace single newlines with space, keep double newlines
+    if "description" in parsed and isinstance(parsed["description"], str):
+        desc = parsed["description"]
+        desc = desc.replace("\r\n", "\n").replace("\r", "\n")
+        paragraphs = desc.split("\n\n")
+        cleaned_paragraphs = []
+        for p in paragraphs:
+            cleaned_p = p.replace("\n", " ").strip()
+            cleaned_p = " ".join(cleaned_p.split())
+            if cleaned_p:
+                cleaned_paragraphs.append(cleaned_p)
+        parsed["description"] = "\n\n".join(cleaned_paragraphs)
+
+    # Normalize title_variants
+    if "title_variants" in parsed and isinstance(parsed["title_variants"], list):
+        for variant in parsed["title_variants"]:
+            if isinstance(variant, dict):
+                if "title" in variant and isinstance(variant["title"], str):
+                    variant["title"] = variant["title"].replace("\n", " ").replace("\r", " ").strip()
+                    variant["title"] = " ".join(variant["title"].split())
+                if "thumbnail_text" in variant and isinstance(variant["thumbnail_text"], str):
+                    variant["thumbnail_text"] = variant["thumbnail_text"].replace("\n", " ").replace("\r", " ").strip()
+                    variant["thumbnail_text"] = " ".join(variant["thumbnail_text"].split())
+
     parsed = _score_and_sort_seo_variants(parsed)
+
+    # Backfill thumbnail_path if empty
+    if not parsed.get("thumbnail_path"):
+        parsed["thumbnail_path"] = "thumbnail.jpg"
 
     title = str(parsed.get("title") or "").strip()
     thumbnail_text = str(parsed.get("thumbnail_text") or "").strip()
@@ -402,7 +452,7 @@ def _chatgpt_scenes_prompt(
         "",
         "Required JSON schema:",
         "- channel_id, job_id, scenes (array), total_duration_sec, qa",
-        "- each scene object: id, duration_sec, narration, on_screen_text, caption, visual_prompt, motion, asset_refs",
+        "- each scene object: id, duration_sec, narration, on_screen_text, caption, visual_prompt, motion, asset_refs, layout, layout_payload, layout_reason",
         f"- create {scenes_min}-{scenes_max} scenes; each scene duration_sec should be {scene_dur_target-3}–{scene_dur_target+3} seconds",
         f"- total_duration_sec must be approximately {target_sec} (sum of all scene durations)",
         "- scene ids: sequential scene-01, scene-02, ...",
@@ -415,6 +465,17 @@ def _chatgpt_scenes_prompt(
         "- visual_prompt must match sleep-wellness context for adults 45+: bedroom night routine, evening herbal tea, low-impact stretching, doctor consultation, calm morning sunlight.",
         "- avoid off-topic visuals (cars, highways, random city traffic, tech gadgets unless explicitly in narration).",
         "- motion: 'slow_zoom' / 'pan_right' / 'pan_left'; never repeat same motion 3x in a row",
+        "- layout: one of [\"hook\", \"subtitle\", \"checklist\", \"warning\", \"quote\", \"cta\"].",
+        "- layout_payload: object with exactly these fields: {\"title\": string, \"body\": string, \"bullets\": array of strings, \"cta\": string}.",
+        "- layout_reason: short English reason explaining why the layout fits the narration.",
+        "- scene-01 should use layout=\"hook\" with a 2-8 word Spanish title when safe.",
+        "- final scene should use layout=\"cta\" only if it contains a clear final action.",
+        "- Use layout=\"subtitle\" for normal explanation scenes.",
+        "- Use layout=\"checklist\" only when the narration contains 2-4 concrete steps/items; bullets must come from narration/caption/on_screen_text.",
+        "- Use layout=\"warning\" only when the narration describes a mistake, risk, or something to avoid.",
+        "- Use layout=\"quote\" only for a short emotional or memorable sentence supported by the narration.",
+        "- Every non-subtitle layout must include enough layout_payload for rendering.",
+        "- Python will downgrade unsafe layouts; do not invent overlay facts that are not supported by the scene text.",
         "- qa.verdict: must be PENDING_CLAUDE_QA — never mark your own scenes as PASS",
         "",
     ]
@@ -471,7 +532,15 @@ def _chatgpt_scenes_plan_prompt(channel_config: dict[str, Any], script: dict[str
             f'    "target_scene_count": {target_scene_count},',
             f'    "target_total_duration_sec": {target_sec},',
             '    "batch_size": 6,',
-            '    "batches": []',
+            '    "batches": [',
+            '      {',
+            '        "batch_index": 1,',
+            '        "scene_start": "scene-01",',
+            '        "scene_end": "scene-06",',
+            '        "purpose": "Opening hook",',
+            '        "script_sections": ["Section Title"]',
+            '      }',
+            '    ]',
             "  },",
             '  "warnings": []',
             "}",
@@ -533,11 +602,21 @@ def _chatgpt_scenes_batch_prompt(
         "Batch rules:",
         f"- Generate only scenes {scene_start} through {scene_end}.",
         "- Scene IDs must exactly match the requested range.",
-        "- Every scene must include: id, duration_sec, narration, on_screen_text, caption, visual_prompt, motion, asset_refs.",
+        "- Every scene must include: id, duration_sec, narration, on_screen_text, caption, visual_prompt, motion, asset_refs, layout, layout_payload, layout_reason.",
         "- asset_refs must be {}.",
         "- visual_prompt must be English and stock-search friendly.",
         "- narration must follow the approved script context.",
-        "- If layout fields are present, layout_payload must be supported by narration/caption/on_screen_text.",
+        "- layout must be one of: hook, subtitle, checklist, warning, quote, cta.",
+        "- layout_payload must be an object with {title, body, bullets, cta}; use empty strings/[] for unused fields.",
+        "- layout_reason must be a short English reason explaining why the layout fits the narration.",
+        "- scene-01 should use layout=\"hook\" with a 2-8 word Spanish title when safe.",
+        "- final scene should use layout=\"cta\" only if it contains a clear final action.",
+        "- Use layout=\"subtitle\" for normal explanation scenes.",
+        "- Use layout=\"checklist\" only when the narration contains 2-4 concrete steps/items; bullets must come from narration/caption/on_screen_text.",
+        "- Use layout=\"warning\" only when the narration describes a mistake, risk, or something to avoid.",
+        "- Use layout=\"quote\" only for a short emotional or memorable sentence supported by the narration.",
+        "- Every non-subtitle layout must include enough layout_payload for rendering.",
+        "- Do not invent overlay facts that are not supported by narration/caption/on_screen_text.",
         "- Do not return markdown or more than one JSON object.",
         "",
     ]
@@ -829,7 +908,10 @@ def promote_operator_artifact(
         if artifact == "script":
             candidate = _normalize_script_candidate(candidate)
         elif artifact == "scenes":
-            candidate = _normalize_scenes_candidate(candidate)
+            candidate = _normalize_scenes_candidate(
+                candidate,
+                script=_read_optional_json(job_dir / "script.json"),
+            )
         elif artifact == "seo":
             candidate = _normalize_seo_candidate(candidate)
         try:

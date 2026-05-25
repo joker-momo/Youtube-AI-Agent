@@ -1,6 +1,6 @@
 import React from 'react';
 import {AbsoluteFill, Audio, Img, interpolate, OffthreadVideo, Sequence, useCurrentFrame, useVideoConfig} from 'remotion';
-import {SubtitleConfig, WordSegment} from './render-props';
+import {SceneLayout, SubtitleConfig, WordSegment} from './render-props';
 import {mediaSrc, RenderProps, Scene} from './render-props';
 import {fitHeadline, fullFrame} from './styles';
 
@@ -73,14 +73,33 @@ const LogoWatermark: React.FC<{logoPath: string}> = ({logoPath}) => (
   </div>
 );
 
-const CaptionBlock: React.FC<{
+type RetentionLayout = SceneLayout;
+
+type RetentionTemplateProps = {
+  scene: Scene;
+  palette: RenderProps['style']['palette'];
+  opacity: number;
+  isLast: boolean;
+  title: string;
+  body: string;
+  bullets: string[];
+  cta: string;
+  panelStyle: React.CSSProperties;
   line: WordSegment[];
-  activeText: string | null;
+  activeIndex: number | null;
+  fallbackText: string;
+  subtitles: Required<SubtitleConfig>;
+  captionOpacity: number;
+};
+
+const SubtitleOverlay: React.FC<{
+  line: WordSegment[];
+  activeIndex: number | null;
   fallbackText: string;
   palette: RenderProps['style']['palette'];
   subtitles: Required<SubtitleConfig>;
   opacity: number;
-}> = ({line, activeText, fallbackText, palette, subtitles, opacity}) => {
+}> = ({line, activeIndex, fallbackText, palette, subtitles, opacity}) => {
   const words = line.length > 0 ? line : fallbackText.split(/\s+/).filter(Boolean).slice(0, subtitles.words_per_page).map((text, i) => ({
     text,
     start: i,
@@ -115,7 +134,7 @@ const CaptionBlock: React.FC<{
         }}
       >
         {words.map((word, index) => {
-          const isActive = activeText !== null && word.text === activeText;
+          const isActive = activeIndex !== null && index === activeIndex;
           return (
             <span
               key={`${word.text}-${index}`}
@@ -140,22 +159,98 @@ const CaptionBlock: React.FC<{
   );
 };
 
+const SubtitleLayoutTemplate: React.FC<RetentionTemplateProps> = ({
+  line,
+  activeIndex,
+  fallbackText,
+  palette,
+  subtitles,
+  captionOpacity,
+}) => (
+  <SubtitleOverlay
+    line={line}
+    activeIndex={activeIndex}
+    fallbackText={fallbackText}
+    palette={palette}
+    subtitles={subtitles}
+    opacity={captionOpacity}
+  />
+);
+
+const HookOverlay: React.FC<RetentionTemplateProps> = ({title, body, panelStyle}) => (
+  <div style={{...panelStyle, maxWidth: 1040}}>
+    <div style={{fontSize: 76, fontWeight: 900, lineHeight: 1.02}}>{title}</div>
+    <div style={{fontSize: 36, fontWeight: 800, marginTop: 20, maxWidth: 900}}>{body}</div>
+  </div>
+);
+
+const ChecklistOverlay: React.FC<RetentionTemplateProps> = ({title, bullets, panelStyle, palette}) => (
+  <div style={{...panelStyle, maxWidth: 900}}>
+    <div style={{fontSize: 58, fontWeight: 900, marginBottom: 24}}>{title}</div>
+    <div style={{display: 'flex', flexDirection: 'column', gap: 18}}>
+      {bullets.map((bullet, index) => (
+        <div key={`${bullet}-${index}`} style={{display: 'flex', alignItems: 'center', gap: 18, fontSize: 42, fontWeight: 800}}>
+          <span style={{width: 34, height: 34, borderRadius: 17, background: palette.accent, color: '#102018', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, fontWeight: 900}}>
+            {index + 1}
+          </span>
+          <span>{bullet}</span>
+        </div>
+      ))}
+    </div>
+  </div>
+);
+
+const WarningOverlay: React.FC<RetentionTemplateProps> = ({title, body, panelStyle, palette}) => (
+  <div style={{...panelStyle, maxWidth: 980, bottom: 140}}>
+    <div style={{fontSize: 66, fontWeight: 900, lineHeight: 1.05, color: palette.accent}}>{title}</div>
+    <div style={{fontSize: 34, fontWeight: 800, marginTop: 18, maxWidth: 900}}>{body}</div>
+  </div>
+);
+
+const QuoteOverlay: React.FC<RetentionTemplateProps> = ({body, panelStyle}) => (
+  <div style={{...panelStyle, left: 180, right: 180, bottom: 150, textAlign: 'center'}}>
+    <div style={{fontSize: 66, fontWeight: 900, lineHeight: 1.12}}>"{body}"</div>
+  </div>
+);
+
+const CtaOverlay: React.FC<RetentionTemplateProps> = ({cta, body, panelStyle, palette, isLast}) => {
+  if (!isLast) {
+    return null;
+  }
+  return (
+    <div style={{...panelStyle, textAlign: 'center', bottom: 128}}>
+      <div style={{fontSize: 70, fontWeight: 900, lineHeight: 1.05}}>{cta}</div>
+      <div style={{fontSize: 34, fontWeight: 800, marginTop: 18, color: palette.accent}}>{body}</div>
+    </div>
+  );
+};
+
+const layoutTemplates: Record<RetentionLayout, React.FC<RetentionTemplateProps>> = {
+  hook: HookOverlay,
+  subtitle: SubtitleLayoutTemplate,
+  checklist: ChecklistOverlay,
+  warning: WarningOverlay,
+  quote: QuoteOverlay,
+  cta: CtaOverlay,
+};
+
 const RetentionOverlay: React.FC<{
   scene: Scene;
   palette: RenderProps['style']['palette'];
   opacity: number;
   isLast: boolean;
-}> = ({scene, palette, opacity, isLast}) => {
+  line: WordSegment[];
+  activeIndex: number | null;
+  fallbackText: string;
+  subtitles: Required<SubtitleConfig>;
+  captionOpacity: number;
+}> = ({scene, palette, opacity, isLast, line, activeIndex, fallbackText, subtitles, captionOpacity}) => {
   const layout = scene.layout ?? 'subtitle';
   const payload = scene.layout_payload ?? {};
   const title = payload.title || scene.on_screen_text || scene.caption;
   const body = payload.body || scene.caption || scene.narration;
   const bullets = (payload.bullets ?? []).slice(0, 4);
-  const cta = payload.cta || scene.on_screen_text || 'Comienza hoy';
-
-  if (layout === 'subtitle') {
-    return null;
-  }
+  const cta = payload.cta || '';
 
   const panelStyle: React.CSSProperties = {
     position: 'absolute',
@@ -168,56 +263,24 @@ const RetentionOverlay: React.FC<{
     textShadow: '0 5px 22px rgba(0,0,0,0.72)',
   };
 
-  if (layout === 'checklist') {
-    return (
-      <div style={{...panelStyle, maxWidth: 900}}>
-        <div style={{fontSize: 58, fontWeight: 900, marginBottom: 24}}>{title}</div>
-        <div style={{display: 'flex', flexDirection: 'column', gap: 18}}>
-          {bullets.map((bullet, index) => (
-            <div key={`${bullet}-${index}`} style={{display: 'flex', alignItems: 'center', gap: 18, fontSize: 42, fontWeight: 800}}>
-              <span style={{width: 34, height: 34, borderRadius: 17, background: palette.accent, color: '#102018', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, fontWeight: 900}}>
-                {index + 1}
-              </span>
-              <span>{bullet}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  if (layout === 'warning') {
-    return (
-      <div style={{...panelStyle, maxWidth: 980, bottom: 140}}>
-        <div style={{fontSize: 38, fontWeight: 900, color: palette.accent, marginBottom: 16}}>ATENCION</div>
-        <div style={{fontSize: 66, fontWeight: 900, lineHeight: 1.05}}>{title}</div>
-        <div style={{fontSize: 34, fontWeight: 800, marginTop: 18, maxWidth: 900}}>{body}</div>
-      </div>
-    );
-  }
-
-  if (layout === 'quote') {
-    return (
-      <div style={{...panelStyle, left: 180, right: 180, bottom: 150, textAlign: 'center'}}>
-        <div style={{fontSize: 66, fontWeight: 900, lineHeight: 1.12}}>"{body}"</div>
-      </div>
-    );
-  }
-
-  if (layout === 'cta' && isLast) {
-    return (
-      <div style={{...panelStyle, textAlign: 'center', bottom: 128}}>
-        <div style={{fontSize: 70, fontWeight: 900, lineHeight: 1.05}}>{cta}</div>
-        <div style={{fontSize: 34, fontWeight: 800, marginTop: 18, color: palette.accent}}>{body}</div>
-      </div>
-    );
-  }
-
+  const Template = layoutTemplates[layout] ?? layoutTemplates.subtitle;
   return (
-    <div style={{...panelStyle, maxWidth: 1040}}>
-      <div style={{fontSize: 76, fontWeight: 900, lineHeight: 1.02}}>{title}</div>
-      <div style={{fontSize: 36, fontWeight: 800, marginTop: 20, maxWidth: 900}}>{body}</div>
-    </div>
+    <Template
+      scene={scene}
+      palette={palette}
+      opacity={opacity}
+      isLast={isLast}
+      title={title}
+      body={body}
+      bullets={bullets}
+      cta={cta}
+      panelStyle={panelStyle}
+      line={line}
+      activeIndex={activeIndex}
+      fallbackText={fallbackText}
+      subtitles={subtitles}
+      captionOpacity={captionOpacity}
+    />
   );
 };
 
@@ -353,9 +416,9 @@ const SceneView: React.FC<{
 
   const activePageIdx = Math.floor(targetWordIdx / wordsPerPage);
   const displayLine = pages[activePageIdx] || [];
-  const activeWord = activeWordIdx !== -1 ? words[activeWordIdx]?.text ?? null : null;
-  const shouldShowWordCaption = subtitles.enabled && (scene.layout ?? 'subtitle') === 'subtitle';
-
+  const activeIndexInPage = activeWordIdx !== -1 && activePageIdx === Math.floor(activeWordIdx / wordsPerPage)
+    ? activeWordIdx - activePageIdx * wordsPerPage
+    : null;
   const opacity       = interpolate(frame, [0, FADE_IN], [0, 1], {extrapolateRight: 'clamp'});
   const headlineY     = interpolate(frame, [4, FADE_IN + 8], [20, 0], {extrapolateRight: 'clamp'});
   const headlineAlpha = interpolate(frame, [4, FADE_IN + 8], [0, 1], {extrapolateRight: 'clamp'});
@@ -449,17 +512,17 @@ const SceneView: React.FC<{
         zIndex: 15,
       }} />
 
-      <RetentionOverlay scene={scene} palette={palette} opacity={headlineAlpha} isLast={isLast} />
-      {shouldShowWordCaption ? (
-        <CaptionBlock
-          line={displayLine}
-          activeText={activeWord}
-          fallbackText={scene.on_screen_text || scene.caption || scene.narration}
-          palette={palette}
-          subtitles={subtitles}
-          opacity={captionAlpha}
-        />
-      ) : null}
+      <RetentionOverlay
+        scene={scene}
+        palette={palette}
+        opacity={headlineAlpha}
+        isLast={isLast}
+        line={displayLine}
+        activeIndex={activeIndexInPage}
+        fallbackText={scene.on_screen_text || scene.caption || scene.narration}
+        subtitles={subtitles}
+        captionOpacity={captionAlpha}
+      />
 
       {/* Scene-to-scene fade-out: solid black overlay fades in over final FADE_OUT frames.
           Must be the LAST child so it composites on top of everything. */}

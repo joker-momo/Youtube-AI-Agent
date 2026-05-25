@@ -3,6 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from jsonschema import ValidationError
+
+from video_agent.contracts import repo_root
+from video_agent.operator_validators import validate_operator_artifact
+from video_agent.utils.validation import validate_json
 from video_agent.utils.json_io import read_json, write_json
 
 SCHEMA_VERSION = "2026-05-json-shards-v1"
@@ -101,13 +106,26 @@ def validate_scenes_plan(plan_envelope: dict[str, Any]) -> None:
     batches = data.get("batches")
     if not isinstance(batches, list) or not batches:
         raise ShardValidationError("scenes_plan data.batches must be a non-empty list.")
+    target_scene_count = data["target_scene_count"]
+    next_expected = 1
     for idx, batch in enumerate(batches, start=1):
         if not isinstance(batch, dict):
             raise ShardValidationError(f"Plan batch {idx} must be an object.")
         if batch.get("batch_index") != idx:
             raise ShardValidationError(f"Plan batch {idx} has wrong batch_index.")
-        _scene_num(str(batch.get("scene_start") or ""))
-        _scene_num(str(batch.get("scene_end") or ""))
+        start = _scene_num(str(batch.get("scene_start") or ""))
+        end = _scene_num(str(batch.get("scene_end") or ""))
+        if start != next_expected:
+            raise ShardValidationError(
+                f"scenes_plan ranges must be contiguous: expected scene-{next_expected:02d}, got scene-{start:02d}."
+            )
+        if end < start:
+            raise ShardValidationError(f"Plan batch {idx} scene_end must be >= scene_start.")
+        next_expected = end + 1
+    if next_expected - 1 != target_scene_count:
+        raise ShardValidationError(
+            f"scenes_plan final batch must end at scene-{target_scene_count:02d}; got scene-{next_expected - 1:02d}."
+        )
 
 
 _REQUIRED_SCENE_FIELDS = {
@@ -182,7 +200,10 @@ def merge_scene_batches(
     job_id: str,
     channel_id: str,
     batch_envelopes: list[dict[str, Any]],
+    script: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    from video_agent.retention.layout_planner import apply_retention_layouts
+
     if not batch_envelopes:
         raise ShardValidationError("No scene batches to merge.")
     ordered = sorted(batch_envelopes, key=lambda env: int(env.get("batch_index") or 0))
@@ -211,13 +232,22 @@ def merge_scene_batches(
     total_duration = sum(float(scene.get("duration_sec") or 0) for scene in scenes)
     if total_duration.is_integer():
         total_duration = int(total_duration)
-    return {
+    scenes = apply_retention_layouts(scenes, script=script)
+    merged = {
         "channel_id": channel_id,
         "job_id": job_id,
         "scenes": scenes,
         "total_duration_sec": total_duration,
         "qa": {"verdict": "PENDING_CLAUDE_QA"},
     }
+    try:
+        validate_json(merged, repo_root() / "schemas/scenes.schema.json")
+    except ValidationError as exc:
+        raise ShardValidationError(f"final scenes schema validation failed: {exc.message}") from exc
+    validation = validate_operator_artifact("scenes", merged, job_id, None)
+    if not validation.is_valid:
+        raise ShardValidationError(f"final scenes validation failed: {validation.format_report()}")
+    return merged
 
 
 _RISK_RANK = {"none": 0, "low": 1, "medium": 2, "high": 3}

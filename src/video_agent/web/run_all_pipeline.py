@@ -79,7 +79,7 @@ async def execute_run_all(
     job_dir: Path,
     channel_path: Path,
     client: BrowserClient,
-    enforce_approvals: bool = True,
+    enforce_approvals: bool = False,
 ) -> dict:
     """End-to-end pipeline: script -> scenes -> seo -> render -> review.
 
@@ -127,7 +127,7 @@ async def _execute_run_all_locked(
     job_dir: Path,
     channel_path: Path,
     client: BrowserClient,
-    enforce_approvals: bool = True,
+    enforce_approvals: bool = False,
 ) -> dict:
     completed: list[dict] = []
     _start_time = time.monotonic()

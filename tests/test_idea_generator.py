@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from video_agent.contracts import repo_root
 import video_agent.orchestrator.idea_generator as idea_generator
+import video_agent.web.routes._legacy as legacy_routes
 from video_agent.orchestrator.idea_generator import (
     DEFAULT_CHANNEL_KEYWORD_CONFIG,
     _discover_top_keywords,
@@ -305,7 +306,7 @@ def test_flatten_keyword_result_for_ui_legacy_and_v2():
         "rejected_keywords": [{"keyword": "d"}],
     }
     assert flatten_keyword_result_for_ui(legacy) == legacy
-    assert [item["keyword"] for item in flatten_keyword_result_for_ui(v2)] == ["b", "c"]
+    assert [item["keyword"] for item in flatten_keyword_result_for_ui(v2)] == ["b", "c", "d"]
 
 
 def test_select_keywords_for_prompt_uses_top_opportunity_then_long_tail():
@@ -473,12 +474,26 @@ class FakeBrowserClient:
         self.response = response
         self.error = error
         self.calls: list[list[str]] = []
+        self.vidiq_calls: list[list[str]] = []
 
     async def run_session(self, site: str, messages, **kwargs) -> str:
         self.calls.append(list(messages))
         if self.error:
             raise self.error
         return self.response
+
+    async def run_vidiq_scores(self, keywords: list[str]) -> list[dict]:
+        self.vidiq_calls.append(list(keywords))
+        return [
+            {
+                "keyword": keyword,
+                "score": 82 if "45" in keyword else 40,
+                "volume": "Medium",
+                "competition": "Low",
+                "related": ["como comer mejor despues de los 45", "energia despues de los 45"],
+            }
+            for keyword in keywords
+        ]
 
 
 @pytest.fixture
@@ -510,6 +525,144 @@ def test_post_generate_ideas_success(http_client: TestClient, tmp_path: Path):
     # Files exist on disk
     for rel in body["saved"]:
         assert (tmp_path / rel).exists()
+
+
+def test_post_generate_ideas_returns_and_saves_v2_keyword_metadata(http_client: TestClient, tmp_path: Path):
+    ideas = [
+        {
+            **SAMPLE_IDEAS[0],
+            "target_keyword": "como comer mejor despues de los 45",
+            "title_seed": "Cómo comer mejor después de los 45 sin dietas",
+        }
+    ]
+    fake = FakeBrowserClient(response=_make_raw(ideas))
+    app.dependency_overrides[get_browser_client] = lambda: fake
+    try:
+        r = http_client.post(
+            "/channels/vida-plena-45/ideas/generate",
+            json={"seed_topics": ["como comer mejor despues de los 45"], "count": 1},
+        )
+    finally:
+        app.dependency_overrides.pop(get_browser_client, None)
+
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["keyword_result"]["metadata"]["version"] == "keyword_scoring_v2"
+    assert body["summary"]["total_scanned"] >= 1
+    assert body["summary"]["target_language"] == "spanish"
+
+    idea = body["ideas"][0]
+    assert idea["vidiq_score"] == 82
+    assert idea["keyword_final_score"] >= 70
+    assert idea["intent_cluster"] == "nutrition_after_45"
+    assert idea["bucket"] == "top_opportunity_keywords"
+    assert idea["recommended_angle"]
+    assert idea["thumbnail_hook_options"]
+
+    saved = json.loads((tmp_path / body["saved"][0]).read_text(encoding="utf-8"))
+    assert saved["keyword_final_score"] == idea["keyword_final_score"]
+    assert saved["bucket"] == idea["bucket"]
+
+
+def test_post_generate_ideas_keeps_v2_score_when_target_keyword_is_paraphrased(
+    http_client: TestClient,
+    tmp_path: Path,
+):
+    ideas = [
+        {
+            **SAMPLE_IDEAS[0],
+            "target_keyword": "sueño",
+            "title_seed": "Sueño después de los 45: una rutina simple",
+        }
+    ]
+    fake = FakeBrowserClient(response=_make_raw(ideas))
+    app.dependency_overrides[get_browser_client] = lambda: fake
+    try:
+        r = http_client.post(
+            "/channels/vida-plena-45/ideas/generate",
+            json={"seed_topics": ["como comer mejor despues de los 45"], "count": 1},
+        )
+    finally:
+        app.dependency_overrides.pop(get_browser_client, None)
+
+    assert r.status_code == 201, r.text
+    body = r.json()
+    idea = body["ideas"][0]
+    assert idea["target_keyword"] == "como comer mejor despues de los 45"
+    assert idea["keyword_match_source"] == "ordered_fallback"
+    assert idea["vidiq_score"] == 82
+    assert idea["keyword_final_score"] >= 70
+    assert idea["bucket"] == "top_opportunity_keywords"
+
+    saved = json.loads((tmp_path / body["saved"][0]).read_text(encoding="utf-8"))
+    assert saved["keyword_final_score"] == idea["keyword_final_score"]
+    assert saved["keyword_match_source"] == "ordered_fallback"
+
+
+def test_post_generate_ideas_attaches_rejected_keyword_scores(
+    http_client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    ideas = [
+        {
+            **SAMPLE_IDEAS[0],
+            "target_keyword": "sueño",
+            "title_seed": "Sueño después de los 45: rutina realista",
+        }
+    ]
+    keyword_result = {
+        "top_opportunity_keywords": [],
+        "long_tail_test_keywords": [],
+        "rejected_keywords": [
+            {
+                "keyword": "sueño",
+                "vidiq_score": 64,
+                "final_score": 50.0,
+                "volume": "High",
+                "competition": "Medium",
+                "intent_cluster": "sleep_after_45",
+                "audience_fit": 60,
+                "intent_strength": 25,
+                "content_fit": 70,
+                "language_fit": 100,
+                "serp_opportunity": 50,
+                "bucket": "rejected_keywords",
+                "recommended_angle": "Dormir mejor después de los 45",
+                "thumbnail_hook_options": ["DUERME MEJOR"],
+                "notes": ["spanish_language_ok"],
+                "rejection_reasons": ["low_final_score"],
+            }
+        ],
+        "all_scored_keywords": [],
+        "metadata": {"version": "keyword_scoring_v2", "target_language": "spanish"},
+    }
+
+    async def fake_generate_ideas(**kwargs):
+        return ideas, keyword_result, "trend"
+
+    monkeypatch.setattr(legacy_routes, "generate_ideas", fake_generate_ideas)
+    fake = FakeBrowserClient(response=_make_raw(ideas))
+    app.dependency_overrides[get_browser_client] = lambda: fake
+    try:
+        r = http_client.post(
+            "/channels/vida-plena-45/ideas/generate",
+            json={"seed_topics": [], "count": 1},
+        )
+    finally:
+        app.dependency_overrides.pop(get_browser_client, None)
+
+    assert r.status_code == 201, r.text
+    body = r.json()
+    idea = body["ideas"][0]
+    assert idea["keyword_final_score"] == 50.0
+    assert idea["vidiq_score"] == 64
+    assert idea["bucket"] == "rejected_keywords"
+    assert idea["keyword_rejection_reasons"] == ["low_final_score"]
+
+    saved = json.loads((tmp_path / body["saved"][0]).read_text(encoding="utf-8"))
+    assert saved["keyword_final_score"] == 50.0
+    assert saved["bucket"] == "rejected_keywords"
 
 
 def test_post_generate_ideas_unknown_channel(http_client: TestClient):

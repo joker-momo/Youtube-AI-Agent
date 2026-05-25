@@ -193,6 +193,55 @@ def test_promote_operator_artifact_rewrites_scenes_prefilled_qa(tmp_path):
     assert promoted["qa"]["verdict"] == "PENDING_CLAUDE_QA"
 
 
+def test_promote_operator_artifact_promotes_final_scene_cta_from_script(tmp_path):
+    job_dir = tmp_path / "operator-job"
+    job_dir.mkdir()
+    (job_dir / "script.json").write_text(json.dumps(VALID_SCRIPT), encoding="utf-8")
+    raw_path = tmp_path / "scenes.raw.txt"
+    raw_path.write_text(
+        json.dumps(
+            {
+                "channel_id": "vida-plena-45",
+                "job_id": "operator-job",
+                "total_duration_sec": 24,
+                "scenes": [
+                    {
+                        "id": "scene-01",
+                        "duration_sec": 12,
+                        "narration": "Baja la luz antes de dormir.",
+                        "on_screen_text": "BAJA LA LUZ",
+                        "caption": "Baja la luz antes de dormir.",
+                        "visual_prompt": "Calm bedroom",
+                        "motion": "slow_zoom",
+                        "asset_refs": {},
+                        "layout": "subtitle",
+                    },
+                    {
+                        "id": "scene-02",
+                        "duration_sec": 12,
+                        "narration": "Puedes probar este hábito esta noche.",
+                        "on_screen_text": "PRUÉBALO HOY",
+                        "caption": "Puedes probar este hábito esta noche.",
+                        "visual_prompt": "Calm morning",
+                        "motion": "pan_left",
+                        "asset_refs": {},
+                        "layout": "subtitle",
+                    },
+                ],
+                "qa": {"verdict": "PENDING_CLAUDE_QA"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = promote_operator_artifact(job_dir, "scenes", raw_path)
+    promoted = json.loads(result.output_path.read_text(encoding="utf-8"))
+
+    assert promoted["scenes"][0]["layout"] != "cta"
+    assert promoted["scenes"][1]["layout"] == "cta"
+    assert promoted["scenes"][1]["layout_payload"]["cta"] == VALID_SCRIPT["cta"]
+
+
 def test_promote_operator_artifact_rejects_invalid_seo_contract(tmp_path):
     raw_path = tmp_path / "seo.raw.txt"
     raw_path.write_text(
@@ -377,4 +426,3 @@ def test_extract_json_objects_robustness_with_preamble():
     candidates = extract_json_objects(raw_text)
     assert len(candidates) == 1
     assert candidates[0] == {"title": "Uno"}
-

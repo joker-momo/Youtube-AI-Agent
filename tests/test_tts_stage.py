@@ -2,6 +2,7 @@ import wave
 from pathlib import Path
 
 from video_agent.stages.assets import prepare_assets
+from video_agent.tts import synthesize_scene_track
 
 
 def scene_doc():
@@ -92,3 +93,28 @@ def test_prepare_assets_keeps_silent_mock_audio_by_default(tmp_path):
     assert manifest["audio"]["provider"] == "mock-local"
     assert manifest["audio"]["source"] == "silent_placeholder"
     assert (tmp_path / "job-mock-tts/assets/narration.wav").exists()
+
+
+def test_scene_lead_in_adds_silence_before_later_scenes(tmp_path):
+    client = FakeTTSClient()
+    doc = scene_doc()
+
+    metadata = synthesize_scene_track(
+        doc,
+        tmp_path / "narration.wav",
+        {
+            "provider": "kokoro",
+            "voice_id": "ef_dora",
+            "lang_code": "e",
+            "sample_rate": 24000,
+            "humanize": {"enabled": False},
+            "scene_lead_in_sec": 0.6,
+        },
+        client,
+    )
+
+    assert doc["scenes"][0]["duration_sec"] == 1.0
+    assert doc["scenes"][1]["duration_sec"] == 1.6
+    assert metadata["scene_lead_in_sec"] == 0.6
+    with wave.open(str(tmp_path / "narration.wav"), "r") as handle:
+        assert handle.getnframes() == int(2.6 * 24000)

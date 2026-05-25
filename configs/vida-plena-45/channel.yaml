@@ -92,6 +92,7 @@ tts:
   speed: 0.97
   sample_rate: 24000
   pace_wpm: 145
+  scene_lead_in_sec: 0.6
   humanize:
     enabled: true
     pause_comma_ms: 300

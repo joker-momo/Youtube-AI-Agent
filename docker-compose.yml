@@ -46,6 +46,7 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://127.0.0.1:8000}
+      SCENES_SHARDED_GENERATION: ${SCENES_SHARDED_GENERATION:-0}
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
@@ -53,6 +54,7 @@ services:
       - ./caches:/app/caches
       - ./asset_library:/app/asset_library
       - ./configs:/app/configs
+      - ./inputs:/app/inputs
       - ./src:/app/src
       - ./tests:/app/tests
       - ./remotion/src:/app/remotion/src
@@ -82,6 +84,7 @@ services:
       WHISPER_SYNTH_TIMEOUT_SEC: ${WHISPER_SYNTH_TIMEOUT_SEC:-900}
       WHISPER_MODEL_LOAD_TIMEOUT_SEC: ${WHISPER_MODEL_LOAD_TIMEOUT_SEC:-300}
       WHISPER_TRANSCRIBE_TIMEOUT_SEC: ${WHISPER_TRANSCRIBE_TIMEOUT_SEC:-1800}
+      SCENES_SHARDED_GENERATION: ${SCENES_SHARDED_GENERATION:-0}
     volumes:
       - ./jobs:/app/jobs
       - ./caches:/app/caches

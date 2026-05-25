@@ -129,7 +129,7 @@ def _validate_scene_layout(scene: dict[str, Any], scene_label: str) -> Validatio
     if layout == "checklist":
         bullets = (payload or {}).get("bullets") if isinstance(payload, dict) else None
         valid = [b for b in bullets or [] if str(b).strip()] if isinstance(bullets, list) else []
-        if len(valid) < 2:
+        if not 2 <= len(valid) <= 4:
             result.warnings.append(f"Scene {scene_label}: checklist layout should have 2-4 bullets.")
     if layout == "cta":
         cta = (payload or {}).get("cta") if isinstance(payload, dict) else ""

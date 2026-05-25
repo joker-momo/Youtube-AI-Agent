@@ -131,6 +131,7 @@ tts:
   pace_wpm: 145
   provider: kokoro
   sample_rate: 24000
+  scene_lead_in_sec: 0.6
   speed: 0.97
   voice_id: ef_dora
 upload:

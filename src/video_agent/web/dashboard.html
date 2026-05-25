@@ -161,7 +161,7 @@
   .gen-form select { padding:7px 10px; border:1px solid var(--line); border-radius:6px; font-size:13px; background:#fff; }
   .gen-form textarea { flex:1; min-width:200px; padding:7px 10px; border:1px solid var(--line); border-radius:6px; font-size:12px; font-family:inherit; resize:vertical; min-height:40px; }
   .gen-form .gen-actions { display:flex; gap:8px; flex-shrink:0; }
-  .ideas-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px; margin-top:4px; }
+  .ideas-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(340px,100%),1fr)); gap:12px; margin-top:4px; }
   .idea-card { border:1px solid var(--line); border-radius:8px; padding:14px; background:#fff; display:flex; flex-direction:column; gap:6px; }
   .idea-card-title { font-size:14px; font-weight:700; color:#1a1a1a; line-height:1.4; }
   .idea-card-angle { font-size:12px; color:var(--muted); line-height:1.5; }
@@ -174,15 +174,22 @@
   .spinner-inline { display:inline-block; width:14px; height:14px; border:2px solid #d1d5db; border-top-color:#374151; border-radius:50%; animation:spin .7s linear infinite; vertical-align:middle; margin-right:4px; }
   @keyframes spin { to { transform:rotate(360deg); } }
   .idea-duplicate-badge { font-size:11px; font-weight:600; padding:2px 8px; border-radius:10px; background:#fef2f2; color:#b91c1c; border:1px solid #fca5a5; margin-bottom:4px; display:inline-block; }
-  .idea-score-row { display:flex; align-items:center; gap:8px; margin-top:4px; }
-  .idea-score-badge { font-size:12px; font-weight:700; padding:2px 10px; border-radius:12px; }
+  .idea-score-row { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:4px; }
+  .idea-score-badge { font-size:12px; font-weight:700; padding:2px 10px; border-radius:12px; max-width:100%; overflow-wrap:anywhere; }
   .idea-score-badge.high { background:#d1fae5; color:#065f46; }
   .idea-score-badge.mid { background:#fef3c7; color:#92400e; }
   .idea-score-badge.low { background:#fee2e2; color:#991b1b; }
   .idea-score-badge.none { background:#f3f4f6; color:#6b7280; }
-  .idea-comp-badge { font-size:11px; padding:2px 8px; border-radius:10px; background:#f3f4f6; color:#374151; }
+  .idea-comp-badge { font-size:11px; padding:2px 8px; border-radius:10px; background:#f3f4f6; color:#374151; max-width:100%; overflow-wrap:anywhere; }
+  .idea-bucket-badge { font-size:11px; padding:2px 8px; border-radius:10px; background:#eef2ff; color:#3730a3; font-weight:650; max-width:100%; overflow-wrap:anywhere; }
+  .idea-v2-metrics { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; margin-top:2px; }
+  .idea-v2-metric { background:#f9fafb; border:1px solid #edf0f3; border-radius:6px; padding:5px 6px; }
+  .idea-v2-metric span { display:block; font-size:10px; color:var(--muted); }
+  .idea-v2-metric b { display:block; font-size:12px; color:#1f2937; margin-top:1px; }
+  .idea-hook-list { display:flex; gap:4px; flex-wrap:wrap; margin-top:2px; }
+  .idea-hook-chip { font-size:10px; border:1px solid #e5e7eb; border-radius:10px; padding:1px 7px; color:#374151; background:#fff; }
   .idea-related { font-size:11px; color:var(--muted); margin-top:3px; line-height:1.6; }
-  .idea-score-bar { flex:1; height:6px; border-radius:3px; background:#e5e7eb; overflow:hidden; }
+  .idea-score-bar { flex:1 1 120px; min-width:96px; height:6px; border-radius:3px; background:#e5e7eb; overflow:hidden; }
   .idea-score-bar-fill { height:100%; border-radius:3px; transition:width .4s; }
   /* ---- end Idea Generator ---- */
   .kpis {
@@ -1069,7 +1076,7 @@ async function deleteJob(jobId) {
 async function resumeJob(jobId) {
   if (!jobId) return;
   try {
-    const r = await fetch('/jobs/' + encodeURIComponent(jobId) + '/run-all?enforce_approvals=false', { method: 'POST' });
+    const r = await fetch('/jobs/' + encodeURIComponent(jobId) + '/run-all', { method: 'POST' });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) {
       const msg = (d && (d.error || d.detail?.error || d.detail)) || ('HTTP ' + r.status);
@@ -2708,7 +2715,7 @@ async function submitNewJob() {
     await fetchTimeline(jobId);
 
     // Auto-run full pipeline (fire-and-forget — UI polls for progress)
-    fetch('/jobs/' + encodeURIComponent(jobId) + '/run-all?enforce_approvals=false', { method: 'POST' })
+    fetch('/jobs/' + encodeURIComponent(jobId) + '/run-all', { method: 'POST' })
       .then(async (r) => {
         const d = await r.json().catch(() => ({}));
         if (!r.ok) {
@@ -2909,21 +2916,33 @@ async function scoreOneIdea(btn, idea) {
 function renderIdeaScoreBlock(res) {
   if (!res) return '';
   const n = res.best_score;
+  const finalScore = res.keyword_final_score ?? res.final_score ?? null;
   const cls = _scoreClass(n);
   const color = _scoreColor(n);
   const pct = n != null ? Math.min(n, 100) : 0;
   const comp = res.competition ? `<span class="idea-comp-badge">⚔️ ${escapeHtml(res.competition)}</span>` : '';
+  const bucket = res.bucket ? `<span class="idea-bucket-badge">${escapeHtml(bucketLabel(res.bucket))}</span>` : '';
   const related = (res.related || []).slice(0, 6).map(r => `<span style="background:#f3f4f6;border-radius:4px;padding:1px 7px;font-size:11px">${escapeHtml(r)}</span>`).join(' ');
   const err = res.error ? `<div style="font-size:11px;color:var(--muted)">vidIQ unavailable</div>` : '';
   return `
     <div class="idea-score-row">
-      <span class="idea-score-badge ${cls}">${n != null ? n + '/100' : 'N/A'}</span>
+      <span class="idea-score-badge ${cls}">${finalScore != null ? 'Final ' + finalScore + '/100' : (n != null ? n + '/100' : 'N/A')}</span>
       <div class="idea-score-bar"><div class="idea-score-bar-fill" style="width:${pct}%;background:${color}"></div></div>
       ${comp}
+      ${bucket}
     </div>
     ${related ? `<div class="idea-related">Related: ${related}</div>` : ''}
     ${err}
   `;
+}
+
+function bucketLabel(bucket) {
+  const labels = {
+    top_opportunity_keywords: 'Top opportunity',
+    long_tail_test_keywords: 'Long-tail test',
+    rejected_keywords: 'Rejected',
+  };
+  return labels[bucket] || String(bucket || '').replaceAll('_', ' ');
 }
 
 function renderIdeaCard(idea, savedPath) {
@@ -2933,23 +2952,36 @@ function renderIdeaCard(idea, savedPath) {
   const safePath = escapeHtml(savedPath);
 
   // Inline score block from pre-computed vidiq_score (no extra fetch needed)
+  const finalScore = idea.keyword_final_score ?? null;
   const score = idea.vidiq_score ?? null;
   const vol = idea.vidiq_volume || '';
   const comp = idea.vidiq_competition || '';
   const kw = idea.target_keyword || '';
+  const bucket = idea.bucket || '';
+  const cluster = idea.intent_cluster || '';
+  const hooks = Array.isArray(idea.thumbnail_hook_options) ? idea.thumbnail_hook_options : [];
+  const audienceFit = idea.audience_fit ?? null;
+  const intentStrength = idea.intent_strength ?? null;
+  const contentFit = idea.content_fit ?? null;
   let scoreHtml = '';
-  if (score !== null || kw) {
-    const cls = _scoreClass(score);
-    const color = _scoreColor(score);
-    const pct = score != null ? Math.min(100, score) : 0;
+  if (finalScore !== null || score !== null || kw || bucket || cluster) {
+    const mainScore = finalScore ?? score;
+    const cls = _scoreClass(mainScore);
+    const color = _scoreColor(mainScore);
+    const pct = mainScore != null ? Math.min(100, mainScore) : 0;
+    const metric = (label, value) => value == null ? '' : `<div class="idea-v2-metric"><span>${label}</span><b>${escapeHtml(String(value))}/100</b></div>`;
     scoreHtml = `
       <div class="idea-score-row">
-        ${score !== null ? `<span class="idea-score-badge ${cls}">${score}/100</span>` : ''}
-        ${score !== null ? `<div class="idea-score-bar"><div class="idea-score-bar-fill" style="width:${pct}%;background:${color}"></div></div>` : ''}
+        ${mainScore !== null ? `<span class="idea-score-badge ${cls}">Final ${mainScore}/100</span>` : ''}
+        ${mainScore !== null ? `<div class="idea-score-bar"><div class="idea-score-bar-fill" style="width:${pct}%;background:${color}"></div></div>` : ''}
+        ${score !== null ? `<span class="idea-comp-badge">vidIQ ${score}/100</span>` : ''}
         ${comp ? `<span class="idea-comp-badge">${escapeHtml(comp)}</span>` : ''}
         ${vol ? `<span class="idea-comp-badge" style="background:#eff6ff;color:#1d4ed8">${escapeHtml(vol)}</span>` : ''}
+        ${bucket ? `<span class="idea-bucket-badge">${escapeHtml(bucketLabel(bucket))}</span>` : ''}
       </div>
-      ${kw ? `<div class="idea-related" style="margin-top:4px">🔑 <b>${escapeHtml(kw)}</b></div>` : ''}`;
+      ${kw ? `<div class="idea-related" style="margin-top:4px">🔑 <b>${escapeHtml(kw)}</b>${cluster ? ' · ' + escapeHtml(cluster) : ''}</div>` : ''}
+      ${(audienceFit !== null || intentStrength !== null || contentFit !== null) ? `<div class="idea-v2-metrics">${metric('Audience', audienceFit)}${metric('Intent', intentStrength)}${metric('Content', contentFit)}</div>` : ''}
+      ${hooks.length ? `<div class="idea-hook-list">${hooks.slice(0, 5).map(h => `<span class="idea-hook-chip">${escapeHtml(h)}</span>`).join('')}</div>` : ''}`;
   }
 
   const dupHtml = idea.is_duplicate
@@ -3016,7 +3048,7 @@ async function createJobFromIdea(idea, savedPath) {
     await fetchTimeline(jobId);
 
     // Auto-run full pipeline (fire-and-forget — UI polls for progress)
-    fetch('/jobs/' + encodeURIComponent(jobId) + '/run-all?enforce_approvals=false', { method: 'POST' })
+    fetch('/jobs/' + encodeURIComponent(jobId) + '/run-all', { method: 'POST' })
       .then(async (r) => {
         const d = await r.json().catch(() => ({}));
         if (!r.ok) {

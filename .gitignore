@@ -5,6 +5,7 @@ browser_profiles/*
 node_modules/
 remotion/node_modules/
 remotion/public/jobs/
+remotion/public/branding/
 caches/
 asset_library/
 inputs/image-library/
@@ -31,3 +32,9 @@ browser_trace/
 /logs
 /.venv
 /.understand-anything
+/inputs/ideas
+/scratch
+jobs.db
+worker_logs.txt
+remotion/src/*.js
+

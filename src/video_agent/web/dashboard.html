@@ -497,16 +497,105 @@
   .io-title { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; font-weight: 750; margin-bottom: 7px; }
   .stage-actions { margin: 10px 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .action-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
     border: 1px solid var(--line-strong);
     background: #fff;
     border-radius: 6px;
-    height: 28px;
-    padding: 0 10px;
+    height: 30px;
+    padding: 0 12px;
     font-size: 12px;
+    font-weight: 600;
+    color: #334155;
     cursor: pointer;
+    text-decoration: none;
+    transition: background-color 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease, transform 0.05s ease;
+    line-height: 1;
   }
+  .action-btn:hover { background: #f5f7fa; border-color: #c8cfd9; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08); }
+  .action-btn:active { transform: translateY(1px); box-shadow: none; }
+  .action-btn:disabled, .action-btn[disabled] { opacity: 0.55; cursor: not-allowed; box-shadow: none; transform: none; }
   .action-btn.primary { border-color: #b6d8c2; background: #f0fbf4; color: #1d6b3b; }
+  .action-btn.primary:hover { background: #e2f5ea; border-color: #8fc6a6; }
   .action-btn.warn { border-color: #e9cfb0; background: #fff9f0; color: #8a5a12; }
+  .action-btn.warn:hover { background: #fef1da; border-color: #d8b282; }
+  .action-btn.danger { border-color: #f1c0c0; background: #fff5f5; color: #b3261e; }
+  .action-btn.danger:hover { background: #fde8e8; border-color: #e29a9a; }
+  .action-btn.ghost { border-color: transparent; background: transparent; color: #2563eb; }
+  .action-btn.ghost:hover { background: #eef4ff; border-color: #c8d8f5; color: #1d4ed8; }
+
+  /* ---- Channel Videos rows ---- */
+  .channel-video-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+    transition: border-color 0.12s ease, box-shadow 0.12s ease;
+  }
+  .channel-video-row:hover {
+    border-color: #c8cfd9;
+    box-shadow: 0 1px 4px rgba(15, 23, 42, 0.06);
+  }
+  .channel-video-row .cv-idx {
+    font-size: 12px;
+    color: #94a3b8;
+    min-width: 22px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .channel-video-row .cv-thumb {
+    flex: 0 0 auto;
+    width: 88px;
+    height: 50px;
+    border-radius: 6px;
+    overflow: hidden;
+    background: #0f172a;
+    display: block;
+  }
+  .channel-video-row .cv-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .channel-video-row .cv-meta {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .channel-video-row .cv-title {
+    color: #0f172a;
+    font-weight: 600;
+    font-size: 13px;
+    line-height: 1.35;
+    text-decoration: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+  .channel-video-row .cv-title:hover { color: #2563eb; }
+  .channel-video-row .cv-sub {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: #64748b;
+  }
+  .channel-video-row .cv-id {
+    font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+    color: #475569;
+  }
+  .channel-video-row .cv-dot { color: #cbd5e1; }
+  /* ---- end Channel Videos rows ---- */
   .gate-note { font-size: 12px; color: #8a5a12; background: #fff7eb; border: 1px solid #f1d6af; border-radius: 6px; padding: 6px 8px; }
   .insight { margin-top: 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; padding: 14px; }
   .insight-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
@@ -777,9 +866,9 @@
               <option value="vida-plena-45">vida-plena-45</option>
             </select>
             <div class="gen-actions">
-              <button class="action-btn" onclick="loadChannelVideos()">📂 Load cached</button>
               <button class="action-btn primary" id="channel-videos-sync-btn" onclick="syncAndLoadChannelVideos()" title="Fetch latest published videos from YouTube RSS and refresh the list">🔄 Sync from YouTube</button>
-              <a class="action-btn" id="channel-videos-open-link" href="#" target="_blank" rel="noopener" style="display:none">↗ Open channel</a>
+              <button class="action-btn" onclick="loadChannelVideos()" title="Re-render from the local published_videos.json cache">📂 Load cached</button>
+              <a class="action-btn ghost" id="channel-videos-open-link" href="#" target="_blank" rel="noopener" style="display:none">↗ Open channel</a>
             </div>
           </div>
           <div id="channel-videos-status" style="font-size:12px;color:var(--muted);margin-bottom:6px"></div>
@@ -804,7 +893,7 @@
             <div class="gen-actions">
               <button class="action-btn primary" id="gen-btn" onclick="generateAndScore()">✨ Generate + Score</button>
               <button class="action-btn" onclick="loadSavedIdeas()">📂 Load saved</button>
-              <button class="action-btn" id="sync-btn" onclick="syncChannelVideos()" title="Sync published videos from YouTube to check for duplicates">🔄 Sync channel</button>
+              <button class="action-btn danger" id="clear-saved-btn" onclick="clearSavedIdeas()" title="Delete every saved idea JSON for the selected channel">🗑 Clear saved</button>
             </div>
           </div>
           <div id="ideas-status" style="font-size:12px;color:var(--muted);margin-bottom:6px"></div>
@@ -2821,7 +2910,12 @@ function _renderChannelVideos(payload) {
   }
   const videos = payload.videos || [];
   if (videos.length === 0) {
-    listEl.innerHTML = '<div style="font-size:13px;color:var(--muted);padding:10px 6px">No cached videos yet — click "Sync from YouTube" to fetch the latest published list.</div>';
+    listEl.innerHTML = `
+      <div style="text-align:center;padding:24px 16px;border:1px dashed var(--line-strong);border-radius:8px;background:#fafbfc;color:var(--muted);font-size:13px">
+        <div style="font-size:28px;line-height:1;margin-bottom:8px">📭</div>
+        <div>No cached videos yet.</div>
+        <div style="margin-top:4px;font-size:12px">Click <strong>🔄 Sync from YouTube</strong> to fetch the latest published list.</div>
+      </div>`;
     statusEl.textContent = payload.synced_at ? `Last synced: ${_formatSyncedAt(payload.synced_at)}` : '';
     return;
   }
@@ -2830,19 +2924,24 @@ function _renderChannelVideos(payload) {
     const title = String(v.title || '(untitled)');
     const published = v.published ? new Date(v.published).toLocaleDateString() : '';
     const url = vid ? `https://www.youtube.com/watch?v=${encodeURIComponent(vid)}` : '#';
+    const thumb = vid ? `https://i.ytimg.com/vi/${encodeURIComponent(vid)}/mqdefault.jpg` : '';
     return `
-      <div class="channel-video-row" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel-soft,#fafafa)">
-        <div style="font-size:12px;color:var(--muted-2,#888);min-width:24px;text-align:right">${idx + 1}</div>
-        <div style="flex:1;min-width:0">
-          <div style="font-weight:600;font-size:13px;line-height:1.3;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(title)}</div>
-          <div style="font-size:11px;color:var(--muted);margin-top:2px;font-family:ui-monospace,monospace">${escapeHtml(vid)}${published ? ' · ' + escapeHtml(published) : ''}</div>
+      <div class="channel-video-row">
+        <div class="cv-idx">${idx + 1}</div>
+        ${thumb ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener" class="cv-thumb"><img loading="lazy" src="${escapeHtml(thumb)}" alt=""></a>` : ''}
+        <div class="cv-meta">
+          <a class="cv-title" href="${escapeHtml(url)}" target="_blank" rel="noopener" title="${escapeHtml(title)}">${escapeHtml(title)}</a>
+          <div class="cv-sub">
+            <span class="cv-id">${escapeHtml(vid)}</span>
+            ${published ? `<span class="cv-dot">·</span><span class="cv-date">${escapeHtml(published)}</span>` : ''}
+          </div>
         </div>
-        <a class="action-btn" href="${escapeHtml(url)}" target="_blank" rel="noopener" style="flex:0 0 auto;font-size:12px">▶ Open</a>
+        <a class="action-btn primary" href="${escapeHtml(url)}" target="_blank" rel="noopener">▶ Open</a>
       </div>
     `;
   });
   listEl.innerHTML = rows.join('');
-  statusEl.textContent = `${videos.length} videos · last synced ${_formatSyncedAt(payload.synced_at) || 'never'}`;
+  statusEl.textContent = `${videos.length} video${videos.length === 1 ? '' : 's'} · last synced ${_formatSyncedAt(payload.synced_at) || 'never'}`;
 }
 
 async function loadChannelVideos() {
@@ -2963,22 +3062,32 @@ async function generateAndScore() {
   }
 }
 
-async function syncChannelVideos() {
+async function clearSavedIdeas() {
   const channelId = document.getElementById('idea-channel').value;
-  const btn = document.getElementById('sync-btn');
+  if (!channelId) return;
+  if (!confirm(`Delete ALL saved ideas for ${channelId}? This removes the JSON files under inputs/ideas/${channelId}/ and cannot be undone.`)) {
+    return;
+  }
+  const btn = document.getElementById('clear-saved-btn');
   const status = document.getElementById('ideas-status');
   btn.disabled = true;
-  btn.innerHTML = '<span class="spinner-inline"></span>Syncing…';
+  btn.innerHTML = '<span class="spinner-inline"></span>Clearing…';
   try {
-    const r = await fetch('/channels/' + encodeURIComponent(channelId) + '/sync-videos');
+    const r = await fetch('/channels/' + encodeURIComponent(channelId) + '/ideas', {method: 'DELETE'});
     const d = await r.json();
-    if (!r.ok) { status.textContent = '❌ Sync failed: ' + (d.detail || r.status); return; }
-    status.textContent = '✅ Synced ' + d.count + ' published videos from YouTube.';
+    if (!r.ok) {
+      status.textContent = '❌ Clear failed: ' + (d.detail || r.status);
+      return;
+    }
+    document.getElementById('ideas-grid').innerHTML = '';
+    _CURRENT_IDEAS = [];
+    _CURRENT_PATHS = [];
+    status.textContent = `🗑 Removed ${d.deleted} saved idea${d.deleted === 1 ? '' : 's'}.`;
   } catch (e) {
-    status.textContent = '❌ Sync error: ' + e.message;
+    status.textContent = '❌ Clear error: ' + e.message;
   } finally {
     btn.disabled = false;
-    btn.innerHTML = '🔄 Sync channel';
+    btn.innerHTML = '🗑 Clear saved';
   }
 }
 

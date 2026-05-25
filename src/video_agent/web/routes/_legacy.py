@@ -1244,6 +1244,37 @@ async def get_sync_channel_videos(
     return {"channel_id": channel_id, "count": len(videos), "videos": videos}
 
 
+@router.delete("/channels/{channel_id}/ideas")
+async def delete_saved_ideas(
+    channel_id: str,
+    inputs_root: Path = Depends(get_inputs_root),
+) -> dict:
+    """Delete every saved-idea JSON under ``inputs/ideas/<channel_id>/``.
+
+    Returns ``{deleted: int}`` with the count of files removed. Files
+    outside the channel folder are never touched. The directory itself
+    is left in place (idempotent for the UI's load-saved flow).
+    """
+    _safe_channel_id(channel_id)
+    ideas_dir = (inputs_root / "ideas" / channel_id).resolve()
+    safe_root = (inputs_root / "ideas").resolve()
+    try:
+        ideas_dir.relative_to(safe_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid channel_id: {channel_id!r}") from exc
+    if not ideas_dir.exists():
+        return {"channel_id": channel_id, "deleted": 0}
+    deleted = 0
+    for p in ideas_dir.iterdir():
+        if p.is_file() and p.suffix.lower() == ".json":
+            try:
+                p.unlink()
+                deleted += 1
+            except OSError:
+                continue
+    return {"channel_id": channel_id, "deleted": deleted}
+
+
 @router.get("/channels/{channel_id}/videos")
 async def get_channel_videos(channel_id: str) -> dict:
     """Return the cached YouTube channel videos plus the channel's

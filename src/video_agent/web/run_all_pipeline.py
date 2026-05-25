@@ -444,7 +444,8 @@ async def _execute_run_all_locked(
             await _record("whisper_timestamps", run_whisper_timestamps_stage(job_dir))
         if "render" in remaining:
             _check_stop_requested()
-            await _record("render", run_render_stage(job_dir, channel_path))
+            # Full pipeline ends with notify_job_done_with_files; skip per-render notify to avoid duplicates.
+            await _record("render", run_render_stage(job_dir, channel_path, notify_telegram=False))
         if "review" in remaining:
             _check_stop_requested()
             await _record("review", run_review_stage(job_dir))

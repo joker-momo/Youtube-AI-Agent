@@ -104,6 +104,7 @@ visuals:
   strategy: "auto"
   source_dir: "asset_library/source"
   providers: ["pexels_video"]
+  fallback_providers: ["pexels"]
   query_cache_ttl_hours: 24
   orientation: "landscape"
   per_page: 10
@@ -125,8 +126,11 @@ render:
   resolution: "1920x1080"
   fps: 30
   codec: "h264"
-  crf: 18
-  concurrency: 2
+  # Bitrate-based encoding lets VideoToolbox HW encoder kick in (CRF mode forces software libx264).
+  video_bitrate: "12M"
+  # Use Metal-backed ANGLE so Chromium WebGL composites on GPU instead of CPU.
+  gl: "angle"
+  concurrency: "auto"
   subtitles:
     enabled: true
     mode: "word_highlight"

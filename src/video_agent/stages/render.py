@@ -6,6 +6,7 @@ import re
 import signal
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -84,8 +85,40 @@ def _input_props_arg(render_props_path: Path) -> str:
 
 def _render_concurrency(render_props_path: Path) -> int:
     props = read_json(render_props_path)
-    concurrency = props.get("render", {}).get("concurrency", 1)
-    return max(1, int(concurrency))
+    raw = props.get("render", {}).get("concurrency", "auto")
+    cpu_count = os.cpu_count() or 1
+    if isinstance(raw, str) and raw.strip().lower() in {"auto", "max", ""}:
+        return max(1, cpu_count)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return max(1, cpu_count)
+    if value <= 0:
+        return max(1, cpu_count)
+    return max(1, min(value, cpu_count))
+
+
+_ALLOWED_GL_BACKENDS = {"angle", "swangle", "egl", "swiftshader", "vulkan", "angle-egl"}
+
+
+def _render_video_bitrate(render_props_path: Path) -> str | None:
+    props = read_json(render_props_path)
+    raw = props.get("render", {}).get("video_bitrate")
+    if raw is None:
+        return None
+    value = str(raw).strip()
+    return value or None
+
+
+def _render_gl(render_props_path: Path) -> str | None:
+    props = read_json(render_props_path)
+    raw = props.get("render", {}).get("gl")
+    if raw is None:
+        return None
+    value = str(raw).strip().lower()
+    if value not in _ALLOWED_GL_BACKENDS:
+        return None
+    return value
 
 
 def build_remotion_commands(render_props_path: Path, video_path: Path, thumbnail_path: Path) -> RemotionCommands:
@@ -94,39 +127,46 @@ def build_remotion_commands(render_props_path: Path, video_path: Path, thumbnail
     public_dir = remotion_root / "public"
     input_props = _input_props_arg(render_props_path)
     concurrency = str(_render_concurrency(render_props_path))
+    video_bitrate = _render_video_bitrate(render_props_path)
+    gl_backend = _render_gl(render_props_path)
     base = ["npx", "--prefix", str(remotion_root), "remotion"]
-    return RemotionCommands(
-        video=[
-            *base,
-            "render",
-            str(entry),
-            "ChannelVideoStandard",
-            str(video_path),
-            "--props",
-            input_props,
-            "--codec",
-            "h264",
-            "--public-dir",
-            str(public_dir),
-            "--concurrency",
-            concurrency,
-            "--hardware-acceleration",
-            "if-possible",
-        ],
-        thumbnail=[
-            *base,
-            "still",
-            str(entry),
-            "ThumbnailStandard",
-            str(thumbnail_path),
-            "--props",
-            input_props,
-            "--public-dir",
-            str(public_dir),
-            "--hardware-acceleration",
-            "if-possible",
-        ],
-    )
+    video_cmd = [
+        *base,
+        "render",
+        str(entry),
+        "ChannelVideoStandard",
+        str(video_path),
+        "--props",
+        input_props,
+        "--codec",
+        "h264",
+        "--public-dir",
+        str(public_dir),
+        "--concurrency",
+        concurrency,
+        "--hardware-acceleration",
+        "if-possible",
+    ]
+    if video_bitrate:
+        video_cmd += ["--video-bitrate", video_bitrate]
+    if gl_backend:
+        video_cmd += ["--gl", gl_backend]
+    thumbnail_cmd = [
+        *base,
+        "still",
+        str(entry),
+        "ThumbnailStandard",
+        str(thumbnail_path),
+        "--props",
+        input_props,
+        "--public-dir",
+        str(public_dir),
+        "--hardware-acceleration",
+        "if-possible",
+    ]
+    if gl_backend:
+        thumbnail_cmd += ["--gl", gl_backend]
+    return RemotionCommands(video=video_cmd, thumbnail=thumbnail_cmd)
 
 
 def build_thumbnail_commands(render_props_path: Path, out_dir: Path) -> list[list[str]]:
@@ -142,6 +182,7 @@ def build_thumbnail_commands(render_props_path: Path, out_dir: Path) -> list[lis
     base = ["npx", "--prefix", str(remotion_root), "remotion"]
     props_base = read_json(render_props_path)
     props_base["_render_props_path"] = str(render_props_path)
+    gl_backend = _render_gl(render_props_path)
 
     variants = (props_base.get("seo") or {}).get("title_variants") or []
     if not variants:
@@ -159,12 +200,15 @@ def build_thumbnail_commands(render_props_path: Path, out_dir: Path) -> list[lis
             "thumbnail_path": "",
         }
         out_path = out_dir / f"thumbnail_{i + 1}.jpg"
-        cmds.append([
+        cmd = [
             *base, "still", str(entry), "ThumbnailStandard", str(out_path),
             "--props", json.dumps(props, ensure_ascii=False),
             "--public-dir", str(public_dir),
             "--hardware-acceleration", "if-possible",
-        ])
+        ]
+        if gl_backend:
+            cmd += ["--gl", gl_backend]
+        cmds.append(cmd)
     return cmds
 
 
@@ -192,6 +236,8 @@ def _run_with_progress(
             except OSError:
                 pass
         progress: dict = {"percent": 0, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""}
+        last_frame_ts = time.monotonic()
+        last_frame_count = 0
         try:
             assert proc.stdout is not None
             for line in proc.stdout:
@@ -210,11 +256,23 @@ def _run_with_progress(
                     fps_m = re.search(r"([\d.]+)\s*fps", line, re.IGNORECASE)
                     eta_m = re.search(r"time remaining:\s*([\dm\s]+\d+s)", line, re.IGNORECASE) \
                          or re.search(r"ETA\s*([\d:]+)", line, re.IGNORECASE)
+                    if fps_m:
+                        fps_value = float(fps_m.group(1))
+                    else:
+                        now = time.monotonic()
+                        elapsed = now - last_frame_ts
+                        delta_frames = frame - last_frame_count
+                        if elapsed >= 0.5 and delta_frames > 0:
+                            fps_value = round(delta_frames / elapsed, 1)
+                            last_frame_ts = now
+                            last_frame_count = frame
+                        else:
+                            fps_value = progress.get("fps", 0.0)
                     progress = {
                         "percent": pct,
                         "frame": frame,
                         "total_frames": total,
-                        "fps": float(fps_m.group(1)) if fps_m else progress.get("fps", 0.0),
+                        "fps": fps_value,
                         "eta": eta_m.group(1).strip() if eta_m else "",
                     }
                     try:
@@ -235,12 +293,76 @@ def _run_with_progress(
             raise subprocess.CalledProcessError(rc, cmd)
 
 
+def _mark_render_stage_completed(job_dir: Path) -> None:
+    """Best-effort: mark render stage completed in job.json.
+
+    No-op when job.json missing or render stage absent. Errors swallowed —
+    state bookkeeping must never invalidate a successful render artifact.
+    """
+    state_path = job_dir / "job.json"
+    if not state_path.exists():
+        return
+    try:
+        import datetime
+
+        data = json.loads(state_path.read_text(encoding="utf-8"))
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        stages = data.get("stages") or []
+        render_stage = next((s for s in stages if s.get("name") == "render"), None)
+        if render_stage is None:
+            return
+        if render_stage.get("status") == "completed":
+            return
+        render_stage["status"] = "completed"
+        render_stage["completed_at"] = now
+        # Advance current_stage to the next pending stage if render was current.
+        if data.get("current_stage") == "render":
+            pending = next(
+                (s["name"] for s in stages if s.get("status") not in {"completed", "skipped"} and s.get("name") != "render"),
+                None,
+            )
+            if pending:
+                data["current_stage"] = pending
+        atomic_write_json(state_path, data, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[render] state mark skipped: {exc}", flush=True)
+
+
+def _notify_render_done(job_dir: Path) -> None:
+    """Best-effort Telegram notify after a successful render.
+
+    Silently no-ops when Telegram env vars are missing or the notifications
+    module is unavailable. Errors are swallowed because notify failures must
+    never invalidate a successful render.
+    """
+    if not (os.environ.get("TELEGRAM_BOT_TOKEN") and os.environ.get("TELEGRAM_CHAT_ID")):
+        return
+    if os.environ.get("RENDER_NOTIFY_TELEGRAM", "1") == "0":
+        return
+    try:
+        import asyncio
+
+        from video_agent.notifications.telegram import notify_job_done_with_files
+
+        asyncio.run(
+            notify_job_done_with_files(
+                job_id=job_dir.name,
+                job_dir=job_dir,
+                stages_done=["render"],
+                wall_seconds=None,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[render] telegram notify skipped: {exc}", flush=True)
+
+
 def render_with_remotion(
     render_props_path: Path,
     video_path: Path,
     thumbnail_path: Path,
     *,
     stop_request_path: Path | None = None,
+    notify_telegram: bool = True,
 ) -> None:
     commands = build_remotion_commands(render_props_path, video_path, thumbnail_path)
     progress_path = render_props_path.parent / "render_progress.json"
@@ -307,3 +429,7 @@ def render_with_remotion(
             raise RuntimeError(
                 "All thumbnail variants failed: " + "; ".join(thumb_errors)
             )
+
+    _mark_render_stage_completed(render_props_path.parent)
+    if notify_telegram:
+        _notify_render_done(render_props_path.parent)

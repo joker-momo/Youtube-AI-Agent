@@ -346,6 +346,67 @@ def test_prepare_assets_searches_all_providers_and_selects_best_candidate(tmp_pa
     assert scene["asset_selection"]["candidate_count"] == 2
 
 
+class VideoMissingKeyFallbackStockClient:
+    def __init__(self):
+        self.searched_providers = []
+
+    def search(self, provider, query, filters):
+        self.searched_providers.append(provider)
+        if provider == "pexels_video":
+            raise RuntimeError("PEXELS_API_KEY is required for provider=pexels_video")
+        return {"photos": [{"id": "pexels-fallback"}]}
+
+    def normalize(self, provider, response):
+        return [
+            {
+                "provider": "pexels",
+                "provider_asset_id": "pexels-fallback",
+                "media_type": "photo",
+                "download_url": "https://example.test/pexels-fallback.jpg",
+                "source_url": "https://www.pexels.com/photo/pexels-fallback/",
+                "width": 1920,
+                "height": 1080,
+                "tags": ["calm", "sleep"],
+                "photographer": "Pexels Photographer",
+                "photographer_url": "https://www.pexels.com/@fallback",
+                "attribution": "Photo by Pexels Photographer on Pexels",
+                "quality": "large2x",
+                "license": "Pexels License",
+            }
+        ]
+
+
+def test_prepare_assets_uses_fallback_providers_when_primary_fails(tmp_path):
+    doc = scene_doc()
+    doc["scenes"][0]["visual_prompt"] = "calm sleep wellness bedroom"
+    job_dir = tmp_path / "jobs" / "job-fallback-providers"
+    stock_client = VideoMissingKeyFallbackStockClient()
+
+    manifest = prepare_assets(
+        job_dir,
+        STYLE_DNA,
+        doc,
+        visual_config={
+            "strategy": "stock_photo_api",
+            "providers": ["pexels_video"],
+            "fallback_providers": ["pexels"],
+            "query_cache_path": str(tmp_path / "caches" / "query_cache.db"),
+            "asset_library_path": str(tmp_path / "asset_library"),
+        },
+        channel_id="vida-plena-45",
+        stock_client=stock_client,
+        download_client=FakeDownloadClient(),
+    )
+
+    scene = manifest["scenes"][0]
+    assert stock_client.searched_providers == ["pexels_video", "pexels"]
+    assert scene["source"] == "asset_library"
+    assert scene["provider"] == "pexels"
+    assert scene["provider_asset_id"] == "pexels-fallback"
+    assert scene["asset_selection"]["fallback"] is True
+    assert scene["asset_selection"]["searched_providers"] == ["pexels"]
+
+
 class RankedFakeStockClient:
     def search(self, provider, query, filters):
         return {"photos": [{"id": "low"}, {"id": "high"}]}

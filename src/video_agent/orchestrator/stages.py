@@ -575,7 +575,7 @@ def _run_whisper_timestamps_stage_inline(job_dir: Path) -> Path:
     return output_path
 
 
-def run_render_stage(job_dir: Path, channel_path: Path) -> Path:
+def run_render_stage(job_dir: Path, channel_path: Path, *, notify_telegram: bool = True) -> Path:
     state = load_job(job_dir)
     if state.current_stage != "render":
         raise StageInputMissingError(
@@ -592,6 +592,7 @@ def run_render_stage(job_dir: Path, channel_path: Path) -> Path:
                 render=True,
                 require_operator_qa=False,
                 stop_request_path=job_dir / ".stop_requested",
+                notify_telegram=notify_telegram,
             )
         )
     except (FileNotFoundError, ValueError) as exc:

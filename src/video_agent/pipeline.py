@@ -61,6 +61,9 @@ class OperatorRenderOptions:
     require_operator_qa: bool = True
     tts_override: dict | None = None
     stop_request_path: Path | None = None
+    # Send Telegram notify after render completes. Full pipeline sets this False
+    # to avoid duplicating the final job_done notify; single-stage re-renders set True.
+    notify_telegram: bool = False
 
 
 def _resolve_brand_logo_source(channel_config: dict) -> Path | None:
@@ -438,6 +441,7 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
             video_path,
             job_dir / "thumbnail.jpg",
             stop_request_path=options.stop_request_path,
+            notify_telegram=options.notify_telegram,
         )
         logger.log("RENDERED", {"job_id": job_id, "video_path": str(video_path), "cost_usd": 0})
 
@@ -668,6 +672,7 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
             video_path,
             job_dir / "thumbnail.jpg",
             stop_request_path=options.stop_request_path,
+            notify_telegram=options.notify_telegram,
         )
         logger.log("RENDERED", {"job_id": job_id, "video_path": str(video_path), "cost_usd": 0})
 

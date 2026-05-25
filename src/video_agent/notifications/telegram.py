@@ -159,19 +159,23 @@ def _compress_video(src: Path, dst: Path, target_mb: float = 45.0) -> bool:
         if video_kbps < 120:
             audio_kbps = 48  # Save bit budget on audio
             video_kbps = int((target_mb * 1024 * 8) / duration) - audio_kbps
-        
+
         video_kbps = max(80, video_kbps)  # Floor at 80kbps to maintain basic visibility
-        
+
         cmd = [
             "ffmpeg", "-y", "-i", str(src),
             "-vf", scale_filter,
             "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",  # Required by Telegram for inline playback (sendVideo)
+            "-profile:v", "baseline",
+            "-level", "3.1",
             "-b:v", f"{video_kbps}k",
             "-maxrate", f"{video_kbps}k",
             "-bufsize", f"{video_kbps * 2}k",
             "-preset", "veryfast",
             "-c:a", "aac", "-b:a", f"{audio_kbps}k",
-            "-movflags", "+faststart",
+            "-ar", "44100",
+            "-movflags", "+faststart",  # Move moov atom to file head for streaming
             str(dst),
         ]
     else:
@@ -180,8 +184,12 @@ def _compress_video(src: Path, dst: Path, target_mb: float = 45.0) -> bool:
             "ffmpeg", "-y", "-i", str(src),
             "-vf", scale_filter,
             "-c:v", "libx264", "-crf", "30",
+            "-pix_fmt", "yuv420p",
+            "-profile:v", "baseline",
+            "-level", "3.1",
             "-preset", "veryfast",
             "-c:a", "aac", "-b:a", "64k",
+            "-ar", "44100",
             "-movflags", "+faststart",
             str(dst),
         ]
@@ -198,11 +206,42 @@ def _compress_video(src: Path, dst: Path, target_mb: float = 45.0) -> bool:
         return False
 
 
-async def _send_video_file(path: Path, caption: str = "") -> None:
-    """Send video via sendDocument.
+def _probe_video_metadata(path: Path) -> dict:
+    """Return ``{duration, width, height}`` from ffprobe (best-effort, all 0 on failure)."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=width,height",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=0",
+                str(path),
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        meta = {"duration": 0, "width": 0, "height": 0}
+        for line in result.stdout.splitlines():
+            if "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            if k == "duration":
+                meta["duration"] = int(float(v))
+            elif k in {"width", "height"}:
+                meta[k] = int(v)
+        return meta
+    except Exception:
+        return {"duration": 0, "width": 0, "height": 0}
 
-    If file > 50 MB: compress to temp file with ffmpeg, send compressed version,
-    then delete the temp file. Original is never touched.
+
+async def _send_video_file(path: Path, caption: str = "") -> None:
+    """Send video via sendVideo so Telegram plays it inline.
+
+    Behavior:
+    - File > 50 MB: compress to temp file with ffmpeg, send compressed version, then delete temp.
+    - Encoded with yuv420p + faststart + baseline profile so Telegram can stream inline.
+    - Falls back to sendDocument only if sendVideo fails (rare — e.g. unsupported codec).
+    Original file is never touched.
     """
     chat_id = _chat_id()
     bot = _bot()
@@ -231,21 +270,40 @@ async def _send_video_file(path: Path, caption: str = "") -> None:
             tmp_path.unlink(missing_ok=True)
             return
 
+    meta = _probe_video_metadata(send_path)
+
     try:
         async def _send_once() -> None:
             with send_path.open("rb") as fh:
-                await bot.send_document(
+                await bot.send_video(
                     chat_id=chat_id,
-                    document=fh,
+                    video=fh,
                     caption=caption,
                     parse_mode="HTML",
                     filename=path.name,
+                    supports_streaming=True,
+                    duration=meta["duration"] or None,
+                    width=meta["width"] or None,
+                    height=meta["height"] or None,
                 )
         await _with_retries(_send_once, attempts=4)
     except TelegramError as exc:
-        print(f"[telegram] sendDocument failed: {exc}", file=sys.stderr)
+        print(f"[telegram] sendVideo failed ({exc}); falling back to sendDocument", file=sys.stderr)
+        try:
+            async def _send_doc_once() -> None:
+                with send_path.open("rb") as fh:
+                    await bot.send_document(
+                        chat_id=chat_id,
+                        document=fh,
+                        caption=caption,
+                        parse_mode="HTML",
+                        filename=path.name,
+                    )
+            await _with_retries(_send_doc_once, attempts=2)
+        except Exception as exc2:  # noqa: BLE001
+            print(f"[telegram] sendDocument fallback failed: {exc2}", file=sys.stderr)
     except Exception as exc:  # noqa: BLE001
-        print(f"[telegram] sendDocument failed (unexpected): {exc}", file=sys.stderr)
+        print(f"[telegram] sendVideo failed (unexpected): {exc}", file=sys.stderr)
     finally:
         if send_path != path:
             send_path.unlink(missing_ok=True)  # delete temp, keep original

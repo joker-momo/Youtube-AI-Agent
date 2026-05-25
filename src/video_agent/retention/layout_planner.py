@@ -89,55 +89,15 @@ def downgrade(scene: dict[str, Any], reason: str) -> None:
     add_warning(scene, reason)
 
 
-def _safe_short_text(scene: dict[str, Any], key: str, *, max_words: int = 16) -> str:
-    text = str(scene.get(key) or "").strip()
-    return text if text and word_count(text) <= max_words and _is_supported(scene, text) else ""
-
-
-def _derive_checklist_payload(scene: dict[str, Any]) -> dict[str, Any] | None:
-    title = _safe_short_text(scene, "on_screen_text", max_words=8)
-    caption = _safe_short_text(scene, "caption", max_words=10)
-    bullets = []
-    for value in [title, caption]:
-        if value and value.lower() not in {item.lower() for item in bullets}:
-            bullets.append(value)
-    if len(bullets) < 2:
-        return None
-    return {"title": title or caption, "body": "", "bullets": bullets[:4], "cta": ""}
-
-
-def _derive_quote_payload(scene: dict[str, Any]) -> dict[str, Any] | None:
-    quote = _safe_short_text(scene, "caption", max_words=16)
-    if not quote:
-        quote = _safe_short_text(scene, "on_screen_text", max_words=8)
-    if not quote:
-        return None
-    return {"title": "", "body": quote, "bullets": [], "cta": ""}
-
-
-def _promote_candidate_with_safe_payload(candidate: dict[str, Any], layout: str) -> bool:
-    if layout == "warning" and has_warning_intent(candidate):
-        candidate["layout"] = "warning"
-        add_warning(candidate, "Planner promoted warning using existing risk/avoidance narration.")
-        return True
-    if layout == "checklist":
-        payload = _derive_checklist_payload(candidate)
-        if payload:
-            candidate["layout_payload"] = payload
-            candidate["layout"] = "checklist"
-            add_warning(candidate, "Planner promoted checklist using existing on-screen/caption text.")
-            return True
-    if layout == "quote":
-        payload = _derive_quote_payload(candidate)
-        if payload:
-            candidate["layout_payload"] = payload
-            candidate["layout"] = "quote"
-            add_warning(candidate, "Planner promoted quote using existing caption text.")
-            return True
-    return False
-
-
 def apply_pattern_break_rhythm(scenes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Spec-strict pattern break.
+
+    Only promote a scene if it ALREADY shipped valid checklist/warning/quote
+    payload from ChatGPT (tracked in ``_proposed_layout``). Never fabricate
+    overlay content from on_screen_text or caption — that produces duplicate
+    or non-actionable bullets (see retention layout spec §"Python planner
+    must not", "Safe Data Source Rule").
+    """
     run_start = None
     for idx, scene in enumerate(scenes + [{"layout": "__end__"}]):
         if scene.get("layout") == "subtitle":
@@ -161,24 +121,6 @@ def apply_pattern_break_rhythm(scenes: list[dict[str, Any]]) -> list[dict[str, A
                     candidate["layout"] = "quote"
                     promoted = True
                     break
-            if not promoted:
-                existing_layouts = {str(item.get("layout") or "") for item in scenes}
-                layout_priority = [
-                    layout for layout in ("warning", "checklist", "quote")
-                    if layout not in existing_layouts
-                ] + [
-                    layout for layout in ("warning", "checklist", "quote")
-                    if layout in existing_layouts
-                ]
-                for layout in layout_priority:
-                    for candidate in window:
-                        if candidate.get("layout") != "subtitle":
-                            continue
-                        if _promote_candidate_with_safe_payload(candidate, layout):
-                            promoted = True
-                            break
-                    if promoted:
-                        break
             if not promoted:
                 add_warning(
                     scenes[run_start],

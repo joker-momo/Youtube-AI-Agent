@@ -219,6 +219,7 @@ class StockAssetService:
     ) -> None:
         self.visual_config = visual_config
         self.providers = list(visual_config.get("providers") or ["pexels", "pixabay"])
+        self.fallback_providers = list(visual_config.get("fallback_providers") or [])
         self.cache = QueryCache(
             _resolve_project_path(visual_config.get("query_cache_path"), "caches/query_cache.db")
         )
@@ -307,9 +308,47 @@ class StockAssetService:
             if cached is not None:
                 return cached
 
-        ranked_candidates = []
         self.last_errors = []
-        for provider_order, provider in enumerate(self.providers, start=1):
+        asset = self._search_and_download(
+            providers=self.providers,
+            query=query,
+            filters=filters,
+            ttl_hours=ttl_hours,
+            scene=scene,
+            channel_id=channel_id,
+            job_id=job_id,
+        )
+        if asset is not None:
+            return asset
+        if self.fallback_providers:
+            asset = self._search_and_download(
+                providers=self.fallback_providers,
+                query=query,
+                filters=filters,
+                ttl_hours=ttl_hours,
+                scene=scene,
+                channel_id=channel_id,
+                job_id=job_id,
+                is_fallback=True,
+            )
+            if asset is not None:
+                return asset
+        return None
+
+    def _search_and_download(
+        self,
+        *,
+        providers: list[str],
+        query: str,
+        filters: dict[str, Any],
+        ttl_hours: int,
+        scene: dict[str, Any],
+        channel_id: str,
+        job_id: str,
+        is_fallback: bool = False,
+    ) -> dict[str, Any] | None:
+        ranked_candidates: list[dict[str, Any]] = []
+        for provider_order, provider in enumerate(providers, start=1):
             try:
                 response = self.cache.get(provider, query, filters)
                 if response is None:
@@ -327,6 +366,7 @@ class StockAssetService:
                         "provider": provider,
                         "error_type": exc.__class__.__name__,
                         "message": str(exc),
+                        "stage": "fallback" if is_fallback else "primary",
                     }
                 )
                 continue
@@ -357,11 +397,12 @@ class StockAssetService:
                 "candidate_rank": rank,
                 "provider_rank": ranked_candidate["provider_order"],
                 "provider_candidate_rank": ranked_candidate["provider_candidate_rank"],
-                "searched_providers": self.providers,
+                "searched_providers": providers,
                 "candidate_count": len(ranked_candidates),
                 "score": ranked_candidate["score"],
                 "reasons": ranked_candidate["reasons"],
                 "matched_terms": ranked_candidate["matched_terms"],
+                "fallback": is_fallback,
             }
             return asset
         return None

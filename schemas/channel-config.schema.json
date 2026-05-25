@@ -43,7 +43,14 @@
         "fps": { "type": "integer" },
         "codec": { "type": "string" },
         "crf": { "type": "integer" },
-        "concurrency": { "type": "integer", "minimum": 1 }
+        "video_bitrate": { "type": "string" },
+        "gl": { "type": "string", "enum": ["angle", "swangle", "egl", "swiftshader", "vulkan", "angle-egl"] },
+        "concurrency": {
+          "oneOf": [
+            { "type": "integer", "minimum": 1 },
+            { "type": "string", "enum": ["auto", "max"] }
+          ]
+        }
       }
     },
     "upload": {

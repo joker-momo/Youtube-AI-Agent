@@ -128,38 +128,57 @@ def test_pattern_break_promotes_only_eligible_existing_payload():
     )
 
 
-def test_pattern_break_derives_safe_templates_from_existing_scene_text():
+def test_pattern_break_does_not_fabricate_overlay_content():
+    """Spec §"Python planner must not": never invent bullets/quotes from on_screen_text.
+
+    Long runs of subtitle without ChatGPT-proposed payload must stay subtitle and
+    emit a planner warning instead of being promoted with derived junk content.
+    """
     scenes = [
         _scene(
             id=f"scene-{idx:02d}",
             layout="subtitle",
-            on_screen_text=f"ESCENA {idx}",
+            on_screen_text="",
             caption=f"Frase breve {idx}.",
             narration=f"Frase breve {idx}.",
         )
         for idx in range(1, 16)
     ]
-    scenes[3]["narration"] = "Evita forzar el sueño cuando aparece ansiedad."
-    scenes[3]["caption"] = "Evita forzar el sueño."
-    scenes[3]["on_screen_text"] = "EVITA FORZAR"
-    scenes[8]["caption"] = "Respira y baja el ritmo."
-    scenes[8]["on_screen_text"] = "RESPIRA"
-    scenes[8]["narration"] = "Respira y baja el ritmo."
-    scenes[13]["caption"] = "Dormir mejor empieza antes."
-    scenes[13]["on_screen_text"] = "ANTES DE DORMIR"
-    scenes[13]["narration"] = "Dormir mejor empieza antes."
 
     planned = apply_retention_layouts(scenes)
-    layouts = {scene["layout"] for scene in planned}
+    layouts = [scene["layout"] for scene in planned]
 
-    assert "warning" in layouts
-    assert "checklist" in layouts
-    assert "quote" in layouts
-    for scene in planned:
-        if scene["layout"] == "checklist":
-            assert scene["layout_payload"]["bullets"]
-        if scene["layout"] == "quote":
-            assert scene["layout_payload"]["body"]
+    # All scenes stay subtitle — planner must not fabricate checklist/quote payloads.
+    assert all(layout == "subtitle" for layout in layouts)
+    # At least one scene in the long subtitle run carries the pattern-break warning.
+    assert any(
+        "Could not insert safe pattern break" in w
+        for s in planned
+        for w in s.get("planner_warnings", [])
+    )
+
+
+def test_pattern_break_promotes_proposed_checklist_with_valid_payload():
+    """Spec line 617: promote a scene that ALREADY shipped valid checklist payload."""
+    scenes = [
+        _scene(id=f"scene-{idx:02d}", layout="subtitle")
+        for idx in range(1, 16)
+    ]
+    scenes[8]["layout"] = "checklist"
+    scenes[8]["narration"] = "Empieza con un plato simple: proteína, verduras y agua."
+    scenes[8]["caption"] = "Empieza con un plato simple."
+    scenes[8]["on_screen_text"] = "TU PLATO BASE"
+    scenes[8]["layout_payload"] = {
+        "title": "TU PLATO BASE",
+        "body": "",
+        "bullets": ["Proteína", "Verduras", "Agua"],
+        "cta": "",
+    }
+
+    planned = apply_retention_layouts(scenes)
+
+    assert planned[8]["layout"] == "checklist"
+    assert planned[8]["layout_payload"]["bullets"] == ["Proteína", "Verduras", "Agua"]
 
 
 def test_final_scene_promotes_to_cta_from_script_without_mid_video_cta():

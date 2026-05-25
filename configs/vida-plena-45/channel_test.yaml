@@ -103,8 +103,9 @@ render:
     true_peak_dbtp: -1
   codec: h264
   composition: ChannelVideoStandard
-  concurrency: 8
-  crf: 18
+  concurrency: auto
+  video_bitrate: "12M"
+  gl: angle
   fps: 30
   resolution: 1920x1080
 research_gate:
@@ -142,6 +143,8 @@ visuals:
   per_page: 10
   providers:
   - pexels_video
+  fallback_providers:
+  - pexels
   query_cache_ttl_hours: 24
   scene_count_target: 5
   source_dir: asset_library/source

@@ -39,7 +39,7 @@ branding:
 budget:
   max_cost_per_video_usd: 0
 channel:
-  description: Salud y bienestar práctico para personas de más de 45 años.
+  description: "Salud y bienestar práctico para personas de más de 45 años en España. Consejos sencillos sobre alimentación, descanso, movimiento suave y hábitos diarios, sin dietas extremas ni promesas milagro."
   id: vida-plena-45
   name: Vida Plena 45+
   youtube_channel_id: UCKUswqsAaLsEkcsgzTuKAmw
@@ -136,6 +136,7 @@ research_gate:
 schema_version: 3.0-mvp
 seo:
   language: es-ES
+  strict_language: true
   max_tags: 8
   min_tags: 5
 style_dna:

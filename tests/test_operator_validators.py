@@ -123,3 +123,32 @@ def test_validator_uses_audience_language_fallback():
     result = _validate_seo(seo, cfg)
     assert result.is_valid
     assert "language should be 'es-ES'" in result.format_report()
+
+
+def test_validator_strict_language_rejects_es_419():
+    cfg = _spain_config()
+    cfg["seo"]["strict_language"] = True
+    seo = _valid_seo(language="es-419")
+    result = _validate_seo(seo, cfg)
+    assert not result.is_valid
+    report = result.format_report()
+    assert "language must be 'es-ES'" in report
+    # When strict, no warning escape hatch.
+    assert "Claude QA can force ChatGPT rework" not in report
+
+
+def test_validator_non_strict_keeps_warning_for_es_419():
+    cfg = _spain_config()
+    cfg["seo"].pop("strict_language", None)
+    seo = _valid_seo(language="es-419")
+    result = _validate_seo(seo, cfg)
+    assert result.is_valid
+    assert "language should be 'es-ES'" in result.format_report()
+
+
+def test_validator_strict_language_passes_when_language_matches():
+    cfg = _spain_config()
+    cfg["seo"]["strict_language"] = True
+    seo = _valid_seo()  # already es-ES
+    result = _validate_seo(seo, cfg)
+    assert result.is_valid, result.format_report()

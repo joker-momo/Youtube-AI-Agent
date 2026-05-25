@@ -33,9 +33,9 @@ Phase 1 is manual YouTube upload. Do not build YouTube upload, Telegram, Hermes,
 | UI | Local FastAPI web UI with WebSocket progress |
 | Hermes | Dropped |
 | LLM access | Browser web UI only: ChatGPT Plus and Claude |
-| Browser control | Playwright CDP attach to host Chrome |
-| Chrome | Dedicated host profile on port `9222` |
-| Browser container | Separate `browser-worker` service |
+| Browser control | Playwright CDP attach to the `browser-runtime` container over the internal Docker network |
+| Chrome | Persisted Chromium profile mounted into `browser-runtime` at `browser_profiles/default` |
+| Browser container | Separate `browser-worker` service plus the headed `browser-runtime` container (KasmVNC on `127.0.0.1:7900` for manual sign-ins) |
 | Flow | Sequential step-by-step execution |
 | Failure mode | Fail-soft, retry twice, then manual prompt fallback |
 | Tab strategy | Reuse one tab per AI, but use new chat per artifact |
@@ -71,8 +71,10 @@ User browser
       -> validators
       -> existing assets/TTS/render code
   -> browser-worker container
-      -> Playwright CDP
-      -> host Chrome dedicated profile
+      -> Playwright CDP over the internal Docker network
+  -> browser-runtime container
+      -> Chromium with persisted profile (browser_profiles/default)
+      -> KasmVNC bound to 127.0.0.1:7900 for manual sign-ins
 ```
 
 The app owns orchestration and state. The browser worker owns all ChatGPT, Claude, vidIQ, and ChatGPT image-generation browser actions.
@@ -100,11 +102,13 @@ Future FastAPI service:
 - `POST /chatgpt/images`
 - `GET /health`
 
-It attaches to host Chrome through:
+It attaches to the in-cluster `browser-runtime` container through:
 
 ```text
-http://host.docker.internal:9222
+http://browser-runtime:9222
 ```
+
+CDP port 9222 is internal to the Docker network and never published to host. The browser profile is persisted under `browser_profiles/default`.
 
 ## State Model
 
@@ -153,7 +157,7 @@ jobs/<job_id>/
    - Keep all existing tests passing.
 
 2. Browser worker MVP
-   - CDP attach to host Chrome.
+   - CDP attach to the `browser-runtime` container over the internal Docker network.
    - ChatGPT driver: new chat, send prompt, wait complete, extract JSON/text/images.
    - Claude driver with send/submit handling.
    - Centralized selectors.

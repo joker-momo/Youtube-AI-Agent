@@ -3,7 +3,7 @@ channel:
   id: "vida-plena-45"
   name: "Vida Plena 45+"
   youtube_channel_id: "UCKUswqsAaLsEkcsgzTuKAmw"
-  description: "Salud y bienestar práctico para personas de más de 45 años."
+  description: "Salud y bienestar práctico para personas de más de 45 años en España. Consejos sencillos sobre alimentación, descanso, movimiento suave y hábitos diarios, sin dietas extremas ni promesas milagro."
 audience:
   language: "es-ES"
   age_range: [45, 75]
@@ -99,6 +99,7 @@ research_gate:
 
 seo:
   language: "es-ES"
+  strict_language: true
   min_tags: 5
   max_tags: 8
 domain_plugins:

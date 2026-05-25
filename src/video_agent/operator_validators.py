@@ -228,21 +228,30 @@ def _detect_prefilled_qa(parsed: dict[str, Any], artifact: str) -> ValidationRes
         if verdict in FORBIDDEN_QA_VALUES:
             result.errors.append(
                 f"ChatGPT prefilled qa.verdict={qa.get('verdict')!r} for {artifact}. "
-                "QA must come from Gemini, not ChatGPT."
+                "QA must come from the dedicated QA reviewer, not ChatGPT."
             )
     return result
 
 
 def _validate_seo(seo: dict[str, Any], channel_config: dict[str, Any]) -> ValidationResult:
     result = ValidationResult()
+    seo_config = channel_config.get("seo", {}) or {}
     expected_language = (
-        channel_config.get("seo", {}).get("language")
+        seo_config.get("language")
         or channel_config.get("audience", {}).get("language")
         or "es-ES"
     )
+    strict_language = bool(seo_config.get("strict_language", False))
     language = seo.get("language")
     if language != expected_language:
-        if str(language) in QA_REWORKABLE_LANGUAGE_VALUES:
+        if strict_language:
+            # Channel demands an exact language match — every mismatch is a
+            # hard error and blocks promotion regardless of which Spanish
+            # variant ChatGPT produced.
+            result.errors.append(
+                f"language must be '{expected_language}' from channel_config.seo.language, got '{language}'."
+            )
+        elif str(language) in QA_REWORKABLE_LANGUAGE_VALUES:
             result.warnings.append(
                 f"language should be '{expected_language}' from channel_config.seo.language, got '{language}'. "
                 "Allowing promotion so Claude QA can force ChatGPT rework."
@@ -252,7 +261,6 @@ def _validate_seo(seo: dict[str, Any], channel_config: dict[str, Any]) -> Valida
                 f"language must be '{expected_language}' from channel_config.seo.language, got '{language}'."
             )
 
-    seo_config = channel_config.get("seo", {})
     result.merge(_validate_tags(seo.get("tags"), seo_config.get("min_tags", 5), seo_config.get("max_tags", 8)))
     result.merge(_validate_forbidden_positioning(seo, channel_config))
     result.merge(_validate_locale_style(seo, channel_config))

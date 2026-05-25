@@ -12,7 +12,7 @@ Build a Docker-first standalone YouTube production app that can take a channel a
 trend/data intake -> idea selection -> ChatGPT script/scenes/SEO -> Claude QA -> assets/images -> TTS -> Remotion render -> review -> final video
 ```
 
-The current v2 `operator-*` CLI flow remains functional during the transition. The approved v3 target is a standalone local FastAPI web app with WebSocket progress and a separate browser-worker service attached to a dedicated host Chrome profile.
+The current v2 `operator-*` CLI flow remains functional during the transition. The approved v3 target is a standalone local FastAPI web app with WebSocket progress and a separate browser-worker service that attaches to the `browser-runtime` container over the internal Docker network. The Chromium profile is persisted under `browser_profiles/default`; CDP port 9222 is never published to host.
 
 Current product priority:
 
@@ -32,9 +32,9 @@ Decisions already chosen:
 - Standalone Python web app; Hermes is dropped.
 - Local FastAPI UI with WebSocket realtime progress.
 - Browser web UI access for ChatGPT Plus, Claude, vidIQ, and ChatGPT image generation; no LLM API client in Phase 1.
-- Separate `browser-worker` container using Playwright CDP attach to host Chrome on port `9222`.
-- Dedicated host Chrome profile; user logs in manually. The system must not auto-login.
-- Dedicated CDP profile is required because Chrome blocks remote debugging on the default Chrome user-data directory (`DevTools remote debugging requires a non-default data directory`). The user's regular Chrome profile such as `CodeX` can be inspected for its directory name, but the automation path must use a separate non-default profile such as `$HOME/.video-agent/chrome-cdp-profile`. The user signs in to ChatGPT/Claude manually inside that dedicated profile; browser-worker auth checks should open the target page and report `login_required` when the profile is not signed in.
+- Separate `browser-worker` container using Playwright CDP attach to the in-cluster `browser-runtime` container over the internal Docker network. CDP port 9222 is internal-only and never published to host.
+- The `browser-runtime` container runs Chromium with a persisted profile mounted from `browser_profiles/default`. The user signs in to ChatGPT/Claude/vidIQ manually through the KasmVNC console bound to `127.0.0.1:7900`. The system must not auto-login.
+- A non-default profile directory is required because Chrome blocks remote debugging on the default user-data directory (`DevTools remote debugging requires a non-default data directory`). Mounting `browser_profiles/default` satisfies that requirement and keeps the sign-ins persistent across container restarts. Browser-worker auth checks should open the target page and report `login_required` when the profile is not signed in.
 - Sequential per-step flow with file-based state detection.
 - Fail-soft browser handling: save trace, expose prompt path, allow user retry.
 - Manual YouTube upload in Phase 1.
@@ -44,7 +44,7 @@ Decisions already chosen:
 
 - Run project commands through Docker.
 - Use ChatGPT as the primary semi-automated operator for script, scenes, SEO, and optionally image generation.
-- Use Claude as QA for operator-produced artifacts. Gemini references in older sections are historical/legacy unless explicitly tied to the `operator/gemini` compatibility folder name.
+- Use Claude as the dedicated QA reviewer for operator-produced artifacts (`ChatGPT writes → Claude QA`). Any Gemini references in older sections are historical/legacy only; the `operator/gemini` folder name is kept as backwards-compatible storage.
 - Keep generated job outputs local under `jobs/`.
 - Keep the operator workflow resumable from files, not hidden browser state.
 - Update this status file as the system evolves.
@@ -93,7 +93,7 @@ Decisions already chosen:
 - `operator-promote` blocks `job_id` mismatch for script, scenes, and SEO artifacts.
 - SEO artifacts now include `job_id`.
 - Scene promotion blocks invalid `scene-NN` IDs, list-shaped `asset_refs`, missing `visual_prompt`, and ChatGPT-prefilled `qa.verdict=PASS`.
-- SEO promotion blocks non-`es-419` language, tag count outside the channel rule, duplicate/empty tags, and forbidden channel positioning such as `adultos mayores`.
+- SEO promotion validates the artifact language against `channel_config.seo.language` (Spain-first channels expect `es-ES`; legacy configs may still set `es-419`). It also blocks tag counts outside the channel rule, duplicate/empty tags, forbidden positioning such as `adultos mayores`, and placeholder social-link text. When `seo.strict_language: true`, any language mismatch is a hard error; otherwise reworkable Spanish variants emit a warning so Claude QA can force ChatGPT to regenerate.
 - Vida Plena 45+ channel config now declares SEO language/tag limits and positioning rules.
 
 ### V3 Phase 1 Step 1 Skeleton
@@ -965,7 +965,7 @@ Important findings from this fresh run:
   - Spanish user-facing text must preserve accents.
   - ChatGPT must not prefill internal QA as `PASS`.
 - SEO output needs stricter validation:
-  - language should be `es-419` for Latin American Spanish.
+  - language must match `channel_config.seo.language` exactly (Vida Plena 45+ is now `es-ES`; legacy LatAm channels may still use `es-419`). Historical note: this list was authored before the Spain-first migration.
   - Spanish accents must be preserved.
   - tags should stay focused, around 5-8 high-relevance tags.
   - avoid positioning Vida Plena 45+ as `adultos mayores`.

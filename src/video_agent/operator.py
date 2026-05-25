@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from html import escape
 from dataclasses import dataclass
 from pathlib import Path
@@ -271,6 +272,53 @@ def _normalize_scenes_candidate(
     return parsed
 
 
+# YouTube chapter timestamp lines look like "00:00 - Section title" or "01:30 - Section".
+_TIMESTAMP_LINE_RE = re.compile(r"^\s*\d{1,2}:\d{2}\s+-\s+.+")
+
+
+def _normalize_youtube_description(desc: str) -> str:
+    """Normalize an SEO description without collapsing YouTube chapter timestamps.
+
+    The previous behavior replaced every `\\n` inside a paragraph with a space,
+    which broke chapter blocks like::
+
+        00:00 - Intro
+        01:30 - Tema
+        03:00 - Cierre
+
+    into a single unreadable line. This helper preserves timestamp lines as
+    separate lines while still collapsing whitespace inside ordinary
+    paragraphs and capping consecutive blank lines.
+    """
+    desc = (desc or "").replace("\r\n", "\n").replace("\r", "\n")
+    raw_lines = desc.split("\n")
+    out: list[str] = []
+    for line in raw_lines:
+        stripped = line.strip()
+        if not stripped:
+            if out and out[-1] != "":
+                out.append("")
+            continue
+        # Collapse internal whitespace for both timestamp and prose lines —
+        # but keep timestamp lines on their own line so YouTube can still
+        # parse them as chapters.
+        out.append(" ".join(stripped.split()))
+
+    # Collapse 3+ consecutive blank lines down to a single blank line.
+    cleaned: list[str] = []
+    blank_count = 0
+    for line in out:
+        if line == "":
+            blank_count += 1
+            if blank_count <= 1:
+                cleaned.append(line)
+        else:
+            blank_count = 0
+            cleaned.append(line)
+
+    return "\n".join(cleaned).strip() + "\n"
+
+
 def _score_and_sort_seo_variants(seo: dict[str, Any]) -> dict[str, Any]:
     """Score title_variants, sort best-first, backfill top-level title + thumbnail_text."""
     from video_agent.seo.title_scorer import score_variants
@@ -296,18 +344,9 @@ def _normalize_seo_candidate(
         parsed["title"] = parsed["title"].replace("\n", " ").replace("\r", " ").strip()
         parsed["title"] = " ".join(parsed["title"].split())
 
-    # Normalize description: replace single newlines with space, keep double newlines
+    # Normalize description while preserving YouTube chapter timestamp lines.
     if "description" in parsed and isinstance(parsed["description"], str):
-        desc = parsed["description"]
-        desc = desc.replace("\r\n", "\n").replace("\r", "\n")
-        paragraphs = desc.split("\n\n")
-        cleaned_paragraphs = []
-        for p in paragraphs:
-            cleaned_p = p.replace("\n", " ").strip()
-            cleaned_p = " ".join(cleaned_p.split())
-            if cleaned_p:
-                cleaned_paragraphs.append(cleaned_p)
-        parsed["description"] = "\n\n".join(cleaned_paragraphs)
+        parsed["description"] = _normalize_youtube_description(parsed["description"])
 
     # Normalize title_variants
     if "title_variants" in parsed and isinstance(parsed["title_variants"], list):

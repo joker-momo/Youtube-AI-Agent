@@ -52,11 +52,11 @@ User browser
       -> stage modules
       -> existing render/assets/TTS code
   -> browser-worker container
-      -> Playwright CDP attach
-      -> host Chrome dedicated profile on port 9222
+      -> Playwright CDP attach over the internal Docker network
+      -> browser-runtime container (Chromium + persisted profile)
 ```
 
-Browser access uses the user's logged-in ChatGPT Plus, Claude, and vidIQ sessions through a dedicated Chrome profile. The system must not auto-login or inspect browser secrets.
+Browser access uses the user's logged-in ChatGPT Plus, Claude, and vidIQ sessions through a persisted Chromium profile mounted into the `browser-runtime` container at `browser_profiles/default`. The system must not auto-login or inspect browser secrets. CDP port 9222 is not published to the host; KasmVNC is bound to `127.0.0.1:7900` for manual sign-ins only.
 
 ## Requirements
 
@@ -354,5 +354,5 @@ The next code work should be v3 Phase 1 Step 1:
 1. Add minimal FastAPI `app` service.
 2. Add minimal `browser-worker` service.
 3. Extend Docker Compose.
-4. Add Chrome dedicated profile setup script for CDP port `9222`.
+4. Run `browser-runtime` with a persisted Chromium profile under `browser_profiles/default` and KasmVNC on `127.0.0.1:7900` for manual sign-ins.
 5. Keep the existing v2 CLI and tests green.

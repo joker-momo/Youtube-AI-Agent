@@ -124,72 +124,30 @@ class RawScriptRequest(BaseModel):
     raw_response: str
 
 
-class EnvSaveRequest(BaseModel):
-    content: str
+# EnvSaveRequest moved to video_agent.web.routes.config along with the
+# /config/env* handlers. Re-exported here for any external callers still
+# importing it from _legacy.
+from video_agent.web.routes.config import EnvSaveRequest  # noqa: E402,F401
 
 
 def get_jobs_root() -> Path:
     return Path(os.environ.get("JOBS_DIR", "/app/jobs"))
 
 
-def _env_path() -> Path:
-    return repo_root() / ".env"
-
-
-def _env_example_path() -> Path:
-    return repo_root() / ".env.example"
-
-
-def _compat_app_helper(name: str, fallback):
-    app_module = sys.modules.get("video_agent.web.app")
-    helper = getattr(app_module, name, None) if app_module is not None else None
-    if helper is not None and helper is not fallback:
-        return helper
-    return fallback
-
-
-def _active_env_path() -> Path:
-    return _compat_app_helper("_env_path", _env_path)()
-
-
-def _active_env_example_path() -> Path:
-    return _compat_app_helper("_env_example_path", _env_example_path)()
-
-
-_SECRET_KEY_MARKERS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "COOKIE", "SESSION", "API")
-
-
-def _env_editor_enabled() -> bool:
-    return os.environ.get("ENABLE_ENV_EDITOR", "").strip().lower() == "true"
-
-
-def _require_env_editor(x_admin_token: str | None) -> None:
-    if not _env_editor_enabled():
-        raise HTTPException(status_code=403, detail="Environment editor is disabled.")
-    expected = os.environ.get("ADMIN_TOKEN", "")
-    if expected and x_admin_token != expected:
-        raise HTTPException(status_code=403, detail="Invalid admin token.")
-
-
-def _mask_env_value(key: str, value: str) -> str:
-    if not any(marker in key.upper() for marker in _SECRET_KEY_MARKERS):
-        return value
-    if not value:
-        return ""
-    suffix = value[-4:] if len(value) >= 4 else value
-    return f"********{suffix}"
-
-
-def _mask_env_content(content: str) -> str:
-    lines: list[str] = []
-    for line in content.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in line:
-            lines.append(line)
-            continue
-        key, value = line.split("=", 1)
-        lines.append(f"{key}={_mask_env_value(key.strip(), value)}")
-    return "\n".join(lines) + ("\n" if content.endswith("\n") else "")
+# Env editor helpers moved to video_agent.web.services.env_config in commit
+# extracting /config/env* routes. The names below are kept as thin aliases so
+# any test that still patches `_legacy._env_path` (or imports the helper from
+# app.py via re-export) keeps working without rewrites.
+from video_agent.web.services.env_config import (  # noqa: E402
+    active_env_example_path as _active_env_example_path,
+    active_env_path as _active_env_path,
+    env_editor_enabled as _env_editor_enabled,
+    env_example_path as _env_example_path,
+    env_path as _env_path,
+    mask_env_content as _mask_env_content,
+    mask_env_value as _mask_env_value,
+    require_env_editor as _require_env_editor,
+)
 
 
 _SAFE_JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -237,44 +195,10 @@ def health() -> dict:
     return {"ok": True, "service": "app"}
 
 
-@router.get("/config/env")
-def get_env_config() -> dict:
-    env_path = _active_env_path()
-    example_path = _active_env_example_path()
-    content = ""
-    exists = env_path.exists()
-    if exists:
-        content = _mask_env_content(env_path.read_text(encoding="utf-8"))
-    return {
-        "path": str(env_path),
-        "exists": exists,
-        "example_exists": example_path.exists(),
-        "content": content,
-    }
-
-
-@router.post("/config/env")
-def save_env_config(
-    payload: EnvSaveRequest,
-    x_admin_token: str | None = Header(default=None),
-) -> dict:
-    _require_env_editor(x_admin_token)
-    env_path = _active_env_path()
-    atomic_write_text(env_path, payload.content, encoding="utf-8")
-    return {"ok": True, "path": str(env_path)}
-
-
-@router.post("/config/env/bootstrap")
-def bootstrap_env_config(x_admin_token: str | None = Header(default=None)) -> dict:
-    _require_env_editor(x_admin_token)
-    env_path = _active_env_path()
-    example_path = _active_env_example_path()
-    if env_path.exists():
-        return {"ok": True, "created": False, "reason": ".env already exists"}
-    if not example_path.exists():
-        raise HTTPException(status_code=404, detail=".env.example not found")
-    atomic_write_text(env_path, example_path.read_text(encoding="utf-8"), encoding="utf-8")
-    return {"ok": True, "created": True, "path": str(env_path)}
+# /config/env, /config/env (POST), /config/env/bootstrap handlers moved to
+# video_agent.web.routes.config — see commit extracting Phase 2.1 of the
+# legacy refactor. Helpers still re-exported above for backward-compatible
+# imports.
 
 
 @router.get("/jobs")

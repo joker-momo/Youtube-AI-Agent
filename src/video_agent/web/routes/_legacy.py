@@ -1244,6 +1244,47 @@ async def get_sync_channel_videos(
     return {"channel_id": channel_id, "count": len(videos), "videos": videos}
 
 
+@router.get("/channels/{channel_id}/videos")
+async def get_channel_videos(channel_id: str) -> dict:
+    """Return the cached YouTube channel videos plus the channel's
+    ``youtube_channel_id`` so the dashboard can render direct links.
+
+    Reads ``configs/<channel_id>/published_videos.json`` written by
+    ``/channels/{id}/sync-videos``. Returns ``{count, videos, channel_url,
+    synced_at}``; ``videos: []`` when the cache is missing instead of a
+    404 so the UI can still render an empty list with a "Sync" CTA.
+    """
+    _safe_channel_id(channel_id)
+    channel_path = repo_root() / "configs" / channel_id / "channel.yaml"
+    if not channel_path.exists():
+        raise HTTPException(status_code=404, detail=f"No config for channel: {channel_id}")
+    from video_agent.utils.json_io import read_yaml as _read_yaml
+
+    channel_config = _read_yaml(channel_path)
+    cache_path = repo_root() / "configs" / channel_id / "published_videos.json"
+    videos: list[dict] = []
+    synced_at: str | None = None
+    if cache_path.exists():
+        try:
+            data = json.loads(cache_path.read_text(encoding="utf-8"))
+            videos = data.get("videos") or []
+            synced_at = data.get("synced_at")
+        except Exception:
+            videos = []
+    yt_channel_id = (channel_config.get("channel") or {}).get("youtube_channel_id")
+    channel_url = (
+        f"https://www.youtube.com/channel/{yt_channel_id}" if yt_channel_id else None
+    )
+    return {
+        "channel_id": channel_id,
+        "youtube_channel_id": yt_channel_id,
+        "channel_url": channel_url,
+        "count": len(videos),
+        "videos": videos,
+        "synced_at": synced_at,
+    }
+
+
 @router.post("/channels/{channel_id}/ideas/generate", status_code=201)
 async def post_generate_ideas(
     channel_id: str,

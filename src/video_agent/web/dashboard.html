@@ -765,6 +765,27 @@
       </div>
       <div id="jobs-page">
       <section class="kpis" id="kpis"></section>
+      <section class="ideas-section" id="channel-videos-section">
+        <div class="panel-head" onclick="toggleChannelVideosPanel()">
+          <div class="panel-title">📺 Channel Videos</div>
+          <span style="font-size:12px;color:var(--muted)" id="channel-videos-caret">› expand</span>
+        </div>
+        <div class="ideas-body" id="channel-videos-body" style="display:none">
+          <div class="gen-form">
+            <label>Channel</label>
+            <select id="channel-videos-channel" onchange="loadChannelVideos()">
+              <option value="vida-plena-45">vida-plena-45</option>
+            </select>
+            <div class="gen-actions">
+              <button class="action-btn" onclick="loadChannelVideos()">📂 Load cached</button>
+              <button class="action-btn primary" id="channel-videos-sync-btn" onclick="syncAndLoadChannelVideos()" title="Fetch latest published videos from YouTube RSS and refresh the list">🔄 Sync from YouTube</button>
+              <a class="action-btn" id="channel-videos-open-link" href="#" target="_blank" rel="noopener" style="display:none">↗ Open channel</a>
+            </div>
+          </div>
+          <div id="channel-videos-status" style="font-size:12px;color:var(--muted);margin-bottom:6px"></div>
+          <div id="channel-videos-list" style="display:flex;flex-direction:column;gap:6px"></div>
+        </div>
+      </section>
       <section class="ideas-section" id="ideas-section">
         <div class="panel-head" onclick="toggleIdeasPanel()">
           <div class="panel-title">💡 Idea Generator</div>
@@ -2751,6 +2772,8 @@ async function loadChannels() {
     ).join('') || '<option value="">no channels</option>';
     document.getElementById('idea-channel').innerHTML = opts;
     document.getElementById('nj-channel').innerHTML = opts;
+    const cvSel = document.getElementById('channel-videos-channel');
+    if (cvSel) cvSel.innerHTML = opts;
   } catch (e) {}
 }
 loadChannels();
@@ -2761,6 +2784,103 @@ function toggleIdeasPanel() {
   document.getElementById('ideas-caret').textContent = IDEAS_PANEL_OPEN ? '‹ collapse' : '› expand';
   if (IDEAS_PANEL_OPEN && document.getElementById('ideas-grid').children.length === 0) {
     loadSavedIdeas();
+  }
+}
+
+// ---- Channel Videos panel ----
+let CHANNEL_VIDEOS_PANEL_OPEN = false;
+
+function toggleChannelVideosPanel() {
+  CHANNEL_VIDEOS_PANEL_OPEN = !CHANNEL_VIDEOS_PANEL_OPEN;
+  document.getElementById('channel-videos-body').style.display = CHANNEL_VIDEOS_PANEL_OPEN ? '' : 'none';
+  document.getElementById('channel-videos-caret').textContent = CHANNEL_VIDEOS_PANEL_OPEN ? '‹ collapse' : '› expand';
+  if (CHANNEL_VIDEOS_PANEL_OPEN && document.getElementById('channel-videos-list').children.length === 0) {
+    loadChannelVideos();
+  }
+}
+
+function _formatSyncedAt(iso) {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString();
+  } catch (_) {
+    return iso;
+  }
+}
+
+function _renderChannelVideos(payload) {
+  const listEl = document.getElementById('channel-videos-list');
+  const statusEl = document.getElementById('channel-videos-status');
+  const linkEl = document.getElementById('channel-videos-open-link');
+  if (payload.channel_url) {
+    linkEl.href = payload.channel_url;
+    linkEl.style.display = '';
+  } else {
+    linkEl.style.display = 'none';
+  }
+  const videos = payload.videos || [];
+  if (videos.length === 0) {
+    listEl.innerHTML = '<div style="font-size:13px;color:var(--muted);padding:10px 6px">No cached videos yet — click "Sync from YouTube" to fetch the latest published list.</div>';
+    statusEl.textContent = payload.synced_at ? `Last synced: ${_formatSyncedAt(payload.synced_at)}` : '';
+    return;
+  }
+  const rows = videos.map((v, idx) => {
+    const vid = String(v.id || '');
+    const title = String(v.title || '(untitled)');
+    const published = v.published ? new Date(v.published).toLocaleDateString() : '';
+    const url = vid ? `https://www.youtube.com/watch?v=${encodeURIComponent(vid)}` : '#';
+    return `
+      <div class="channel-video-row" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel-soft,#fafafa)">
+        <div style="font-size:12px;color:var(--muted-2,#888);min-width:24px;text-align:right">${idx + 1}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600;font-size:13px;line-height:1.3;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(title)}</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px;font-family:ui-monospace,monospace">${escapeHtml(vid)}${published ? ' · ' + escapeHtml(published) : ''}</div>
+        </div>
+        <a class="action-btn" href="${escapeHtml(url)}" target="_blank" rel="noopener" style="flex:0 0 auto;font-size:12px">▶ Open</a>
+      </div>
+    `;
+  });
+  listEl.innerHTML = rows.join('');
+  statusEl.textContent = `${videos.length} videos · last synced ${_formatSyncedAt(payload.synced_at) || 'never'}`;
+}
+
+async function loadChannelVideos() {
+  const channelId = document.getElementById('channel-videos-channel').value;
+  const statusEl = document.getElementById('channel-videos-status');
+  statusEl.textContent = 'Loading…';
+  try {
+    const r = await fetch('/channels/' + encodeURIComponent(channelId) + '/videos');
+    if (!r.ok) {
+      const detail = await r.text();
+      statusEl.textContent = '❌ Failed to load: ' + detail.slice(0, 200);
+      return;
+    }
+    _renderChannelVideos(await r.json());
+  } catch (e) {
+    statusEl.textContent = '❌ Error: ' + e.message;
+  }
+}
+
+async function syncAndLoadChannelVideos() {
+  const channelId = document.getElementById('channel-videos-channel').value;
+  const btn = document.getElementById('channel-videos-sync-btn');
+  const statusEl = document.getElementById('channel-videos-status');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-inline"></span>Syncing…';
+  try {
+    const r = await fetch('/channels/' + encodeURIComponent(channelId) + '/sync-videos');
+    const d = await r.json();
+    if (!r.ok) {
+      statusEl.textContent = '❌ Sync failed: ' + (d.detail || r.status);
+      return;
+    }
+    await loadChannelVideos();
+  } catch (e) {
+    statusEl.textContent = '❌ Sync error: ' + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '🔄 Sync from YouTube';
   }
 }
 

@@ -221,3 +221,82 @@ def test_scenes_prompt_marks_scene_01_as_first_frame():
     assert "render skips logo intro/outro" in prompt
     assert "first frame the viewer sees" in prompt
     assert "scenes 01-03" in prompt
+
+
+def test_complete_stage_falls_back_to_previous_completed_at(tmp_path):
+    """When a stage was never explicitly started, ``_complete_stage`` must
+    use the previous stage's ``completed_at`` as the new stage's
+    ``started_at`` instead of ``now`` — otherwise every stage reports a
+    0-second duration."""
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    from video_agent.orchestrator.stages import _complete_stage
+
+    job_dir = tmp_path / "job-fallback"
+    job_dir.mkdir()
+    # Stage A finished a minute ago; stage B is the new in-flight one with
+    # no explicit started_at (the historical bug).
+    a_end = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    state = {
+        "job_id": "job-fallback",
+        "channel_id": "vida-plena-45",
+        "idea_path": "ideas/test.json",
+        "current_stage": "stage_b",
+        "created_at": a_end,
+        "updated_at": a_end,
+        "stages": [
+            {
+                "name": "stage_a",
+                "status": "completed",
+                "started_at": a_end,
+                "completed_at": a_end,
+            },
+            {"name": "stage_b", "status": "pending"},
+        ],
+    }
+    (job_dir / "job.json").write_text(json.dumps(state), encoding="utf-8")
+    output_marker = job_dir / "artifact.txt"
+    output_marker.write_text("ok", encoding="utf-8")
+
+    _complete_stage(job_dir, "stage_b", output_marker)
+
+    updated = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    stage_b = next(s for s in updated["stages"] if s["name"] == "stage_b")
+    assert stage_b["status"] == "completed"
+    # started_at must equal stage_a.completed_at so the duration is non-zero.
+    assert stage_b["started_at"] == a_end
+    assert stage_b["completed_at"] != stage_b["started_at"]
+
+
+def test_start_stage_marks_started_at_only_once(tmp_path):
+    import json
+    from datetime import datetime, timezone
+
+    from video_agent.orchestrator.stages import _start_stage
+
+    job_dir = tmp_path / "job-start"
+    job_dir.mkdir()
+    state = {
+        "job_id": "job-start",
+        "channel_id": "vida-plena-45",
+        "idea_path": "ideas/test.json",
+        "created_at": "2025-01-01T00:00:00+00:00",
+        "updated_at": "2025-01-01T00:00:00+00:00",
+        "current_stage": "stage_a",
+        "stages": [
+            {"name": "stage_a", "status": "pending"},
+        ],
+    }
+    (job_dir / "job.json").write_text(json.dumps(state), encoding="utf-8")
+
+    _start_stage(job_dir, "stage_a")
+    first = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    first_started = first["stages"][0]["started_at"]
+    assert first["stages"][0]["status"] == "in_progress"
+    assert first_started is not None
+
+    # Idempotent — calling again must not move the timestamp.
+    _start_stage(job_dir, "stage_a")
+    second = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    assert second["stages"][0]["started_at"] == first_started

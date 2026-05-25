@@ -320,10 +320,27 @@ def _mark_render_stage_completed(job_dir: Path) -> None:
         data = json.loads(state_path.read_text(encoding="utf-8"))
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
         stages = data.get("stages") or []
+
+        def _backfill_started_at(stage: dict) -> None:
+            """If ``stage`` has no ``started_at``, copy the previous stage's
+            ``completed_at`` so the dashboard reports a real duration rather
+            than 0 seconds when this stage was never explicitly marked
+            in_progress."""
+            if stage.get("started_at"):
+                return
+            previous_end: str | None = None
+            for earlier in stages:
+                if earlier.get("name") == stage.get("name"):
+                    break
+                if earlier.get("completed_at"):
+                    previous_end = earlier["completed_at"]
+            stage["started_at"] = previous_end or now
+
         render_stage = next((s for s in stages if s.get("name") == "render"), None)
         if render_stage is None:
             return
         if render_stage.get("status") != "completed":
+            _backfill_started_at(render_stage)
             render_stage["status"] = "completed"
             render_stage["completed_at"] = now
 
@@ -340,6 +357,7 @@ def _mark_render_stage_completed(job_dir: Path) -> None:
                 write_operator_review(job_dir)
             except Exception as exc:  # noqa: BLE001
                 print(f"[render] auto-review HTML write skipped: {exc}", flush=True)
+            _backfill_started_at(review_stage)
             review_stage["status"] = "completed"
             review_stage["completed_at"] = now
 

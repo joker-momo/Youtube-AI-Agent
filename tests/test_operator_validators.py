@@ -40,15 +40,25 @@ def _valid_seo(**overrides):
     return seo
 
 
-def test_validator_rejects_wrong_language_with_dynamic_wording():
+def test_validator_warns_for_qa_reworkable_generic_spanish_language():
     cfg = _spain_config()
     seo = _valid_seo(language="es-419")
     result = _validate_seo(seo, cfg)
     report = result.format_report()
-    assert not result.is_valid
-    assert "language must be 'es-ES'" in report
+    assert result.is_valid
+    assert "language should be 'es-ES'" in report
+    assert "Claude QA can force ChatGPT rework" in report
     # Must NOT contain the legacy hard-coded Latin American Spanish phrasing.
     assert "Latin American Spanish" not in report
+
+
+def test_validator_rejects_nonstandard_wrong_language_with_dynamic_wording():
+    cfg = _spain_config()
+    seo = _valid_seo(language="es-LA")
+    result = _validate_seo(seo, cfg)
+    report = result.format_report()
+    assert not result.is_valid
+    assert "language must be 'es-ES'" in report
 
 
 def test_validator_blocks_placeholder_social_text_in_description():
@@ -111,5 +121,5 @@ def test_validator_uses_audience_language_fallback():
     }
     seo = _valid_seo(language="es-419")
     result = _validate_seo(seo, cfg)
-    assert not result.is_valid
-    assert "language must be 'es-ES'" in result.format_report()
+    assert result.is_valid
+    assert "language should be 'es-ES'" in result.format_report()

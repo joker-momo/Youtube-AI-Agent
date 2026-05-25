@@ -162,6 +162,42 @@ def test_promote_operator_artifact_normalizes_compact_scenes_shape(tmp_path):
     assert promoted["qa"]["verdict"] == "PENDING_CLAUDE_QA"
 
 
+def test_promote_operator_artifact_unwraps_scenes_rework_envelope(tmp_path):
+    raw_path = tmp_path / "scenes.raw.txt"
+    raw_path.write_text(
+        json.dumps(
+            {
+                "artifact_type": "scenes",
+                "channel_id": "vida-plena-45",
+                "job_id": "operator-job",
+                "data": {
+                    "total_duration_sec": 12,
+                    "scenes": [
+                        {
+                            "scene_id": "scene-01",
+                            "duration_sec": 12,
+                            "narration": "Baja la luz antes de dormir.",
+                            "on_screen_text": "Baja la luz",
+                            "visual_direction": "Warm bedroom at night",
+                            "camera_notes": "Slow push-in.",
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = promote_operator_artifact(tmp_path / "operator-job", "scenes", raw_path)
+    promoted = json.loads(result.output_path.read_text(encoding="utf-8"))
+
+    assert promoted["total_duration_sec"] == 12
+    assert promoted["scenes"][0]["id"] == "scene-01"
+    assert promoted["scenes"][0]["visual_prompt"] == "Warm bedroom at night"
+    assert promoted["scenes"][0]["motion"] == "Slow push-in."
+    assert promoted["qa"]["verdict"] == "PENDING_CLAUDE_QA"
+
+
 def test_promote_operator_artifact_rewrites_scenes_prefilled_qa(tmp_path):
     raw_path = tmp_path / "scenes.raw.txt"
     raw_path.write_text(
@@ -284,6 +320,43 @@ def test_promote_operator_artifact_rejects_invalid_seo_contract(tmp_path):
     assert "Too many tags" in message
     assert "Forbidden positioning" in message
     assert not (tmp_path / "operator-job/seo.json").exists()
+
+
+def test_promote_operator_artifact_preserves_generic_spanish_language_for_qa_rework(tmp_path):
+    raw_path = tmp_path / "seo.raw.txt"
+    raw_path.write_text(
+        json.dumps(
+            {
+                "job_id": "operator-job",
+                "title": "Cómo dormir mejor después de los 45",
+                "description": "Una guía práctica para crear una rutina nocturna más tranquila y descansar mejor.",
+                "tags": [
+                    "sueño",
+                    "descanso",
+                    "rutina nocturna",
+                    "bienestar",
+                    "hábitos saludables",
+                    "dormir mejor",
+                ],
+                "language": "es-419",
+                "ai_disclosure": True,
+                "thumbnail_path": "thumbnail.jpg",
+                "thumbnail_text": "DUERME MEJOR HOY",
+                "suggested_pinned_comments": "¿Qué hábito probarás esta noche?",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = promote_operator_artifact(
+        tmp_path / "operator-job",
+        "seo",
+        raw_path,
+        channel_path=ROOT / "configs/vida-plena-45/channel.yaml",
+    )
+    promoted = json.loads(result.output_path.read_text(encoding="utf-8"))
+
+    assert promoted["language"] == "es-419"
 
 
 def test_promote_operator_qa_normalizes_gemini_response(tmp_path):

@@ -232,41 +232,81 @@ class StockAssetService:
         self.used_asset_ids: set[tuple[str, str]] = set()  # (provider, asset_id)
         self.last_errors: list[dict[str, str]] = []
 
+    # Library-cache results without real semantic overlap have no place in the
+    # final video (e.g. Vietnam Airlines clip returned for a "rutina nocturna"
+    # prompt). Resolution / aspect-ratio bonuses alone are not enough — we also
+    # require at least one tag term to match the query. When nothing clears the
+    # bar we fall back to a fresh API search so the renderer never bakes a
+    # placeholder into the output.
+    _MIN_LIBRARY_CACHE_SCORE = 40
+    _REQUIRE_LIBRARY_CACHE_TAG_MATCH = True
+
     def _try_library_cache(
         self, query: str, media_type: str | None, channel_id: str, job_id: str, scene: dict[str, Any]
     ) -> dict[str, Any] | None:
-        """Return a cached library asset matching query, skipping already-used ones."""
+        """Return a cached library asset matching the query, scored against it.
+
+        Only returns when at least one candidate scores above
+        ``_MIN_LIBRARY_CACHE_SCORE``. Lower-scoring cache hits are rejected so the
+        caller falls back to a fresh provider search. The previous behavior was to
+        return the first token-overlap match with score=0, which produced
+        wildly off-topic backgrounds (airplane takeoff for a sleep-rest scene).
+        """
         used_asset_ids = {aid for _, aid in self.used_asset_ids}
         candidates = self.library.search_by_query(
             query, media_type=media_type, exclude_asset_ids=used_asset_ids, limit=10
         )
-        for asset in candidates:
+
+        scored: list[tuple[int, int, dict[str, Any], dict[str, Any]]] = []
+        for idx, asset in enumerate(candidates):
             key = (asset["provider"], str(asset["provider_asset_id"]))
             if key in self.used_provider_ids:
                 continue
             if not self.library.is_file_valid(asset):
                 continue
-            self.used_provider_ids.add(key)
-            self.used_asset_ids.add((asset["provider"], asset["asset_id"]))
-            self.library.record_usage(
-                asset["asset_id"],
-                channel_id=channel_id,
-                job_id=job_id,
-                scene_id=scene["id"],
-                scene_intent=scene.get("motion"),
-            )
-            asset["asset_selection"] = {
-                "query": query,
-                "source": "library_cache",
-                "candidate_rank": 1,
-                "searched_providers": [],
-                "candidate_count": len(candidates),
-                "score": 0,
-                "reasons": ["library_cache_hit"],
-                "matched_terms": [],
-            }
-            return asset
-        return None
+            scoring = _candidate_score(query, asset)
+            scored.append((scoring["score"], idx, asset, scoring))
+
+        if not scored:
+            return None
+
+        scored.sort(key=lambda row: (-row[0], row[1]))
+        best_score, _, best_asset, best_scoring = scored[0]
+        if best_score < self._MIN_LIBRARY_CACHE_SCORE:
+            return None
+        matched_terms = best_scoring.get("matched_terms") or []
+        reasons = set(best_scoring.get("reasons") or [])
+        # Require strong overlap (>=2 matched scene terms or the explicit
+        # strong_scene_term_match reason). Resolution / aspect-ratio bonuses
+        # alone push generic clips above the score threshold even when their
+        # tags only share one filler word with the query.
+        if self._REQUIRE_LIBRARY_CACHE_TAG_MATCH and not (
+            "strong_scene_term_match" in reasons or len(matched_terms) >= 2
+        ):
+            return None
+
+        self.used_provider_ids.add(
+            (best_asset["provider"], str(best_asset["provider_asset_id"]))
+        )
+        self.used_asset_ids.add((best_asset["provider"], best_asset["asset_id"]))
+        self.library.record_usage(
+            best_asset["asset_id"],
+            channel_id=channel_id,
+            job_id=job_id,
+            scene_id=scene["id"],
+            scene_intent=scene.get("motion"),
+        )
+        best_asset["asset_selection"] = {
+            "query": query,
+            "source": "library_cache",
+            "candidate_rank": 1,
+            "searched_providers": [],
+            "candidate_count": len(scored),
+            "score": best_score,
+            "reasons": ["library_cache_hit", *best_scoring["reasons"]],
+            "matched_terms": best_scoring["matched_terms"],
+        }
+        return best_asset
 
     # Demographic keywords that require a fresh API search (skip library cache to avoid
     # returning old videos of young people that were cached before this constraint existed).

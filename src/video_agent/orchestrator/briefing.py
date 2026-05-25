@@ -144,11 +144,11 @@ _SCHEMA_ES = {
         "{\n"
         '  "job_id": str (= job_id dado),\n'
         '  "channel_id": str (= channel_id dado),\n'
-        '  "title": str (50-70 caracteres, en es-419, sin clickbait),\n'
+        '  "title": str (50-70 caracteres, en {expected_language}, sin clickbait),\n'
         '  "description": str (mô tả chuẩn vàng 6 phần, 700-1500 caracteres),\n'
-        '  "tags": array de 6-10 strings (es-419, mezcla 1-2 broad + '
+        '  "tags": array de 6-10 strings ({expected_language}, mezcla 1-2 broad + '
         '4-8 long-tail, sin duplicados),\n'
-        '  "language": "es-419",\n'
+        '  "language": "{expected_language}",\n'
         '  "ai_disclosure": true,\n'
         '  "thumbnail_path": str (ruta relativa, por ej. "thumbnail.jpg"),\n'
         '  "suggested_pinned_comments": str (un comentario fijado en español que combine ambas estrategias: una pregunta para interactuar y un CTA con link de suscripción)\n'
@@ -225,8 +225,8 @@ _DECOMP_ES = {
         "2. Redacta un title de 50-70 chars sin clickbait ni promesas médicas.",
         "3. Redacta la description siguiendo la Estructura de Oro de 6 secciones descrita en el contrato de longitud.",
         "4. Genera las 2 propuestas de comentarios fijados (engagement_boosting y subscriber_growth) con emojis y el link de suscripción correcto.",
-        "5. Genera 5-8 tags en es-419, todos relevantes, sin duplicados, sin frases prohibidas.",
-        "6. Confirma language=es-419, ai_disclosure=true, thumbnail_path razonable y la estructura del JSON.",
+        "5. Genera 5-8 tags en {expected_language}, todos relevantes, sin duplicados, sin frases prohibidas.",
+        "6. Confirma language={expected_language}, ai_disclosure=true, thumbnail_path razonable y la estructura del JSON.",
         "7. Solo entonces construye el JSON.",
     ],
 }
@@ -252,6 +252,19 @@ def _join_list(value: Any) -> str:
     if isinstance(value, list):
         return ", ".join(str(v) for v in value)
     return str(value or "")
+
+
+def _expected_language(channel_config: dict | None = None) -> str:
+    config = channel_config or {}
+    return str(
+        (config.get("seo") or {}).get("language")
+        or (config.get("audience") or {}).get("language")
+        or "es-ES"
+    )
+
+
+def _fill_stage_contract(text: str, channel_config: dict | None = None) -> str:
+    return text.replace("{expected_language}", _expected_language(channel_config))
 
 
 def _channel_summary(channel_config: dict) -> str:
@@ -330,6 +343,7 @@ def build_initial_briefing(
     model commits the role + channel DNA + hard constraints to the
     conversation context, and the subsequent task messages stay short.
     """
+    expected_language = _expected_language(channel_config)
     if kind == "qa":
         role = (
             "Eres revisor (QA) profesional de contenido de video de bienestar "
@@ -349,7 +363,7 @@ def build_initial_briefing(
             "La duda mínima equivale a incumplimiento. No des el beneficio de la duda.\n\n"
             "PILAR 2 — CALIDAD TÉCNICA:\n"
             "Verificas esquema JSON, contrato de longitud y duraciones, tono del "
-            "canal, frases prohibidas/preferidas, idioma es-419 y seguridad médica "
+            f"canal, frases prohibidas/preferidas, idioma {expected_language} y seguridad médica "
             "general.\n\n"
             "Cada vez que te pase un artefacto, devolverás UN SOLO objeto JSON con: "
             "verdict, youtube_policy (compliant, risk_level, violations[]), scores, "
@@ -389,7 +403,7 @@ def build_initial_briefing(
             "# Restricciones absolutas (válidas para TODAS las respuestas)",
             f'- Usa exactamente job_id="{job_id}" y channel_id="{channel_id}" '
             "en cualquier artefacto que generes. No los inventes ni los acortes.",
-            "- Responde siempre en español neutro (es-419).",
+            f"- Responde siempre en el español configurado del canal ({expected_language}).",
             "- Conserva los acentos correctos. Nunca uses transliteraciones.",
             "- Nunca des consejos médicos específicos; sugiere consultar a un "
             "profesional cuando aplique.",
@@ -434,6 +448,7 @@ def build_stage_briefing(
     format). Asks the model to acknowledge with ``OK`` so it commits the
     briefing before the task arrives.
     """
+    expected_language = _expected_language(channel_config)
     role = _ROLES_ES.get(stage_name, _ROLES_ES["script"])
     summary = _channel_summary(channel_config)
     brand_voice = _read_brand_voice(channel_config)
@@ -460,7 +475,7 @@ def build_stage_briefing(
             "# Restricciones absolutas (válidas para todo lo que respondas)",
             f'- Usa exactamente job_id="{job_id}" y channel_id="{channel_id}" '
             "en todos los artefactos. No los inventes ni los acortes.",
-            "- Responde siempre en español neutro (es-419).",
+            f"- Responde siempre en el español configurado del canal ({expected_language}).",
             "- Conserva los acentos correctos. Nunca uses transliteraciones.",
             "- Nunca des consejos médicos específicos; sugiere consultar a un "
             "profesional cuando aplique.",
@@ -489,6 +504,7 @@ def build_stage_briefing(
 def build_task_prompt(
     stage_name: str,
     existing_prompt: str,
+    channel_config: dict | None = None,
 ) -> str:
     """Per-stage task message for a persistent temp chat.
 
@@ -498,9 +514,13 @@ def build_task_prompt(
     and self-check.
     """
     role_hint = _ROLES_ES.get(stage_name, "")
-    schema = _SCHEMA_ES.get(stage_name, "")
+    expected_language = _expected_language(channel_config)
+    schema = _fill_stage_contract(_SCHEMA_ES.get(stage_name, ""), channel_config)
     length = _LENGTH_ES.get(stage_name, "")
-    decomp = _DECOMP_ES.get(stage_name, [])
+    decomp = [
+        _fill_stage_contract(step, channel_config)
+        for step in _DECOMP_ES.get(stage_name, [])
+    ]
 
     blocks = [
         f"# Cambia de sombrero: {stage_name}",
@@ -521,7 +541,7 @@ def build_task_prompt(
             "",
             "# Antes de responder, autocheck silencioso",
             "1. ¿job_id y channel_id coinciden EXACTAMENTE con los que te di?",
-            "2. ¿Idioma es-419 con acentos correctos?",
+            f"2. ¿Idioma {expected_language} con acentos correctos?",
             "3. ¿Respeto las frases prohibidas y uso las preferidas cuando aplica?",
             "4. ¿Esquema completo, tipos correctos, longitudes dentro de los rangos del contrato?",
             "5. ¿Sin palabras manipulativas (milagro, cura, garantizado, etc.)?",

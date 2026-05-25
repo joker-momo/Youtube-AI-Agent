@@ -39,6 +39,7 @@ SPANISH_SPECIFIC_CHARS = set("áéíóúñ¿¡üÁÉÍÓÚÑÜ")
 ALLOWED_ASSET_REF_KEYS = {"background", "primary", "secondary", "bg", "overlay"}
 FORBIDDEN_QA_VALUES = {"PASS", "PASSED", "TRUE", "OK", "APPROVED", "VERIFIED"}
 ALLOWED_LAYOUTS = {"hook", "subtitle", "checklist", "warning", "quote", "cta"}
+QA_REWORKABLE_LANGUAGE_VALUES = {"es-419", "es-LATAM"}
 
 
 def load_operator_channel_config(channel_path: Path | None, parsed: dict[str, Any]) -> dict[str, Any]:
@@ -192,9 +193,15 @@ def _validate_seo(seo: dict[str, Any], channel_config: dict[str, Any]) -> Valida
     )
     language = seo.get("language")
     if language != expected_language:
-        result.errors.append(
-            f"language must be '{expected_language}' from channel_config.seo.language, got '{language}'."
-        )
+        if str(language) in QA_REWORKABLE_LANGUAGE_VALUES:
+            result.warnings.append(
+                f"language should be '{expected_language}' from channel_config.seo.language, got '{language}'. "
+                "Allowing promotion so Claude QA can force ChatGPT rework."
+            )
+        else:
+            result.errors.append(
+                f"language must be '{expected_language}' from channel_config.seo.language, got '{language}'."
+            )
 
     seo_config = channel_config.get("seo", {})
     result.merge(_validate_tags(seo.get("tags"), seo_config.get("min_tags", 5), seo_config.get("max_tags", 8)))

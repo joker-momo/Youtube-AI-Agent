@@ -195,6 +195,13 @@ def _normalize_scenes_candidate(
     from video_agent.retention.layout_planner import apply_retention_layouts, normalize_payload
 
     parsed = dict(candidate)
+    data = parsed.get("data")
+    if parsed.get("artifact_type") == "scenes" and isinstance(data, dict):
+        parsed = {
+            **data,
+            "channel_id": parsed.get("channel_id") or data.get("channel_id"),
+            "job_id": parsed.get("job_id") or data.get("job_id"),
+        }
     scenes = parsed.get("scenes")
     if not isinstance(scenes, list):
         return parsed
@@ -218,13 +225,14 @@ def _normalize_scenes_candidate(
 
         visual_prompt = str(
             current.get("visual_prompt")
+            or current.get("visual_direction")
             or current.get("visual")
             or ""
         )
         caption = str(current.get("caption") or "")
         on_screen_text = str(current.get("on_screen_text") or caption)
         narration = str(current.get("narration") or "")
-        motion = str(current.get("motion") or "slow push-in")
+        motion = str(current.get("motion") or current.get("camera_notes") or "slow push-in")
         asset_refs = current.get("asset_refs")
         if not isinstance(asset_refs, dict):
             asset_refs = {}
@@ -276,10 +284,13 @@ def _score_and_sort_seo_variants(seo: dict[str, Any]) -> dict[str, Any]:
     return seo
 
 
-def _normalize_seo_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+def _normalize_seo_candidate(
+    candidate: dict[str, Any],
+    *,
+    channel_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Backfill SEO fields for compatibility with older model/test payloads."""
     parsed = dict(candidate)
-
     # Strip literal newlines from title
     if "title" in parsed and isinstance(parsed["title"], str):
         parsed["title"] = parsed["title"].replace("\n", " ").replace("\r", " ").strip()
@@ -844,6 +855,7 @@ def _claude_qa_prompt(
         "════════════════════════════════════════",
         "• Check that the artifact uses the configured language from channel_config.seo.language or channel_config.audience.language.",
         f"• For this channel, expected language is {locale['language']} unless config says otherwise.",
+        "• If the artifact has a language field and it is not EXACTLY the expected language, verdict MUST be NEEDS_REWORK.",
         f"• Expected target locale: {locale['target_locale']}.",
     ]
     if locale["avoid"]:
@@ -1021,7 +1033,10 @@ def promote_operator_artifact(
                 script=_read_optional_json(job_dir / "script.json"),
             )
         elif artifact == "seo":
-            candidate = _normalize_seo_candidate(candidate)
+            candidate = _normalize_seo_candidate(
+                candidate,
+                channel_config=load_operator_channel_config(channel_path, candidate),
+            )
         try:
             validate_json(candidate, schema_path)
             parsed = candidate

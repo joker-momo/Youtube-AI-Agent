@@ -1269,6 +1269,11 @@ def test_rebase_words_to_scene_timestamps_clamps_boundary_words():
 def _qa_pass_payload() -> dict:
     return {
         "verdict": "PASS",
+        "youtube_policy": {
+            "compliant": True,
+            "risk_level": "none",
+            "violations": [],
+        },
         "scores": {"schema_fit": 5, "channel_fit": 5, "safety": 5, "clarity": 5},
         "issues": [],
         "required_changes": [],
@@ -1350,6 +1355,97 @@ def test_auto_script_qa_fail_raises_with_issues(
         )
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
     assert state["current_stage"] == "script_qa"  # not advanced
+
+
+def test_auto_seo_qa_prompt_uses_channel_language(
+    tmp_path: Path,
+    channel_path: Path,
+    valid_seo_payload: dict,
+):
+    from video_agent.orchestrator.stages import auto_seo_qa_stage
+
+    job_dir = tmp_path / "job-auto"
+    _seed_at_stage(job_dir, "seo_qa", {"seo.json": valid_seo_payload})
+    fake = FakeBrowserClient(queue=[json.dumps(_qa_pass_payload())])
+
+    output = asyncio.run(
+        auto_seo_qa_stage(
+            job_dir,
+            channel_path,
+            lambda msgs: fake.run_session("claude", msgs),
+        )
+    )
+
+    assert output == job_dir / "operator" / "claude" / "seo_qa.json"
+    task = fake.calls[0][0]
+    assert "expected language is es-ES" in task
+    assert "not EXACTLY the expected language, verdict MUST be NEEDS_REWORK" in task
+    assert "expected language is es-419" not in task
+
+
+def test_auto_seo_qa_forces_rework_when_language_mismatches_even_if_claude_passes(
+    tmp_path: Path,
+    channel_path: Path,
+    valid_seo_payload: dict,
+):
+    from video_agent.orchestrator.stages import auto_seo_qa_stage
+
+    job_dir = tmp_path / "job-auto"
+    seo_payload = dict(valid_seo_payload)
+    seo_payload["language"] = "es-419"
+    _seed_at_stage(job_dir, "seo_qa", {"seo.json": seo_payload})
+    fake = FakeBrowserClient(queue=[json.dumps(_qa_pass_payload())])
+
+    with pytest.raises(StageInputMissingError, match="NEEDS_REWORK"):
+        asyncio.run(
+            auto_seo_qa_stage(
+                job_dir,
+                channel_path,
+                lambda msgs: fake.run_session("claude", msgs),
+            )
+        )
+
+    qa = json.loads((job_dir / "operator/claude/seo_qa.json").read_text(encoding="utf-8"))
+    assert qa["verdict"] == "NEEDS_REWORK"
+    assert "SEO language must be exactly es-ES" in qa["issues"][0]
+    state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    assert state["current_stage"] == "seo_qa"
+
+
+def test_auto_seo_qa_rework_repromotes_before_retrying_qa(
+    tmp_path: Path,
+    channel_path: Path,
+    valid_seo_payload: dict,
+):
+    from video_agent.orchestrator.stages import auto_qa_with_rework
+
+    job_dir = tmp_path / "job-auto"
+    original = dict(valid_seo_payload, job_id="job-auto", language="es-419")
+    reworked = dict(valid_seo_payload, job_id="job-auto", language="es-ES")
+    _seed_at_stage(job_dir, "seo_qa", {"seo.json": original})
+    fake = FakeBrowserClient(
+        queue=[
+            json.dumps(_qa_pass_payload()),
+            json.dumps(reworked, ensure_ascii=False),
+            json.dumps(_qa_pass_payload()),
+        ]
+    )
+
+    output = asyncio.run(
+        auto_qa_with_rework(
+            "seo",
+            job_dir,
+            channel_path,
+            chatgpt_fn=lambda msgs: fake.run_session("chatgpt", msgs),
+            qa_session_fn=lambda msgs: fake.run_session("claude", msgs),
+        )
+    )
+
+    assert output == job_dir / "operator" / "claude" / "seo_qa.json"
+    promoted = json.loads((job_dir / "seo.json").read_text(encoding="utf-8"))
+    assert promoted["language"] == "es-ES"
+    assert "idioma es-ES" in fake.calls[1][0]
+    assert len(fake.calls) == 3
 
 
 def test_auto_qa_with_rework_passes_after_one_retry(

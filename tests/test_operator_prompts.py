@@ -10,6 +10,7 @@ from video_agent.operator import (
     _claude_qa_prompt,
     _locale_guidance,
 )
+from video_agent.orchestrator.briefing import build_task_prompt
 
 
 SPAIN_CONFIG = {
@@ -121,8 +122,23 @@ def test_scenes_plan_prompt_contains_locale_rules():
 def test_qa_prompt_with_channel_config_contains_locale_qa():
     prompt = _claude_qa_prompt("seo", {"language": "es-ES"}, SPAIN_CONFIG)
     assert "expected language is es-ES" in prompt
+    assert "not EXACTLY the expected language, verdict MUST be NEEDS_REWORK" in prompt
     assert "forbidden age-positioning" in prompt
     assert "no proporcionadas" in prompt
+
+
+def test_seo_task_briefing_uses_channel_language_contract():
+    prompt = build_task_prompt(
+        "seo",
+        "Write SEO JSON.",
+        channel_config=SPAIN_CONFIG,
+    )
+
+    assert '"language": "es-ES"' in prompt
+    assert "Confirma language=es-ES" in prompt
+    assert "Idioma es-ES con acentos correctos" in prompt
+    assert '"language": "es-419"' not in prompt
+    assert "Confirma language=es-419" not in prompt
 
 
 def test_qa_prompt_backward_compatible_without_channel_config():

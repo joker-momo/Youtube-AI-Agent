@@ -811,6 +811,9 @@ def promote_qa_stage(job_dir: Path, artifact: str, raw_response: str) -> Path:
         ) from exc
 
     qa_payload = json.loads(result.output_path.read_text(encoding="utf-8"))
+    if artifact == "seo":
+        _enforce_seo_language_qa(job_dir, result.output_path, qa_payload)
+        qa_payload = json.loads(result.output_path.read_text(encoding="utf-8"))
     verdict = str(qa_payload.get("verdict", "")).upper()
     if verdict != "PASS":
         issues = qa_payload.get("issues") or qa_payload.get("required_changes") or []
@@ -820,6 +823,65 @@ def promote_qa_stage(job_dir: Path, artifact: str, raw_response: str) -> Path:
 
     _complete_stage(job_dir, stage_name, result.output_path)
     return result.output_path
+
+
+def _enforce_seo_language_qa(
+    job_dir: Path,
+    qa_output: Path,
+    qa_payload: dict,
+) -> None:
+    """Force SEO rework if Claude misses the configured language contract."""
+    seo_path = job_dir / "seo.json"
+    if not seo_path.exists():
+        return
+    try:
+        seo_payload = json.loads(seo_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return
+
+    state = load_job(job_dir)
+    channel_config_path = repo_root() / "configs" / state.channel_id / "channel.yaml"
+    channel_config = read_yaml(channel_config_path) if channel_config_path.exists() else {}
+    expected_language = (
+        (channel_config.get("seo") or {}).get("language")
+        or (channel_config.get("audience") or {}).get("language")
+        or "es-ES"
+    )
+    actual_language = seo_payload.get("language")
+    if actual_language == expected_language:
+        return
+
+    issue = (
+        f"SEO language must be exactly {expected_language}; got {actual_language}. "
+        "ChatGPT must regenerate the SEO artifact with the configured language."
+    )
+    updated = dict(qa_payload)
+    updated["verdict"] = "NEEDS_REWORK"
+    youtube_policy = dict(updated.get("youtube_policy") or {})
+    youtube_policy.setdefault("compliant", True)
+    youtube_policy.setdefault("risk_level", "none")
+    youtube_policy.setdefault("violations", [])
+    updated["youtube_policy"] = youtube_policy
+    scores = dict(updated.get("scores") or {})
+    try:
+        current_channel_fit = int(scores.get("channel_fit") or 5)
+    except (TypeError, ValueError):
+        current_channel_fit = 5
+    scores["channel_fit"] = min(current_channel_fit, 3)
+    updated["scores"] = scores
+    issues = list(updated.get("issues") or [])
+    if issue not in issues:
+        issues.append(issue)
+    updated["issues"] = issues
+    required = (
+        f"Set seo.language to exactly {expected_language} and use "
+        f"{expected_language} consistently in SEO text."
+    )
+    changes = list(updated.get("required_changes") or [])
+    if required not in changes:
+        changes.append(required)
+    updated["required_changes"] = changes
+    _write_json(qa_output, updated)
 
 
 # ---------------------------------------------------------------------------
@@ -874,7 +936,11 @@ async def _auto_run_then_promote(
 
     from video_agent.orchestrator.briefing import build_task_prompt
 
-    task = build_task_prompt(briefing_stage_name, prompt_text)
+    task = build_task_prompt(
+        briefing_stage_name,
+        prompt_text,
+        channel_config=read_yaml(channel_path),
+    )
 
     raw_response = await session_fn([task])
     if not isinstance(raw_response, str) or not raw_response.strip():
@@ -1114,11 +1180,12 @@ async def _auto_qa(
         raise StageInputMissingError(f"Missing {artifact_path}")
 
     artifact_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
-    base_prompt = _claude_qa_prompt(artifact, artifact_payload)
+    channel_config = read_yaml(channel_path)
+    base_prompt = _claude_qa_prompt(artifact, artifact_payload, channel_config)
 
     from video_agent.orchestrator.briefing import build_task_prompt
 
-    task = build_task_prompt(stage_name, base_prompt)
+    task = build_task_prompt(stage_name, base_prompt, channel_config=channel_config)
 
     raw_response = await session_fn([task])
     if not isinstance(raw_response, str) or not raw_response.strip():
@@ -1764,8 +1831,8 @@ async def auto_thumbnail_image_stage(
         for i, thumb_text in enumerate(variants, start=1):
             prompt = _build_thumbnail_prompt(title, thumb_text, accent_color, channel_description)
             prompts.append(prompt)
-            png_paths.append(assets_dir / f"thumbnail_{i}.png")
-            jpg_paths.append(job_dir / f"thumbnail_{i}.jpg")
+            png_paths.append((assets_dir / f"thumbnail_{i}.png").resolve())
+            jpg_paths.append((job_dir / f"thumbnail_{i}.jpg").resolve())
 
         try:
             await image_fn.generate_images(
@@ -1803,20 +1870,27 @@ async def auto_thumbnail_image_stage(
 
             prompt = _build_thumbnail_prompt(title, thumb_text, accent_color, channel_description)
             project_name = f"{state.job_id[:30]}-thumb{i}"[:45]
-            png_path = assets_dir / f"thumbnail_{i}.png"
-            jpg_path = job_dir / f"thumbnail_{i}.jpg"
+            png_path = (assets_dir / f"thumbnail_{i}.png").resolve()
+            jpg_path = (job_dir / f"thumbnail_{i}.jpg").resolve()
 
             try:
-                await image_fn(
+                response = await image_fn(
                     prompt=prompt,
                     project_name=project_name,
                     out_path=str(png_path),
                 )
 
                 # Convert PNG → JPG (Pillow — already a project dependency)
-                img = _PilImage.open(png_path).convert("RGB")
+                source_path = png_path
+                if not source_path.exists() and isinstance(response, dict):
+                    returned_path = response.get("local_path")
+                    if returned_path:
+                        source_path = Path(str(returned_path)).expanduser()
+                if not source_path.exists():
+                    raise FileNotFoundError(f"Generated image file not found: {png_path}")
+                img = _PilImage.open(source_path).convert("RGB")
                 img.save(jpg_path, "JPEG", quality=92, optimize=True)
-                png_path.unlink(missing_ok=True)  # remove intermediate PNG
+                source_path.unlink(missing_ok=True)  # remove intermediate PNG
 
                 generated.append(jpg_path)
                 logger.log(
@@ -1885,6 +1959,12 @@ _ARTIFACT_PROMOTER = {
     "seo": promote_seo_stage,
 }
 
+_ARTIFACT_RAW_PATH = {
+    "script": SCRIPT_RAW_PATH,
+    "scenes": SCENES_RAW_PATH,
+    "seo": SEO_RAW_PATH,
+}
+
 
 def _reset_promote_and_qa(job_dir: Path, artifact: str) -> None:
     """Reset ``<artifact>_promote`` and ``<artifact>_qa`` to pending."""
@@ -1923,6 +2003,12 @@ async def auto_rework_artifact(
     qa_payload = json.loads(qa_path.read_text(encoding="utf-8"))
     issues = qa_payload.get("issues") or []
     required_changes = qa_payload.get("required_changes") or []
+    channel_config = read_yaml(channel_path)
+    expected_language = (
+        (channel_config.get("seo") or {}).get("language")
+        or (channel_config.get("audience") or {}).get("language")
+        or "es-ES"
+    )
 
     _reset_promote_and_qa(job_dir, artifact)
 
@@ -1935,7 +2021,7 @@ async def auto_rework_artifact(
         f"# Rework del artefacto `{artifact}`\n"
         f"Tu artefacto anterior recibió verdict NEEDS_REWORK del revisor "
         f"(Claude). Reescribe el artefacto JSON corrigiendo SOLO los puntos "
-        f"a continuación. Mantén el mismo esquema, idioma es-419, job_id y "
+        f"a continuación. Mantén el mismo esquema, idioma {expected_language}, job_id y "
         f"channel_id.\n\n"
         f"## Issues detectadas\n{issue_lines}\n\n"
         f"## Cambios requeridos\n{change_lines}\n\n"
@@ -1984,6 +2070,19 @@ async def auto_qa_with_rework(
     last_exc: StageInputMissingError | None = None
     for attempt in range(max_retries + 1):
         try:
+            state = load_job(job_dir)
+            promote_stage = f"{artifact}_promote"
+            if state.current_stage == promote_stage:
+                raw_path = job_dir / _ARTIFACT_RAW_PATH[artifact]
+                if not raw_path.exists():
+                    raise StageInputMissingError(
+                        f"Cannot promote {artifact}; missing raw response {raw_path}"
+                    )
+                _ARTIFACT_PROMOTER[artifact](
+                    job_dir,
+                    channel_path,
+                    raw_path.read_text(encoding="utf-8"),
+                )
             return await qa_fn(job_dir, channel_path, qa_session_fn)
         except StageInputMissingError as exc:
             last_exc = exc

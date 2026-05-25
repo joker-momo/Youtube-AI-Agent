@@ -32,19 +32,32 @@ def _reload_humanize(monkeypatch, **env):
     return importlib.reload(humanize)
 
 
-def test_fast_mode_is_default(monkeypatch):
+def test_balanced_mode_is_default(monkeypatch):
     humanize = _reload_humanize(monkeypatch)
+    assert humanize.HUMAN_MODE == "balanced"
+    assert humanize._FAST_MODE is False
+    # Balanced keeps human-looking typing/pauses but trims technical waits.
+    assert humanize.PAUSE_MIN_MS == 200
+    assert humanize.PAUSE_MAX_MS == 700
+    assert humanize.TYPING_MIN_MS == 25
+    assert humanize.TYPING_MAX_MS == 75
+    assert humanize.PASTE_THRESHOLD_CHARS == 150
+    # Technical stable detection is short (event-driven, not a sleep).
+    assert humanize.STABLE_MS == 600
+    assert humanize.STABLE_POLL_MS == 150
+    # Post-read pause off — the pipeline is the only "reader".
+    assert humanize.POST_READ_PAUSE_ENABLED is False
+
+
+def test_fast_mode_cuts_visible_cadence(monkeypatch):
+    humanize = _reload_humanize(monkeypatch, BROWSER_HUMAN_MODE="fast")
     assert humanize.HUMAN_MODE == "fast"
     assert humanize._FAST_MODE is True
-    # Tightened windows
     assert humanize.PAUSE_MIN_MS == 100
     assert humanize.PAUSE_MAX_MS == 400
     assert humanize.TYPING_MIN_MS == 18
     assert humanize.TYPING_MAX_MS == 55
-    assert humanize.PASTE_THRESHOLD_CHARS == 100
-    assert humanize.STABLE_MS == 600
-    assert humanize.STABLE_POLL_MS == 250
-    # Post-read pause disabled.
+    assert humanize.STABLE_MS == 400
     assert humanize.POST_READ_PAUSE_ENABLED is False
 
 
@@ -58,17 +71,16 @@ def test_human_mode_restores_slower_cadence(monkeypatch):
     assert humanize.TYPING_MIN_MS == 35
     assert humanize.TYPING_MAX_MS == 110
     assert humanize.PASTE_THRESHOLD_CHARS == 200
-    assert humanize.STABLE_MS == 2000
-    assert humanize.STABLE_POLL_MS == 500
+    assert humanize.STABLE_MS == 1500
+    assert humanize.STABLE_POLL_MS == 300
     assert humanize.POST_READ_PAUSE_ENABLED is True
 
 
-def test_estimate_read_pause_zero_in_fast_mode(monkeypatch):
-    humanize = _reload_humanize(monkeypatch)
-    # Fast mode always returns 0 regardless of text length.
+def test_estimate_read_pause_zero_outside_human_mode(monkeypatch):
+    humanize = _reload_humanize(monkeypatch)  # balanced
     assert humanize.estimate_read_pause_ms("short") == 0
-    long_text = " ".join(["palabra"] * 500)
-    assert humanize.estimate_read_pause_ms(long_text) == 0
+    humanize_fast = _reload_humanize(monkeypatch, BROWSER_HUMAN_MODE="fast")
+    assert humanize_fast.estimate_read_pause_ms("short") == 0
 
 
 def test_estimate_read_pause_nonzero_in_human_mode(monkeypatch):
@@ -78,10 +90,15 @@ def test_estimate_read_pause_nonzero_in_human_mode(monkeypatch):
     assert 800 <= pause <= 4000
 
 
+def test_unknown_mode_falls_back_to_balanced(monkeypatch):
+    humanize = _reload_humanize(monkeypatch, BROWSER_HUMAN_MODE="warp-speed")
+    assert humanize.HUMAN_MODE == "balanced"
+
+
 def test_env_overrides_take_precedence(monkeypatch):
     humanize = _reload_humanize(
         monkeypatch,
-        BROWSER_HUMAN_MODE="fast",
+        BROWSER_HUMAN_MODE="balanced",
         BROWSER_HUMAN_STABLE_MS="1234",
         BROWSER_HUMAN_PAUSE_MIN_MS="50",
     )

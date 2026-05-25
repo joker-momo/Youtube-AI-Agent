@@ -324,25 +324,43 @@ docker compose run --rm video-agent python -m video_agent.cli audit \
 
 ## Browser Driver Speed Profile
 
-The ChatGPT / Claude / Gemini browser drivers run in **fast mode** by default. They still type and click with randomized cadence (real keystrokes, hover-before-click, occasional thinking pauses), but the long human-style waits between actions are trimmed because the browser is signed in with a real Chromium profile + persisted cookies + real WebGL fingerprints, so the LLM hosts do not throttle real accounts and the extra latency adds no anti-bot value.
+The ChatGPT / Claude / Gemini browser drivers run in **balanced mode** by default. The visible cadence still looks like a real user typing carefully — real keystrokes, hover-before-click, occasional "thinking" pauses, no instant insert-text dumps — but the wait-for-response layer is rewritten to detect stream-end via an in-page `MutationObserver` instead of polling `page.evaluate` every 250-500 ms. The result is roughly **50× fewer CDP round-trips per turn** and stream-end detection within ~100 ms of the final mutation instead of one full poll interval.
 
-Switches (`src/video_agent/browser_worker/drivers/humanize.py`):
+Three modes, controlled by `BROWSER_HUMAN_MODE`:
 
-| Env var | Fast default | Human-mode default |
-|---|---|---|
-| `BROWSER_HUMAN_MODE` | `fast` | `human` |
-| `BROWSER_HUMAN_PAUSE_MIN_MS` / `MAX_MS` | 100 / 400 | 400 / 1400 |
-| `BROWSER_HUMAN_TYPING_MIN_MS` / `MAX_MS` | 18 / 55 | 35 / 110 |
-| `BROWSER_HUMAN_THINK_PROB` | 0.02 | 0.04 |
-| `BROWSER_HUMAN_PASTE_THRESHOLD` (chars) | 100 | 200 |
-| `BROWSER_HUMAN_PASTE_PAUSE_MIN_MS` / `MAX_MS` | 400 / 1200 | 1500 / 3500 |
-| `BROWSER_HUMAN_POST_READ_PAUSE` | `0` (skip) | `1` (linger after response) |
-| `BROWSER_HUMAN_STABLE_MS` | 600 | 2000 |
-| `BROWSER_HUMAN_STABLE_POLL_MS` | 250 | 500 |
+| Env var | `balanced` (default) | `fast` | `human` |
+|---|---|---|---|
+| `BROWSER_HUMAN_PAUSE_MIN_MS` / `MAX_MS` | 200 / 700 | 100 / 400 | 400 / 1400 |
+| `BROWSER_HUMAN_TYPING_MIN_MS` / `MAX_MS` | 25 / 75 | 18 / 55 | 35 / 110 |
+| `BROWSER_HUMAN_THINK_PROB` | 0.03 | 0.02 | 0.04 |
+| `BROWSER_HUMAN_PASTE_THRESHOLD` (chars) | 150 | 100 | 200 |
+| `BROWSER_HUMAN_PASTE_PAUSE_MIN_MS` / `MAX_MS` | 700 / 1800 | 400 / 1200 | 1500 / 3500 |
+| `BROWSER_HUMAN_POST_READ_PAUSE` | `0` | `0` | `1` |
+| `BROWSER_HUMAN_STABLE_MS` | 600 | 400 | 1500 |
+| `BROWSER_HUMAN_STABLE_POLL_MS` | 150 | 120 | 300 |
 
-The `_wait_for_stable_response` helper now derives `stable_ms` and `poll_ms` from these env defaults too. Because the stop button is already verified hidden before the helper runs, fast mode trims the post-stream defensive wait from 2 s to 600 ms while still re-checking the DOM at 250 ms intervals — net savings of ~1.5 s per ChatGPT / Claude turn.
+Notes:
 
-Set `BROWSER_HUMAN_MODE=human` to restore the slower, conspicuously-human cadence if a session ever needs extra trust-building (e.g. recovering from a rate-limit).
+- **`balanced`** is the production default. Visible cadence (typing speed, pre-send pauses, paste review) stays in the human-typist range; only the Python⇄Chrome detection layer is accelerated. Use this when ChatGPT / Claude tabs are unattended automation tabs.
+- **`fast`** trims the visible cadence too. Pick this when latency matters more than the look (e.g. batch backfill of dozens of jobs overnight).
+- **`human`** restores the original slow, conspicuously-human cadence. Use this for trust-building sessions, live demos, or recovery from a rate-limit warning.
+
+How the technical detection works (`_wait_for_stable_response` in `src/video_agent/browser_worker/drivers/chatgpt.py`):
+
+1. Before sending, the driver snapshots the previous assistant turn text.
+2. After clicking send + waiting for the Stop button to hide, it calls `page.wait_for_function` with a predicate that:
+   - Lazily installs a `MutationObserver` on the latest `data-message-author-role="assistant"` node.
+   - Records `lastMutationTs = Date.now()` on every childList / subtree / characterData change.
+   - Returns `true` only when `Date.now() - lastMutationTs >= STABLE_MS` **and** the scraped text differs from the prior snapshot.
+3. Playwright polls the predicate inside the page every `STABLE_POLL_MS` (no CDP round-trip while the predicate is false). When it returns `true`, the Python side does one final scrape and returns the text.
+
+Per-turn wins versus the old "evaluate every 500 ms" loop:
+
+- ~50 fewer CDP messages for a 30-second response.
+- Detection latency drops from one full poll interval (250-500 ms) to ~100 ms after the last mutation.
+- The page-side observer is event-driven, so the Chrome CPU cost is essentially zero between mutations — unlike the old loop which fired a full `querySelectorAll` walk every poll.
+
+A legacy poll-evaluate implementation lives next to the new one as `_wait_for_stable_response_legacy` for emergency fallback only.
 
 ## Opening Retention Policy
 

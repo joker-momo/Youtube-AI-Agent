@@ -23,77 +23,110 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-# ``fast`` is the default because the browser is signed in with a real
-# Chrome profile, persisted cookies, and real WebGL/audio fingerprints —
-# ChatGPT/Claude do not throttle real accounts, so the long human-style
-# pauses add latency without anti-bot value. Set ``BROWSER_HUMAN_MODE=human``
-# to restore the slower, conspicuously-human cadence if a session ever needs
-# extra trust-building (e.g. recovering from a temporary rate-limit).
-HUMAN_MODE = os.environ.get("BROWSER_HUMAN_MODE", "fast").strip().lower()
-_FAST_MODE = HUMAN_MODE != "human"
+# Three cadence profiles available via ``BROWSER_HUMAN_MODE``:
+#   - ``balanced`` (default): preserves human-looking typing + pauses while
+#     letting the technical detection layer (MutationObserver) cut waste.
+#     The visible cadence still looks like a real user typing carefully;
+#     savings come from smarter response-stable detection, not from
+#     ripping out human-style pauses.
+#   - ``fast``: aggressive cuts on visible cadence too. Use when the
+#     browser tab is unattended and only the LLM host is observing.
+#   - ``human``: original slow cadence, restored for trust-building or
+#     live-demo sessions where the tab is being watched by a person.
+HUMAN_MODE = os.environ.get("BROWSER_HUMAN_MODE", "balanced").strip().lower()
+if HUMAN_MODE not in {"balanced", "fast", "human"}:
+    HUMAN_MODE = "balanced"
+_FAST_MODE = HUMAN_MODE == "fast"
+_BALANCED_MODE = HUMAN_MODE == "balanced"
+
+
+def _by_mode(fast: int, balanced: int, human: int) -> int:
+    if _FAST_MODE:
+        return fast
+    if _BALANCED_MODE:
+        return balanced
+    return human
+
+
+def _by_mode_f(fast: float, balanced: float, human: float) -> float:
+    if _FAST_MODE:
+        return fast
+    if _BALANCED_MODE:
+        return balanced
+    return human
+
 
 # Per-character keystroke delay window. ChatGPT/Claude both accept real
 # keystrokes; spacing them out makes the typing speed look human instead
 # of an instant insert_text dump. Tune via env without rebuild.
+#
+# Balanced default keeps the keystroke distribution centered around the
+# 25-75 ms a careful 60-WPM typist produces — same look as human mode
+# minus the slow upper tail (110 ms felt unnecessarily sluggish on long
+# prompts).
 TYPING_MIN_MS = _env_int(
-    "BROWSER_HUMAN_TYPING_MIN_MS", 18 if _FAST_MODE else 35
+    "BROWSER_HUMAN_TYPING_MIN_MS", _by_mode(fast=18, balanced=25, human=35)
 )
 TYPING_MAX_MS = _env_int(
-    "BROWSER_HUMAN_TYPING_MAX_MS", 55 if _FAST_MODE else 110
+    "BROWSER_HUMAN_TYPING_MAX_MS", _by_mode(fast=55, balanced=75, human=110)
 )
 
 # Idle pauses between high-level actions (page load -> modal dismiss
-# -> composer click -> typing -> send click). Burst-style automation
-# without these reads as obviously bot, but the slow defaults add
-# multiple seconds per turn; the fast profile keeps just enough jitter
-# to avoid identical timing.
+# -> composer click -> typing -> send click). Balanced shaves the longest
+# tail (1400 ms) down to ~700 ms so the wait between actions still looks
+# deliberate but the pipeline does not stall on randomness alone.
 PAUSE_MIN_MS = _env_int(
-    "BROWSER_HUMAN_PAUSE_MIN_MS", 100 if _FAST_MODE else 400
+    "BROWSER_HUMAN_PAUSE_MIN_MS", _by_mode(fast=100, balanced=200, human=400)
 )
 PAUSE_MAX_MS = _env_int(
-    "BROWSER_HUMAN_PAUSE_MAX_MS", 400 if _FAST_MODE else 1400
+    "BROWSER_HUMAN_PAUSE_MAX_MS", _by_mode(fast=400, balanced=700, human=1400)
 )
 
 # Occasionally insert a "thinking" pause inside long typing runs so the
-# cadence is not perfectly uniform. Fast mode keeps it on but rarer.
+# cadence is not perfectly uniform.
 THINKING_PAUSE_MIN_MS = _env_int(
-    "BROWSER_HUMAN_THINK_MIN_MS", 120 if _FAST_MODE else 200
+    "BROWSER_HUMAN_THINK_MIN_MS", _by_mode(fast=120, balanced=150, human=200)
 )
 THINKING_PAUSE_MAX_MS = _env_int(
-    "BROWSER_HUMAN_THINK_MAX_MS", 400 if _FAST_MODE else 900
+    "BROWSER_HUMAN_THINK_MAX_MS", _by_mode(fast=400, balanced=600, human=900)
 )
 THINKING_PROBABILITY = _env_float(
-    "BROWSER_HUMAN_THINK_PROB", 0.02 if _FAST_MODE else 0.04
+    "BROWSER_HUMAN_THINK_PROB", _by_mode_f(fast=0.02, balanced=0.03, human=0.04)
 )
 
 # Above this length we paste instead of typing — humans paste long
-# prompts too, and per-char typing 2 000+ chars takes minutes. Fast mode
-# pastes earlier and shortens the post-paste review pause.
+# prompts too, and per-char typing 2 000+ chars takes minutes.
 PASTE_THRESHOLD_CHARS = _env_int(
-    "BROWSER_HUMAN_PASTE_THRESHOLD", 100 if _FAST_MODE else 200
+    "BROWSER_HUMAN_PASTE_THRESHOLD", _by_mode(fast=100, balanced=150, human=200)
 )
 PASTE_REVIEW_PAUSE_MIN_MS = _env_int(
-    "BROWSER_HUMAN_PASTE_PAUSE_MIN_MS", 400 if _FAST_MODE else 1500
+    "BROWSER_HUMAN_PASTE_PAUSE_MIN_MS", _by_mode(fast=400, balanced=700, human=1500)
 )
 PASTE_REVIEW_PAUSE_MAX_MS = _env_int(
-    "BROWSER_HUMAN_PASTE_PAUSE_MAX_MS", 1200 if _FAST_MODE else 3500
+    "BROWSER_HUMAN_PASTE_PAUSE_MAX_MS", _by_mode(fast=1200, balanced=1800, human=3500)
 )
 
 # Post-response read pause window applied after a model finishes streaming.
-# Useful in human mode to look natural; useless in fast pipeline mode.
+# Always off outside ``human`` mode — the technical layer never benefits.
 POST_READ_PAUSE_ENABLED = (
-    os.environ.get("BROWSER_HUMAN_POST_READ_PAUSE", "1" if not _FAST_MODE else "0").strip()
+    os.environ.get(
+        "BROWSER_HUMAN_POST_READ_PAUSE",
+        "1" if HUMAN_MODE == "human" else "0",
+    ).strip()
     not in {"0", "false", "False", "no", ""}
 )
 
-# How long the stability watcher should wait after the stream stops before
-# trusting the response is complete. Fast mode trims this aggressively;
-# the stop-button-hidden state already proved the response finished.
+# Technical detection knobs. These do NOT affect the visible cadence —
+# they only change how the Python side waits for the response to settle.
+# The MutationObserver lives entirely inside the page, so ``STABLE_MS``
+# 600 ms means "wait until the assistant turn DOM has been quiet for
+# 600 ms" rather than "sleep 600 ms". Detection is event-driven, not
+# poll-driven.
 STABLE_MS = _env_int(
-    "BROWSER_HUMAN_STABLE_MS", 600 if _FAST_MODE else 2000
+    "BROWSER_HUMAN_STABLE_MS", _by_mode(fast=400, balanced=600, human=1500)
 )
 STABLE_POLL_MS = _env_int(
-    "BROWSER_HUMAN_STABLE_POLL_MS", 250 if _FAST_MODE else 500
+    "BROWSER_HUMAN_STABLE_POLL_MS", _by_mode(fast=120, balanced=150, human=300)
 )
 
 

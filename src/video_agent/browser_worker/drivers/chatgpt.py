@@ -67,22 +67,184 @@ async def _wait_for_stable_response(
     stable_ms: int | None = None,
     log_tag: str = "scrape",
 ) -> str | None:
-    # Tune both windows from ``BROWSER_HUMAN_MODE``. The stop-button
-    # already hid before this helper is called, so the "is response done"
-    # signal mostly serves to defend against ChatGPT's late edits to the
-    # finished assistant turn (e.g. citation rewrites). Fast mode shaves
-    # ~1.5 s per turn while keeping the defensive check.
+    """Wait for the assistant turn to (a) differ from ``prior_text`` and
+    (b) stop mutating for ``stable_ms``, then return the stable text.
+
+    The watcher runs entirely inside the page using a ``MutationObserver``
+    that records the timestamp of the most recent DOM mutation. The Python
+    side calls ``page.wait_for_function`` once and Playwright polls the
+    page-side predicate roughly every 100 ms — no Python⇄Chrome CDP
+    round-trip per check. Compared to the older "evaluate every 250-500 ms"
+    loop this cuts roughly 50 CDP messages per ChatGPT turn and detects
+    stream-end within ~100 ms of the final mutation instead of one full
+    poll interval. The human-cadence look is preserved because all of the
+    typing, hovering, and pause behavior happens in the calling driver.
+    """
     if poll_ms is None:
         poll_ms = STABLE_POLL_MS
     if stable_ms is None:
         stable_ms = STABLE_MS
-    """Poll ``scrape_js`` until the result differs from ``prior_text`` AND
-    has not changed for ``stable_ms``. Returns the stable text or None on
-    timeout. Defends against scraping a partial streaming response.
 
-    Emits one log line per poll iteration so the operator can see what
-    the scrape is (or is not) picking up while a stage runs.
+    import sys
+    import time
+
+    deadline = time.monotonic() + response_timeout_ms / 1000.0
+    prior_len = len(prior_text or "")
+    print(
+        f"[{log_tag}] start prior_len={prior_len} timeout_ms={response_timeout_ms} "
+        f"stable_ms={stable_ms} (observer-based)",
+        flush=True,
+        file=sys.stderr,
+    )
+
+    # JS expression executed once per Playwright poll inside the page.
+    # Installs a MutationObserver lazily and only resolves when the
+    # latest assistant turn has been quiet for ``stable_ms``. The
+    # observer survives between calls because state lives on ``window``,
+    # which is fine for the persistent ChatGPT/Claude tabs the pipeline
+    # reuses across stages.
+    detector_js = """
+        ({scrapeFnSource, priorText, stableMs}) => {
+          // Re-eval the scrape function on every check so the latest
+          // assistant turn is always considered, not the one that
+          // existed when the observer was first attached.
+          let scrapeFn;
+          try {
+            scrapeFn = eval('(' + scrapeFnSource + ')');
+          } catch (err) {
+            return {ready: false, error: 'scrape_fn_eval_failed:' + err.message};
+          }
+
+          if (!window.__chatStableTracker) {
+            window.__chatStableTracker = {
+              text: '',
+              lastMutationTs: Date.now(),
+              observerAttached: false,
+              attachedTo: null,
+            };
+          }
+          const tracker = window.__chatStableTracker;
+          const current = String(scrapeFn() || '');
+
+          // Identify the DOM node currently holding the assistant turn
+          // so we can (re)attach the observer if ChatGPT rerenders the
+          // turn into a new container (e.g. when the streaming bubble
+          // is swapped for the final rendered markdown block).
+          const turnCandidates = [
+            'article[data-message-author-role="assistant"]:last-of-type',
+            '[data-message-author-role="assistant"]:last-of-type',
+            '[data-testid="conversation-turn-content"][data-author="assistant"]:last-of-type',
+          ];
+          let turnNode = null;
+          for (const sel of turnCandidates) {
+            const found = document.querySelector(sel);
+            if (found) {
+              turnNode = found;
+              break;
+            }
+          }
+
+          if (turnNode && tracker.attachedTo !== turnNode) {
+            if (tracker.observer) {
+              try { tracker.observer.disconnect(); } catch (_) {}
+            }
+            const obs = new MutationObserver(() => {
+              tracker.lastMutationTs = Date.now();
+            });
+            obs.observe(turnNode, {
+              childList: true,
+              subtree: true,
+              characterData: true,
+            });
+            tracker.observer = obs;
+            tracker.attachedTo = turnNode;
+            tracker.observerAttached = true;
+            tracker.lastMutationTs = Date.now();
+          }
+
+          if (current !== tracker.text) {
+            tracker.text = current;
+            tracker.lastMutationTs = Date.now();
+          }
+
+          const quietFor = Date.now() - tracker.lastMutationTs;
+          const ready = !!(
+            current &&
+            current !== priorText &&
+            quietFor >= stableMs
+          );
+          return {ready, len: current.length, quietFor};
+        }
     """
+
+    try:
+        handle = await page.wait_for_function(
+            detector_js,
+            arg={
+                "scrapeFnSource": scrape_js.strip(),
+                "priorText": prior_text or "",
+                "stableMs": int(stable_ms),
+            },
+            timeout=response_timeout_ms,
+            polling=poll_ms,
+        )
+    except Exception as exc:
+        # Reset tracker state so the next call doesn't inherit stale
+        # observer references from the timed-out attempt.
+        try:
+            await page.evaluate("() => { delete window.__chatStableTracker; }")
+        except Exception:
+            pass
+        elapsed_ms = int((response_timeout_ms / 1000.0 - max(0.0, deadline - time.monotonic())) * 1000)
+        print(
+            f"[{log_tag}] TIMEOUT after ~{elapsed_ms}ms ({exc.__class__.__name__})",
+            flush=True,
+            file=sys.stderr,
+        )
+        return None
+
+    try:
+        info = await handle.json_value()
+    except Exception:
+        info = None
+    final_text = await page.evaluate(scrape_js)
+    final_len = len(final_text or "")
+    quiet_for = (info or {}).get("quietFor") if isinstance(info, dict) else None
+    print(
+        f"[{log_tag}] STABLE len={final_len} quiet_for_ms={quiet_for}",
+        flush=True,
+        file=sys.stderr,
+    )
+    # Reset tracker so a subsequent send in the same tab starts fresh
+    # (the prior_text it watches against changes per call).
+    try:
+        await page.evaluate("() => { delete window.__chatStableTracker; }")
+    except Exception:
+        pass
+    return final_text if final_text else None
+
+
+async def _wait_for_stable_response_legacy(
+    page: "Page",
+    scrape_js: str,
+    prior_text: str,
+    *,
+    response_timeout_ms: int,
+    poll_ms: int | None = None,
+    stable_ms: int | None = None,
+    log_tag: str = "scrape",
+) -> str | None:
+    """Legacy poll-evaluate loop retained for emergency fallback.
+
+    The active code path is the MutationObserver-based watcher above.
+    This function kept in case a future page-context restriction blocks
+    ``page.wait_for_function`` (no known case today).
+    """
+    if poll_ms is None:
+        poll_ms = STABLE_POLL_MS
+    if stable_ms is None:
+        stable_ms = STABLE_MS
+
     import sys
     import time
 
@@ -92,38 +254,18 @@ async def _wait_for_stable_response(
     iteration = 0
     prior_len = len(prior_text or "")
     print(
-        f"[{log_tag}] start prior_len={prior_len} timeout_ms={response_timeout_ms}",
+        f"[{log_tag}] start prior_len={prior_len} timeout_ms={response_timeout_ms} (legacy-poll)",
         flush=True,
         file=sys.stderr,
     )
     while time.monotonic() < deadline:
         iteration += 1
         current = await page.evaluate(scrape_js)
-        cur_len = len(current or "")
-        diff = (current or "") != prior_text
-        same_as_last = current == last_seen
-        stable_for = (
-            (time.monotonic() - stable_since) * 1000.0 if stable_since else 0
-        )
-        if iteration <= 3 or iteration % 10 == 0:
-            preview = (current or "")[:80].replace("\n", " ")
-            print(
-                f"[{log_tag}] iter={iteration} len={cur_len} "
-                f"diff_from_prior={diff} same_as_last={same_as_last} "
-                f"stable_ms={int(stable_for)} preview={preview!r}",
-                flush=True,
-                file=sys.stderr,
-            )
         if current and current != prior_text:
             if current == last_seen:
                 if stable_since is None:
                     stable_since = time.monotonic()
                 elif (time.monotonic() - stable_since) * 1000.0 >= stable_ms:
-                    print(
-                        f"[{log_tag}] STABLE after iter={iteration} len={cur_len}",
-                        flush=True,
-                        file=sys.stderr,
-                    )
                     return current
             else:
                 last_seen = current

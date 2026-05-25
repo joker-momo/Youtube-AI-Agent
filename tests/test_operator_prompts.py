@@ -67,9 +67,9 @@ def test_locale_guidance_falls_back_to_default_when_config_empty():
     assert locale["target_locale"] == "Spain"
 
 
-def test_locale_guidance_keeps_latam_when_language_is_es_419():
-    locale = _locale_guidance({"audience": {"language": "es-419"}})
-    assert locale["language"] == "es-419"
+def test_locale_guidance_keeps_non_spain_spanish_language_dynamic():
+    locale = _locale_guidance({"audience": {"language": "es-MX"}})
+    assert locale["language"] == "es-MX"
     assert locale["target_locale"] == "Latin America"
 
 
@@ -80,7 +80,7 @@ def test_seo_prompt_uses_dynamic_language():
     assert "móvil" in prompt
     assert "ordenador" in prompt
     # Old hard-coded text must be gone
-    assert "language: must be es-419" not in prompt
+    assert "language: must be es-MX" not in prompt
     assert "Spanish/LatAm wellness search terms" not in prompt
     assert "and other social links" not in prompt
 
@@ -137,8 +137,8 @@ def test_seo_task_briefing_uses_channel_language_contract():
     assert '"language": "es-ES"' in prompt
     assert "Confirma language=es-ES" in prompt
     assert "Idioma es-ES con acentos correctos" in prompt
-    assert '"language": "es-419"' not in prompt
-    assert "Confirma language=es-419" not in prompt
+    assert '"language": "es-MX"' not in prompt
+    assert "Confirma language=es-MX" not in prompt
 
 
 def test_qa_prompt_backward_compatible_without_channel_config():
@@ -147,12 +147,12 @@ def test_qa_prompt_backward_compatible_without_channel_config():
     assert "expected language is es-ES" in prompt
 
 
-def test_seo_prompt_for_legacy_es_419_channel_keeps_language_dynamic():
+def test_seo_prompt_for_non_spain_spanish_channel_keeps_language_dynamic():
     cfg = dict(SPAIN_CONFIG)
-    cfg["seo"] = {"language": "es-419", "min_tags": 5, "max_tags": 8}
-    cfg["audience"] = {"language": "es-419", "age_range": [45, 75], "primary_markets": ["MX"]}
+    cfg["seo"] = {"language": "es-MX", "min_tags": 5, "max_tags": 8}
+    cfg["audience"] = {"language": "es-MX", "age_range": [45, 75], "primary_markets": ["MX"]}
     cfg.pop("locale_style", None)
     prompt = _chatgpt_seo_prompt(cfg, VALID_SCRIPT, VALID_SCENES)
-    assert "language: must be es-419" in prompt
+    assert "language: must be es-MX" in prompt
     # Must NOT label the output as Spain-first when channel is LatAm.
     assert "Spain-first Spanish wellness" not in prompt

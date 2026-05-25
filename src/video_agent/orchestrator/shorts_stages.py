@@ -27,6 +27,11 @@ async def auto_shorts_script_stage(
         raise StageInputMissingError(f"Missing {script_path}")
     
     channel_config = read_yaml(channel_path)
+    expected_language = (
+        (channel_config.get("seo") or {}).get("language")
+        or (channel_config.get("audience") or {}).get("language")
+        or "es-ES"
+    )
     long_script = read_json(script_path)
     
     prompt = _chatgpt_shorts_script_prompt(channel_config, long_script)
@@ -72,7 +77,7 @@ async def auto_shorts_script_stage(
             "title": short_data.get("title", f"Short {i}"),
             "description": short_data.get("narration", ""),
             "tags": ["shorts"],
-            "language": "es-419",
+            "language": expected_language,
             "ai_disclosure": True,
             "thumbnail_path": "thumbnail.jpg",
             "thumbnail_text": short_data.get("hook", "")[:25].upper(),
@@ -209,6 +214,5 @@ async def auto_shorts_render_stage(job_dir: Path, channel_path: Path, session_fn
             
     _complete_stage(job_dir, stage_name, shorts_dir)
     return shorts_dir
-
 
 

@@ -67,7 +67,7 @@ _ROLES_ES = {
         "médicas, tags de spam o cualquier elemento que pueda causar demonetización o "
         "eliminación → verdict=NEEDS_REWORK inmediato. La duda mínima equivale a "
         "incumplimiento.\n"
-        "PILAR 2 — CALIDAD TÉCNICA: Verificas language=es-419, rango de tags, "
+        "PILAR 2 — CALIDAD TÉCNICA: Verificas el language configurado del canal, rango de tags, "
         "ausencia de duplicados, ausencia de frases prohibidas, longitud de "
         "title/description y ai_disclosure=true.\n"
         "Devuelves UN SOLO JSON con verdict, youtube_policy, scores, issues y "
@@ -194,7 +194,7 @@ _LENGTH_ES = {
         "    6. Sección 6 (Hashtags): 3-5 hashtags relevantes al final.\n"
         "- suggested_pinned_comments: un único comentario fijado sugerido (en español, con emojis cálidos) que combine dos estrategias: una pregunta de enganche al inicio para generar conversación y debate en el público, seguido inmediatamente por un llamado a la acción para suscribirse al canal con el link de suscripción exacto: https://www.youtube.com/channel/UCKUswqsAaLsEkcsgzTuKAmw?sub_confirmation=1\n"
         "- tags: 6-10 elementos, mezcla 1-2 broad (high comp) + 4-8 long-tail "
-        "(low comp, score 50+), es-419, sin duplicados."
+        "(low comp, score 50+), idioma {expected_language}, sin duplicados."
     ),
 }
 
@@ -282,7 +282,7 @@ def _channel_summary(channel_config: dict) -> str:
         (
             f"- Audiencia: {_join_list(aud.get('age_range', []))} años, "
             f"mercados principales {_join_list(aud.get('primary_markets', []))}, "
-            f"idioma {aud.get('language', 'es-419')}."
+            f"idioma {aud.get('language') or _expected_language(channel_config)}."
         ),
         (
             f"- Nicho: {niche.get('category', '')}, "
@@ -516,7 +516,7 @@ def build_task_prompt(
     role_hint = _ROLES_ES.get(stage_name, "")
     expected_language = _expected_language(channel_config)
     schema = _fill_stage_contract(_SCHEMA_ES.get(stage_name, ""), channel_config)
-    length = _LENGTH_ES.get(stage_name, "")
+    length = _fill_stage_contract(_LENGTH_ES.get(stage_name, ""), channel_config)
     decomp = [
         _fill_stage_contract(step, channel_config)
         for step in _DECOMP_ES.get(stage_name, [])

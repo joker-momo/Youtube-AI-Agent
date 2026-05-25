@@ -749,7 +749,13 @@ _QA_RAW_PATH = {
 }
 
 
-def promote_qa_stage(job_dir: Path, artifact: str, raw_response: str) -> Path:
+def promote_qa_stage(
+    job_dir: Path,
+    artifact: str,
+    raw_response: str,
+    *,
+    channel_path: Path | None = None,
+) -> Path:
     """Promote a raw Claude QA response into ``operator/claude/<art>_qa.json``.
 
     ``artifact`` is one of ``script``, ``scenes``, ``seo``. The stage
@@ -813,7 +819,12 @@ def promote_qa_stage(job_dir: Path, artifact: str, raw_response: str) -> Path:
 
     qa_payload = json.loads(result.output_path.read_text(encoding="utf-8"))
     if artifact == "seo":
-        _enforce_seo_language_qa(job_dir, result.output_path, qa_payload)
+        _enforce_seo_language_qa(
+            job_dir,
+            result.output_path,
+            qa_payload,
+            channel_path=channel_path,
+        )
         qa_payload = json.loads(result.output_path.read_text(encoding="utf-8"))
     elif artifact == "scenes":
         _enforce_scenes_visual_prompt_english(job_dir, result.output_path, qa_payload)
@@ -833,6 +844,8 @@ def _enforce_seo_language_qa(
     job_dir: Path,
     qa_output: Path,
     qa_payload: dict,
+    *,
+    channel_path: Path | None = None,
 ) -> None:
     """Force SEO rework if Claude misses the configured language contract."""
     seo_path = job_dir / "seo.json"
@@ -843,14 +856,17 @@ def _enforce_seo_language_qa(
     except json.JSONDecodeError:
         return
 
-    try:
-        state = load_job(job_dir)
-    except Exception:
-        # If job.json is missing or corrupted we cannot know which channel this
-        # belongs to. Skip the enforcement layer rather than aborting the QA
-        # promotion entirely — the artifact has already been written to disk.
-        return
-    channel_config_path = repo_root() / "configs" / state.channel_id / "channel.yaml"
+    if channel_path is None:
+        try:
+            state = load_job(job_dir)
+        except Exception:
+            # If job.json is missing or corrupted we cannot know which channel this
+            # belongs to. Skip the enforcement layer rather than aborting the QA
+            # promotion entirely; the artifact has already been written to disk.
+            return
+        channel_config_path = repo_root() / "configs" / state.channel_id / "channel.yaml"
+    else:
+        channel_config_path = channel_path
     channel_config = read_yaml(channel_config_path) if channel_config_path.exists() else {}
     expected_language = (
         (channel_config.get("seo") or {}).get("language")
@@ -1275,7 +1291,7 @@ async def _auto_qa(
         raise StageInputMissingError(
             f"browser-worker returned an empty Claude QA response for {artifact}"
         )
-    return promote_qa_stage(job_dir, artifact, raw_response)
+    return promote_qa_stage(job_dir, artifact, raw_response, channel_path=channel_path)
 
 
 async def auto_script_qa_stage(

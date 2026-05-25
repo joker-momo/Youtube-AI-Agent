@@ -769,8 +769,8 @@ def test_merge_keyword_channel_config_picks_up_locale_style():
 
 
 def test_merge_keyword_channel_config_falls_back_to_audience_language():
-    cfg = merge_keyword_channel_config({"audience": {"language": "es-419"}})
-    assert cfg["locale_language_code"] == "es-419"
+    cfg = merge_keyword_channel_config({"audience": {"language": "es-MX"}})
+    assert cfg["locale_language_code"] == "es-MX"
 
 
 def test_idea_gen_prompt_contains_spain_locale_block():
@@ -783,14 +783,14 @@ def test_idea_gen_prompt_contains_spain_locale_block():
     assert "not Latin America Spanish unless the config says otherwise" in prompt
 
 
-def test_idea_gen_prompt_for_legacy_latam_channel_keeps_dynamic_language():
+def test_idea_gen_prompt_for_non_spain_spanish_channel_keeps_dynamic_language():
     cfg = {
         "channel": {"id": "demo", "name": "Demo", "description": ""},
-        "audience": {"language": "es-419", "age_range": [45, 75]},
+        "audience": {"language": "es-MX", "age_range": [45, 75]},
         "niche": {},
         "content_format": {"target_duration_sec": 600},
         "positioning": {},
     }
     prompt = _idea_gen_prompt(cfg, ["sueño"], count=2)
-    assert "Language: es-419" in prompt
+    assert "Language: es-MX" in prompt
     assert "Target locale: Latin America" in prompt

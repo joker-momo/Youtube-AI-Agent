@@ -90,7 +90,7 @@ def _seed_at_thumbnail_image(job_dir: Path) -> None:
     seo = {
         "job_id": job_dir.name, "title": "5 secretos para dormir bien",
         "thumbnail_text": "DUERME MEJOR HOY", "description": "Desc",
-        "tags": ["sueño"], "language": "es-419", "ai_disclosure": True,
+        "tags": ["sueño"], "language": "es-ES", "ai_disclosure": True,
         "thumbnail_path": "",
         "title_variants": [{"title": "5 secretos", "thumbnail_text": "DUERME MEJOR HOY", "score": 85}],
     }

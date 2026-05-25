@@ -39,7 +39,6 @@ SPANISH_SPECIFIC_CHARS = set("áéíóúñ¿¡üÁÉÍÓÚÑÜ")
 ALLOWED_ASSET_REF_KEYS = {"background", "primary", "secondary", "bg", "overlay"}
 FORBIDDEN_QA_VALUES = {"PASS", "PASSED", "TRUE", "OK", "APPROVED", "VERIFIED"}
 ALLOWED_LAYOUTS = {"hook", "subtitle", "checklist", "warning", "quote", "cta"}
-QA_REWORKABLE_LANGUAGE_VALUES = {"es-419", "es-LATAM"}
 
 
 def load_operator_channel_config(channel_path: Path | None, parsed: dict[str, Any]) -> dict[str, Any]:
@@ -261,25 +260,16 @@ def _validate_seo(seo: dict[str, Any], channel_config: dict[str, Any]) -> Valida
         or channel_config.get("audience", {}).get("language")
         or "es-ES"
     )
-    strict_language = bool(seo_config.get("strict_language", False))
     language = seo.get("language")
-    if language != expected_language:
-        if strict_language:
-            # Channel demands an exact language match — every mismatch is a
-            # hard error and blocks promotion regardless of which Spanish
-            # variant ChatGPT produced.
-            result.errors.append(
-                f"language must be '{expected_language}' from channel_config.seo.language, got '{language}'."
-            )
-        elif str(language) in QA_REWORKABLE_LANGUAGE_VALUES:
-            result.warnings.append(
-                f"language should be '{expected_language}' from channel_config.seo.language, got '{language}'. "
-                "Allowing promotion so Claude QA can force ChatGPT rework."
-            )
-        else:
-            result.errors.append(
-                f"language must be '{expected_language}' from channel_config.seo.language, got '{language}'."
-            )
+    if not isinstance(language, str) or not language.strip():
+        result.errors.append(
+            f"language must be '{expected_language}' from channel_config.seo.language, got '{language}'."
+        )
+    elif language != expected_language:
+        result.warnings.append(
+            f"language should be '{expected_language}' from channel_config.seo.language, got '{language}'. "
+            "Allowing promotion so Claude QA can force ChatGPT rework."
+        )
 
     result.merge(_validate_tags(seo.get("tags"), seo_config.get("min_tags", 5), seo_config.get("max_tags", 8)))
     result.merge(_validate_forbidden_positioning(seo, channel_config))

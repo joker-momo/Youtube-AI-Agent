@@ -40,21 +40,19 @@ def _valid_seo(**overrides):
     return seo
 
 
-def test_validator_warns_for_qa_reworkable_generic_spanish_language():
+def test_validator_warns_for_any_language_mismatch_so_qa_can_rework():
     cfg = _spain_config()
-    seo = _valid_seo(language="es-419")
+    seo = _valid_seo(language="es-MX")
     result = _validate_seo(seo, cfg)
     report = result.format_report()
     assert result.is_valid
     assert "language should be 'es-ES'" in report
     assert "Claude QA can force ChatGPT rework" in report
-    # Must NOT contain the legacy hard-coded Latin American Spanish phrasing.
-    assert "Latin American Spanish" not in report
 
 
-def test_validator_rejects_nonstandard_wrong_language_with_dynamic_wording():
+def test_validator_rejects_missing_language_with_dynamic_wording():
     cfg = _spain_config()
-    seo = _valid_seo(language="es-LA")
+    seo = _valid_seo(language="")
     result = _validate_seo(seo, cfg)
     report = result.format_report()
     assert not result.is_valid
@@ -119,36 +117,24 @@ def test_validator_uses_audience_language_fallback():
         "audience": {"language": "es-ES"},
         "seo": {"min_tags": 5, "max_tags": 8},
     }
-    seo = _valid_seo(language="es-419")
+    seo = _valid_seo(language="es-MX")
     result = _validate_seo(seo, cfg)
     assert result.is_valid
     assert "language should be 'es-ES'" in result.format_report()
 
 
-def test_validator_strict_language_rejects_es_419():
+def test_validator_language_mismatch_routes_to_qa_rework():
     cfg = _spain_config()
-    cfg["seo"]["strict_language"] = True
-    seo = _valid_seo(language="es-419")
+    seo = _valid_seo(language="es-MX")
     result = _validate_seo(seo, cfg)
-    assert not result.is_valid
+    assert result.is_valid
     report = result.format_report()
-    assert "language must be 'es-ES'" in report
-    # When strict, no warning escape hatch.
-    assert "Claude QA can force ChatGPT rework" not in report
+    assert "language should be 'es-ES'" in report
+    assert "Claude QA can force ChatGPT rework" in report
 
 
-def test_validator_non_strict_keeps_warning_for_es_419():
+def test_validator_language_passes_when_language_matches():
     cfg = _spain_config()
-    cfg["seo"].pop("strict_language", None)
-    seo = _valid_seo(language="es-419")
-    result = _validate_seo(seo, cfg)
-    assert result.is_valid
-    assert "language should be 'es-ES'" in result.format_report()
-
-
-def test_validator_strict_language_passes_when_language_matches():
-    cfg = _spain_config()
-    cfg["seo"]["strict_language"] = True
     seo = _valid_seo()  # already es-ES
     result = _validate_seo(seo, cfg)
     assert result.is_valid, result.format_report()

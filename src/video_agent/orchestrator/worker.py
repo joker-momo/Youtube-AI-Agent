@@ -43,7 +43,7 @@ def _is_retryable_exception(exc: Exception) -> bool:
                 return False
             if detail.get("login_required"):
                 return False
-        if exc.status_code in {401, 403, 404}:
+        if 400 <= exc.status_code < 500 and exc.status_code not in {408, 429}:
             return False
     return True
 

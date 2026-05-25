@@ -109,7 +109,6 @@ research_gate:
 
 seo:
   language: "es-ES"
-  strict_language: true
   min_tags: 5
   max_tags: 8
 domain_plugins:

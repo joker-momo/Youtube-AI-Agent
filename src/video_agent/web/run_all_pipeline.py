@@ -310,7 +310,19 @@ async def _execute_run_all_locked(
 
     need_writing_tab = any(
         s in remaining
-        for s in ("script", "script_promote", "scenes", "scenes_promote", "seo", "seo_promote", "shorts_script", "shorts_scenes")
+        for s in (
+            "script",
+            "script_promote",
+            "script_qa",
+            "scenes",
+            "scenes_promote",
+            "scenes_qa",
+            "seo",
+            "seo_promote",
+            "seo_qa",
+            "shorts_script",
+            "shorts_scenes",
+        )
     )
     need_qa_tab = any(s in remaining for s in ("script_qa", "scenes_qa", "seo_qa"))
 

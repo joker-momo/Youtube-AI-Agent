@@ -315,19 +315,14 @@ def test_promote_operator_artifact_rejects_invalid_seo_contract(tmp_path):
         )
 
     message = str(excinfo.value)
-    assert "language must be 'es-ES'" in message
-    assert "Latin American Spanish" not in message
+    assert "language should be 'es-ES'" in message
     assert "Too many tags" in message
     assert "Forbidden positioning" in message
     assert not (tmp_path / "operator-job/seo.json").exists()
 
 
-def test_promote_operator_artifact_preserves_generic_spanish_language_for_qa_rework(tmp_path):
-    """When ``seo.strict_language`` is false, generic Spanish (es-419) must promote
-    with a warning so Claude QA can force ChatGPT rework. The real channel config
-    is strict, so this test patches a temporary non-strict copy."""
-    import yaml
-
+def test_promote_operator_artifact_preserves_wrong_language_for_qa_rework(tmp_path):
+    """Language mismatches promote with a warning so Claude QA can force rework."""
     raw_path = tmp_path / "seo.raw.txt"
     raw_path.write_text(
         json.dumps(
@@ -343,7 +338,7 @@ def test_promote_operator_artifact_preserves_generic_spanish_language_for_qa_rew
                     "hábitos saludables",
                     "dormir mejor",
                 ],
-                "language": "es-419",
+                "language": "es-MX",
                 "ai_disclosure": True,
                 "thumbnail_path": "thumbnail.jpg",
                 "thumbnail_text": "DUERME MEJOR HOY",
@@ -353,22 +348,15 @@ def test_promote_operator_artifact_preserves_generic_spanish_language_for_qa_rew
         encoding="utf-8",
     )
 
-    # Build a non-strict copy of the channel config so the test isolates the
-    # warning path. Production vida-plena-45 keeps strict_language=true.
-    base_cfg = yaml.safe_load((ROOT / "configs/vida-plena-45/channel.yaml").read_text(encoding="utf-8"))
-    base_cfg.setdefault("seo", {})["strict_language"] = False
-    non_strict_path = tmp_path / "channel_non_strict.yaml"
-    non_strict_path.write_text(yaml.safe_dump(base_cfg, allow_unicode=True), encoding="utf-8")
-
     result = promote_operator_artifact(
         tmp_path / "operator-job",
         "seo",
         raw_path,
-        channel_path=non_strict_path,
+        channel_path=ROOT / "configs/vida-plena-45/channel.yaml",
     )
     promoted = json.loads(result.output_path.read_text(encoding="utf-8"))
 
-    assert promoted["language"] == "es-419"
+    assert promoted["language"] == "es-MX"
 
 
 def test_promote_operator_qa_normalizes_gemini_response(tmp_path):

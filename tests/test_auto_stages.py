@@ -1142,6 +1142,91 @@ def test_http_run_all_resumes_from_current_pending_stage(
     assert len(fake.calls) == 6
 
 
+def test_http_run_all_opens_writing_session_when_resuming_at_seo_qa_rework(
+    http_client: TestClient,
+    tmp_path: Path,
+    monkeypatch,
+    valid_seo_payload: dict,
+):
+    _create_job(http_client)
+    job_dir = tmp_path / "job-auto"
+    _set_current_stage(job_dir, "seo_qa")
+    bad_seo = dict(valid_seo_payload, language="es-MX")
+    (job_dir / "seo.json").write_text(json.dumps(bad_seo, ensure_ascii=False), encoding="utf-8")
+
+    qa_pass = json.dumps(
+        {
+            "verdict": "PASS",
+            "scores": {"schema_fit": 5, "channel_fit": 5, "safety": 5, "clarity": 5},
+            "issues": [],
+            "required_changes": [],
+        }
+    )
+    fixed_seo = dict(valid_seo_payload, language="es-ES")
+    fake = FakeBrowserClient(
+        queue=[
+            "OK",  # chatgpt briefing ack
+            "OK",  # qa briefing ack
+            qa_pass,
+            json.dumps(fixed_seo, ensure_ascii=False),
+            qa_pass,
+        ]
+    )
+    app.dependency_overrides[get_browser_client] = lambda: fake
+
+    def fake_render(job_dir, channel_path, *, notify_telegram=True):
+        out = job_dir / "video.mp4"
+        out.write_bytes(b"fake")
+        from video_agent.orchestrator.stages import _complete_stage
+
+        _complete_stage(job_dir, "render", out)
+        return out
+
+    def fake_review(job_dir):
+        out = job_dir / "operator_review.html"
+        out.write_text("<html/>", encoding="utf-8")
+        from video_agent.orchestrator.stages import _complete_stage
+
+        _complete_stage(job_dir, "review", out)
+        return out
+
+    def fake_whisper(job_dir):
+        out = job_dir / "whisper_timestamps.json"
+        out.write_text('{"scenes":[]}', encoding="utf-8")
+        from video_agent.orchestrator.stages import _complete_stage
+
+        _complete_stage(job_dir, "whisper_timestamps", out)
+        return out
+
+    async def fake_thumbnail(job_dir, channel_path, image_fn):
+        out = job_dir / "seo.json"
+        from video_agent.orchestrator.stages import _complete_stage
+
+        _complete_stage(job_dir, "thumbnail_image", out)
+        return out
+
+    async def _noop_sleep(_):
+        return
+
+    monkeypatch.setattr("video_agent.web.run_all_pipeline.run_render_stage", fake_render)
+    monkeypatch.setattr("video_agent.web.run_all_pipeline.run_review_stage", fake_review)
+    monkeypatch.setattr("video_agent.web.run_all_pipeline.run_whisper_timestamps_stage", fake_whisper)
+    monkeypatch.setattr("video_agent.web.run_all_pipeline.auto_thumbnail_image_stage", fake_thumbnail)
+    import asyncio as _asyncio
+
+    monkeypatch.setattr(_asyncio, "sleep", _noop_sleep)
+
+    try:
+        r = http_client.post("/jobs/job-auto/run-all?enforce_approvals=false")
+    finally:
+        app.dependency_overrides.pop(get_browser_client, None)
+
+    assert r.status_code == 200, r.text
+    assert "open:chatgpt" in fake.events
+    assert "open:claude" in fake.events
+    assert json.loads((job_dir / "seo.json").read_text(encoding="utf-8"))["language"] == "es-ES"
+
+
 def test_http_run_all_stops_on_worker_error(
     http_client: TestClient,
     idea_payload: dict,
@@ -1380,7 +1465,7 @@ def test_auto_seo_qa_prompt_uses_channel_language(
     task = fake.calls[0][0]
     assert "expected language is es-ES" in task
     assert "not EXACTLY the expected language, verdict MUST be NEEDS_REWORK" in task
-    assert "expected language is es-419" not in task
+    assert "expected language is es-MX" not in task
 
 
 def test_auto_seo_qa_forces_rework_when_language_mismatches_even_if_claude_passes(
@@ -1392,7 +1477,7 @@ def test_auto_seo_qa_forces_rework_when_language_mismatches_even_if_claude_passe
 
     job_dir = tmp_path / "job-auto"
     seo_payload = dict(valid_seo_payload)
-    seo_payload["language"] = "es-419"
+    seo_payload["language"] = "es-MX"
     _seed_at_stage(job_dir, "seo_qa", {"seo.json": seo_payload})
     fake = FakeBrowserClient(queue=[json.dumps(_qa_pass_payload())])
 
@@ -1420,7 +1505,7 @@ def test_auto_seo_qa_rework_repromotes_before_retrying_qa(
     from video_agent.orchestrator.stages import auto_qa_with_rework
 
     job_dir = tmp_path / "job-auto"
-    original = dict(valid_seo_payload, job_id="job-auto", language="es-419")
+    original = dict(valid_seo_payload, job_id="job-auto", language="es-MX")
     reworked = dict(valid_seo_payload, job_id="job-auto", language="es-ES")
     _seed_at_stage(job_dir, "seo_qa", {"seo.json": original})
     fake = FakeBrowserClient(

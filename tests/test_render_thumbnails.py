@@ -24,7 +24,7 @@ def _make_props(tmp_path, variants=_SENTINEL):
         "seo": {
             "title": "Best title",
             "thumbnail_text": "DUERME MEJOR HOY",
-            "description": "", "tags": [], "language": "es-419",
+            "description": "", "tags": [], "language": "es-ES",
             "ai_disclosure": True, "thumbnail_path": "",
             "title_variants": default_variants if variants is _SENTINEL else variants,
         },

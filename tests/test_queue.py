@@ -119,3 +119,18 @@ def test_worker_retry_classification_skips_operator_blocks():
         )
         is False
     )
+    assert (
+        _is_retryable_exception(
+            HTTPException(
+                status_code=409,
+                detail={"error": "Cannot promote seo; missing raw response"},
+            )
+        )
+        is False
+    )
+    assert (
+        _is_retryable_exception(
+            HTTPException(status_code=502, detail={"error": "browser-worker failed"})
+        )
+        is True
+    )

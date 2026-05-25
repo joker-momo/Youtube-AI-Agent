@@ -139,7 +139,6 @@ research_gate:
 schema_version: 3.0-mvp
 seo:
   language: es-ES
-  strict_language: true
   max_tags: 8
   min_tags: 5
 style_dna:

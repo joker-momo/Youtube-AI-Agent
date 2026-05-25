@@ -40,6 +40,100 @@ from video_agent.assets.query_cache import QueryCache
 from video_agent.contracts import repo_root
 
 
+# Safety net: when ChatGPT leaks Spanish into visual_prompt despite the prompt rule,
+# we still try to send a meaningful English query to Pexels rather than the raw
+# Spanish prose. This is keyword extraction, not real translation — adequate
+# because Pexels stock search is token-based.
+_SPANISH_TO_ENGLISH_KEYWORDS: dict[str, str] = {
+    # rooms & spaces
+    "habitación": "bedroom", "habitacion": "bedroom", "dormitorio": "bedroom",
+    "cocina": "kitchen", "sala": "living room", "baño": "bathroom",
+    "casa": "home", "ventana": "window", "puerta": "door", "cama": "bed",
+    "mesa": "table", "sofá": "sofa", "sofa": "sofa", "silla": "chair",
+    "cortinas": "curtains", "almohada": "pillow", "manta": "blanket",
+    # people
+    "persona": "person", "personas": "people", "mujer": "woman", "hombre": "man",
+    "pareja": "couple", "familia": "family", "adulto": "adult", "adulta": "adult",
+    "anciano": "elderly", "anciana": "elderly",
+    # objects & activity
+    "reloj": "clock", "lámpara": "lamp", "lampara": "lamp", "luz": "light",
+    "libro": "book", "libreta": "notebook", "móvil": "smartphone", "movil": "smartphone",
+    "teléfono": "phone", "telefono": "phone", "pantalla": "screen",
+    "ordenador": "computer", "portátil": "laptop", "portatil": "laptop",
+    "taza": "cup", "infusión": "tea", "infusion": "tea", "té": "tea",
+    "agua": "water", "comida": "food", "plato": "plate", "cena": "dinner",
+    "desayuno": "breakfast", "comer": "eating",
+    # actions
+    "duerme": "sleeping", "dormir": "sleeping", "descansa": "resting",
+    "descanso": "rest", "respira": "breathing", "respiración": "breathing",
+    "camina": "walking", "caminar": "walking", "estira": "stretching",
+    "estiramiento": "stretching", "lee": "reading", "leer": "reading",
+    "escribe": "writing", "escribir": "writing", "apaga": "turning off",
+    "enciende": "turning on", "abre": "opening", "cierra": "closing",
+    "acomoda": "arranging", "ordena": "organizing", "ordenada": "tidy",
+    # time / mood
+    "noche": "night", "nocturna": "night", "nocturno": "night",
+    "tarde": "evening", "atardecer": "dusk", "mañana": "morning",
+    "matutino": "morning", "matutina": "morning", "amanecer": "sunrise",
+    "calma": "calm", "tranquilo": "calm", "tranquila": "calm",
+    "cálido": "warm", "calido": "warm", "cálida": "warm", "calida": "warm",
+    "tenue": "soft", "suave": "gentle",
+    # camera framing
+    "plano": "shot", "primer": "close-up", "secuencia": "sequence",
+    "montaje": "montage", "fondo": "background",
+}
+
+_SPANISH_STOPWORDS_FOR_TRANSLATE = {
+    "el", "la", "los", "las", "un", "una", "unos", "unas",
+    "de", "del", "en", "con", "sin", "por", "para", "sobre",
+    "y", "o", "u", "que", "qué", "como", "cómo", "cuando",
+    "este", "esta", "estos", "estas", "ese", "esa", "esos", "esas",
+    "su", "sus", "mi", "mis", "tu", "tus", "se", "le", "lo", "les",
+    "no", "sí", "más", "mas", "muy", "ya", "pero", "también",
+    "al", "lo", "es", "son", "estar", "ser", "hay",
+}
+
+
+def _is_likely_spanish_query(query: str) -> bool:
+    spanish_chars = set("áéíóúñ¿¡üÁÉÍÓÚÑÜ")
+    if any(c in spanish_chars for c in query):
+        return True
+    tokens = re.findall(r"[a-záéíóúñü]+", query.lower())
+    hits = sum(1 for t in tokens if t in _SPANISH_STOPWORDS_FOR_TRANSLATE)
+    return hits >= 2
+
+
+def _translate_spanish_query_to_english(query: str) -> str:
+    """Best-effort Spanish→English keyword extraction for stock-search queries.
+
+    Maps known Spanish content words to English equivalents and drops stopwords.
+    Not a real translator — adequate for token-based stock-image search.
+    Returns the original query unchanged if no Spanish words are detected.
+    """
+    if not _is_likely_spanish_query(query):
+        return query
+    tokens = re.findall(r"[\wáéíóúñüÁÉÍÓÚÑÜ]+", query, flags=re.UNICODE)
+    out: list[str] = []
+    for token in tokens:
+        lowered = token.lower()
+        if lowered in _SPANISH_STOPWORDS_FOR_TRANSLATE:
+            continue
+        translated = _SPANISH_TO_ENGLISH_KEYWORDS.get(lowered)
+        if translated:
+            out.append(translated)
+        else:
+            # Keep words that look English-safe (ASCII letters, length >= 4).
+            if re.fullmatch(r"[A-Za-z]+", token) and len(token) >= 4:
+                out.append(token.lower())
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for word in out:
+        if word not in seen:
+            deduped.append(word)
+            seen.add(word)
+    return " ".join(deduped[:12]) or query
+
+
 def _force_elderly_demographic(query: str) -> str:
     lower_q = query.lower()
     people_words = [
@@ -331,7 +425,11 @@ class StockAssetService:
 
     def get_scene_asset(self, scene: dict[str, Any], channel_id: str, job_id: str) -> dict[str, Any] | None:
         raw_query = scene.get("visual_prompt") or scene.get("on_screen_text") or ""
-        query = _force_elderly_demographic(raw_query)
+        # Safety net: even though prompts and validators require English visual_prompt,
+        # if a Spanish prompt slips through we still translate it to English keywords
+        # before sending it to Pexels (an English-keyword search engine).
+        translated_query = _translate_spanish_query_to_english(raw_query)
+        query = _force_elderly_demographic(translated_query)
         scene_dur = int(scene.get("duration_sec") or 30)
         filters = _stock_filters(self.visual_config, scene_duration_sec=scene_dur)
         ttl_hours = int(self.visual_config.get("query_cache_ttl_hours", 24))
@@ -414,10 +512,26 @@ class StockAssetService:
             ranked_candidates,
             key=lambda item: (-item["score"], item["provider_order"], item["provider_candidate_rank"]),
         )
+
+        def _passes_strict_gate(item: dict[str, Any]) -> bool:
+            if item["score"] < self._MIN_LIBRARY_CACHE_SCORE:
+                return False
+            reasons = set(item.get("reasons") or [])
+            matched = item.get("matched_terms") or []
+            return ("strong_scene_term_match" in reasons or len(matched) >= 2)
+
+        any_strict = any(_passes_strict_gate(item) for item in ranked_candidates)
+        # Two-tier selection: prefer candidates that satisfy the strict semantic
+        # gate (score + tag overlap). If none qualify (low-resolution mock data,
+        # niche queries with sparse Pexels coverage, etc.) fall back to the
+        # unfiltered ranking so we never bake a generated_placeholder when at
+        # least *some* footage is available.
         for rank, ranked_candidate in enumerate(ranked_candidates, start=1):
             candidate = ranked_candidate["candidate"]
             key = (candidate["provider"], str(candidate["provider_asset_id"]))
             if key in self.used_provider_ids:
+                continue
+            if any_strict and not _passes_strict_gate(ranked_candidate):
                 continue
             try:
                 asset = self._ensure_asset(candidate, query)

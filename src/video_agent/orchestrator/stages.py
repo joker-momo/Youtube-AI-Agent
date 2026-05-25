@@ -814,6 +814,9 @@ def promote_qa_stage(job_dir: Path, artifact: str, raw_response: str) -> Path:
     if artifact == "seo":
         _enforce_seo_language_qa(job_dir, result.output_path, qa_payload)
         qa_payload = json.loads(result.output_path.read_text(encoding="utf-8"))
+    elif artifact == "scenes":
+        _enforce_scenes_visual_prompt_english(job_dir, result.output_path, qa_payload)
+        qa_payload = json.loads(result.output_path.read_text(encoding="utf-8"))
     verdict = str(qa_payload.get("verdict", "")).upper()
     if verdict != "PASS":
         issues = qa_payload.get("issues") or qa_payload.get("required_changes") or []
@@ -876,6 +879,81 @@ def _enforce_seo_language_qa(
     required = (
         f"Set seo.language to exactly {expected_language} and use "
         f"{expected_language} consistently in SEO text."
+    )
+    changes = list(updated.get("required_changes") or [])
+    if required not in changes:
+        changes.append(required)
+    updated["required_changes"] = changes
+    _write_json(qa_output, updated)
+
+
+def _enforce_scenes_visual_prompt_english(
+    job_dir: Path,
+    qa_output: Path,
+    qa_payload: dict,
+) -> None:
+    """Force scenes rework if any visual_prompt is Spanish.
+
+    Pexels stock search is English-keyword based, so Spanish visual_prompts
+    produce off-topic backgrounds (Bellagio fountains for sleep scenes, etc.).
+    This QA layer flips the verdict to NEEDS_REWORK with a per-scene list of
+    offending visual_prompts so ChatGPT regenerates them in English.
+    """
+    from video_agent.operator_validators import _looks_like_spanish_visual_prompt
+
+    scenes_path = job_dir / "scenes.json"
+    if not scenes_path.exists():
+        return
+    try:
+        scenes_payload = json.loads(scenes_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return
+
+    offenders: list[tuple[str, str]] = []  # (scene_id, reason)
+    for scene in scenes_payload.get("scenes") or []:
+        if not isinstance(scene, dict):
+            continue
+        prompt = str(scene.get("visual_prompt") or "")
+        is_spanish, reason = _looks_like_spanish_visual_prompt(prompt)
+        if is_spanish:
+            offenders.append((str(scene.get("id", "?")), reason or "Spanish detected"))
+
+    if not offenders:
+        return
+
+    summary = ", ".join(f"{sid} ({reason})" for sid, reason in offenders[:5])
+    if len(offenders) > 5:
+        summary += f", and {len(offenders) - 5} more"
+    issue = (
+        f"{len(offenders)} scene visual_prompt fields are Spanish. "
+        "Pexels stock search is English-keyword based; Spanish prompts produce "
+        f"off-topic backgrounds. Offenders: {summary}."
+    )
+
+    updated = dict(qa_payload)
+    updated["verdict"] = "NEEDS_REWORK"
+    youtube_policy = dict(updated.get("youtube_policy") or {})
+    youtube_policy.setdefault("compliant", True)
+    youtube_policy.setdefault("risk_level", "none")
+    youtube_policy.setdefault("violations", [])
+    updated["youtube_policy"] = youtube_policy
+    scores = dict(updated.get("scores") or {})
+    try:
+        current_clarity = int(scores.get("clarity") or 5)
+    except (TypeError, ValueError):
+        current_clarity = 5
+    scores["clarity"] = min(current_clarity, 3)
+    updated["scores"] = scores
+    issues = list(updated.get("issues") or [])
+    if issue not in issues:
+        issues.append(issue)
+    updated["issues"] = issues
+    required = (
+        "Rewrite every visual_prompt in ENGLISH for Pexels stock search. "
+        "Format: person + setting + action + lighting + camera framing. "
+        "Example: 'Mature woman in her 50s drinking herbal tea on a sofa "
+        "at night, warm tungsten light, medium shot'. "
+        f"Scenes to fix: {', '.join(sid for sid, _ in offenders)}."
     )
     changes = list(updated.get("required_changes") or [])
     if required not in changes:

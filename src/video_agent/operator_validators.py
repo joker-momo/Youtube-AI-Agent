@@ -160,14 +160,63 @@ def _validate_asset_refs(scene: dict[str, Any], scene_label: str) -> ValidationR
     return result
 
 
+# Common Spanish stopwords / function words that almost never appear in English
+# stock-search queries. Used to detect Spanish-language visual_prompt when ChatGPT
+# ignores the "visual_prompt must remain English" rule.
+_SPANISH_STOPWORDS = {
+    "el", "la", "los", "las", "un", "una", "unos", "unas",
+    "de", "del", "en", "con", "sin", "por", "para", "sobre",
+    "y", "o", "u", "que", "qué", "como", "cómo", "cuando", "cuándo",
+    "esta", "este", "estos", "estas", "ese", "esa", "esos", "esas",
+    "su", "sus", "mi", "mis", "tu", "tus",
+    "se", "le", "lo", "les", "nos", "te", "me",
+    "muy", "mas", "más", "menos", "pero", "ya", "no", "sí",
+    "persona", "personas", "habitación", "cama", "noche", "tarde",
+    "casa", "calle", "mano", "manos", "luz", "agua", "comida",
+    "cena", "desayuno", "acomoda", "respira", "abre", "cierra",
+    "apaga", "enciende", "mira", "lee", "escribe", "camina",
+    "siente", "ordenada", "limpio", "tranquilo", "calma", "ambiente",
+    "mediana", "edad", "secuencia", "objetos", "reloj", "lámpara",
+    "libro", "cortinas", "cocina", "ventana",
+}
+
+
+def _looks_like_spanish_visual_prompt(prompt: str) -> tuple[bool, str | None]:
+    """Detect Spanish-language visual_prompt.
+
+    Returns ``(is_spanish, reason)``. Triggers when either:
+    - Spanish-specific accented characters appear (á, é, í, ó, ú, ñ, ¿, ¡, ü), or
+    - Two or more Spanish stopwords appear in the prompt, which is very
+      uncharacteristic of an English stock-search query.
+
+    The visual_prompt is fed to Pexels stock search; Pexels is English-keyword
+    based, so Spanish text returns garbage results (Bellagio fountains for a
+    "secuencia de objetos" query, Vietnam Airlines for a sleep-rest scene).
+    """
+    if not prompt:
+        return False, None
+    if any(char in SPANISH_SPECIFIC_CHARS for char in prompt):
+        return True, "Spanish accent characters detected (á/é/í/ó/ú/ñ/¿/¡/ü)."
+    tokens = re.findall(r"[A-Za-zÁÉÍÓÚÑÜáéíóúñü]+", prompt.lower())
+    spanish_hits = [t for t in tokens if t in _SPANISH_STOPWORDS]
+    if len(spanish_hits) >= 2:
+        return True, f"Spanish stopwords detected: {sorted(set(spanish_hits))[:6]}."
+    return False, None
+
+
 def _validate_visual_prompt(scene: dict[str, Any], scene_label: str) -> ValidationResult:
     result = ValidationResult()
     prompt = str(scene.get("visual_prompt") or "")
     if not prompt:
         result.errors.append(f"Scene {scene_label}: missing or empty visual_prompt.")
         return result
-    if any(char in SPANISH_SPECIFIC_CHARS for char in prompt):
-        result.warnings.append(f"Scene {scene_label}: visual_prompt should be English for stock/image generation.")
+    is_spanish, reason = _looks_like_spanish_visual_prompt(prompt)
+    if is_spanish:
+        result.errors.append(
+            f"Scene {scene_label}: visual_prompt must be ENGLISH for stock search "
+            f"(Pexels is English-keyword based). {reason} "
+            f"Got: {prompt[:120]!r}."
+        )
     return result
 
 

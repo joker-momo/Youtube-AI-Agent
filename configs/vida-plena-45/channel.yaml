@@ -3,12 +3,32 @@ channel:
   id: "vida-plena-45"
   name: "Vida Plena 45+"
   youtube_channel_id: "UCKUswqsAaLsEkcsgzTuKAmw"
-  description: "Salud y bienestar practico para personas de mas de 45 anos."
+  description: "Salud y bienestar práctico para personas de más de 45 años."
 audience:
-  language: "es-419"
+  language: "es-ES"
   age_range: [45, 75]
-  primary_markets: ["MX", "CO", "ES"]
-  secondary_markets: ["AR", "CL", "PE"]
+  primary_markets: ["ES"]
+  secondary_markets: ["MX", "CO", "AR", "CL", "PE"]
+locale_style:
+  target_locale: "Spain"
+  language_code: "es-ES"
+  timezone: "Europe/Madrid"
+  lexical_preferences:
+    prefer:
+      - "móvil"
+      - "ordenador"
+      - "por la tarde"
+      - "de madrugada"
+      - "hábitos sencillos"
+      - "personas de más de 45 años"
+    avoid:
+      - "celular"
+      - "computadora"
+      - "LatAm"
+      - "adultos mayores"
+      - "tercera edad"
+      - "ancianos"
+      - "abuelitos"
 niche:
   category: "health_wellness"
   sub_niches:
@@ -43,8 +63,8 @@ content_format:
   publish_schedule:
     cadence: "3 per week"
     days: ["Monday", "Wednesday", "Friday"]
-    time_local: "19:00"
-    timezone: "America/Mexico_City"
+    time_local: "20:00"
+    timezone: "Europe/Madrid"
 
 qa_rules:
   script_path: "configs/vida-plena-45/qa-rules/script.yaml"
@@ -63,9 +83,10 @@ positioning:
     - "abuelos"
     - "abuelitos"
   preferred_phrases:
+    - "personas de más de 45 años"
     - "adultos 45+"
     - "mediana edad"
-    - "segunda juventud"
+    - "bienestar práctico"
 research_gate:
   # vidIQ free tier scores Spanish long-tail phrases lower than English.
   # Calibrated to 20 after observing that "insomnio" (short keyword) = 63
@@ -77,7 +98,7 @@ research_gate:
   min_tag_score: 20
 
 seo:
-  language: "es-419"
+  language: "es-ES"
   min_tags: 5
   max_tags: 8
 domain_plugins:

@@ -111,7 +111,7 @@ def valid_seo_payload() -> dict:
             "bienestar 45",
             "descanso",
         ],
-        "language": "es-419",
+        "language": "es-ES",
         "ai_disclosure": True,
         "thumbnail_path": "thumbnail.jpg",
     }
@@ -705,7 +705,7 @@ def test_http_auto_thumbnail_image(
                     "bienestar 45",
                     "descanso",
                 ],
-                "language": "es-419",
+                "language": "es-ES",
                 "ai_disclosure": True,
                 "thumbnail_path": "",
                 "thumbnail_text": "DUERME MEJOR HOY",
@@ -753,7 +753,7 @@ def test_http_auto_thumbnail_image_worker_error_returns_502(
                 "title": "5 hábitos nocturnos para dormir mejor",
                 "description": "Rutina suave y realista para descansar mejor.",
                 "tags": ["dormir mejor"],
-                "language": "es-419",
+                "language": "es-ES",
                 "ai_disclosure": True,
                 "thumbnail_path": "",
             },
@@ -843,7 +843,7 @@ def test_http_run_all_success(
 
     # Render and review are expensive; stub them so the route exercise
     # only verifies orchestration, not Remotion.
-    def fake_render(job_dir, channel_path):
+    def fake_render(job_dir, channel_path, *, notify_telegram=True):
         out = job_dir / "video.mp4"
         out.write_bytes(b"fake")
         # Mirror what the real stage does so /run-all sees the state advance.
@@ -957,7 +957,7 @@ def test_http_run_all_requires_idea_research_confirmation(
     )
     app.dependency_overrides[get_browser_client] = lambda: fake
 
-    def fake_render(job_dir, channel_path):
+    def fake_render(job_dir, channel_path, *, notify_telegram=True):
         out = job_dir / "video.mp4"
         out.write_bytes(b"fake")
         from video_agent.orchestrator.stages import _complete_stage
@@ -1079,7 +1079,7 @@ def test_http_run_all_resumes_from_current_pending_stage(
     )
     app.dependency_overrides[get_browser_client] = lambda: fake
 
-    def fake_render(job_dir, channel_path):
+    def fake_render(job_dir, channel_path, *, notify_telegram=True):
         out = job_dir / "video.mp4"
         out.write_bytes(b"fake")
         from video_agent.orchestrator.stages import _complete_stage
@@ -1745,7 +1745,7 @@ _SEO_PAYLOAD = {
     "title": "5 hábitos nocturnos para dormir mejor",
     "description": "Rutina suave y realista para descansar.",
     "tags": ["dormir mejor", "rutina nocturna", "vida plena 45", "bienestar", "descanso"],
-    "language": "es-419",
+    "language": "es-ES",
     "ai_disclosure": True,
     "thumbnail_path": "thumbnail.jpg",
 }

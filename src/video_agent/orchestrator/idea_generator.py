@@ -276,6 +276,23 @@ DEFAULT_CHANNEL_KEYWORD_CONFIG = {
     "enable_serp_inspection": False,
     "serp_max_results": 10,
     "max_keywords_per_intent_cluster": 3,
+    "target_locale": "Spain",
+    "locale_language_code": "es-ES",
+    "lexical_prefer": [
+        "móvil",
+        "ordenador",
+        "por la tarde",
+        "de madrugada",
+        "personas de más de 45 años",
+    ],
+    "lexical_avoid": [
+        "celular",
+        "computadora",
+        "LatAm",
+        "adultos mayores",
+        "tercera edad",
+        "ancianos",
+    ],
 }
 
 PORTUGUESE_MARKERS = [
@@ -537,6 +554,24 @@ def merge_keyword_channel_config(channel_config: dict | None) -> dict:
     language = str(audience.get("language") or "").lower()
     if language.startswith("es"):
         cfg["target_language"] = "spanish"
+    # Locale-style overrides — Spain-first config flows through to idea prompts.
+    locale_style = channel_config.get("locale_style") or {}
+    if locale_style:
+        cfg["target_locale"] = locale_style.get("target_locale", cfg["target_locale"])
+        cfg["locale_language_code"] = (
+            locale_style.get("language_code")
+            or audience.get("language")
+            or cfg["locale_language_code"]
+        )
+        lexical = locale_style.get("lexical_preferences") or {}
+        prefer = lexical.get("prefer")
+        avoid = lexical.get("avoid")
+        if prefer:
+            cfg["lexical_prefer"] = list(prefer)
+        if avoid:
+            cfg["lexical_avoid"] = list(avoid)
+    elif audience.get("language"):
+        cfg["locale_language_code"] = audience["language"]
     keyword_cfg = channel_config.get("keyword_scoring") or {}
     cfg.update({k: v for k, v in keyword_cfg.items() if v is not None})
     return cfg
@@ -713,7 +748,12 @@ def _idea_gen_prompt(
 
     channel_name = ch.get("name", ch.get("id", ""))
     description = ch.get("description", "")
-    language = audience.get("language", "es-419")
+    language = audience.get("language", "es-ES")
+    locale_style = channel_config.get("locale_style", {}) or {}
+    target_locale = locale_style.get("target_locale") or ("Spain" if language == "es-ES" else "Latin America")
+    lexical = locale_style.get("lexical_preferences", {}) or {}
+    lexical_prefer = list(lexical.get("prefer") or [])
+    lexical_avoid = list(lexical.get("avoid") or [])
     age_range = audience.get("age_range", [45, 75])
     sub_niches = niche.get("sub_niches", [])
     avoid_topics = niche.get("avoid_topics", [])
@@ -763,6 +803,19 @@ def _idea_gen_prompt(
 
     kw_block = "\n".join(kw_lines)
 
+    prefer_line = ("- Prefer: " + ", ".join(lexical_prefer)) if lexical_prefer else ""
+    avoid_line = ("- Avoid: " + ", ".join(lexical_avoid)) if lexical_avoid else ""
+    locale_block = "\n".join(
+        line for line in [
+            "## Locale style",
+            f"- Target locale: {target_locale}",
+            f"- Language code: {language}",
+            f"- Use {target_locale}-natural Spanish.",
+            prefer_line,
+            avoid_line,
+        ] if line
+    )
+
     return f"""You are a YouTube content strategist for the channel **{channel_name}**.
 
 ## Channel
@@ -771,6 +824,8 @@ def _idea_gen_prompt(
 - Language: {language}
 - Sub-niches: {", ".join(sub_niches)}
 {phrase_block}{avoid_block}
+
+{locale_block}
 
 ## High-opportunity keywords (real YouTube search data from vidIQ)
 
@@ -798,7 +853,9 @@ Each idea must be a JSON object with these exact keys:
 ```
 
 Rules:
-- All text in Spanish ({language}).
+- All text must be in Spanish for {target_locale} ({language}), not Latin America Spanish unless the config says otherwise.
+- Do not use Portuguese.
+- Do not use forbidden age-positioning phrases from channel_config.positioning.forbidden_phrases.
 - `target_duration_sec` must be exactly {target_dur} for every idea.
 - `key_points` must have 5–7 items; each concrete and actionable.
 - `title_seed` must include or closely echo the target keyword naturally.

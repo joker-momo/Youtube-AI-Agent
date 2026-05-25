@@ -60,6 +60,23 @@
         "ai_disclosure": { "type": "boolean" },
         "default_privacy": { "type": "string" }
       }
+    },
+    "locale_style": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "target_locale": { "type": "string" },
+        "language_code": { "type": "string" },
+        "timezone": { "type": "string" },
+        "lexical_preferences": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "prefer": { "type": "array", "items": { "type": "string" } },
+            "avoid": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
     }
   }
 }

@@ -104,7 +104,7 @@ def valid_seo_payload() -> dict:
             "hábitos saludables",
             "vida plena",
         ],
-        "language": "es-419",
+        "language": "es-ES",
         "ai_disclosure": True,
         "thumbnail_path": "thumbnail.jpg",
     }

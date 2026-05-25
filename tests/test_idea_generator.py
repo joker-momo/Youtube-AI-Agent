@@ -336,7 +336,7 @@ def test_discover_top_keywords_v2_returns_bucketed_dict():
         _discover_top_keywords(
             ["como comer mejor despues de los 45"],
             fake_vidiq,
-            channel_config={"audience": {"language": "es-419"}},
+            channel_config={"audience": {"language": "es-ES"}},
         )
     )
 
@@ -364,7 +364,7 @@ def test_discover_top_keywords_v2_rejects_portuguese_even_with_high_vidiq_score(
         _discover_top_keywords(
             ["como comer bem depois dos 45"],
             fake_vidiq,
-            channel_config={"audience": {"language": "es-419"}},
+            channel_config={"audience": {"language": "es-ES"}},
         )
     )
 
@@ -728,3 +728,69 @@ def test_post_generate_ideas_prompt_includes_seeds(http_client: TestClient, tmp_
         app.dependency_overrides.pop(get_browser_client, None)
 
     assert any("yoga matutino" in m for m in captured)
+
+
+# ---------------------------------------------------------------------------
+# Spain-first locale prompt tests
+# ---------------------------------------------------------------------------
+
+from video_agent.orchestrator.idea_generator import (
+    _idea_gen_prompt,
+    merge_keyword_channel_config,
+)
+
+
+_SPAIN_CFG = {
+    "channel": {"id": "vida-plena-45", "name": "Vida Plena 45+", "description": "Bienestar"},
+    "audience": {"language": "es-ES", "age_range": [45, 75], "primary_markets": ["ES"]},
+    "niche": {"sub_niches": ["sleep"]},
+    "content_format": {"target_duration_sec": 840},
+    "positioning": {
+        "forbidden_phrases": ["adultos mayores"],
+        "preferred_phrases": ["personas de más de 45 años"],
+    },
+    "locale_style": {
+        "target_locale": "Spain",
+        "language_code": "es-ES",
+        "lexical_preferences": {
+            "prefer": ["móvil", "ordenador"],
+            "avoid": ["celular", "computadora", "adultos mayores"],
+        },
+    },
+}
+
+
+def test_merge_keyword_channel_config_picks_up_locale_style():
+    cfg = merge_keyword_channel_config(_SPAIN_CFG)
+    assert cfg["target_locale"] == "Spain"
+    assert cfg["locale_language_code"] == "es-ES"
+    assert "móvil" in cfg["lexical_prefer"]
+    assert "celular" in cfg["lexical_avoid"]
+
+
+def test_merge_keyword_channel_config_falls_back_to_audience_language():
+    cfg = merge_keyword_channel_config({"audience": {"language": "es-419"}})
+    assert cfg["locale_language_code"] == "es-419"
+
+
+def test_idea_gen_prompt_contains_spain_locale_block():
+    prompt = _idea_gen_prompt(_SPAIN_CFG, ["dormir mejor despues de los 45"], count=3)
+    assert "Target locale: Spain" in prompt
+    assert "es-ES" in prompt
+    assert "móvil" in prompt
+    assert "ordenador" in prompt
+    assert "Spanish for Spain" in prompt
+    assert "not Latin America Spanish unless the config says otherwise" in prompt
+
+
+def test_idea_gen_prompt_for_legacy_latam_channel_keeps_dynamic_language():
+    cfg = {
+        "channel": {"id": "demo", "name": "Demo", "description": ""},
+        "audience": {"language": "es-419", "age_range": [45, 75]},
+        "niche": {},
+        "content_format": {"target_duration_sec": 600},
+        "positioning": {},
+    }
+    prompt = _idea_gen_prompt(cfg, ["sueño"], count=2)
+    assert "Language: es-419" in prompt
+    assert "Target locale: Latin America" in prompt

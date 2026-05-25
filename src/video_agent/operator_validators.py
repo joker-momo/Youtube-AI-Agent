@@ -185,14 +185,78 @@ def _detect_prefilled_qa(parsed: dict[str, Any], artifact: str) -> ValidationRes
 
 def _validate_seo(seo: dict[str, Any], channel_config: dict[str, Any]) -> ValidationResult:
     result = ValidationResult()
-    expected_language = channel_config.get("seo", {}).get("language", "es-419")
+    expected_language = (
+        channel_config.get("seo", {}).get("language")
+        or channel_config.get("audience", {}).get("language")
+        or "es-ES"
+    )
     language = seo.get("language")
     if language != expected_language:
-        result.errors.append(f"language must be '{expected_language}' (Latin American Spanish), got '{language}'.")
+        result.errors.append(
+            f"language must be '{expected_language}' from channel_config.seo.language, got '{language}'."
+        )
 
     seo_config = channel_config.get("seo", {})
     result.merge(_validate_tags(seo.get("tags"), seo_config.get("min_tags", 5), seo_config.get("max_tags", 8)))
     result.merge(_validate_forbidden_positioning(seo, channel_config))
+    result.merge(_validate_locale_style(seo, channel_config))
+    return result
+
+
+_PLACEHOLDER_SOCIAL_MARKERS = (
+    "redes adicionales",
+    "no proporcionadas",
+    "no proporcionados",
+    "not provided",
+    "sin enlaces",
+    "social links not provided",
+)
+
+
+def _validate_locale_style(seo: dict[str, Any], channel_config: dict[str, Any]) -> ValidationResult:
+    """Block placeholder missing-resource text and warn about locale lexical mismatches."""
+    result = ValidationResult()
+    locale_style = channel_config.get("locale_style") or {}
+    lexical = locale_style.get("lexical_preferences") or {}
+    avoid_terms = [str(term).strip().lower() for term in (lexical.get("avoid") or []) if str(term).strip()]
+    expected_language = (
+        channel_config.get("seo", {}).get("language")
+        or channel_config.get("audience", {}).get("language")
+        or "es-ES"
+    )
+
+    scan_fields: list[tuple[str, str]] = []
+    for field in ("title", "description", "thumbnail_text", "suggested_pinned_comments"):
+        value = seo.get(field)
+        if isinstance(value, str) and value:
+            scan_fields.append((field, value))
+    tags = seo.get("tags")
+    if isinstance(tags, list):
+        joined_tags = " ".join(t for t in tags if isinstance(t, str))
+        if joined_tags:
+            scan_fields.append(("tags", joined_tags))
+
+    # Block placeholder social-link text outright.
+    for field, value in scan_fields:
+        lowered = value.lower()
+        for marker in _PLACEHOLDER_SOCIAL_MARKERS:
+            if marker in lowered:
+                result.errors.append(
+                    f"SEO {field} contains placeholder social-link text ({marker!r}). "
+                    "Remove missing social links instead of mentioning them."
+                )
+                break
+
+    # Lexical warnings only when configured language is es-ES (Spain-first) — keeps it gentle for other channels.
+    if expected_language == "es-ES" and avoid_terms:
+        for field, value in scan_fields:
+            lowered = value.lower()
+            hits = [term for term in avoid_terms if term in lowered]
+            for term in hits:
+                # Forbidden positioning is reported as an error elsewhere; downgrade to warning here to avoid double-counting.
+                result.warnings.append(
+                    f"SEO {field} uses '{term}', which is on the locale avoid list for {expected_language}."
+                )
     return result
 
 

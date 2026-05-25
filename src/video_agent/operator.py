@@ -344,6 +344,46 @@ def _normalize_seo_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
     return parsed
 
 
+def _locale_guidance(channel_config: dict[str, Any]) -> dict[str, Any]:
+    """Resolve locale/language/lexical preferences from channel config.
+
+    Resolution order for language: seo.language → audience.language → es-ES (default).
+    target_locale defaults to ``Spain`` when language is es-ES, else ``Latin America``.
+    """
+    audience = (channel_config or {}).get("audience") or {}
+    seo_cfg = (channel_config or {}).get("seo") or {}
+    locale_style = (channel_config or {}).get("locale_style") or {}
+    language = str(seo_cfg.get("language") or audience.get("language") or "es-ES")
+    default_locale = "Spain" if language == "es-ES" else "Latin America"
+    target_locale = str(locale_style.get("target_locale") or default_locale)
+    lexical = locale_style.get("lexical_preferences") or {}
+    prefer = list(lexical.get("prefer") or [])
+    avoid = list(lexical.get("avoid") or [])
+    return {
+        "language": language,
+        "target_locale": target_locale,
+        "prefer": prefer,
+        "avoid": avoid,
+    }
+
+
+def _locale_block_lines(channel_config: dict[str, Any], *, header: str = "LOCALE AND LANGUAGE RULES (MANDATORY):") -> list[str]:
+    """Return prompt lines describing locale-specific writing rules from channel config."""
+    locale = _locale_guidance(channel_config)
+    lines = [
+        header,
+        f"• Write in Spanish for {locale['target_locale']}, language code {locale['language']}.",
+        f"• Use a natural {locale['target_locale']}-first tone for adults 45+.",
+    ]
+    if locale["prefer"]:
+        lines.append("• Prefer these terms when natural: " + ", ".join(locale["prefer"]) + ".")
+    if locale["avoid"]:
+        lines.append("• Avoid these terms: " + ", ".join(locale["avoid"]) + ".")
+    lines.append("• Never use forbidden age-positioning terms from channel_config.positioning.forbidden_phrases.")
+    lines.append("• Avoid calling the audience senior, elderly, ancianos, tercera edad, abuelos, or adultos mayores.")
+    return lines
+
+
 def _chatgpt_script_prompt(channel_config: dict[str, Any], idea: dict[str, Any]) -> str:
     cf = channel_config.get("content_format", {})
     target_sec = cf.get("target_duration_sec", 840)
@@ -388,6 +428,8 @@ def _chatgpt_script_prompt(channel_config: dict[str, Any], idea: dict[str, Any])
             "• Do NOT repeat phrases like 'hazlo simple y con calma' or close variants more than once.",
             "• Each section narration_text must end differently (different verb + image + rhythm).",
             "• Keep tone warm and natural, but avoid formulaic copy-paste cadence.",
+            "",
+            *_locale_block_lines(channel_config),
             "",
             "Channel config:",
             _json_block(channel_config),
@@ -478,6 +520,11 @@ def _chatgpt_scenes_prompt(
         "- Python will downgrade unsafe layouts; do not invent overlay facts that are not supported by the scene text.",
         "- qa.verdict: must be PENDING_CLAUDE_QA — never mark your own scenes as PASS",
         "",
+        *_locale_block_lines(channel_config, header="LOCALE RULES:"),
+        "• All Spanish scene fields (narration, caption, on_screen_text, layout_payload) must use the configured language.",
+        "• on_screen_text must sound natural in the configured locale and remain 2-4 words.",
+        "• visual_prompt must remain English (stock search/generation works better in English).",
+        "",
     ]
     
     if qa_feedback:
@@ -552,6 +599,11 @@ def _chatgpt_scenes_plan_prompt(channel_config: dict[str, Any], script: dict[str
             "- final batch must include the final scene.",
             "- Use exactly one JSON object; no markdown fences.",
             "",
+            *_locale_block_lines(channel_config, header="Locale rules:"),
+            "- Spanish text fields must use the configured language for the configured locale.",
+            "- Prefer Spain-native terms from channel_config.locale_style.lexical_preferences.prefer.",
+            "- Avoid terms from channel_config.locale_style.lexical_preferences.avoid.",
+            "",
             "Channel config:",
             _json_block(channel_config),
             "",
@@ -618,6 +670,12 @@ def _chatgpt_scenes_batch_prompt(
         "- Every non-subtitle layout must include enough layout_payload for rendering.",
         "- Do not invent overlay facts that are not supported by narration/caption/on_screen_text.",
         "- Do not return markdown or more than one JSON object.",
+        "",
+        *_locale_block_lines(channel_config, header="Locale rules:"),
+        "- Spanish text fields must use the configured language for the configured locale.",
+        "- Prefer terms from channel_config.locale_style.lexical_preferences.prefer.",
+        "- Avoid terms from channel_config.locale_style.lexical_preferences.avoid.",
+        "- visual_prompt must stay English regardless of locale.",
         "",
     ]
     if previous_batch_summary:
@@ -689,6 +747,14 @@ def _claude_scenes_qa_batch_prompt(
 
 
 def _chatgpt_seo_prompt(channel_config: dict[str, Any], script: dict[str, Any], scenes: dict[str, Any]) -> str:
+    locale = _locale_guidance(channel_config)
+    seo_language = locale["language"]
+    is_spain = seo_language == "es-ES"
+    tags_line = (
+        "- tags: 5-8 concise Spain-first Spanish wellness search terms"
+        if is_spain
+        else "- tags: 5-8 concise Spanish wellness search terms matching the configured audience locale"
+    )
     return "\n".join(
         [
             "You are exporting an SEO artifact as a JSON file for a YouTube channel pipeline.",
@@ -715,15 +781,30 @@ def _chatgpt_seo_prompt(channel_config: dict[str, Any], script: dict[str, Any], 
             "- description: YouTube video description in Spanish. It MUST follow this Golden Structure (structured into 6 distinct sections/paragraphs separated by blank lines):",
             "  1. Section 1 (Hook & SEO): 2-3 short sentences. Start with the primary keyword within the first 25 characters (e.g. 'Si después de los 45...').",
             "  2. Section 2 (Detailed Summary): 2-3 short paragraphs detailing what the video covers and what the viewer will learn, incorporating secondary/LSI keywords naturally.",
-            "  3. Section 3 (Timestamps): A list of timestamps for key parts/scenes in 'mm:ss - Section Title' format (derive these from the approved scenes narration and durations). IMPORTANT: Do not include any primary or external links in this section.",
-            "  4. Section 4 (CTA & Subscription Link): A call-to-action asking viewers to subscribe, accompanied by the subscription link 'https://www.youtube.com/channel/UCKUswqsAaLsEkcsgzTuKAmw?sub_confirmation=1' and other social links.",
+            "  3. Section 3 (Timestamps): A list of timestamps for key parts/scenes in 'MM:SS - Section title' format (derive these from the approved scenes narration and durations).",
+            "    - Timestamps MUST be one timestamp per line, never combined on a single line.",
+            "    - Each timestamp line MUST use 'MM:SS - Section title' exactly (two-digit minutes, two-digit seconds, dash with spaces).",
+            "    - IMPORTANT: Do not include any primary or external links in this section.",
+            "  4. Section 4 (CTA & Subscription Link): A call-to-action asking viewers to subscribe, accompanied by the subscription link 'https://www.youtube.com/channel/UCKUswqsAaLsEkcsgzTuKAmw?sub_confirmation=1'. Do NOT mention social links unless they are explicitly provided in channel_config.upload.social_links or channel_config.channel.social_links. Never write placeholder text such as 'Redes adicionales: no proporcionadas', 'no proporcionadas', 'not provided', or 'sin enlaces'.",
             "  5. Section 5 (Channel Info, Disclaimer & AI Disclosure): A short blurb about the channel's mission (Vida Plena 45+), the medical disclaimer (e.g., 'Aviso: El contenido es de carácter informativo y no sustituye la opinión médica.'), and the AI disclosure statement (disclosing that the video uses AI voice/visual assist).",
             "  6. Section 6 (Hashtags): 3-5 relevant hashtags at the very bottom (e.g., #vidasana #bienestar45).",
             "- suggested_pinned_comments: a single suggested pinned comment in Spanish (containing warm/engaging emojis) that combines two strategies: start with an engaging question to boost audience interaction (e.g. asking for opinions or experiences), and follow with a clear call-to-action to subscribe to the channel with the exact link: https://www.youtube.com/channel/UCKUswqsAaLsEkcsgzTuKAmw?sub_confirmation=1",
-            "- language: must be es-419",
-            "- tags: 5-8 concise Spanish/LatAm wellness search terms",
+            f"- language: must be {seo_language}",
+            tags_line,
             "- ai_disclosure: must be true",
             "- thumbnail_path: leave as empty string ''",
+            "",
+            "SEO LOCALE RULES:",
+            f"• Optimize title, description, tags, and pinned comment for {locale['target_locale']}-first Spanish ({seo_language}).",
+            "• Prefer 'móvil' over 'celular', 'ordenador' over 'computadora', 'por la tarde' over LatAm phrasing when natural." if is_spain else "• Use vocabulary natural to the configured audience locale.",
+            "• Use 'personas de más de 45 años' or 'adultos 45+'; avoid 'adultos mayores', 'tercera edad', 'ancianos'.",
+            "• Do not use LatAm label text like 'Spanish/LatAm' in output.",
+            "• For thumbnail_text, use 2-5 words, all caps, Spain-natural Spanish, strong but not exaggerated." if is_spain else "• For thumbnail_text, use 2-5 words, all caps, natural Spanish for the configured locale, strong but not exaggerated.",
+            "• Title and thumbnail_text must share the same pain angle.",
+            "• Avoid medical certainty claims. Use 'puede ayudarte', 'hábitos sencillos', 'rutina realista'.",
+            "",
+            "MISSING-RESOURCE RULES (MANDATORY):",
+            "Never mention missing resources. If social links, website, Instagram, Facebook, or other links are not explicitly provided in channel_config, omit them entirely. Do not write placeholders like 'no proporcionadas', 'not provided', 'sin enlaces', or 'redes adicionales'.",
             "",
             "Channel config:",
             _json_block(channel_config),
@@ -749,8 +830,34 @@ def _chatgpt_seo_prompt(channel_config: dict[str, Any], script: dict[str, Any], 
     )
 
 
-def _claude_qa_prompt(artifact_name: str, artifact: dict[str, Any] | None) -> str:
+def _claude_qa_prompt(
+    artifact_name: str,
+    artifact: dict[str, Any] | None,
+    channel_config: dict[str, Any] | None = None,
+) -> str:
     artifact_text = _json_block(artifact) if artifact is not None else "<paste ChatGPT JSON artifact here>"
+    locale = _locale_guidance(channel_config or {})
+    locale_qa_lines = [
+        "",
+        "════════════════════════════════════════",
+        "LOCALE QA (mandatory when channel_config is available)",
+        "════════════════════════════════════════",
+        "• Check that the artifact uses the configured language from channel_config.seo.language or channel_config.audience.language.",
+        f"• For this channel, expected language is {locale['language']} unless config says otherwise.",
+        f"• Expected target locale: {locale['target_locale']}.",
+    ]
+    if locale["avoid"]:
+        locale_qa_lines.append(
+            "• Flag locale lexical mismatches if these terms appear repeatedly when a configured-locale equivalent is expected: "
+            + ", ".join(locale["avoid"])
+            + "."
+        )
+    locale_qa_lines.append(
+        "• Flag forbidden age-positioning terms from channel_config.positioning.forbidden_phrases (senior, ancianos, tercera edad, abuelos, adultos mayores, abuelitos)."
+    )
+    locale_qa_lines.append(
+        "• Flag placeholder missing-resource text such as 'no proporcionadas', 'redes adicionales', 'not provided', or 'sin enlaces' in any SEO field."
+    )
     return "\n".join(
         [
             f"You are QA reviewer for the {artifact_name.upper()} artifact of a Spanish-language YouTube health channel.",
@@ -758,6 +865,7 @@ def _claude_qa_prompt(artifact_name: str, artifact: dict[str, Any] | None) -> st
             "⚠️ OUTPUT RULES:",
             "• Return exactly ONE raw JSON object. No markdown. No commentary.",
             "• Start with { and end with }.",
+            *locale_qa_lines,
             "",
             "═══════════════════════════════════════════",
             "MANDATORY CHECK 1 — YouTube Policy & Terms",
@@ -792,7 +900,7 @@ def _claude_qa_prompt(artifact_name: str, artifact: dict[str, Any] | None) -> st
             "MANDATORY CHECK 2 — Schema & Content Quality",
             "════════════════════════════════════════",
             "• Schema fit: all required fields present, correct types, no nulls where strings expected",
-            "• Channel fit: content matches es-419 Spanish health channel for adults 45+",
+            f"• Channel fit: content matches {locale['language']} Spanish health channel ({locale['target_locale']}-first) for adults 45+",
             "• Safety: no specific medical diagnoses, no supplement promotion, no miracle cures",
             "• Clarity: language is natural, readable, appropriate pace",
             f"• Duration accuracy (for scenes): total_duration_sec must match sum of scene durations",
@@ -857,7 +965,7 @@ def write_operator_prompts(
         if current_stage == "script":
             paths_and_text = [
                 (chatgpt_dir / "script_prompt.md", _chatgpt_script_prompt(channel_config, idea)),
-                (claude_dir / "script_qa_prompt.md", _claude_qa_prompt("script", script)),
+                (claude_dir / "script_qa_prompt.md", _claude_qa_prompt("script", script, channel_config)),
             ]
         elif current_stage == "scenes":
             if script is None:
@@ -865,7 +973,7 @@ def write_operator_prompts(
             qa_feedback = get_scenes_qa_feedback(job_dir)
             paths_and_text = [
                 (chatgpt_dir / "scenes_prompt.md", _chatgpt_scenes_prompt(channel_config, script, qa_feedback=qa_feedback)),
-                (claude_dir / "scenes_qa_prompt.md", _claude_qa_prompt("scenes", scenes)),
+                (claude_dir / "scenes_qa_prompt.md", _claude_qa_prompt("scenes", scenes, channel_config)),
             ]
         elif current_stage == "seo":
             if script is None:
@@ -875,7 +983,7 @@ def write_operator_prompts(
             seo = _read_optional_json(job_dir / "seo.json")
             paths_and_text = [
                 (chatgpt_dir / "seo_prompt.md", _chatgpt_seo_prompt(channel_config, script, scenes)),
-                (claude_dir / "seo_qa_prompt.md", _claude_qa_prompt("seo", seo)),
+                (claude_dir / "seo_qa_prompt.md", _claude_qa_prompt("seo", seo, channel_config)),
             ]
         else:
             raise ValueError(f"Unsupported operator prompt stage: {current_stage}")

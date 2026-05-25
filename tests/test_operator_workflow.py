@@ -279,7 +279,8 @@ def test_promote_operator_artifact_rejects_invalid_seo_contract(tmp_path):
         )
 
     message = str(excinfo.value)
-    assert "language must be 'es-419'" in message
+    assert "language must be 'es-ES'" in message
+    assert "Latin American Spanish" not in message
     assert "Too many tags" in message
     assert "Forbidden positioning" in message
     assert not (tmp_path / "operator-job/seo.json").exists()

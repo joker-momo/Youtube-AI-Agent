@@ -594,13 +594,15 @@
     font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
     color: #475569;
   }
-  .channel-video-row .cv-views {
+  .channel-video-row .cv-views,
+  .channel-video-row .cv-rating {
     display: inline-flex;
     align-items: center;
     gap: 4px;
     font-weight: 600;
     color: #334155;
   }
+  .channel-video-row .cv-rating { color: #b45309; }
   .channel-video-row .cv-date { color: #64748b; }
   .channel-video-row .cv-dot { color: #cbd5e1; margin: 0 4px; }
   /* ---- end Channel Videos rows ---- */
@@ -1010,19 +1012,24 @@ function fmtSize(n) {
   return (n / 1024 / 1024).toFixed(1) + 'MB';
 }
 
-function fmtTime(ts) {
+function _pad2(n) { return n < 10 ? '0' + n : String(n); }
+
+function fmtDate(ts) {
+  // Always render dates as dd/MM/yyyy regardless of browser locale.
+  // The UI ships across LATAM/EU/Asia operator machines and inconsistent
+  // ordering between mm/dd/yyyy and dd/mm/yyyy has been confusing.
   if (!ts) return '-';
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return ts;
-  return new Intl.DateTimeFormat(undefined, {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  }).format(d);
+  return `${_pad2(d.getDate())}/${_pad2(d.getMonth() + 1)}/${d.getFullYear()}`;
+}
+
+function fmtTime(ts) {
+  // dd/MM/yyyy HH:mm:ss, 24h. Same locale-free output as fmtDate.
+  if (!ts) return '-';
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return ts;
+  return `${fmtDate(d)} ${_pad2(d.getHours())}:${_pad2(d.getMinutes())}:${_pad2(d.getSeconds())}`;
 }
 
 function jobState(job) {
@@ -2897,13 +2904,9 @@ function toggleChannelVideosPanel() {
 }
 
 function _formatSyncedAt(iso) {
-  if (!iso) return '';
-  try {
-    const d = new Date(iso);
-    return d.toLocaleString();
-  } catch (_) {
-    return iso;
-  }
+  // Use the centralised dd/MM/yyyy formatter so every timestamp in the
+  // dashboard reads the same way regardless of the operator's locale.
+  return iso ? fmtTime(iso) : '';
 }
 
 function _renderChannelVideos(payload) {
@@ -2938,22 +2941,37 @@ function _renderChannelVideos(payload) {
   const rows = videos.map((v, idx) => {
     const vid = String(v.id || '');
     const title = String(v.title || '(untitled)');
-    const published = v.published ? new Date(v.published).toLocaleDateString() : '';
+    const published = v.published ? fmtDate(v.published) : '';
     const views = (typeof v.views === 'number' && v.views >= 0) ? _formatViews(v.views) : null;
-    const url = vid ? `https://www.youtube.com/watch?v=${encodeURIComponent(vid)}` : '#';
+    const url = (v.url && String(v.url)) || (vid ? `https://www.youtube.com/watch?v=${encodeURIComponent(vid)}` : '#');
     const thumb = vid ? `https://i.ytimg.com/vi/${encodeURIComponent(vid)}/mqdefault.jpg` : '';
+    const rating = (typeof v.rating_average === 'number' && v.rating_average > 0) ? v.rating_average : null;
+    const ratingCount = (typeof v.rating_count === 'number' && v.rating_count > 0) ? v.rating_count : null;
+    const description = (v.description && String(v.description).trim()) || '';
     const subParts = [];
-    if (views !== null) subParts.push(`<span class="cv-views" title="View count from YouTube RSS">👁 ${escapeHtml(views)} views</span>`);
+    if (views !== null) {
+      subParts.push(`<span class="cv-views" title="View count from YouTube RSS">👁 ${escapeHtml(views)} views</span>`);
+    }
+    if (rating !== null) {
+      const ratingLabel = `⭐ ${rating.toFixed(1)}` + (ratingCount ? ` (${ratingCount})` : '');
+      subParts.push(`<span class="cv-rating" title="Public star rating from YouTube RSS (0-5 scale)">${escapeHtml(ratingLabel)}</span>`);
+    }
     if (published) subParts.push(`<span class="cv-date">${escapeHtml(published)}</span>`);
     const sub = subParts.length
       ? subParts.join('<span class="cv-dot">·</span>')
       : '';
+    // Title tooltip combines the literal title and the first ~280 chars of
+    // the description so the operator can hover for context without
+    // opening YouTube.
+    const titleTooltip = description
+      ? `${title}\n\n${description.slice(0, 280)}${description.length > 280 ? '…' : ''}`
+      : title;
     return `
       <div class="channel-video-row">
         <div class="cv-idx">${idx + 1}</div>
         ${thumb ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener" class="cv-thumb"><img loading="lazy" src="${escapeHtml(thumb)}" alt=""></a>` : ''}
         <div class="cv-meta">
-          <a class="cv-title" href="${escapeHtml(url)}" target="_blank" rel="noopener" title="${escapeHtml(title)}">${escapeHtml(title)}</a>
+          <a class="cv-title" href="${escapeHtml(url)}" target="_blank" rel="noopener" title="${escapeHtml(titleTooltip)}">${escapeHtml(title)}</a>
           ${sub ? `<div class="cv-sub">${sub}</div>` : ''}
         </div>
         <a class="action-btn primary" href="${escapeHtml(url)}" target="_blank" rel="noopener">▶ Open</a>

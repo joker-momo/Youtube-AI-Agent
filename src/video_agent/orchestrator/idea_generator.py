@@ -81,23 +81,55 @@ def sync_published_videos(channel_config: dict, configs_dir: Path) -> list[dict]
         vid_id = entry.findtext("yt:videoId", namespaces=ns) or ""
         title = entry.findtext("atom:title", namespaces=ns) or ""
         published = entry.findtext("atom:published", namespaces=ns) or ""
-        # YouTube RSS exposes ``media:community/media:statistics views="N"``
-        # for each entry. The feed always carries the metric (0 for fresh
-        # uploads) so we can render it in the dashboard without a second
-        # API call.
+        updated = entry.findtext("atom:updated", namespaces=ns) or ""
+        description = entry.findtext("media:group/media:description", namespaces=ns) or ""
+        # Watch URL is exposed as the entry's <link rel="alternate"> href. We
+        # also derive a thumbnail URL from the video id (the RSS feed itself
+        # lists multiple thumbnail variants; the mqdefault.jpg form is the
+        # smallest stable one and is good enough for the dashboard).
+        link_el = entry.find("atom:link[@rel='alternate']", ns)
+        url = link_el.attrib.get("href") if link_el is not None else (
+            f"https://www.youtube.com/watch?v={vid_id}" if vid_id else ""
+        )
+        author_name = entry.findtext("atom:author/atom:name", namespaces=ns) or ""
+
+        # YouTube RSS exposes ``media:community`` per entry with:
+        #   - ``media:statistics views="N"`` — total view count
+        #   - ``media:starRating count="N" average="X" min="1" max="5"``
+        #     — like ratio (the visible 👍 count is not in RSS; average
+        #     rating is a public 0-5 scale proxy).
         views: int | None = None
         stats = entry.find("media:group/media:community/media:statistics", ns)
         if stats is not None:
             raw_views = stats.attrib.get("views")
             if raw_views and raw_views.isdigit():
                 views = int(raw_views)
+        rating_avg: float | None = None
+        rating_count: int | None = None
+        rating = entry.find("media:group/media:community/media:starRating", ns)
+        if rating is not None:
+            try:
+                rating_avg = float(rating.attrib.get("average", "0")) or None
+            except ValueError:
+                rating_avg = None
+            try:
+                rating_count = int(rating.attrib.get("count", "0")) or None
+            except ValueError:
+                rating_count = None
+
         if vid_id and title:
             videos.append(
                 {
                     "id": vid_id,
                     "title": title,
                     "published": published,
+                    "updated": updated or None,
+                    "url": url,
+                    "author": author_name or None,
+                    "description": description or None,
                     "views": views,
+                    "rating_average": rating_avg,
+                    "rating_count": rating_count,
                 }
             )
 

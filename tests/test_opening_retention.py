@@ -100,6 +100,70 @@ def test_vida_plena_channel_config_hides_channel_name_overlay():
     )
 
 
+def test_mark_render_completed_auto_advances_review(tmp_path):
+    """After render completes the review stage must auto-complete too.
+
+    Review is a cosmetic HTML write, not an external approval — leaving
+    it pending stalls the dashboard on "Review page" forever.
+    """
+    import json
+    from datetime import datetime, timezone
+
+    from video_agent.stages.render import _mark_render_stage_completed
+
+    job_dir = tmp_path / "job-auto-review"
+    job_dir.mkdir()
+    state = {
+        "job_id": "job-auto-review",
+        "channel_id": "vida-plena-45",
+        "current_stage": "render",
+        "stages": [
+            {"name": "render", "status": "in_progress", "started_at": "2025-01-01T00:00:00+00:00"},
+            {"name": "review", "status": "pending"},
+        ],
+    }
+    (job_dir / "job.json").write_text(json.dumps(state), encoding="utf-8")
+
+    # write_operator_review hits the disk; skip its dependencies by ensuring
+    # the call swallows failures (job dir has no script.json etc.).
+    _mark_render_stage_completed(job_dir)
+
+    updated = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    stage_by_name = {s["name"]: s for s in updated["stages"]}
+    assert stage_by_name["render"]["status"] == "completed"
+    assert stage_by_name["review"]["status"] == "completed"
+    # No more downstream stages → current_stage stays "review" as a
+    # readable "fully done" marker.
+    assert updated["current_stage"] == "review"
+
+
+def test_mark_render_completed_skips_review_when_already_done(tmp_path):
+    import json
+
+    from video_agent.stages.render import _mark_render_stage_completed
+
+    job_dir = tmp_path / "job-already-done"
+    job_dir.mkdir()
+    state = {
+        "job_id": "job-already-done",
+        "channel_id": "vida-plena-45",
+        "current_stage": "render",
+        "stages": [
+            {"name": "render", "status": "in_progress", "started_at": "2025-01-01T00:00:00+00:00"},
+            {"name": "review", "status": "completed", "completed_at": "2025-01-01T00:00:00+00:00"},
+        ],
+    }
+    (job_dir / "job.json").write_text(json.dumps(state), encoding="utf-8")
+
+    _mark_render_stage_completed(job_dir)
+
+    updated = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    stage_by_name = {s["name"]: s for s in updated["stages"]}
+    assert stage_by_name["render"]["status"] == "completed"
+    # Review already-completed timestamp must not be overwritten.
+    assert stage_by_name["review"]["completed_at"] == "2025-01-01T00:00:00+00:00"
+
+
 def test_channel_video_tsx_gates_channel_name_label():
     """Static smoke check: the channel-name label is wrapped in the flag."""
     src = (repo_root() / "remotion/src/ChannelVideo.tsx").read_text(encoding="utf-8")

@@ -295,10 +295,23 @@ def _run_with_progress(
 
 
 def _mark_render_stage_completed(job_dir: Path) -> None:
-    """Best-effort: mark render stage completed in job.json.
+    """Best-effort: mark render stage completed in job.json AND auto-complete
+    the trailing ``review`` stage so the dashboard does not stall on a stage
+    that is just an HTML write.
 
-    No-op when job.json missing or render stage absent. Errors swallowed —
-    state bookkeeping must never invalidate a successful render artifact.
+    ``review`` is not a gating QA step in this pipeline — ``run_review_stage``
+    only calls ``write_operator_review`` to render ``operator_review.html``.
+    Treating it like an external approval kept jobs sitting at "Review page"
+    forever after every render. We now:
+      1. Mark ``render`` completed.
+      2. Try to write ``operator_review.html`` immediately (failures swallowed;
+         the dashboard will still link the artifact next time).
+      3. Mark ``review`` completed.
+      4. Advance ``current_stage`` to whatever pending stage is left
+         (typically nothing → job is fully done).
+
+    All work is best-effort; bookkeeping must never invalidate a successful
+    render artifact on disk.
     """
     state_path = job_dir / "job.json"
     if not state_path.exists():
@@ -310,18 +323,40 @@ def _mark_render_stage_completed(job_dir: Path) -> None:
         render_stage = next((s for s in stages if s.get("name") == "render"), None)
         if render_stage is None:
             return
-        if render_stage.get("status") == "completed":
-            return
-        render_stage["status"] = "completed"
-        render_stage["completed_at"] = now
-        # Advance current_stage to the next pending stage if render was current.
-        if data.get("current_stage") == "render":
+        if render_stage.get("status") != "completed":
+            render_stage["status"] = "completed"
+            render_stage["completed_at"] = now
+
+        # Auto-complete ``review`` whenever the render finishes. The stage is
+        # purely cosmetic (writes operator_review.html), so blocking the job
+        # there had no value and produced the recurring "stuck at Review
+        # page" support thread. Write the HTML opportunistically; ignore
+        # errors so a missing artifact does not block state advance.
+        review_stage = next((s for s in stages if s.get("name") == "review"), None)
+        if review_stage is not None and review_stage.get("status") != "completed":
+            try:
+                from video_agent.operator import write_operator_review
+
+                write_operator_review(job_dir)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[render] auto-review HTML write skipped: {exc}", flush=True)
+            review_stage["status"] = "completed"
+            review_stage["completed_at"] = now
+
+        # Advance current_stage to the next pending stage that is not one of
+        # the two we just completed.
+        completed_names = {"render", "review"}
+        if data.get("current_stage") in completed_names:
             pending = next(
-                (s["name"] for s in stages if s.get("status") not in {"completed", "skipped"} and s.get("name") != "render"),
+                (
+                    s["name"]
+                    for s in stages
+                    if s.get("status") not in {"completed", "skipped"}
+                    and s.get("name") not in completed_names
+                ),
                 None,
             )
-            if pending:
-                data["current_stage"] = pending
+            data["current_stage"] = pending if pending else "review"
         atomic_write_json(state_path, data, indent=2)
     except Exception as exc:  # noqa: BLE001
         print(f"[render] state mark skipped: {exc}", flush=True)

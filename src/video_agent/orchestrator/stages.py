@@ -1187,13 +1187,28 @@ async def _request_shard_envelope(
     expected_artifact_type: str,
     expected_job_id: str,
     expected_channel_id: str,
+    max_attempts: int = 4,
 ) -> dict:
+    """Send ``prompt`` and parse the model's JSON envelope, retrying with
+    progressively stricter reminders if the envelope is missing or
+    invalid. ChatGPT occasionally drops the envelope fields and just
+    returns the inner ``data`` object — escalate the message on each
+    retry so the model fixes the shape.
+    """
     last_error: Exception | None = None
-    for _attempt in range(2):
-        raw = await session_fn([prompt])
+    last_preview = ""
+    current_prompt = prompt
+    for attempt in range(max_attempts):
+        raw = await session_fn([current_prompt])
         if not isinstance(raw, str) or not raw.strip():
             last_error = StageInputMissingError(
                 f"Empty model response for {expected_artifact_type}"
+            )
+            current_prompt = (
+                "Tu respuesta anterior fue vacía. Devuelve UN SOLO objeto JSON "
+                f"con artifact_type='{expected_artifact_type}', job_id='{expected_job_id}', "
+                f"channel_id='{expected_channel_id}', y la sección data{{...}}.\n\n"
+                + prompt
             )
             continue
         try:
@@ -1207,8 +1222,26 @@ async def _request_shard_envelope(
             return envelope
         except Exception as exc:
             last_error = exc
+            last_preview = (raw or "")[:400].replace("\n", " ")
+            current_prompt = (
+                f"ERROR: tu respuesta anterior no validó como envelope `{expected_artifact_type}`. "
+                f"Razón: {str(exc)[:300]}. "
+                "DEBES devolver EXACTAMENTE un objeto JSON con esta forma "
+                "(sin markdown, sin texto adicional):\n"
+                "```\n"
+                "{\n"
+                f'  "artifact_type": "{expected_artifact_type}",\n'
+                f'  "job_id": "{expected_job_id}",\n'
+                f'  "channel_id": "{expected_channel_id}",\n'
+                '  "data": { ... }\n'
+                "}\n"
+                "```\n"
+                "Vuelve a generar el artefacto cumpliendo este esquema.\n\n"
+                + prompt
+            )
     raise StageInputMissingError(
-        f"{expected_artifact_type} failed validation after retry: {last_error}"
+        f"{expected_artifact_type} failed validation after {max_attempts} attempts: "
+        f"{last_error}. Last preview: {last_preview!r}"
     )
 
 

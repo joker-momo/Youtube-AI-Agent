@@ -316,15 +316,47 @@ def job_timeline(
             completed_so_far += 1
         elif stage.get("status") != "completed":
             remaining_eta += eta
-        items.append(
-            {
-                **stage,
-                "inputs": inputs,
-                "outputs": outputs,
-                "actual_seconds": actual,
-                "eta_seconds": eta if stage.get("status") != "completed" else 0,
-            }
-        )
+        sub_progress = None
+        # Sharded stages emit per-batch artifacts to a directory; surface
+        # the saved/total count so the UI can show meaningful in-stage
+        # progress instead of a frozen "Scenes JSON · 0s" row.
+        if name == "scenes_promote":
+            batches_dir = job_dir / "operator" / "chatgpt" / "scenes_batches"
+            plan_path = job_dir / "operator" / "chatgpt" / "scenes_plan.json"
+            done = 0
+            total = 0
+            if batches_dir.is_dir():
+                done = sum(
+                    1
+                    for f in batches_dir.glob("scenes_batch_*.json")
+                    if f.is_file()
+                )
+            try:
+                if plan_path.exists():
+                    plan_obj = json.loads(plan_path.read_text(encoding="utf-8"))
+                    data = plan_obj.get("data") if isinstance(plan_obj, dict) else None
+                    batches = (data or {}).get("batches") if isinstance(data, dict) else None
+                    if isinstance(batches, list):
+                        total = len(batches)
+            except Exception:
+                total = 0
+            if done or total:
+                sub_progress = {
+                    "kind": "scenes_batches",
+                    "done": done,
+                    "total": total,
+                    "label": f"Batch {done}/{total or '?'} saved",
+                }
+        item = {
+            **stage,
+            "inputs": inputs,
+            "outputs": outputs,
+            "actual_seconds": actual,
+            "eta_seconds": eta if stage.get("status") != "completed" else 0,
+        }
+        if sub_progress is not None:
+            item["sub_progress"] = sub_progress
+        items.append(item)
 
     pct = (100.0 * completed_so_far / total_stages) if total_stages else 0
     approvals = load_approvals(job_dir)
@@ -781,6 +813,77 @@ def get_render_progress(
         return _json.loads(progress_path.read_text(encoding="utf-8"))
     except Exception:
         return {"percent": 0, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""}
+
+
+@router.get("/jobs/{job_id}/stages/whisper_timestamps/progress")
+def get_whisper_progress(
+    job_id: str,
+    jobs_root: Path = Depends(get_jobs_root),
+) -> dict:
+    """Latest WHISPER_STAGE_PROGRESS event from events.jsonl.
+
+    Worker emits per-stage heartbeats (synth → load → transcribe → map);
+    transcribe heartbeats include ``estimated_pct``. UI uses that for a
+    live progress bar similar to render.
+    """
+    job_dir = _safe_job_dir(jobs_root, job_id)
+    log_path = job_dir / "events.jsonl"
+    if not log_path.exists():
+        return {"percent": 0, "step": "", "elapsed_sec": 0}
+    latest_step = ""
+    latest_pct = 0.0
+    latest_elapsed = 0.0
+    latest_meta = ""
+    try:
+        for line in log_path.read_text(encoding="utf-8").splitlines():
+            if not line or "WHISPER_STAGE_PROGRESS" not in line:
+                continue
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            data = obj.get("data") or {}
+            latest_step = str(data.get("step") or latest_step)
+            if data.get("estimated_pct") is not None:
+                try:
+                    latest_pct = float(data["estimated_pct"])
+                except Exception:
+                    pass
+            if data.get("elapsed_sec") is not None:
+                try:
+                    latest_elapsed = float(data["elapsed_sec"])
+                except Exception:
+                    pass
+            # Coarse step → percent floor so non-transcribe steps still
+            # render a bar.
+            floor_map = {
+                "start": 1,
+                "synthesizing_narration_audio": 5,
+                "narration_audio_ready": 15,
+                "audio_info": 20,
+                "loading_whisper_model_tiny": 25,
+                "whisper_model_loaded": 30,
+                "transcribing_audio": 35,
+                "transcription_complete": 90,
+                "mapping_words_to_scenes": 95,
+                "scene_mapping_complete": 98,
+                "timestamps_written": 100,
+            }
+            floor = floor_map.get(latest_step, 0)
+            if floor > latest_pct:
+                latest_pct = float(floor)
+            if data.get("audio_duration_sec"):
+                latest_meta = f"audio {data['audio_duration_sec']}s"
+            elif data.get("total_words"):
+                latest_meta = f"{data['total_words']} words"
+    except Exception:
+        pass
+    return {
+        "percent": round(min(max(latest_pct, 0), 100), 1),
+        "step": latest_step,
+        "elapsed_sec": latest_elapsed,
+        "meta": latest_meta,
+    }
 
 
 @router.get("/jobs/{job_id}/stages/shorts_render/progress")
@@ -1384,6 +1487,46 @@ async def post_generate_ideas(
         if kw_data:
             used_fallback_keywords.add(normalize_keyword(kw_data.get("keyword", "")))
             enriched.update(keyword_score_payload(kw_data, target_kw, summary, match_source))
+        # Re-score the idea using its richer title_seed (multi-word, intent
+        # verbs) instead of the bare vidIQ keyword. The keyword-discovery
+        # phase scores a 1-2 word vidIQ term that almost always lands in
+        # rejected_keywords (intent_strength=25). The ChatGPT-fleshed idea
+        # title carries the real intent signal — re-scoring against the
+        # title reflects the actual quality the user judges in the UI.
+        from video_agent.orchestrator.idea_generator import (
+            score_intent_strength as _intent_fn,
+            score_audience_fit as _aud_fn,
+            score_content_fit as _content_fn,
+            calculate_final_score as _final_fn,
+            assign_bucket as _bucket_fn,
+            merge_keyword_channel_config as _merge_cfg,
+        )
+        title_for_scoring = (
+            enriched.get("title_seed") or enriched.get("topic") or target_kw
+        )
+        if title_for_scoring:
+            cfg = _merge_cfg(_read_yaml(channel_path))
+            new_intent = _intent_fn(title_for_scoring)
+            new_audience = _aud_fn(title_for_scoring, cfg)
+            new_content = _content_fn(title_for_scoring, cfg)
+            scoring = {
+                "keyword": title_for_scoring,
+                "vidiq_score": enriched.get("vidiq_score"),
+                "audience_fit": max(enriched.get("audience_fit") or 0, new_audience),
+                "intent_strength": max(enriched.get("intent_strength") or 0, new_intent),
+                "content_fit": max(enriched.get("content_fit") or 0, new_content),
+                "language_fit": enriched.get("language_fit") or 100,
+                "serp_opportunity": enriched.get("serp_opportunity") or 50,
+                "notes": [],
+                "rejection_reasons": [],
+            }
+            _final_fn(scoring)
+            new_bucket = _bucket_fn(scoring)
+            enriched["intent_strength"] = scoring["intent_strength"]
+            enriched["audience_fit"] = scoring["audience_fit"]
+            enriched["content_fit"] = scoring["content_fit"]
+            enriched["keyword_final_score"] = scoring["final_score"]
+            enriched["bucket"] = new_bucket
         # Duplicate check against published channel videos
         dup = find_duplicate(enriched, published)
         enriched["is_duplicate"] = dup is not None

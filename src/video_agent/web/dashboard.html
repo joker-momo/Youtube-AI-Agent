@@ -1543,6 +1543,8 @@ function renderLogsTab(payload) {
 
 // Render progress polling state
 let RENDER_POLL_TIMER = null;
+let WHISPER_POLL_TIMER = null;
+let WHISPER_PROGRESS_CACHE = { pct: 0, step: '', meta: '' };
 let STAGE_DUR_TIMER = null;
 
 function parseIsoToMs(iso) {
@@ -1618,6 +1620,55 @@ function stopRenderProgressPolling() {
   if (RENDER_POLL_TIMER) { clearInterval(RENDER_POLL_TIMER); RENDER_POLL_TIMER = null; }
 }
 
+function startWhisperProgressPolling(jobId) {
+  if (WHISPER_POLL_TIMER) return;
+  WHISPER_POLL_TIMER = setInterval(async () => {
+    try {
+      const r = await fetch('/jobs/' + encodeURIComponent(jobId) + '/stages/whisper_timestamps/progress');
+      if (!r.ok) return;
+      const p = await r.json();
+      const stepLabel = ({
+        'start': 'Starting',
+        'synthesizing_narration_audio': 'Synthesizing narration audio',
+        'narration_audio_ready': 'Narration ready',
+        'audio_info': 'Reading audio info',
+        'loading_whisper_model_tiny': 'Loading Whisper model',
+        'whisper_model_loaded': 'Model loaded',
+        'transcribing_audio': 'Transcribing audio',
+        'transcribing_audio_heartbeat': 'Transcribing audio',
+        'transcription_complete': 'Transcription complete',
+        'mapping_words_to_scenes': 'Mapping words to scenes',
+        'scene_mapping_complete': 'Mapping complete',
+        'timestamps_written': 'Writing timestamps',
+      })[p.step] || p.step || '';
+      const metaParts = [];
+      if (stepLabel) metaParts.push(stepLabel);
+      if (p.elapsed_sec) metaParts.push(Math.round(p.elapsed_sec) + 's elapsed');
+      if (p.meta) metaParts.push(p.meta);
+      WHISPER_PROGRESS_CACHE = { pct: p.percent || 0, step: stepLabel, meta: metaParts.join(' · ') };
+      const bar = document.getElementById('whisper-progress-bar');
+      const pct = document.getElementById('whisper-progress-pct');
+      const meta = document.getElementById('whisper-progress-meta');
+      if (bar) bar.style.width = (p.percent || 0) + '%';
+      if (pct) pct.textContent = Math.round(p.percent || 0) + '%';
+      if (meta) meta.textContent = WHISPER_PROGRESS_CACHE.meta;
+      const lastTl = LAST_TIMELINE;
+      if (lastTl) {
+        const ws = (lastTl.stages || []).find(s => s.name === 'whisper_timestamps');
+        if (ws && ws.status !== 'in_progress') {
+          clearInterval(WHISPER_POLL_TIMER);
+          WHISPER_POLL_TIMER = null;
+          WHISPER_PROGRESS_CACHE = { pct: 0, step: '', meta: '' };
+        }
+      }
+    } catch(e) {}
+  }, 2000);
+}
+
+function stopWhisperProgressPolling() {
+  if (WHISPER_POLL_TIMER) { clearInterval(WHISPER_POLL_TIMER); WHISPER_POLL_TIMER = null; }
+}
+
 function startShortsProgressPolling(jobId) {
   if (SHORTS_POLL_TIMER) return;
   SHORTS_POLL_TIMER = setInterval(async () => {
@@ -1686,11 +1737,18 @@ function renderStep(jobId, s, idx, fallbackStartedAt = null) {
   } else {
     durHtml = '<span class="step-dur"></span>';
   }
+  // Inline sub-progress for sharded stages (e.g. scenes_promote runs 6-8
+  // ChatGPT batches; surface the saved/total count so the row doesn't sit
+  // silent for many minutes).
+  if (s.sub_progress && s.sub_progress.label && s.status === 'in_progress') {
+    durHtml += `<span class="step-substep" style="margin-left:8px;padding:2px 8px;font-size:11px;font-weight:600;background:#dbeafe;color:#1d4ed8;border-radius:10px">${escapeHtml(s.sub_progress.label)}</span>`;
+  }
 
   // Render-specific progress bar (shown when in_progress)
   // Read from RENDER_PROGRESS_CACHE — a global that survives DOM rebuilds.
   const _rpc = (s.name === 'render' && s.status === 'in_progress') ? RENDER_PROGRESS_CACHE : null;
   const _spc = (s.name === 'shorts_render' && s.status === 'in_progress') ? SHORTS_PROGRESS_CACHE : null;
+  const _wpc = (s.name === 'whisper_timestamps' && s.status === 'in_progress') ? WHISPER_PROGRESS_CACHE : null;
   
   let renderProgressHtml = '';
   if (_rpc) {
@@ -1731,6 +1789,18 @@ function renderStep(jobId, s, idx, fallbackStartedAt = null) {
       `;
     }
     renderProgressHtml += '</div>';
+  } else if (_wpc) {
+    renderProgressHtml = `
+      <div style="margin:10px 0 4px;padding:0 2px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
+          <span style="font-size:12px;color:var(--muted);font-weight:600">Whisper transcribing…</span>
+          <span id="whisper-progress-pct" style="font-size:13px;font-weight:700;color:#7c3aed">${Math.round(_wpc.pct)}%</span>
+        </div>
+        <div style="height:6px;border-radius:4px;background:var(--line-strong);overflow:hidden">
+          <div id="whisper-progress-bar" style="height:100%;width:${_wpc.pct}%;background:#7c3aed;border-radius:4px;transition:width 1s linear"></div>
+        </div>
+        <div id="whisper-progress-meta" style="margin-top:6px;font-size:11px;color:var(--muted-2)">${escapeHtml(_wpc.meta || '')}</div>
+      </div>`;
   }
 
   el.innerHTML = `
@@ -1778,6 +1848,14 @@ function renderStep(jobId, s, idx, fallbackStartedAt = null) {
     OPEN_STAGES.add('shorts_render');
   } else if (s.name === 'shorts_render' && s.status !== 'in_progress') {
     stopShortsProgressPolling();
+  }
+
+  if (s.name === 'whisper_timestamps' && s.status === 'in_progress') {
+    startWhisperProgressPolling(jobId);
+    el.classList.add('open');
+    OPEN_STAGES.add('whisper_timestamps');
+  } else if (s.name === 'whisper_timestamps' && s.status !== 'in_progress') {
+    stopWhisperProgressPolling();
   }
 
   return el;
@@ -3275,6 +3353,8 @@ function renderIdeaCard(idea, savedPath) {
       ${points ? `<ul class="idea-card-points">${points}</ul>` : ''}
       <div class="idea-card-actions">
         <button class="action-btn primary"
+          ${(finalScore == null && score == null) || idea.is_duplicate ? 'disabled' : ''}
+          title="${idea.is_duplicate ? 'Idea trùng video đã làm' : ((finalScore == null && score == null) ? 'Chưa có điểm — chờ scoring xong' : 'Tạo job từ idea này')}"
           onclick='createJobFromIdea(${safeIdea}, "${safePath}")'>+ Create Job</button>
       </div>
     </div>`;

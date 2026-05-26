@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import asyncio
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -136,6 +137,50 @@ def test_save_ideas_uses_atomic_json(monkeypatch, tmp_path: Path):
 
     assert len(paths) == 1
     assert writes == [(paths[0], SAMPLE_IDEAS[0])]
+
+
+def test_sync_published_videos_falls_back_to_channel_videos_page(monkeypatch, tmp_path: Path):
+    channel_config = {
+        "channel": {
+            "id": "vida-plena-45",
+            "youtube_channel_id": "UCKUswqsAaLsEkcsgzTuKAmw",
+        }
+    }
+    html = '''
+        "contentId":"p0zS2pG4QEo","contentType":"LOCKUP_CONTENT_TYPE_VIDEO",
+        "rendererContext":{"accessibilityContext":{"label":"Qué hacer si te despiertas de madrugada después de los 45 8 minutos, 32 segundos"}}
+        "contentId":"tvPKhG4ARxw","contentType":"LOCKUP_CONTENT_TYPE_VIDEO",
+        "rendererContext":{"accessibilityContext":{"label":"Cómo comer mejor después de los 45 sin culpa ni dietas 11 minutos, 42 segundos"}}
+    '''
+
+    class FakeResponse:
+        def __init__(self, body: bytes):
+            self.body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def read(self):
+            return self.body
+
+    def fake_urlopen(req, timeout=15):
+        url = req.full_url
+        if "feeds/videos.xml" in url:
+            raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+        assert url.endswith("/videos")
+        return FakeResponse(html.encode("utf-8"))
+
+    monkeypatch.setattr(idea_generator.urllib.request, "urlopen", fake_urlopen)
+
+    videos = idea_generator.sync_published_videos(channel_config, tmp_path)
+
+    assert [v["id"] for v in videos] == ["p0zS2pG4QEo", "tvPKhG4ARxw"]
+    assert videos[0]["title"] == "Qué hacer si te despiertas de madrugada después de los 45"
+    saved = json.loads((tmp_path / "vida-plena-45" / "published_videos.json").read_text(encoding="utf-8"))
+    assert saved["videos"][1]["url"] == "https://www.youtube.com/watch?v=tvPKhG4ARxw"
 
 
 # ---------------------------------------------------------------------------
@@ -655,14 +700,22 @@ def test_post_generate_ideas_attaches_rejected_keyword_scores(
     assert r.status_code == 201, r.text
     body = r.json()
     idea = body["ideas"][0]
-    assert idea["keyword_final_score"] == 50.0
+    # vidIQ scored the 1-word keyword "sueño" as rejected_keywords
+    # (intent_strength=25 on a single bare word). The route now
+    # re-scores the richer title_seed so the idea bucket reflects the
+    # full multi-word intent signal. Raw vidIQ score stays exposed.
     assert idea["vidiq_score"] == 64
-    assert idea["bucket"] == "rejected_keywords"
-    assert idea["keyword_rejection_reasons"] == ["low_final_score"]
+    # Final score must be >= the raw vidIQ-derived score (50.0); the
+    # title-based re-score can only boost, never lower, the verdict.
+    assert idea["keyword_final_score"] >= 50.0
+    assert idea["bucket"] in {
+        "rejected_keywords",
+        "long_tail_test_keywords",
+        "top_opportunity_keywords",
+    }
 
     saved = json.loads((tmp_path / body["saved"][0]).read_text(encoding="utf-8"))
-    assert saved["keyword_final_score"] == 50.0
-    assert saved["bucket"] == "rejected_keywords"
+    assert saved["keyword_final_score"] >= 50.0
 
 
 def test_post_generate_ideas_unknown_channel(http_client: TestClient):

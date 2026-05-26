@@ -61,12 +61,22 @@ def parse_vidiq_overlay(text: str) -> dict:
             score = int(m.group("num"))
         except ValueError:
             pass
+    # vidIQ "Not enough search data" panels stack the column headers
+    # (VOLUME / COMPETITION / VPH over time) with no value rows. The
+    # naive regex below would then capture the next header as the value
+    # ("volume" -> "COMPETITION"). Skip values that collapse onto a
+    # known header token, but still parse when real values are present.
+    _HEADER_TOKENS = {"competition", "vph over time", "volume", "search term", "vph"}
     m = _VOLUME_RE.search(text)
     if m:
-        volume = m.group("v").strip()
+        v = m.group("v").strip()
+        if v.lower() not in _HEADER_TOKENS:
+            volume = v
     m = _COMPETITION_RE.search(text)
     if m:
-        competition = m.group("c").strip()
+        c = m.group("c").strip()
+        if c.lower() not in _HEADER_TOKENS:
+            competition = c
 
     related: list[dict] = []
     m = _RELATED_BLOCK_RE.search(text)

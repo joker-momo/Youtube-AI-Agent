@@ -609,6 +609,52 @@ def _run_whisper_timestamps_stage_inline(job_dir: Path) -> Path:
         {"job_id": state.job_id, "step": "timestamps_written"},
     )
 
+    # Re-anchor the YouTube chapter timestamps in seo.json against the
+    # real scene timeline. seo_promote may have run when scenes.json was
+    # still being reworked or when ChatGPT injected timestamps stretching
+    # past actual video length (e.g. last chapter at 16:12 for an 11-min
+    # video). Idempotent — safe even if chapters are already correct.
+    try:
+        from video_agent.operator import (
+            _compute_chapter_timestamps,
+            _rewrite_description_chapters,
+        )
+        seo_path = job_dir / "seo.json"
+        scenes_path = job_dir / "scenes.json"
+        script_path = job_dir / "script.json"
+        if seo_path.exists() and scenes_path.exists():
+            seo_obj = json.loads(seo_path.read_text(encoding="utf-8"))
+            scene_doc = json.loads(scenes_path.read_text(encoding="utf-8"))
+            script_obj = (
+                json.loads(script_path.read_text(encoding="utf-8"))
+                if script_path.exists()
+                else None
+            )
+            new_chapters = _compute_chapter_timestamps(scene_doc, script_obj)
+            if new_chapters:
+                seo_obj["description"] = _rewrite_description_chapters(
+                    seo_obj.get("description", ""), new_chapters
+                )
+                from video_agent.utils.json_io import write_json as _wj
+                _wj(seo_path, seo_obj)
+                logger.log(
+                    "WHISPER_STAGE_PROGRESS",
+                    {
+                        "job_id": state.job_id,
+                        "step": "seo_chapters_resynced",
+                        "chapter_count": len(new_chapters),
+                    },
+                )
+    except Exception as exc:
+        logger.log(
+            "WHISPER_STAGE_PROGRESS",
+            {
+                "job_id": state.job_id,
+                "step": "seo_chapters_resync_failed",
+                "error": str(exc)[:200],
+            },
+        )
+
     _complete_stage(job_dir, "whisper_timestamps", output_path)
     return output_path
 
@@ -1172,10 +1218,14 @@ async def auto_scenes_stage_sharded(
     session_fn: SessionFn,
 ) -> Path:
     state = load_job(job_dir)
-    if state.current_stage != "scenes":
+    # Allow re-entry from scenes_promote so a resume after the pipeline
+    # coroutine died (app restart, container kill) can continue the batch
+    # loop instead of refusing because the "scenes" stage already completed.
+    if state.current_stage not in ("scenes", "scenes_promote"):
         raise StageInputMissingError(
             f"Cannot auto-run sharded scenes from current_stage={state.current_stage!r}"
         )
+    resume_after_scenes = state.current_stage == "scenes_promote"
     script_path = job_dir / "script.json"
     if not script_path.exists():
         raise StageInputMissingError(f"Missing {script_path}")
@@ -1189,20 +1239,25 @@ async def auto_scenes_stage_sharded(
 
     plan_prompt = _chatgpt_scenes_plan_prompt(channel_config, script)
     prompt_path = job_dir / SCENES_PROMPT_PATH
-    prompt_path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(prompt_path, plan_prompt, encoding="utf-8")
-    _complete_stage(job_dir, "scenes", prompt_path)
+    if not resume_after_scenes:
+        prompt_path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(prompt_path, plan_prompt, encoding="utf-8")
+        _complete_stage(job_dir, "scenes", prompt_path)
 
     try:
-        plan_envelope = await _request_shard_envelope(
-            session_fn=session_fn,
-            prompt=plan_prompt,
-            expected_artifact_type="scenes_plan",
-            expected_job_id=job_id,
-            expected_channel_id=channel_id,
-        )
-        validate_scenes_plan(plan_envelope)
-        save_envelope(job_dir / SCENES_PLAN_PATH, plan_envelope)
+        cached_plan_path = job_dir / SCENES_PLAN_PATH
+        if resume_after_scenes and cached_plan_path.exists():
+            plan_envelope = json.loads(cached_plan_path.read_text(encoding="utf-8"))
+        else:
+            plan_envelope = await _request_shard_envelope(
+                session_fn=session_fn,
+                prompt=plan_prompt,
+                expected_artifact_type="scenes_plan",
+                expected_job_id=job_id,
+                expected_channel_id=channel_id,
+            )
+            validate_scenes_plan(plan_envelope)
+            save_envelope(cached_plan_path, plan_envelope)
 
         batches = (plan_envelope.get("data") or {}).get("batches") or []
         if not isinstance(batches, list) or not batches:
@@ -1210,12 +1265,58 @@ async def auto_scenes_stage_sharded(
 
         batch_envelopes: list[dict] = []
         batch_total = len(batches)
+        # On resume, replay any already-saved batch envelopes from disk so
+        # the loop continues from the first un-saved batch instead of
+        # re-querying ChatGPT for batches we already have.
+        existing_batches: dict[int, dict] = {}
+        if resume_after_scenes:
+            for f in sorted((job_dir / SCENES_BATCHES_DIR).glob("scenes_batch_*.json")):
+                try:
+                    env = json.loads(f.read_text(encoding="utf-8"))
+                    idx = int(((env.get("data") or {}).get("batch_index") or 0))
+                    existing_batches[idx] = env
+                except Exception:
+                    continue
+        scenes_logger = EventLogger(job_dir / EVENT_LOG)
+        scenes_logger.log(
+            "SCENES_PROMOTE_PROGRESS",
+            {
+                "job_id": job_id,
+                "step": "plan_received",
+                "batches_total": batch_total,
+                "batches_done": 0,
+            },
+        )
         for batch in batches:
             if not isinstance(batch, dict):
                 raise ShardValidationError("Plan batch must be an object")
             batch_index = int(batch.get("batch_index") or 0)
             scene_start = str(batch.get("scene_start") or "")
             scene_end = str(batch.get("scene_end") or "")
+            # Reuse already-persisted batch on resume.
+            if batch_index in existing_batches:
+                batch_envelopes.append(existing_batches[batch_index])
+                scenes_logger.log(
+                    "SCENES_PROMOTE_PROGRESS",
+                    {
+                        "job_id": job_id,
+                        "step": "batch_reused",
+                        "batch_index": batch_index,
+                        "batches_total": batch_total,
+                        "batches_done": len(batch_envelopes),
+                    },
+                )
+                continue
+            scenes_logger.log(
+                "SCENES_PROMOTE_PROGRESS",
+                {
+                    "job_id": job_id,
+                    "step": "batch_started",
+                    "batch_index": batch_index,
+                    "batches_total": batch_total,
+                    "batches_done": len(batch_envelopes),
+                },
+            )
             batch_prompt = _chatgpt_scenes_batch_prompt(
                 channel_config,
                 script,
@@ -1239,6 +1340,16 @@ async def auto_scenes_stage_sharded(
             batch_path = job_dir / SCENES_BATCHES_DIR / f"scenes_batch_{batch_index:02d}.json"
             save_envelope(batch_path, batch_envelope)
             batch_envelopes.append(batch_envelope)
+            scenes_logger.log(
+                "SCENES_PROMOTE_PROGRESS",
+                {
+                    "job_id": job_id,
+                    "step": "batch_saved",
+                    "batch_index": batch_index,
+                    "batches_total": batch_total,
+                    "batches_done": len(batch_envelopes),
+                },
+            )
 
         merged = merge_scene_batches(
             job_id=job_id,
@@ -1719,35 +1830,52 @@ def _build_thumbnail_prompt(
     and typography are visually coherent from the start.
     """
     return (
-        f"Create a complete YouTube thumbnail image — photorealistic, 16:9 aspect ratio. "
+        f"Create a complete YouTube thumbnail image — ultra-high-resolution, "
+        f"crystal-clear photorealistic, 1920x1080 (16:9 aspect ratio), 4K quality, "
+        f"tack-sharp focus, professional DSLR photograph (85mm portrait lens look, "
+        f"shot at f/2.8, ISO 100), no motion blur, no compression artifacts, "
+        f"no JPEG haze — every pixel crisp. "
         f"Topic: '{title}'. "
         f"Channel context: {channel_description}. "
         f"\n\n"
         f"SUBJECT: A Hispanic or Latina woman aged 45-55 years old. "
         f"She is positioned in the LEFT half of the frame, face clearly visible, "
-        f"sharp focus, looking slightly toward the right (center of image). "
+        f"tack-sharp focus on the eyes (skin pores, eyelashes, fine hair strands "
+        f"all distinctly visible), looking slightly toward the right (center of image). "
         f"Her expression is emotional and expressive — conveying concern, relief, or urgency "
         f"that matches the hook text '{thumbnail_text}'. "
+        f"Skin tone natural, color-graded for warm cinematic look, no plastic / "
+        f"airbrushed / AI-smoothed appearance. "
         f"\n\n"
         f"PAIN-ANGLE ALIGNMENT: The background and subject must visually express the "
         f"same pain angle as the title, not a generic wellness portrait. If the title "
         f"mentions a plate taking energy after 45, include visual cues like plate, energy, fatigue, "
         f"uncertainty, or a simple meal decision. "
         f"\n\n"
-        f"BACKGROUND: Simple, warm-toned, slightly blurred (bokeh), "
-        f"professional photography lighting, soft and natural. "
+        f"BACKGROUND: Simple, warm-toned, professional studio lighting (key + fill + rim), "
+        f"shallow depth of field bokeh (creamy, smooth — not noisy). High dynamic range, "
+        f"natural skin tones, no banding, no posterization. "
         f"\n\n"
         f"TEXT OVERLAY — render this EXACTLY in the image: \"{thumbnail_text}\". "
         f"Placement: right half of the image, vertically centered or lower-right area. "
         f"Style: extremely bold, ALL-CAPS, very large font (occupying ~40% of image width), "
         f"white color with thick black stroke/outline (3-4px) and a strong drop shadow "
-        f"so it's readable on any background. "
+        f"so it's readable on any background. Letterforms must be razor-sharp, no jagged "
+        f"edges, no anti-alias fuzz — render at the highest typographic fidelity. "
         f"Font style similar to Impact, Anton, or Bebas Neue — punchy and attention-grabbing. "
         f"Accent color for a thin decorative underline or glow beneath the text: {accent_color}. "
         f"\n\n"
+        f"QUALITY KEYWORDS: 4K, UHD, ultra-sharp, photorealistic, hyper-detailed, "
+        f"high-resolution, professional photography, magazine cover quality, "
+        f"award-winning portrait. NEGATIVE — explicitly avoid: blurry, soft focus, "
+        f"out-of-focus subject, low-resolution, pixelated, noisy, grainy, JPEG artifacts, "
+        f"oil-painting look, illustration, cartoon, plastic-skin, over-smoothed, "
+        f"AI-generated artifacts, distorted faces, extra fingers, warped anatomy. "
+        f"\n\n"
         f"RULES: No additional text, captions, watermarks, or UI elements. "
         f"Only the subject, background, and the exact hook text \"{thumbnail_text}\". "
-        f"The final result must look like a polished professional YouTube thumbnail."
+        f"The final result must look like a polished professional YouTube thumbnail "
+        f"that holds up when zoomed in to 200%."
     )
 
 

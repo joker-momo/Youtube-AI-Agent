@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+import html
 import urllib.request
 
 try:
@@ -51,6 +52,74 @@ def _yt_rss_url(channel_id: str) -> str:
     return f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
 
 
+def _yt_videos_url(channel_id: str) -> str:
+    return f"https://www.youtube.com/channel/{channel_id}/videos"
+
+
+def _decode_json_string(value: str) -> str:
+    try:
+        return json.loads(f'"{value}"')
+    except json.JSONDecodeError:
+        return value
+
+
+def _title_from_accessibility_label(label: str) -> str:
+    label = html.unescape(_decode_json_string(label)).strip()
+    label = re.sub(
+        r"\s+\d+\s+(?:phút|minutos?|minutes?|giây|segundos?|seconds?).*$",
+        "",
+        label,
+        flags=re.IGNORECASE,
+    ).strip()
+    return label
+
+
+def _parse_channel_videos_page(raw_html: str, channel_id: str) -> list[dict]:
+    """Extract public video ids/titles from YouTube channel /videos HTML.
+
+    YouTube's RSS endpoint can return 404 even when the channel page lists
+    public videos. This fallback reads only stable public page data and keeps
+    duplicate detection working with id + title.
+    """
+    pattern = re.compile(
+        r'"(?:contentId|videoId)":"(?P<id>[A-Za-z0-9_-]{11})"'
+        r'.{0,2500}?"accessibilityContext":\{"label":"(?P<label>[^"]+)"',
+        re.DOTALL,
+    )
+    seen: set[str] = set()
+    videos: list[dict] = []
+    for match in pattern.finditer(raw_html):
+        vid_id = match.group("id")
+        if vid_id in seen:
+            continue
+        title = _title_from_accessibility_label(match.group("label"))
+        if not title or not re.search(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]", title):
+            continue
+        seen.add(vid_id)
+        videos.append(
+            {
+                "id": vid_id,
+                "title": title,
+                "published": "",
+                "updated": None,
+                "url": f"https://www.youtube.com/watch?v={vid_id}",
+                "author": channel_id,
+                "description": None,
+                "views": None,
+                "rating_average": None,
+                "rating_count": None,
+            }
+        )
+    return videos
+
+
+def _fetch_channel_page_videos(channel_id: str) -> list[dict]:
+    req = urllib.request.Request(_yt_videos_url(channel_id), headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        raw = resp.read().decode("utf-8", errors="replace")
+    return _parse_channel_videos_page(raw, channel_id)
+
+
 def sync_published_videos(channel_config: dict, configs_dir: Path) -> list[dict]:
     """Fetch published videos from YouTube RSS and save to published_videos.json.
 
@@ -68,7 +137,20 @@ def sync_published_videos(channel_config: dict, configs_dir: Path) -> list[dict]
         with urllib.request.urlopen(req, timeout=15) as resp:
             raw = resp.read()
     except Exception as exc:
-        raise ValueError(f"Failed to fetch YouTube RSS for {channel_id}: {exc}") from exc
+        videos = _fetch_channel_page_videos(channel_id)
+        if not videos:
+            raise ValueError(f"Failed to fetch YouTube RSS for {channel_id}: {exc}") from exc
+        out_path = configs_dir / ch_id / PUBLISHED_VIDEOS_FILE
+        atomic_write_json(
+            out_path,
+            {
+                "channel_id": channel_id,
+                "source": "channel_page_fallback",
+                "videos": videos,
+                "synced_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        return videos
 
     root = ET.fromstring(raw)
     ns = {
@@ -143,6 +225,7 @@ def sync_published_videos(channel_config: dict, configs_dir: Path) -> list[dict]
         out_path,
         {
             "channel_id": channel_id,
+            "source": "rss",
             "videos": videos,
             "synced_at": datetime.now(timezone.utc).isoformat(),
         },
@@ -163,16 +246,51 @@ def load_published_videos(channel_config: dict, configs_dir: Path) -> list[dict]
         return []
 
 
+# Spanish filler / structural words that show up in nearly every wellness
+# title for the 45+ niche ("Cómo dormir mejor después de los 45 cuando…").
+# Counting them as evidence of duplication caused 100% false-positives on
+# any new idea that shared the channel's positioning phrase. We strip
+# these before the overlap check.
+_TITLE_STOPWORDS: frozenset[str] = frozenset(
+    {
+        # filler verbs / connectors
+        "como", "para", "cuando", "donde", "sobre", "entre", "desde",
+        "todo", "todos", "todas", "esto", "esta", "estos", "estas",
+        "este", "ese", "esa", "esos", "esas", "otro", "otra", "otros",
+        "otras", "tanto", "tanta", "tantos", "tantas",
+        # comparatives / common adverbs
+        "menos", "mucho", "mucha", "muchos", "muchas", "poco", "poca",
+        "pocos", "pocas", "muy", "mejor", "peor", "casi", "siempre",
+        "nunca", "tambien", "ademas", "solo", "solamente",
+        # generic time / age positioning the channel reuses on every title
+        "despues", "antes", "ahora", "anos", "tiempo", "edad",
+        # channel-positioning fragments (vida plena 45+)
+        "vida", "plena",
+        # other filler nouns that don't carry semantic meaning alone
+        "manera", "forma", "modo", "tipo", "tipos", "veces", "vez",
+        "parte", "partes", "lado", "lados", "caso", "casos", "cosa",
+        "cosas", "ayuda", "ayudar", "puedes", "tener", "hacer", "hace",
+    }
+)
+
+
 def _title_tokens(text: str) -> set[str]:
-    """Lowercase, accent-strip, split to ≥4-char alpha tokens."""
+    """Lowercase, accent-strip, split to ≥4-char alpha tokens with stopwords removed."""
     norm = unicodedata.normalize("NFKD", text.lower()).encode("ascii", "ignore").decode()
-    return {w for w in re.findall(r"[a-z]{4,}", norm)}
+    tokens = {w for w in re.findall(r"[a-z]{4,}", norm)}
+    return tokens - _TITLE_STOPWORDS
 
 
 def find_duplicate(idea: dict, published: list[dict], overlap_threshold: int = 2) -> str | None:
-    """Return matching published video title if idea overlaps, else None.
+    """Return matching published video title if the idea genuinely overlaps, else None.
 
-    overlap_threshold: min number of shared significant tokens to flag as duplicate.
+    The duplicate detector used to count any shared 4+-char tokens, which
+    fired on filler words ("como", "después") that appear in every
+    Spanish wellness title for adults 45+. We now strip a curated
+    stopword list before comparison so only content tokens contribute,
+    and require ``overlap_threshold`` (default 2) shared content tokens
+    before flagging duplication. The match list is the union of the
+    idea's title_seed, topic, and target_keyword.
     """
     idea_text = " ".join([
         idea.get("title_seed", ""),
@@ -180,6 +298,8 @@ def find_duplicate(idea: dict, published: list[dict], overlap_threshold: int = 2
         idea.get("target_keyword", ""),
     ])
     idea_tokens = _title_tokens(idea_text)
+    if not idea_tokens:
+        return None
     for vid in published:
         pub_tokens = _title_tokens(vid.get("title", ""))
         shared = idea_tokens & pub_tokens

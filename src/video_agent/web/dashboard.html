@@ -1097,7 +1097,15 @@ function renderKpis(jobs) {
 function renderJobsList(jobs) {
   const root = document.getElementById('jobs-list');
   root.innerHTML = '';
-  for (const j of jobs) {
+  // Sort newest-first by created_at (fallback updated_at, then job_id) so
+  // the latest job is always at the top of the queue panel.
+  const sorted = (jobs || []).slice().sort((a, b) => {
+    const ka = a.created_at || a.updated_at || '';
+    const kb = b.created_at || b.updated_at || '';
+    if (ka !== kb) return kb.localeCompare(ka);
+    return (b.job_id || '').localeCompare(a.job_id || '');
+  });
+  for (const j of sorted) {
     const pct = j.stages_total ? (100 * j.stages_done / j.stages_total) : 0;
     const state = jobState(j);
     const fillCls = state === 'completed' ? 'completed' : (state === 'failed' ? 'failed' : '');

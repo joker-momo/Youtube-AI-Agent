@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 import shutil
 import subprocess
 import wave
@@ -12,6 +13,7 @@ from PIL import Image, ImageDraw
 from video_agent.assets.service import StockAssetService
 from video_agent.contracts import ARTIFACT_ASSETS, repo_root
 from video_agent.tts import build_tts_client, synthesize_scene_track
+from video_agent.qa.tts_report import audio_qa_report, build_tts_report
 from video_agent.utils.json_io import write_json
 
 SUPPORTED_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp")
@@ -165,12 +167,16 @@ def _mix_bgm_with_narration(
         return False
     ratio = max(3.0, min(12.0, 1.5 + duck_db * 0.7))
     pan = "pan=stereo|c0=c0|c1=c0," if stereo else ""
+    # Apply alimiter after loudnorm: hard ceiling at TP-aware level to prevent
+    # clipping when mixed peaks ride the loudness target.
+    limiter_ceiling_db = min(target_tp, -1.0)
     filter_complex = (
         f"[0:a]volume={voice_gain_db}dB[vox];"
         f"[1:a]volume={bgm_gain_db}dB,aloop=loop=-1:size=2147483647[bgmraw];"
         f"[bgmraw][vox]sidechaincompress=threshold=0.03:ratio={ratio:.2f}:attack=20:release=300:makeup=1[bgmduck];"
         f"[vox][bgmduck]amix=inputs=2:duration=first:dropout_transition=2:normalize=0,"
-        f"{pan}loudnorm=I={target_lufs}:TP={target_tp}:LRA={target_lra}[out]"
+        f"{pan}loudnorm=I={target_lufs}:TP={target_tp}:LRA={target_lra},"
+        f"alimiter=limit={limiter_ceiling_db}dB[out]"
     )
     cmd = [
         "ffmpeg",
@@ -319,6 +325,11 @@ def prepare_assets(
             # Persist per-scene durations so future re-renders (tts_cached) stay in sync.
             from video_agent.utils.json_io import write_json as _wj
             _wj(tts_durations_path, {s["id"]: s["duration_sec"] for s in scene_doc["scenes"]})
+            try:
+                report = build_tts_report(scene_doc["scenes"], audio_metadata, tts_config)
+                _wj(job_dir / "tts_report.json", report)
+            except Exception:
+                pass
         except Exception:
             # Fallback for environments without optional TTS runtime deps
             # or network/model bootstrap failures in external providers.
@@ -381,8 +392,22 @@ def prepare_assets(
                     "sample_rate": out_sr,
                     "bitrate": out_br,
                     "stereo": out_stereo,
+                    "limiter_ceiling_db": min(target_tp, -1.0),
                 },
             }
+            try:
+                br_kbps = int(re.sub(r"[^0-9]", "", str(out_br)) or 0) or None
+                qa_report = audio_qa_report(
+                    integrated_lufs=target_lufs,
+                    true_peak_dbtp=target_tp,
+                    bitrate_kbps=br_kbps,
+                    duration_sec=None,
+                    codec="aac",
+                    sample_rate=out_sr,
+                )
+                write_json(job_dir / "audio_qa.json", qa_report)
+            except Exception:
+                pass
         else:
             audio_metadata = {**audio_metadata, "mix": {"bgm_enabled": False, "error": "ffmpeg_mix_failed"}}
 

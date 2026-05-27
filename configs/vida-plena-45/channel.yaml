@@ -120,17 +120,17 @@ tts:
   provider: "kokoro"
   voice_id: "ef_dora"
   lang_code: "e"
-  speed: 0.97
+  speed: 1.03
   sample_rate: 24000
-  pace_wpm: 145
-  scene_lead_in_sec: 0.6
+  pace_wpm: 120
+  scene_lead_in_sec: 0.45
   humanize:
     enabled: true
-    pause_comma_ms: 300
-    pause_semicolon_ms: 450
-    pause_sentence_ms: 650
-    pause_paragraph_ms: 900
-    speed_jitter_pct: 3.0
+    pause_comma_ms: 230
+    pause_semicolon_ms: 340
+    pause_sentence_ms: 500
+    pause_paragraph_ms: 700
+    speed_jitter_pct: 3.5
 visuals:
   strategy: "auto"
   source_dir: "asset_library/source"
@@ -146,11 +146,11 @@ music:
   voice_gain_db: -4.5
   level_db: -24
   duck_db: 8
-  target_lufs: -13.6
-  target_tp_dbtp: 0.0
-  target_lra: 4.8
-  sample_rate: 44100
-  bitrate: "128k"
+  target_lufs: -15
+  target_tp_dbtp: -1.5
+  target_lra: 7
+  sample_rate: 48000
+  bitrate: "192k"
   stereo: true
 render:
   composition: "ChannelVideoStandard"

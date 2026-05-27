@@ -616,9 +616,18 @@ def _locale_block_lines(channel_config: dict[str, Any], *, header: str = "LOCALE
 def _chatgpt_script_prompt(channel_config: dict[str, Any], idea: dict[str, Any]) -> str:
     cf = channel_config.get("content_format", {})
     target_sec = cf.get("target_duration_sec", 840)
-    target_min = round(target_sec / 60)
     pace_wpm = channel_config.get("tts", {}).get("pace_wpm", 145)
-    total_words = round(target_sec / 60 * pace_wpm)
+    # Inflation factor: LLM historically under-produces by ~30-45%. To land the
+    # rendered video inside the 12-15 min content_format window, we ask the
+    # script for a ~20-minute target so the actual output falls back to spec.
+    script_budget_multiplier = float(
+        channel_config.get("tts", {}).get("script_word_budget_multiplier", 1.43)
+    )
+    prompt_target_sec = int(round(target_sec * script_budget_multiplier))
+    target_min = round(prompt_target_sec / 60)
+    total_words = round(prompt_target_sec / 60 * pace_wpm)
+    min_words = int(round(total_words * 0.92))
+    max_words = int(round(total_words * 1.10))
     return "\n".join(
         [
             "You are exporting a SCRIPT artifact as a JSON file for a YouTube channel pipeline.",
@@ -635,6 +644,8 @@ def _chatgpt_script_prompt(channel_config: dict[str, Any], idea: dict[str, Any])
             "- channel_id, job_id, hook, sections, narration, cta, qa",
             "- sections: array of 6-10 objects, each with: title, key_points (list), narration_text",
             f"- narration: natural Spanish for a {target_min}-minute video (~{total_words} words total)",
+            f"- ⚠️ WORD-COUNT FLOOR (MANDATORY): the combined narration across ALL sections MUST contain BETWEEN {min_words} AND {max_words} spoken Spanish words. Count every word. If you fall under {min_words}, expand the weakest sections with more concrete steps, examples, mini-stories, or sensory detail — do NOT pad with filler, slogans, or repeated phrases.",
+            f"- Each of the 6-10 sections should contribute roughly {round(total_words / 8)} ± 60 words of narration_text.",
             f"- hook: opening sentence ≤28 words. Pattern: [relatable symptom] + [implicit promise].",
             "  Example: 'Si después de los 45 te cuesta conciliar el sueño o despiertas a las 3 de la mañana, esto es exactamente para ti.'",
             "- cta: closing call-to-action sentence",
@@ -670,6 +681,46 @@ def _chatgpt_script_prompt(channel_config: dict[str, Any], idea: dict[str, Any])
             "• Do NOT repeat phrases like 'hazlo simple y con calma' or close variants more than once.",
             "• Each section narration_text must end differently (different verb + image + rhythm).",
             "• Keep tone warm and natural, but avoid formulaic copy-paste cadence.",
+            "",
+            "SPOKEN NARRATION RULES (MANDATORY):",
+            "• Write for spoken Spanish, not essay-style Spanish.",
+            "• The narration should sound like a calm coach speaking to one person.",
+            "• Use short and medium sentences.",
+            "• Prefer direct phrases such as: 'si te pasa esto', 'empieza por aquí', 'prueba esto', 'no hace falta', 'vamos paso a paso'.",
+            "• Put important emotional sentences on their own line.",
+            "• Use paragraph breaks (blank line, i.e. \\n\\n) inside narration_text to guide natural TTS pauses.",
+            "• Avoid long paragraphs with many commas.",
+            "• Avoid overly abstract or literary phrases.",
+            "• Avoid robotic repeated endings across sections.",
+            "• Keep a warm Spain-first tone for people over 45.",
+            "• Do not sound childish, slangy, or overly casual.",
+            "",
+            "TTS PROSODY RULES:",
+            "• Write narration for calm Spanish TTS.",
+            "• Use paragraph breaks before emotional or important sentences.",
+            "• Every major section should include one memorable sentence of 8–14 words on its own line.",
+            "• Avoid long chains joined by commas.",
+            "• Do not overuse exclamation marks.",
+            "• Do not use SSML tags (the TTS pipeline does not parse SSML).",
+            "• Use punctuation naturally to guide pauses.",
+            "",
+            "EMPHASIS SENTENCE RULE:",
+            "• Each section should include at most one short emphasis sentence (≤14 words), on its own line.",
+            "• The emphasis sentence must be direct and useful, not melodramatic.",
+            "• Examples: 'No tienes que demostrar nada.' / 'Empieza antes de agotarte.' / 'Tu cuerpo necesita confianza, no castigo.'",
+            "• Avoid fake emotion such as '¡Transforma tu vida para siempre!' or '¡Nunca más sufrirás!'.",
+            "",
+            "DISCLAIMER RULE:",
+            "• Do NOT create a long disclaimer scene near the beginning.",
+            "• If a disclaimer is needed in narration, use one concise sentence only.",
+            "• Preferred form: 'Este contenido es informativo; si tienes dolor, mareos o una condición médica, consulta con un profesional.'",
+            "• Put the complete medical disclaimer in the SEO description, not in the first minute of the video.",
+            "",
+            "WRITTEN-vs-SPOKEN EXAMPLES (style guide):",
+            "• AVOID: 'Para muchas personas de más de 45 años, el camino más sensato empieza con poco, bien elegido y repetido con cabeza.'",
+            "• PREFER: 'Si tienes más de 45, no hace falta empezar fuerte.\\n\\nEmpieza con poco, elige bien, y repítelo sin prisa.'",
+            "• AVOID: 'No necesitas ganar una batalla contra tu cuerpo. Necesitas construir confianza con él.'",
+            "• PREFER: 'No necesitas ganar una batalla contra tu cuerpo.\\n\\nNecesitas construir confianza con él.'",
             "",
             *_locale_block_lines(channel_config),
             "",
@@ -710,6 +761,24 @@ def get_scenes_qa_feedback(job_dir: Path) -> str | None:
     except Exception:
         pass
     return None
+
+
+_SCENE_RHYTHM_RULES = [
+    "SCENE NARRATION RHYTHM RULES (MANDATORY):",
+    "• Scene narration must sound natural when read aloud by Spanish TTS.",
+    "• Prefer 1–3 short paragraphs per scene, separated by a blank line (\\n\\n).",
+    "• Put the key emotional sentence on its own line so TTS pauses around it.",
+    "• Each scene should have ONE clear emphasis point (≤14 words, direct, useful).",
+    "• Avoid one long paragraph with many commas.",
+    "• Avoid formal essay-style connectors when a direct spoken phrase is better.",
+    "• Keep narration clear enough for people over 45 listening on mobile.",
+    "• Scene narration should usually be 35–60 spoken words; warn above 75; never exceed 90.",
+    "• Avoid melodrama: no '¡Transforma tu vida para siempre!', no '¡Nunca más sufrirás!'.",
+    "• Final CTA scene must be short: do not stuff multiple actions and channel promo into one paragraph.",
+    "DISCLAIMER RULE:",
+    "• Do NOT place a long disclaimer in early scenes.",
+    "• If narration requires a disclaimer, use ONE concise sentence such as: 'Este contenido es informativo; si tienes dolor, mareos o una condición médica, consulta con un profesional.'",
+]
 
 
 def _chatgpt_scenes_prompt(
@@ -770,8 +839,10 @@ def _chatgpt_scenes_prompt(
         "• on_screen_text must sound natural in the configured locale and remain 2-4 words.",
         "• visual_prompt must remain English (stock search/generation works better in English).",
         "",
+        *_SCENE_RHYTHM_RULES,
+        "",
     ]
-    
+
     if qa_feedback:
         prompt_parts.extend([
             "⚠️ CRITICAL REWORK FEEDBACK FROM PREVIOUS QA REVIEW:",
@@ -921,6 +992,8 @@ def _chatgpt_scenes_batch_prompt(
         "- Prefer terms from channel_config.locale_style.lexical_preferences.prefer.",
         "- Avoid terms from channel_config.locale_style.lexical_preferences.avoid.",
         "- visual_prompt must stay English regardless of locale.",
+        "",
+        *_SCENE_RHYTHM_RULES,
         "",
     ]
     if previous_batch_summary:

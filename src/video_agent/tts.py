@@ -6,6 +6,8 @@ from pathlib import Path
 import tempfile
 from typing import Any, Protocol
 
+from video_agent.qa.spoken_text import normalize_spoken_text
+
 
 class TTSClient(Protocol):
     def synthesize(self, text: str, output_path: Path, config: dict[str, Any]) -> dict[str, Any]: ...
@@ -86,35 +88,48 @@ def synthesize_scene_track(
             scene_audio: list[np.ndarray] = []
             if index > 1 and scene_lead_in_sec > 0:
                 scene_audio.append(np.zeros(int(round(sample_rate * scene_lead_in_sec)), dtype=np.float32))
-            segments = _split_segments(str(scene["narration"]))
-            if not segments:
-                segments = [(str(scene["narration"]), "")]
-            for seg_idx, (seg_text, punct) in enumerate(segments, start=1):
-                segment_path = temp_root / f"scene-{index:02d}-seg-{seg_idx:03d}.wav"
-                seg_cfg = dict(config)
-                if hcfg["enabled"]:
-                    seg_cfg["speed"] = _segment_speed(
-                        base_speed, index, seg_idx, hcfg["speed_jitter_pct"]
-                    )
-                metadata = client.synthesize(seg_text, segment_path, seg_cfg)
-                scene_rate = int(metadata.get("sample_rate") or sample_rate)
-                if scene_rate != sample_rate:
-                    raise RuntimeError(
-                        f"TTS sample-rate drift on scene {index}: expected {sample_rate}, got {scene_rate}"
-                    )
-                audio, read_rate = sf.read(segment_path, dtype="float32")
-                if read_rate != sample_rate:
-                    raise RuntimeError(
-                        f"TTS sample-rate mismatch: expected {sample_rate}, got {read_rate}"
-                    )
-                if audio.ndim > 1:
-                    audio = audio.mean(axis=1)
-                scene_audio.append(audio.astype(np.float32))
-                if hcfg["enabled"]:
-                    pause_sec = _pause_after(punct, hcfg)
-                    if pause_sec > 0:
-                        silence_frames = int(round(sample_rate * pause_sec))
-                        scene_audio.append(np.zeros(silence_frames, dtype=np.float32))
+            narration_text = normalize_spoken_text(str(scene["narration"]))
+            paragraphs = [p for p in narration_text.split("\n\n") if p.strip()]
+            if not paragraphs:
+                paragraphs = [str(scene["narration"])]
+            seg_counter = 0
+            for p_idx, paragraph in enumerate(paragraphs):
+                segments = _split_segments(paragraph)
+                if not segments:
+                    segments = [(paragraph, "")]
+                for seg_text, punct in segments:
+                    seg_counter += 1
+                    segment_path = temp_root / f"scene-{index:02d}-seg-{seg_counter:03d}.wav"
+                    seg_cfg = dict(config)
+                    if hcfg["enabled"]:
+                        seg_cfg["speed"] = _segment_speed(
+                            base_speed, index, seg_counter, hcfg["speed_jitter_pct"]
+                        )
+                    metadata = client.synthesize(seg_text, segment_path, seg_cfg)
+                    scene_rate = int(metadata.get("sample_rate") or sample_rate)
+                    if scene_rate != sample_rate:
+                        raise RuntimeError(
+                            f"TTS sample-rate drift on scene {index}: expected {sample_rate}, got {scene_rate}"
+                        )
+                    audio, read_rate = sf.read(segment_path, dtype="float32")
+                    if read_rate != sample_rate:
+                        raise RuntimeError(
+                            f"TTS sample-rate mismatch: expected {sample_rate}, got {read_rate}"
+                        )
+                    if audio.ndim > 1:
+                        audio = audio.mean(axis=1)
+                    scene_audio.append(audio.astype(np.float32))
+                    if hcfg["enabled"]:
+                        pause_sec = _pause_after(punct, hcfg)
+                        if pause_sec > 0:
+                            silence_frames = int(round(sample_rate * pause_sec))
+                            scene_audio.append(np.zeros(silence_frames, dtype=np.float32))
+                if hcfg["enabled"] and p_idx < len(paragraphs) - 1:
+                    paragraph_sec = max(0.0, hcfg["pause_paragraph_ms"] / 1000.0)
+                    if paragraph_sec > 0:
+                        scene_audio.append(
+                            np.zeros(int(round(sample_rate * paragraph_sec)), dtype=np.float32)
+                        )
             if scene_audio:
                 audio = np.concatenate(scene_audio)
             else:

@@ -1,6 +1,6 @@
 # Youtube AI Agent Project Status
 
-Last updated: 2026-05-30 (Idea-discovery & keyword-scoring spec v3 landed: safer language guardrail, full all_scored debug data, sensitive-topic safety flags, pre-save duplicate prevention, optional SERP hook)
+Last updated: 2026-05-30 (Shorts Autopilot v5 landed: sequential Shorts derived from long videos — legacy removed, planner/QA/audio-mix/vertical-render/manifest/API/UI, auto-trigger after long Review PASS)
 
 This file is the living project tracker. Update it whenever a meaningful system capability is added, changed, verified, or deferred so a new reader can quickly understand what the system does, what is being built now, and what remains.
 

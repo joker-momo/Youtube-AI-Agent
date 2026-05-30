@@ -194,3 +194,135 @@ upload:
   default_privacy: "manual_upload_only"
 budget:
   max_cost_per_video_usd: 0
+shorts:
+  enabled: true
+  autopilot:
+    enabled: true
+    trigger: "after_review_passed"
+    execution_mode: "sequential"
+    run_after_long_review_pass: true
+    allow_manual_button_for_existing_jobs: true
+    manual_button_label: "Gen Video Shorts"
+    require_user_choices: false
+    require_user_review_before_render: false
+    render_automatically: true
+    render_only_if_qa_pass: true
+    max_regeneration_attempts: 2
+    skip_if_shorts_already_exist: true
+    continue_if_one_short_fails: true
+    archive_on_force_regenerate: true
+    detect_legacy_shorts_artifacts: true
+    concurrency:
+      enabled: false
+      llm_generation: 1
+      qa: 1
+      tts: 1
+      audio_mix: 1
+      remotion_render: 1
+      manifest_write: 1
+    retries:
+      llm_generation: 2
+      qa_regeneration: 2
+      tts: 2
+      audio_mix: 1
+      render: 1
+  auto_generate:
+    enabled: true
+    default_count: 3
+    max_count: 5
+    allow_fewer_if_candidates_are_weak: true
+    require_user_choices: false
+  duration:
+    min_sec: 20
+    target_min_sec: 25
+    target_max_sec: 45
+    hard_max_sec: 60
+  render:
+    format: "short"
+    composition: "ShortVideoStandard"
+    cover_composition: "ShortCover"
+    resolution: "1080x1920"
+    fps: 30
+  source:
+    require_long_job: true
+    require_source_map: true
+    use_whisper_timestamps: true
+    allow_visual_reuse_from_long: true
+    prefer_vertical_assets: true
+  content:
+    default_formats_per_long:
+      - "pain_to_tip"
+      - "mistake_to_avoid"
+      - "mini_checklist"
+    fallback_formats:
+      - "myth_or_contradiction"
+  tts:
+    provider: "kokoro"
+    voice_id: "ef_dora"
+    speed: 1.07
+    pace_wpm: 130
+    humanize:
+      enabled: true
+      pause_comma_ms: 160
+      pause_semicolon_ms: 240
+      pause_sentence_ms: 360
+      pause_paragraph_ms: 500
+      speed_jitter_pct: 3.0
+  music:
+    enabled: true
+    source: "youtube_studio_audio_library"
+    auto_select: true
+    volume_db_below_voice: 20
+    ducking_enabled: true
+    fade_in_ms: 120
+    fade_out_ms: 450
+    require_license_metadata: true
+    allow_render_without_license_metadata: true
+  cover:
+    enabled: true
+    export_cover_jpg: true
+    cover_frame_sec: 0.3
+    text_max_words: 5
+    use_first_scene_as_cover: true
+  funnel:
+    cta_to_long_video: true
+    cta_max_words: 8
+    default_cta_without_url: "Vídeo completo en el canal."
+    default_cta_with_url: "Mira la guía completa aquí."
+    pinned_comment_template: |
+      Si quieres ver la guía completa paso a paso, mira el vídeo largo del canal 👇
+      {long_video_url}
+music_library:
+  tracks:
+    shorts_movement:
+      file: "assets/music/blue_skies_silent_partner.mp3"
+      title: "Blue Skies"
+      artist: "Silent Partner"
+      source: "YouTube Studio Audio Library"
+      mood: "soft_upbeat"
+      use_for: ["movement", "exercise", "routine"]
+      default_volume_db_below_voice: 20
+    shorts_daily_habit:
+      file: "assets/music/sunset_dream_cheel.mp3"
+      title: "Sunset Dream"
+      artist: "Cheel"
+      source: "YouTube Studio Audio Library"
+      mood: "warm_lifestyle"
+      use_for: ["food", "daily_habits", "routine", "movement_light"]
+      default_volume_db_below_voice: 22
+    shorts_sleep_stress:
+      file: "assets/music/nimbus_eveningland.mp3"
+      title: "Nimbus"
+      artist: "Eveningland"
+      source: "YouTube Studio Audio Library"
+      mood: "calm_wellness"
+      use_for: ["sleep", "stress", "calm", "mental_load"]
+      default_volume_db_below_voice: 22
+    shorts_deep_calm:
+      file: "assets/music/no6_in_my_dreams_esther_abrami.mp3"
+      title: "No.6 In My Dreams"
+      artist: "Esther Abrami"
+      source: "YouTube Studio Audio Library"
+      mood: "reflective_sleep"
+      use_for: ["sleep_deep", "reflective", "night"]
+      default_volume_db_below_voice: 18

@@ -33,12 +33,8 @@ from video_agent.notifications.telegram import (
     notify_job_failed,
     notify_stage_done,
 )
-from video_agent.orchestrator.shorts_stages import (
-    auto_shorts_script_stage,
-    auto_shorts_scenes_stage,
-    auto_shorts_tts_stage,
-    auto_shorts_render_stage,
-)
+# Legacy auto_shorts_* stages are deprecated and intentionally NOT imported.
+# Shorts are produced by the sequential Shorts Autopilot (video_agent.shorts).
 from video_agent.utils.json_io import read_yaml
 from video_agent.web.approval_flow import (
     APPROVAL_REQUIRED_STAGES,
@@ -320,8 +316,6 @@ async def _execute_run_all_locked(
             "seo",
             "seo_promote",
             "seo_qa",
-            "shorts_script",
-            "shorts_scenes",
         )
     )
     need_qa_tab = any(s in remaining for s in ("script_qa", "scenes_qa", "seo_qa"))
@@ -461,18 +455,16 @@ async def _execute_run_all_locked(
         if "review" in remaining:
             _check_stop_requested()
             await _record("review", run_review_stage(job_dir))
-        if "shorts_script" in remaining:
-            _check_stop_requested()
-            await _record("shorts_script", await auto_shorts_script_stage(job_dir, channel_path, chatgpt_fn))
-        if "shorts_scenes" in remaining:
-            _check_stop_requested()
-            await _record("shorts_scenes", await auto_shorts_scenes_stage(job_dir, channel_path, chatgpt_fn))
-        if "shorts_tts" in remaining:
-            _check_stop_requested()
-            await _record("shorts_tts", await auto_shorts_tts_stage(job_dir, channel_path, chatgpt_fn))
-        if "shorts_render" in remaining:
-            _check_stop_requested()
-            await _record("shorts_render", await auto_shorts_render_stage(job_dir, channel_path, chatgpt_fn))
+            # Emit a machine-readable long-form review verdict so the Shorts
+            # autopilot trigger (after_review_passed) has a stable PASS signal.
+            try:
+                from video_agent.shorts.review_verdict import write_review_verdict
+
+                write_review_verdict(job_dir)
+            except Exception:
+                pass
+            # Shorts autopilot auto-trigger (new jobs) is wired in the review
+            # endpoint integration; see video_agent.shorts.trigger.
     except StageInputMissingError as exc:
         state = load_job(job_dir)
         await notify_job_failed(

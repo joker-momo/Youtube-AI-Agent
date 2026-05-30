@@ -10,7 +10,14 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
-from video_agent.shorts import paths, prompts, qa, short_seo_builder, source_map
+from video_agent.shorts import (
+    paths,
+    qa,
+    short_scene_builder,
+    short_script_builder,
+    short_seo_builder,
+    source_map,
+)
 from video_agent.shorts.manifest import write_short_status
 from video_agent.storage.atomic import atomic_write_json
 
@@ -90,15 +97,12 @@ def build_short(
     for attempt in range(max_regen + 1):  # initial + N regenerations
         attempts = attempt + 1
         plan_for_prompt = {**short_plan, "source_long_job_id": long_job_dir.name}
-        script_prompt = prompts.short_script_prompt(channel_config, plan_for_prompt, {})
-        if feedback:
-            script_prompt += f"\nFIX THESE QA ISSUES FROM THE PREVIOUS ATTEMPT:\n{feedback}\n"
-        short_script = _parse(llm_fn("script", script_prompt))
-        atomic_write_json(sd / paths.SHORT_SCRIPT_FILE, short_script)
-
-        scene_prompt = prompts.short_scene_prompt(channel_config, plan_for_prompt, short_script)
-        short_scenes = _parse(llm_fn("scenes", scene_prompt))
-        atomic_write_json(sd / paths.SHORT_SCENES_FILE, short_scenes)
+        short_script = short_script_builder.build_short_script(
+            long_job_dir, plan_for_prompt, channel_config, llm_fn, feedback=feedback
+        )
+        short_scenes = short_scene_builder.build_short_scenes(
+            long_job_dir, plan_for_prompt, short_script, channel_config, llm_fn
+        )
 
         sm = source_map.build_source_map(long_job_dir, short_plan, short_script, channel_config, long_video_url)
         atomic_write_json(sd / paths.SHORT_SOURCE_MAP_FILE, sm)

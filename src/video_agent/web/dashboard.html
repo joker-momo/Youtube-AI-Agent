@@ -910,6 +910,24 @@
           <div class="ideas-grid" id="ideas-grid"></div>
         </div>
       </section>
+      <section class="ideas-section" id="shorts-section">
+        <div class="panel-head" onclick="toggleShortsPanel()">
+          <div class="panel-title">🎬 Shorts Autopilot</div>
+          <span style="font-size:12px;color:var(--muted)" id="shorts-caret">› expand</span>
+        </div>
+        <div class="ideas-body" id="shorts-body" style="display:none">
+          <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
+            Select a completed long job below, then generate Shorts. Sequential, automatic — no setup needed.
+          </div>
+          <div class="gen-actions" style="margin-bottom:8px">
+            <button class="action-btn primary" id="gen-shorts-btn" onclick="genVideoShorts(false)">Gen Video Shorts</button>
+            <button class="action-btn" onclick="refreshShorts()">↻ Refresh</button>
+            <button class="action-btn danger" onclick="genVideoShorts(true)" title="Archive existing Shorts and regenerate">⟲ Force regenerate</button>
+          </div>
+          <div id="shorts-status" style="font-size:12px;color:var(--muted);margin-bottom:6px"></div>
+          <div class="ideas-grid" id="shorts-grid"></div>
+        </div>
+      </section>
       <section class="content-grid">
         <div class="panel jobs-panel">
           <div class="panel-head">
@@ -1124,8 +1142,10 @@ function renderJobsList(jobs) {
           <div class="job-count"><b>${j.stages_done}</b>/${j.stages_total}</div>
           <button class="job-stop" data-action="stop-job" data-job="${escapeHtml(j.job_id)}" ${stopDisabled} title="${escapeHtml(stopTitle)}">Stop</button>
           <button class="job-del" data-action="delete-job" data-job="${escapeHtml(j.job_id)}" ${deleteDisabled} title="${escapeHtml(deleteTitle)}">×</button>
+          <button class="job-stop" onclick="openShortsFor('${escapeHtml(j.job_id)}')" title="Shorts Autopilot">🎬</button>
         </div>
       </div>
+      <div class="job-shorts-chip" id="shorts-chip-${escapeHtml(j.job_id)}" style="font-size:11px;color:var(--muted);margin-top:2px"></div>
       <div class="job-stage">
         <span class="state-dot ${state}"></span>
         <span>${escapeHtml(STAGE_LABEL[j.current_stage] || j.current_stage || 'pending')}</span>
@@ -2975,6 +2995,124 @@ function toggleIdeasPanel() {
   if (IDEAS_PANEL_OPEN && document.getElementById('ideas-grid').children.length === 0) {
     loadSavedIdeas();
   }
+}
+
+// ---- Shorts Autopilot panel ----
+let SHORTS_PANEL_OPEN = false;
+let SHORTS_JOB_ID = null;
+let SHORTS_POLL = null;
+
+function toggleShortsPanel() {
+  SHORTS_PANEL_OPEN = !SHORTS_PANEL_OPEN;
+  document.getElementById('shorts-body').style.display = SHORTS_PANEL_OPEN ? '' : 'none';
+  document.getElementById('shorts-caret').textContent = SHORTS_PANEL_OPEN ? '‹ collapse' : '› expand';
+  if (SHORTS_PANEL_OPEN) refreshShorts();
+}
+
+function openShortsFor(jobId) {
+  SHORTS_JOB_ID = jobId;
+  if (!SHORTS_PANEL_OPEN) toggleShortsPanel();
+  else refreshShorts();
+  document.getElementById('shorts-section').scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+
+function _shortsJob() { return SHORTS_JOB_ID || SELECTED_ID; }
+
+async function refreshShorts() {
+  const jobId = _shortsJob();
+  const statusEl = document.getElementById('shorts-status');
+  const grid = document.getElementById('shorts-grid');
+  if (!jobId) { statusEl.textContent = 'Select a job (click 🎬 on a job card).'; grid.innerHTML = ''; return; }
+  try {
+    const r = await fetch('/jobs/' + encodeURIComponent(jobId) + '/shorts');
+    if (!r.ok) { statusEl.textContent = 'No shorts info for ' + jobId; grid.innerHTML = ''; return; }
+    const data = await r.json();
+    statusEl.innerHTML = '<b>' + escapeHtml(jobId) + '</b> — Shorts: ' + escapeHtml(data.label || 'none')
+      + (data.running ? ' <span style="color:var(--red)">●</span>' : '');
+    renderShortsCards(jobId, data);
+    if (data.running && !SHORTS_POLL) {
+      SHORTS_POLL = setInterval(refreshShorts, 5000);
+    } else if (!data.running && SHORTS_POLL) {
+      clearInterval(SHORTS_POLL); SHORTS_POLL = null;
+    }
+  } catch (e) {
+    statusEl.textContent = 'Error loading shorts: ' + e;
+  }
+}
+
+function renderShortsCards(jobId, data) {
+  const grid = document.getElementById('shorts-grid');
+  const shorts = data.shorts || [];
+  if (shorts.length === 0) {
+    grid.innerHTML = '<div style="font-size:12px;color:var(--muted)">No Shorts yet. Click "Gen Video Shorts".</div>';
+    return;
+  }
+  grid.innerHTML = shorts.map(s => {
+    const sid = s.short_id;
+    const base = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent('shorts/' + sid + '/');
+    const cover = s.cover_path ? ('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(s.cover_path)) : '';
+    const video = s.video_path ? ('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(s.video_path)) : '';
+    const chipColor = s.status === 'rendered' ? '#1a7f37' : (s.status === 'needs_review' ? '#b35900' : '#666');
+    const needsReview = s.status === 'needs_review';
+    return `
+      <div class="idea-card" style="display:flex;gap:10px">
+        <div style="width:90px;height:160px;background:#111;border-radius:6px;overflow:hidden;flex:0 0 auto">
+          ${cover ? `<img src="${cover}" style="width:100%;height:100%;object-fit:cover">` : ''}
+        </div>
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600">${escapeHtml(sid)} · ${escapeHtml(s.format || '')}
+            <span style="color:${chipColor};font-weight:700">· ${escapeHtml(s.status || '')}</span></div>
+          <div style="font-size:12px;margin:4px 0">${escapeHtml(s.hook || '')}</div>
+          <div style="font-size:11px;color:var(--muted)">
+            ${s.duration_sec ? s.duration_sec + 's · ' : ''}QA: ${escapeHtml(s.qa_verdict || '-')} ·
+            Music: ${escapeHtml(s.music_track || '-')} · Kokoro ef_dora 1.07
+          </div>
+          <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px">
+            ${video ? `<a class="action-btn" href="${video}" target="_blank">▶ Play</a>
+                       <a class="action-btn" href="${video}" download>⬇ MP4</a>` : ''}
+            ${cover ? `<a class="action-btn" href="${cover}" download>⬇ Cover</a>` : ''}
+            ${needsReview
+              ? `<button class="action-btn primary" onclick="regenShort('${escapeHtml(jobId)}','${escapeHtml(sid)}')">Regenerate</button>`
+              : `<button class="action-btn" onclick="rerenderShort('${escapeHtml(jobId)}','${escapeHtml(sid)}')">Render again</button>
+                 <button class="action-btn" onclick="markShortUploaded('${escapeHtml(jobId)}','${escapeHtml(sid)}')">Mark uploaded</button>`}
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function genVideoShorts(force) {
+  const jobId = _shortsJob();
+  if (!jobId) { alert('Select a job first (click 🎬 on a job card).'); return; }
+  const btn = document.getElementById('gen-shorts-btn');
+  btn.disabled = true; btn.textContent = 'Starting…';
+  try {
+    const r = await fetch('/jobs/' + encodeURIComponent(jobId) + '/shorts/autopilot', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({force: !!force}),
+    });
+    const data = await r.json();
+    if (data.status === 'legacy_detected') {
+      if (confirm('Legacy Shorts detected. Force regenerate (archive old + rebuild)?')) return genVideoShorts(true);
+    }
+  } catch (e) { alert('Failed to start Shorts: ' + e); }
+  finally { btn.disabled = false; btn.textContent = 'Gen Video Shorts'; }
+  setTimeout(refreshShorts, 1500);
+}
+
+async function regenShort(jobId, shortId) {
+  await fetch('/jobs/' + encodeURIComponent(jobId) + '/shorts/' + encodeURIComponent(shortId) + '/regenerate', {method: 'POST'});
+  setTimeout(refreshShorts, 1500);
+}
+async function rerenderShort(jobId, shortId) {
+  await fetch('/jobs/' + encodeURIComponent(jobId) + '/shorts/' + encodeURIComponent(shortId) + '/render', {method: 'POST'});
+  setTimeout(refreshShorts, 1500);
+}
+async function markShortUploaded(jobId, shortId) {
+  const url = prompt('YouTube URL for this Short (optional):', '') || '';
+  await fetch('/jobs/' + encodeURIComponent(jobId) + '/shorts/' + encodeURIComponent(shortId) + '/uploaded', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({youtube_url: url}),
+  });
+  refreshShorts();
 }
 
 // ---- Channel Videos panel ----

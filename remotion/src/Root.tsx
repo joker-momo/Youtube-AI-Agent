@@ -2,6 +2,8 @@ import React from 'react';
 import {Composition} from 'remotion';
 import {ChannelVideo} from './ChannelVideo';
 import {Thumbnail} from './Thumbnail';
+import {ShortVideo} from './ShortVideo';
+import {ShortCover} from './ShortCover';
 import {defaultRenderProps, RenderProps} from './render-props';
 
 const calculateVideoMetadata = ({props}: {props: RenderProps}) => {
@@ -40,6 +42,25 @@ export const Root: React.FC = () => {
         fps={fps}
         width={1280}
         height={720}
+        defaultProps={defaultRenderProps}
+      />
+      <Composition
+        id="ShortVideoStandard"
+        component={ShortVideo}
+        durationInFrames={Math.round(defaultRenderProps.render.duration_sec * fps)}
+        fps={fps}
+        width={1080}
+        height={1920}
+        defaultProps={defaultRenderProps}
+        calculateMetadata={calculateVideoMetadata}
+      />
+      <Composition
+        id="ShortCover"
+        component={ShortCover}
+        durationInFrames={1}
+        fps={fps}
+        width={1080}
+        height={1920}
         defaultProps={defaultRenderProps}
       />
     </>

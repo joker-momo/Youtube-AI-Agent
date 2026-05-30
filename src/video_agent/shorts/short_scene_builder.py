@@ -54,10 +54,24 @@ def normalize_short_scenes(scenes_doc: dict, short_script: dict) -> dict[str, An
                     (short_script or {}).get("hook") or ""
                 ).strip()
             sc["narration"] = narr
+        # Seed the full long-form scene shape the render/TTS pipeline expects.
+        sc.setdefault("on_screen_text", "")
         sc.setdefault("caption", sc.get("on_screen_text", ""))
+        sc.setdefault("visual_prompt", sc.get("caption", ""))
+        sc.setdefault("layout", "short_tip")
+        sc.setdefault("layout_payload", {})
+        sc.setdefault("layout_reason", "short")
+        sc.setdefault("motion", "none")
+        sc.setdefault("asset_refs", {})
+        sc.setdefault("word_segments", [])
+        sc.setdefault("planner_warnings", [])
+        sc.setdefault("audio_offset_sec", 0.0)
+        sc.setdefault("duration_sec", 3.0)
         norm_scenes.append(sc)
 
     out["scenes"] = norm_scenes
+    if not out.get("total_duration_sec"):
+        out["total_duration_sec"] = round(sum(float(s.get("duration_sec") or 0) for s in norm_scenes), 1)
     return out
 
 

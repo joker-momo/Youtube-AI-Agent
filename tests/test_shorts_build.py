@@ -264,3 +264,18 @@ def test_normalize_short_scenes_keeps_existing_narration():
     out = short_scene_builder.normalize_short_scenes(scenes_doc, {"narration": "otra"})
     assert out["scenes"][0]["narration"] == "Ya tengo voz."
     assert out["scenes"][0]["id"] == "s1"
+
+
+def test_normalize_short_scenes_seeds_full_render_contract():
+    from video_agent.shorts import short_scene_builder
+    out = short_scene_builder.normalize_short_scenes(
+        {"scenes": [{"scene_id": "s1", "on_screen_text": "Hook", "duration_sec": 2.5}]},
+        {"narration": "Una idea."},
+    )
+    sc = out["scenes"][0]
+    for key in ("id", "narration", "on_screen_text", "caption", "visual_prompt", "layout",
+                "layout_payload", "layout_reason", "motion", "asset_refs", "word_segments",
+                "planner_warnings", "audio_offset_sec", "duration_sec"):
+        assert key in sc, key
+    assert isinstance(sc["asset_refs"], dict)
+    assert out["total_duration_sec"] > 0

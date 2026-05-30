@@ -279,3 +279,19 @@ def test_normalize_short_scenes_seeds_full_render_contract():
         assert key in sc, key
     assert isinstance(sc["asset_refs"], dict)
     assert out["total_duration_sec"] > 0
+
+
+def test_normalize_short_scenes_maps_layout_to_render_enum():
+    from video_agent.shorts import short_scene_builder
+    out = short_scene_builder.normalize_short_scenes(
+        {"scenes": [
+            {"scene_id": "s1", "layout": "short_hook", "duration_sec": 2.0},
+            {"scene_id": "s2", "layout": "short_cta", "duration_sec": 3.0},
+            {"scene_id": "s3", "layout": "short_tip", "duration_sec": 3.0},
+        ]},
+        {"narration": "Uno. Dos. Tres."},
+    )
+    valid = {"hook", "subtitle", "checklist", "warning", "quote", "cta"}
+    assert all(s["layout"] in valid for s in out["scenes"])
+    assert out["scenes"][0]["layout"] == "hook"
+    assert out["scenes"][1]["layout"] == "cta"

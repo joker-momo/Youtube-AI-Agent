@@ -20,6 +20,28 @@ def _split_sentences(text: str) -> list[str]:
     return [s.strip() for s in re.split(r"(?<=[.!?])\s+|\n+", str(text or "").strip()) if s.strip()]
 
 
+# Short-native scene layouts → long-form render layout enum
+# (render-props.schema: hook|subtitle|checklist|warning|quote|cta).
+_LAYOUT_MAP = {
+    "short_hook": "hook",
+    "short_pain": "warning",
+    "short_tip": "subtitle",
+    "short_checklist": "checklist",
+    "short_quote": "quote",
+    "short_cta": "cta",
+    "hook": "hook",
+    "warning": "warning",
+    "subtitle": "subtitle",
+    "checklist": "checklist",
+    "quote": "quote",
+    "cta": "cta",
+}
+
+
+def _map_layout(layout: str) -> str:
+    return _LAYOUT_MAP.get(str(layout or "").strip().lower(), "subtitle")
+
+
 def _chunk(seq: list, n: int) -> list[list]:
     if n <= 0:
         return []
@@ -58,7 +80,7 @@ def normalize_short_scenes(scenes_doc: dict, short_script: dict) -> dict[str, An
         sc.setdefault("on_screen_text", "")
         sc.setdefault("caption", sc.get("on_screen_text", ""))
         sc.setdefault("visual_prompt", sc.get("caption", ""))
-        sc.setdefault("layout", "short_tip")
+        sc["layout"] = _map_layout(sc.get("layout"))
         sc.setdefault("layout_payload", {})
         sc.setdefault("layout_reason", "short")
         sc.setdefault("motion", "none")

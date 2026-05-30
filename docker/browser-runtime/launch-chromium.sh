@@ -27,6 +27,27 @@ if [[ -z "$CHROME_BIN" || ! -x "$CHROME_BIN" ]]; then
   exit 1
 fi
 
+# Wait for the X server (KasmVNC :1) before launching Chromium. supervisord
+# starts kasmvnc and chromium nearly together; without this wait Chromium
+# races ahead, dies with "Missing X server", and exhausts its retry budget
+# into a FATAL state — leaving CDP 9222 down forever.
+DISPLAY_NUM="${DISPLAY#:}"
+DISPLAY_NUM="${DISPLAY_NUM%%.*}"
+X_SOCKET="/tmp/.X11-unix/X${DISPLAY_NUM:-1}"
+for attempt in $(seq 1 60); do
+  if [[ -S "$X_SOCKET" ]]; then
+    break
+  fi
+  echo "Waiting for X server at $X_SOCKET (${attempt}/60)..."
+  sleep 1
+done
+if [[ ! -S "$X_SOCKET" ]]; then
+  echo "X server $X_SOCKET not ready after 60s; aborting chromium launch" >&2
+  exit 1
+fi
+# Let the window manager attach to the fresh display before Chromium maps windows.
+sleep 1
+
 echo "Launching $CHROME_BIN"
 echo "Profile: $PROFILE_DIR"
 echo "CDP: 0.0.0.0:$CDP_PORT (internal network only)"

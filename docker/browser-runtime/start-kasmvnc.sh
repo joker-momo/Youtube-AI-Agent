@@ -11,6 +11,12 @@ VNC_KEY_FILE="${VNC_HOME}/self.key"
 
 mkdir -p "${VNC_HOME}"
 
+# Remove stale X locks/sockets left by an unclean previous shutdown. KasmVNC
+# refuses to bind :1 when these exist ("A VNC server is already running as :1"),
+# which leaves the container with no X server and crash-loops Chromium. These
+# accumulate across container stop/start cycles, so clear them on every boot.
+rm -f /tmp/.X1-lock /tmp/.X11-unix/X1 "${VNC_HOME}"/*.pid 2>/dev/null || true
+
 if [[ -z "${VNC_PASSWORD}" ]]; then
   VNC_PASSWORD="$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | base64 | tr -dc 'A-Za-z0-9' | cut -c1-20)"
   echo "KasmVNC generated password for ${VNC_USERNAME}: ${VNC_PASSWORD}"

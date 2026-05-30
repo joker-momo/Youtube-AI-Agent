@@ -463,8 +463,17 @@ async def _execute_run_all_locked(
                 write_review_verdict(job_dir)
             except Exception:
                 pass
-            # Shorts autopilot auto-trigger (new jobs) is wired in the review
-            # endpoint integration; see video_agent.shorts.trigger.
+            # Shorts autopilot auto-trigger (new jobs): only on long Review PASS
+            # and when enabled. Fire-and-forget so the long pipeline returns.
+            try:
+                from video_agent.shorts.trigger import should_run_autopilot_after_review
+
+                if should_run_autopilot_after_review(job_dir, channel_config):
+                    from video_agent.web.routes.shorts import enqueue_shorts_autopilot
+
+                    enqueue_shorts_autopilot(job_dir, channel_config, force=False, client=client)
+            except Exception:
+                pass
     except StageInputMissingError as exc:
         state = load_job(job_dir)
         await notify_job_failed(

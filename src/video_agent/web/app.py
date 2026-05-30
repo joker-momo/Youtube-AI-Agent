@@ -10,6 +10,7 @@ from video_agent.web.routes import (
     config,
     jobs,
     run,
+    shorts,
     stages,
     timeline,
     websocket,
@@ -38,7 +39,10 @@ def dashboard() -> str:
     return _dashboard()
 
 
+# shorts first: its explicit GET /jobs/{id}/shorts must beat the legacy
+# catch-all GET /jobs/{job_id}/{path:path} artifact route.
 for router_module in (
+    shorts,
     config,
     jobs,
     timeline,

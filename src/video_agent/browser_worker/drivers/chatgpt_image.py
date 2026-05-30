@@ -23,6 +23,21 @@ if TYPE_CHECKING:
 
 CHATGPT_HOME = "https://chatgpt.com/"
 
+# Single source of truth for the image-gen instruction prepended to every
+# user image prompt. Enforces Full HD landscape so the rendered 1920x1080
+# video composite never has to upscale a smaller generation.
+IMAGE_GEN_INSTRUCTION = (
+    "Generate one photorealistic image at exactly 1920x1080 pixels "
+    "(Full HD, 16:9 landscape orientation). Fill the entire 1920x1080 frame — "
+    "no borders, no padding, no commentary, no text overlays, no watermark."
+)
+
+
+def build_image_gen_prompt(prompt: str) -> str:
+    """Prepend the 1920x1080 image-gen instruction to a user prompt."""
+    return IMAGE_GEN_INSTRUCTION + "\n\n" + prompt.strip()
+
+
 PROJECTS_HEADER_SELECTOR = "button:has-text('Projects')"
 NEW_PROJECT_BUTTON_SELECTOR = "button:has-text('New project')"
 PROJECT_NAME_INPUT_SELECTOR = "input[name='projectName']"
@@ -311,10 +326,7 @@ class ChatGPTImageDriver:
             # Prepend an explicit "Generate one image" instruction; ChatGPT
             # interprets it as image-gen tool invocation when a project chat
             # is fresh.
-            full_prompt = (
-                "Generate one photorealistic image (16:9), no commentary, no "
-                "text overlays, no watermark.\n\n" + prompt.strip()
-            )
+            full_prompt = build_image_gen_prompt(prompt)
             await human_type(self.page, full_prompt)
             await human_pause(self.page, min_ms=500, max_ms=1200)
             await self._click_send()
@@ -370,10 +382,7 @@ class ChatGPTImageDriver:
                     raise BrowserDriverError(f"Empty prompt at index {i}")
 
                 await self._focus_composer()
-                full_prompt = (
-                    "Generate one photorealistic image (16:9), no commentary, no "
-                    "text overlays, no watermark.\n\n" + prompt.strip()
-                )
+                full_prompt = build_image_gen_prompt(prompt)
                 await human_type(self.page, full_prompt)
                 await human_pause(self.page, min_ms=500, max_ms=1200)
                 await self._click_send()

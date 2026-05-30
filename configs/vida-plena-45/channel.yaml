@@ -49,6 +49,18 @@ niche:
     - "specific_medical_diagnoses"
     - "supplement_promotion"
     - "miracle_cures"
+keyword_research:
+  # Spain-first, 45+ concrete seeds used when Google Trends has no niche match.
+  # Falls back to generic sub_niche keywords only if this list is absent.
+  fallback_seeds:
+    - "dormir mejor después de los 45"
+    - "ejercicio suave después de los 45"
+    - "cena ligera después de los 45"
+    - "mente acelerada después de los 45"
+    - "despertar cansado después de los 45"
+    - "movimiento suave después de los 45"
+    - "cansancio después de los 45"
+    - "calma mental después de los 45"
 brand_voice_path: "configs/vida-plena-45/brand-voice.md"
 style_dna:
   path: "configs/vida-plena-45/style-dna.json"

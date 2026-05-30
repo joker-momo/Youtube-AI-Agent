@@ -1443,6 +1443,17 @@ async def post_generate_ideas(
     if not 1 <= req.count <= 50:
         raise HTTPException(status_code=422, detail="count must be between 1 and 50")
 
+    # Load cached published videos first — feed their titles into the idea
+    # prompt so ChatGPT avoids already-published angles, and reuse them below
+    # for duplicate detection.
+    from video_agent.orchestrator.idea_generator import (
+        MAX_PUBLISHED_TITLES_IN_IDEA_PROMPT,
+    )
+    from video_agent.utils.json_io import read_yaml as _read_yaml
+    published = load_published_videos(_read_yaml(channel_path), repo_root() / "configs")
+    published_titles = [v["title"] for v in published if v.get("title")]
+    published_titles = published_titles[:MAX_PUBLISHED_TITLES_IN_IDEA_PROMPT]
+
     try:
         ideas, top_keywords, seed_source = await generate_ideas(
             channel_path=channel_path,
@@ -1451,16 +1462,12 @@ async def post_generate_ideas(
             seed_topics=req.seed_topics,
             count=req.count,
             with_metadata=True,
+            published_titles=published_titles,
         )
     except BrowserClientError as exc:
         raise _handle_browser_client_error(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-    # Attach keyword score to each idea by matching target_keyword field
-    # Load cached published videos for duplicate detection
-    from video_agent.utils.json_io import read_yaml as _read_yaml
-    published = load_published_videos(_read_yaml(channel_path), repo_root() / "configs")
 
     keywords_for_ui = flatten_keyword_result_for_ui(top_keywords)
     summary = keyword_result_summary(top_keywords)
@@ -1470,6 +1477,7 @@ async def post_generate_ideas(
         if isinstance(kw, dict) and kw.get("keyword")
     }
     ideas_with_scores = []
+    duplicate_candidates: list[dict] = []
     used_fallback_keywords: set[str] = set()
     for idx, idea in enumerate(ideas):
         enriched = dict(idea)
@@ -1499,6 +1507,7 @@ async def post_generate_ideas(
             score_content_fit as _content_fn,
             calculate_final_score as _final_fn,
             assign_bucket as _bucket_fn,
+            detect_language_fit as _language_fn,
             merge_keyword_channel_config as _merge_cfg,
         )
         title_for_scoring = (
@@ -1509,15 +1518,27 @@ async def post_generate_ideas(
             new_intent = _intent_fn(title_for_scoring)
             new_audience = _aud_fn(title_for_scoring, cfg)
             new_content = _content_fn(title_for_scoring, cfg)
+            # Re-check language at the title level — a ChatGPT title in the
+            # wrong locale/language must be caught even if the seed keyword
+            # scored as clean Spanish.
+            new_language, language_notes = _language_fn(
+                title_for_scoring, cfg["target_language"]
+            )
+            existing_notes = list(
+                enriched.get("keyword_notes")
+                or enriched.get("notes")
+                or []
+            )
+            combined_notes = sorted(set(existing_notes + list(language_notes)))
             scoring = {
                 "keyword": title_for_scoring,
                 "vidiq_score": enriched.get("vidiq_score"),
                 "audience_fit": max(enriched.get("audience_fit") or 0, new_audience),
                 "intent_strength": max(enriched.get("intent_strength") or 0, new_intent),
                 "content_fit": max(enriched.get("content_fit") or 0, new_content),
-                "language_fit": enriched.get("language_fit") or 100,
+                "language_fit": new_language,
                 "serp_opportunity": enriched.get("serp_opportunity") or 50,
-                "notes": [],
+                "notes": combined_notes,
                 "rejection_reasons": [],
             }
             _final_fn(scoring)
@@ -1525,12 +1546,24 @@ async def post_generate_ideas(
             enriched["intent_strength"] = scoring["intent_strength"]
             enriched["audience_fit"] = scoring["audience_fit"]
             enriched["content_fit"] = scoring["content_fit"]
+            enriched["language_fit"] = scoring["language_fit"]
             enriched["keyword_final_score"] = scoring["final_score"]
             enriched["bucket"] = new_bucket
-        # Duplicate check against published channel videos
+            # Append language notes without overwriting existing keyword notes.
+            enriched["keyword_notes"] = sorted(set(
+                list(enriched.get("keyword_notes") or [])
+                + list(scoring.get("notes") or [])
+            ))
+        # Duplicate check against published channel videos. Duplicates are
+        # returned separately and NOT saved as normal ideas.
         dup = find_duplicate(enriched, published)
-        enriched["is_duplicate"] = dup is not None
-        enriched["duplicate_of"] = dup
+        if dup:
+            enriched["is_duplicate"] = True
+            enriched["duplicate_of"] = dup
+            duplicate_candidates.append(enriched)
+            continue
+        enriched["is_duplicate"] = False
+        enriched["duplicate_of"] = None
         ideas_with_scores.append(enriched)
 
     paths = save_ideas(ideas_with_scores, channel_id=channel_id, out_dir=inputs_root)
@@ -1546,6 +1579,8 @@ async def post_generate_ideas(
         "seed_source": seed_source,
         "published_videos_checked": len(published),
         "saved": rel_paths,
+        "duplicate_candidates": duplicate_candidates,
+        "duplicate_count": len(duplicate_candidates),
     }
 
 

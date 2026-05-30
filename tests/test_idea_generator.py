@@ -14,20 +14,27 @@ import video_agent.orchestrator.idea_generator as idea_generator
 import video_agent.web.routes._legacy as legacy_routes
 from video_agent.orchestrator.idea_generator import (
     DEFAULT_CHANNEL_KEYWORD_CONFIG,
+    _auto_seeds_from_trends,
     _discover_top_keywords,
     _idea_gen_prompt,
+    _marker_hits,
     _select_keywords_for_prompt,
     _slug,
     assign_bucket,
     calculate_final_score,
     classify_intent_cluster,
+    dedupe_by_normalized_keyword,
     dedupe_by_normalized_keyword_and_intent,
     detect_language_fit,
+    enrich_keyword_item,
     generate_ideas,
+    merge_keyword_channel_config,
     normalize_keyword,
     parse_ideas,
     save_ideas,
     score_audience_fit,
+    score_content_fit,
+    select_by_cluster_limit,
 )
 from video_agent.web.app import flatten_keyword_result_for_ui
 from video_agent.orchestrator.browser_client import BrowserClientError
@@ -572,7 +579,9 @@ def test_post_generate_ideas_success(http_client: TestClient, tmp_path: Path):
         assert (tmp_path / rel).exists()
 
 
-def test_post_generate_ideas_returns_and_saves_v2_keyword_metadata(http_client: TestClient, tmp_path: Path):
+def test_post_generate_ideas_returns_and_saves_v2_keyword_metadata(
+    http_client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     ideas = [
         {
             **SAMPLE_IDEAS[0],
@@ -580,6 +589,9 @@ def test_post_generate_ideas_returns_and_saves_v2_keyword_metadata(http_client: 
             "title_seed": "Cómo comer mejor después de los 45 sin dietas",
         }
     ]
+    # Isolate from the channel's real published_videos.json so this scoring
+    # test does not collide with duplicate detection (Section 6).
+    monkeypatch.setattr(legacy_routes, "load_published_videos", lambda *a, **k: [])
     fake = FakeBrowserClient(response=_make_raw(ideas))
     app.dependency_overrides[get_browser_client] = lambda: fake
     try:
@@ -847,3 +859,531 @@ def test_idea_gen_prompt_for_non_spain_spanish_channel_keeps_dynamic_language():
     prompt = _idea_gen_prompt(cfg, ["sueño"], count=2)
     assert "Language: es-MX" in prompt
     assert "Target locale: Latin America" in prompt
+
+
+# ===========================================================================
+# Spec v3: idea discovery & keyword scoring improvements
+# ===========================================================================
+
+_FALLBACK_CFG = {
+    "audience": {"primary_markets": ["ES"], "language": "es-ES"},
+    "niche": {"sub_niches": ["sleep_quality", "nutrition_45plus"]},
+    "keyword_research": {
+        "fallback_seeds": [
+            "dormir mejor despues de los 45",
+            "ejercicio suave despues de los 45",
+            "cena ligera despues de los 45",
+        ]
+    },
+}
+
+
+def _no_trends(monkeypatch):
+    monkeypatch.setattr(idea_generator, "_fetch_google_trends", lambda geo, lang: [])
+
+
+# --- Section 1: channel-specific fallback seeds ---------------------------
+
+def test_auto_seeds_uses_channel_specific_fallback_seeds_when_trends_do_not_match(monkeypatch):
+    _no_trends(monkeypatch)
+    seeds = _auto_seeds_from_trends(_FALLBACK_CFG, max_seeds=10)
+    assert seeds[:3] == [
+        "dormir mejor despues de los 45",
+        "ejercicio suave despues de los 45",
+        "cena ligera despues de los 45",
+    ]
+
+
+def test_auto_seeds_fallback_respects_max_seeds(monkeypatch):
+    _no_trends(monkeypatch)
+    seeds = _auto_seeds_from_trends(_FALLBACK_CFG, max_seeds=2)
+    assert len(seeds) == 2
+
+
+def test_auto_seeds_legacy_sub_niche_fallback_still_works_without_config_field(monkeypatch):
+    _no_trends(monkeypatch)
+    cfg = {
+        "audience": {"primary_markets": ["ES"], "language": "es-ES"},
+        "niche": {"sub_niches": ["sleep_quality", "nutrition_45plus"]},
+    }
+    seeds = _auto_seeds_from_trends(cfg, max_seeds=10)
+    # Legacy behaviour: first representative keyword per sub_niche
+    assert "sueño" in seeds or "salud" in seeds
+    assert "dormir mejor despues de los 45" not in seeds
+
+
+# --- Section 2: safe language detection -----------------------------------
+
+def test_language_guardrail_english_keyword_penalized():
+    score, notes = detect_language_fit("best camera settings", "spanish")
+    assert score < 80
+    assert "language_mismatch_english" in notes
+
+
+def test_language_guardrail_portuguese_keyword_penalized():
+    score, notes = detect_language_fit("como comer bem depois dos 45", "spanish")
+    assert score < 70
+    assert "language_mismatch_portuguese" in notes
+
+
+def test_language_guardrail_french_keyword_penalized():
+    score, notes = detect_language_fit("mieux dormir après 45 ans", "spanish")
+    assert score < 80
+    assert "language_mismatch_french" in notes
+
+
+def test_language_guardrail_italian_phrase_keyword_penalized():
+    score, notes = detect_language_fit("dormire meglio dopo i 45", "spanish")
+    assert score < 80
+    assert "language_mismatch_italian" in notes
+
+
+def test_language_guardrail_does_not_penalize_spanish_comer_as_italian():
+    score, notes = detect_language_fit("comer mejor despues de los 45", "spanish")
+    assert score >= 80
+    assert "language_mismatch_italian" not in notes
+
+
+def test_language_guardrail_does_not_penalize_spanish_fitness_loanword():
+    score, notes = detect_language_fit("rutina fitness suave despues de los 45", "spanish")
+    assert score >= 80
+    assert "language_mismatch_english" not in notes
+
+
+def test_language_guardrail_uncertain_spanish_generic_keyword_gets_note():
+    score, notes = detect_language_fit("camara reflex", "spanish")
+    assert score < 100
+    assert "spanish_language_uncertain" in notes
+
+
+def test_language_guardrail_spanish_45plus_keyword_still_high():
+    score, notes = detect_language_fit("como dormir mejor despues de los 45", "spanish")
+    assert score >= 80
+    assert "spanish_language_ok" in notes
+
+
+def test_language_marker_phrase_matching_handles_extra_spaces():
+    assert _marker_hits("best   camera    settings", ["best camera settings"]) == [
+        "best camera settings"
+    ]
+    score, notes = detect_language_fit("best   camera   settings", "spanish")
+    assert "language_mismatch_english" in notes
+
+
+# --- Section 4: full scored keyword debug data ----------------------------
+
+def _mk_item(kw, cluster, final, vidiq=50):
+    return {
+        "keyword": kw,
+        "normalized_keyword": normalize_keyword(kw),
+        "intent_cluster": cluster,
+        "final_score": final,
+        "vidiq_score": vidiq,
+        "notes": [],
+        "rejection_reasons": [],
+    }
+
+
+def test_all_scored_keywords_keeps_more_than_cluster_cap():
+    items = [_mk_item(f"kw {i} nutricion", "nutrition_after_45", 90 - i) for i in range(6)]
+    deduped = dedupe_by_normalized_keyword(items)
+    assert len(deduped) == 6  # nothing capped
+    selected = select_by_cluster_limit(deduped, max_per_cluster=3)
+    assert len(selected) == 3
+
+
+def test_top_opportunity_keywords_still_respects_cluster_cap():
+    items = [_mk_item(f"kw {i} nutricion", "nutrition_after_45", 90 - i) for i in range(5)]
+    selected = select_by_cluster_limit(dedupe_by_normalized_keyword(items), max_per_cluster=2)
+    assert len(selected) == 2
+    assert [it["final_score"] for it in selected] == [90, 89]
+
+
+def test_dedupe_by_normalized_keyword_keeps_best_duplicate():
+    items = [
+        _mk_item("Comer mejor", "nutrition_after_45", 60, vidiq=90),
+        _mk_item("comer  mejor", "nutrition_after_45", 70, vidiq=50),
+    ]
+    deduped = dedupe_by_normalized_keyword(items)
+    assert len(deduped) == 1
+    assert deduped[0]["final_score"] == 70
+
+
+def test_legacy_dedupe_by_normalized_keyword_and_intent_wrapper_still_works():
+    items = [_mk_item(f"kw {i} nutricion", "nutrition_after_45", 90 - i) for i in range(5)]
+    result = dedupe_by_normalized_keyword_and_intent(items, max_per_cluster=2)
+    assert len(result) == 2
+
+
+# --- Section 5: sensitive health safety flag ------------------------------
+
+def test_menopausia_topic_is_flagged_but_not_heavily_rejected():
+    item = enrich_keyword_item(
+        {"keyword": "como aliviar la menopausia despues de los 45", "score": 70},
+        DEFAULT_CHANNEL_KEYWORD_CONFIG,
+    )
+    assert item["medical_safety_required"] is True
+    assert "sensitive_45plus_topic_requires_disclaimer" in item["notes"]
+    assert item["content_fit"] >= 55
+    assert item["bucket"] != "rejected_keywords"
+
+
+def test_perimenopausia_topic_is_flagged_but_not_heavily_rejected():
+    item = enrich_keyword_item(
+        {"keyword": "perimenopausia despues de los 45 sintomas", "score": 70},
+        DEFAULT_CHANNEL_KEYWORD_CONFIG,
+    )
+    assert item["medical_safety_required"] is True
+    assert "sensitive_45plus_topic_requires_disclaimer" in item["notes"]
+
+
+def test_diabetes_topic_is_flagged_as_high_risk_medical():
+    item = enrich_keyword_item(
+        {"keyword": "diabetes despues de los 45", "score": 70},
+        DEFAULT_CHANNEL_KEYWORD_CONFIG,
+    )
+    assert item["medical_safety_required"] is True
+    assert "sensitive_medical_topic" in item["notes"]
+
+
+def test_sensitive_topic_sets_medical_safety_required():
+    for kw in ("menopausia", "diabetes", "osteoporosis", "sofocos"):
+        item = enrich_keyword_item({"keyword": kw, "score": 50}, DEFAULT_CHANNEL_KEYWORD_CONFIG)
+        assert item.get("medical_safety_required") is True
+
+
+def test_menopausia_is_not_double_penalized_as_high_risk_medical():
+    meno = score_content_fit("menopausia despues de los 45", DEFAULT_CHANNEL_KEYWORD_CONFIG)
+    diabetes = score_content_fit("diabetes despues de los 45", DEFAULT_CHANNEL_KEYWORD_CONFIG)
+    # Menopausia (valid sensitive, -5) must score higher than diabetes (high risk, -20)
+    assert meno > diabetes
+
+
+# --- Section 6: duplicate prevention --------------------------------------
+
+def test_idea_prompt_includes_published_titles_to_avoid(channel_path: Path):
+    from video_agent.utils.json_io import read_yaml
+    cfg = read_yaml(channel_path)
+    prompt = _idea_gen_prompt(
+        cfg, ["dormir mejor despues de los 45"], 2,
+        published_titles=["Cómo dormir mejor a partir de los 45"],
+    )
+    assert "Already published" in prompt
+    assert "Cómo dormir mejor a partir de los 45" in prompt
+
+
+def test_idea_prompt_omits_published_block_when_empty(channel_path: Path):
+    from video_agent.utils.json_io import read_yaml
+    cfg = read_yaml(channel_path)
+    prompt = _idea_gen_prompt(cfg, ["dormir mejor"], 2, published_titles=[])
+    assert "Already published" not in prompt
+    prompt_none = _idea_gen_prompt(cfg, ["dormir mejor"], 2)
+    assert "Already published" not in prompt_none
+
+
+def test_idea_prompt_caps_published_titles_to_latest_30(channel_path: Path):
+    from video_agent.utils.json_io import read_yaml
+    cfg = read_yaml(channel_path)
+    titles = [f"Video numero {i:02d} sobre bienestar" for i in range(40)]
+    prompt = _idea_gen_prompt(cfg, ["dormir mejor"], 2, published_titles=titles)
+    assert "Video numero 00 sobre bienestar" in prompt
+    assert "Video numero 29 sobre bienestar" in prompt
+    assert "Video numero 39 sobre bienestar" not in prompt
+
+
+def _dup_setup(monkeypatch, ideas, published_titles):
+    keyword_result = {
+        "top_opportunity_keywords": [],
+        "long_tail_test_keywords": [],
+        "rejected_keywords": [],
+        "all_scored_keywords": [],
+        "metadata": {"version": "keyword_scoring_v2", "target_language": "spanish"},
+    }
+
+    async def fake_generate_ideas(**kwargs):
+        return ideas, keyword_result, "trend"
+
+    monkeypatch.setattr(legacy_routes, "generate_ideas", fake_generate_ideas)
+    monkeypatch.setattr(
+        legacy_routes,
+        "load_published_videos",
+        lambda *a, **k: [{"title": t} for t in published_titles],
+    )
+
+
+def test_generate_endpoint_returns_duplicates_separately(
+    http_client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    ideas = [
+        {**SAMPLE_IDEAS[0], "title_seed": "Caminata suave para adultos 45+"},
+        {**SAMPLE_IDEAS[1]},
+    ]
+    _dup_setup(monkeypatch, ideas, ["Caminata suave para adultos 45+"])
+    fake = FakeBrowserClient(response=_make_raw(ideas))
+    app.dependency_overrides[get_browser_client] = lambda: fake
+    try:
+        r = http_client.post(
+            "/channels/vida-plena-45/ideas/generate", json={"seed_topics": [], "count": 2}
+        )
+    finally:
+        app.dependency_overrides.pop(get_browser_client, None)
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["duplicate_count"] == 1
+    assert len(body["duplicate_candidates"]) == 1
+    assert body["duplicate_candidates"][0]["is_duplicate"] is True
+
+
+def test_generate_endpoint_does_not_save_duplicate_ideas(
+    http_client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    ideas = [
+        {**SAMPLE_IDEAS[0], "title_seed": "Caminata suave para adultos 45+"},
+        {**SAMPLE_IDEAS[1]},
+    ]
+    _dup_setup(monkeypatch, ideas, ["Caminata suave para adultos 45+"])
+    fake = FakeBrowserClient(response=_make_raw(ideas))
+    app.dependency_overrides[get_browser_client] = lambda: fake
+    try:
+        r = http_client.post(
+            "/channels/vida-plena-45/ideas/generate", json={"seed_topics": [], "count": 2}
+        )
+    finally:
+        app.dependency_overrides.pop(get_browser_client, None)
+    body = r.json()
+    assert len(body["saved"]) == 1
+    assert len(body["ideas"]) == 1
+    for rel in body["saved"]:
+        saved = json.loads((tmp_path / rel).read_text(encoding="utf-8"))
+        assert saved.get("is_duplicate") is not True
+
+
+def test_generate_endpoint_count_excludes_duplicate_candidates(
+    http_client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    ideas = [
+        {**SAMPLE_IDEAS[0], "title_seed": "Caminata suave para adultos 45+"},
+        {**SAMPLE_IDEAS[1]},
+    ]
+    _dup_setup(monkeypatch, ideas, ["Caminata suave para adultos 45+"])
+    fake = FakeBrowserClient(response=_make_raw(ideas))
+    app.dependency_overrides[get_browser_client] = lambda: fake
+    try:
+        r = http_client.post(
+            "/channels/vida-plena-45/ideas/generate", json={"seed_topics": [], "count": 2}
+        )
+    finally:
+        app.dependency_overrides.pop(get_browser_client, None)
+    body = r.json()
+    assert body["count"] == len(body["ideas"]) == 1
+
+
+# --- Section 3: title-level language re-score -----------------------------
+
+def test_title_rescore_penalizes_english_title(
+    http_client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    ideas = [
+        {
+            "topic": "Camera settings for exercise",
+            "angle": "tech",
+            "target_duration_sec": 54,
+            "key_points": ["a", "b", "c", "d", "e"],
+            "title_seed": "Best camera settings for exercise after 45",
+            "target_keyword": "ejercicio suave despues de los 45",
+        }
+    ]
+    _dup_setup(monkeypatch, ideas, [])
+    fake = FakeBrowserClient(response=_make_raw(ideas))
+    app.dependency_overrides[get_browser_client] = lambda: fake
+    try:
+        r = http_client.post(
+            "/channels/vida-plena-45/ideas/generate", json={"seed_topics": [], "count": 1}
+        )
+    finally:
+        app.dependency_overrides.pop(get_browser_client, None)
+    body = r.json()
+    idea = body["ideas"][0]
+    assert idea["language_fit"] < 80
+    assert idea["bucket"] != "top_opportunity_keywords"
+    notes = idea.get("keyword_notes", [])
+    assert any("language_mismatch_english" in n or "spanish_language_uncertain" in n for n in notes)
+
+
+def test_title_rescore_appends_language_notes_without_overwriting_existing_notes(
+    http_client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    ideas = [
+        {
+            **SAMPLE_IDEAS[0],
+            "title_seed": "Best camera settings for exercise after 45",
+            "target_keyword": "ejercicio suave despues de los 45",
+            "keyword_notes": ["preexisting_marker_note"],
+        }
+    ]
+    _dup_setup(monkeypatch, ideas, [])
+    fake = FakeBrowserClient(response=_make_raw(ideas))
+    app.dependency_overrides[get_browser_client] = lambda: fake
+    try:
+        r = http_client.post(
+            "/channels/vida-plena-45/ideas/generate", json={"seed_topics": [], "count": 1}
+        )
+    finally:
+        app.dependency_overrides.pop(get_browser_client, None)
+    body = r.json()
+    notes = body["ideas"][0].get("keyword_notes", [])
+    assert "preexisting_marker_note" in notes
+    assert any("language_mismatch" in n or "uncertain" in n for n in notes)
+
+
+# --- Section 7: optional SERP hook ----------------------------------------
+
+async def _fake_vidiq(keywords):
+    return [
+        {
+            "keyword": kw,
+            "score": 82 if "45" in kw else 40,
+            "volume": "Medium",
+            "competition": "Low",
+            "related": ["dormir mejor despues de los 45"],
+        }
+        for kw in keywords
+    ]
+
+
+def test_serp_inspection_disabled_by_default():
+    result = asyncio.run(
+        _discover_top_keywords(
+            ["dormir mejor despues de los 45"], _fake_vidiq,
+            channel_config={"audience": {"language": "es-ES"}},
+        )
+    )
+    assert result["metadata"]["serp_inspection"] == "disabled"
+    for it in result["all_scored_keywords"]:
+        assert it["serp_opportunity"] == 50
+
+
+def test_serp_hook_updates_serp_opportunity_when_enabled():
+    async def serp_fn(keywords):
+        return [{"keyword": k, "serp_opportunity": 95, "serp_notes": ["few_exact_match_titles"]} for k in keywords]
+
+    result = asyncio.run(
+        _discover_top_keywords(
+            ["dormir mejor despues de los 45"], _fake_vidiq,
+            channel_config={"audience": {"language": "es-ES"}, "keyword_scoring": {"enable_serp_inspection": True}},
+            serp_fn=serp_fn,
+        )
+    )
+    assert result["metadata"]["serp_inspection"] == "enabled"
+    found = result["all_scored_keywords"]
+    assert any(it["serp_opportunity"] == 95 for it in found)
+    assert any("few_exact_match_titles" in it["notes"] for it in found)
+
+
+def test_serp_hook_recalculates_final_score_when_enabled():
+    async def serp_high(keywords):
+        return [{"keyword": k, "serp_opportunity": 100, "serp_notes": []} for k in keywords]
+
+    base = asyncio.run(
+        _discover_top_keywords(
+            ["dormir mejor despues de los 45"], _fake_vidiq,
+            channel_config={"audience": {"language": "es-ES"}},
+        )
+    )
+    boosted = asyncio.run(
+        _discover_top_keywords(
+            ["dormir mejor despues de los 45"], _fake_vidiq,
+            channel_config={"audience": {"language": "es-ES"}, "keyword_scoring": {"enable_serp_inspection": True}},
+            serp_fn=serp_high,
+        )
+    )
+    base_score = base["all_scored_keywords"][0]["final_score"]
+    boost_score = boosted["all_scored_keywords"][0]["final_score"]
+    assert boost_score > base_score
+
+
+def test_serp_hook_failure_is_fail_soft():
+    async def serp_boom(keywords):
+        raise RuntimeError("serp down")
+
+    result = asyncio.run(
+        _discover_top_keywords(
+            ["dormir mejor despues de los 45"], _fake_vidiq,
+            channel_config={"audience": {"language": "es-ES"}, "keyword_scoring": {"enable_serp_inspection": True}},
+            serp_fn=serp_boom,
+        )
+    )
+    assert result["metadata"]["serp_inspection"] == "failed"
+    for it in result["all_scored_keywords"]:
+        assert it["serp_opportunity"] == 50
+        assert "serp_inspection_failed" in it["notes"]
+
+
+# --- Section 8: prompt variation + optional fields ------------------------
+
+def test_idea_prompt_includes_pain_promise_and_format_rules(channel_path: Path):
+    from video_agent.utils.json_io import read_yaml
+    cfg = read_yaml(channel_path)
+    prompt = _idea_gen_prompt(cfg, ["dormir mejor despues de los 45"], 3)
+    low = prompt.lower()
+    assert "checklist" in low
+    assert "pain" in low or "dolor" in low
+    assert "mistake" in low or "error" in low
+
+
+def test_parse_ideas_accepts_optional_extra_fields_if_supported():
+    raw = json.dumps([
+        {
+            "topic": "Dormir mejor",
+            "angle": "rutina simple",
+            "target_duration_sec": 54,
+            "key_points": ["a", "b", "c", "d", "e"],
+            "title_seed": "Cómo dormir mejor después de los 45",
+            "target_keyword": "dormir mejor despues de los 45",
+            "thumbnail_hook": "NO DESCANSAS",
+            "viewer_pain": "duerme pero se levanta cansado",
+            "idea_format": "mistake_checklist",
+        }
+    ])
+    ideas = parse_ideas(raw)
+    assert len(ideas) == 1
+    assert ideas[0]["thumbnail_hook"] == "NO DESCANSAS"
+    assert ideas[0]["idea_format"] == "mistake_checklist"
+
+
+# --- Section 9: realistic regression table --------------------------------
+
+@pytest.mark.parametrize(
+    "keyword,expected",
+    [
+        ("dormir mejor despues de los 45", "good_spanish_45plus"),
+        ("ejercicio suave despues de los 45", "good_spanish_45plus"),
+        ("mente acelerada despues de los 45", "good_spanish_45plus"),
+        ("cena ligera despues de los 45", "good_spanish_45plus"),
+        ("best camera settings", "language_rejected"),
+        ("como comer bem depois dos 45", "language_rejected"),
+        ("comer mejor despues de los 45", "not_italian_false_positive"),
+        ("rutina fitness suave despues de los 45", "loanword_allowed"),
+        ("menopausia despues de los 45", "sensitive_allowed_with_flag"),
+    ],
+)
+def test_realistic_keyword_scoring_regression(keyword, expected):
+    lang, notes = detect_language_fit(keyword, "spanish")
+    if expected == "good_spanish_45plus":
+        assert lang >= 80
+    elif expected == "language_rejected":
+        assert lang < 80
+    elif expected == "not_italian_false_positive":
+        assert "language_mismatch_italian" not in notes
+        assert lang >= 80
+    elif expected == "loanword_allowed":
+        assert "language_mismatch_english" not in notes
+        assert lang >= 80
+    elif expected == "sensitive_allowed_with_flag":
+        item = enrich_keyword_item({"keyword": keyword, "score": 70}, DEFAULT_CHANNEL_KEYWORD_CONFIG)
+        # Flagged for safety, but NOT killed for being sensitive: content fit
+        # stays healthy and it is never rejected for content/sensitivity.
+        assert item["medical_safety_required"] is True
+        assert "sensitive_45plus_topic_requires_disclaimer" in item["notes"]
+        assert item["content_fit"] >= 55
+        assert "content_mismatch" not in item["rejection_reasons"]

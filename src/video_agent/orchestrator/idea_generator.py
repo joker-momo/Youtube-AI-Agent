@@ -23,6 +23,7 @@ Usage::
 """
 from __future__ import annotations
 
+import functools
 import json
 import re
 import unicodedata
@@ -411,7 +412,16 @@ def _auto_seeds_from_trends(channel_config: dict, max_seeds: int = 10) -> list[s
         unique = list(dict.fromkeys(matched))
         return unique[:max_seeds]
 
-    # Fallback: use sub_niches expanded to Spanish keywords as seeds
+    # Fallback 1: channel-specific seed profile (Spain-first, 45+ concrete).
+    explicit_seeds = [
+        str(s).strip()
+        for s in ((channel_config.get("keyword_research") or {}).get("fallback_seeds") or [])
+        if str(s).strip()
+    ]
+    if explicit_seeds:
+        return explicit_seeds[:max_seeds]
+
+    # Fallback 2: use sub_niches expanded to Spanish keywords as seeds
     fallback: list[str] = []
     for sn in sub_niches_raw:
         kws = _NICHE_KW_MAP.get(sn, [])
@@ -484,6 +494,51 @@ SPANISH_MARKERS = [
     "comer mejor", "habitos", "hábitos",
 ]
 
+# Foreign-language guardrail markers. These are matched with word/phrase
+# boundaries via ``_marker_hits`` — NOT naive substring matching — to avoid
+# false positives such as Italian "come" inside Spanish "comer" or the
+# English loanword "fitness" inside natural Spanish keywords. Prefer
+# multi-word phrase markers; avoid short ambiguous single tokens.
+ENGLISH_MARKERS = [
+    "best camera settings", "weight loss", "sleep tips",
+    "morning routine", "diet plan", "workout routine", "healthy aging",
+]
+
+FRENCH_MARKERS = [
+    "apres 45 ans", "bien-etre", "mieux dormir",
+    "perdre du poids", "manger mieux",
+]
+
+ITALIAN_MARKERS = [
+    "dopo i 45", "dopo 45 anni", "dormire meglio",
+    "mangiare meglio", "benessere dopo", "muoversi dopo",
+]
+
+# Age / channel markers used only to decide whether an otherwise unmarked
+# keyword should be flagged as "spanish_language_uncertain".
+_AGE_CHANNEL_MARKERS = ["45", "45+", "cuarenta"]
+
+
+def _norm_for_marker_match(text: str) -> str:
+    return normalize_keyword(text)
+
+
+@functools.lru_cache(maxsize=512)
+def _marker_to_pattern(marker: str) -> "re.Pattern[str]":
+    # Normalize first, then split into tokens joined by ``\s+``. This avoids
+    # relying on the Python-version-specific behaviour of ``re.escape(" ")``
+    # and keeps phrase matching flexible across collapsed whitespace.
+    parts = [re.escape(part) for part in _norm_for_marker_match(marker).split()]
+    if not parts:
+        return re.compile(r"(?!x)x")  # never matches
+    phrase = r"\s+".join(parts)
+    return re.compile(rf"(?<!\w){phrase}(?!\w)")
+
+
+def _marker_hits(keyword: str, markers: list[str]) -> list[str]:
+    norm = _norm_for_marker_match(keyword)
+    return [marker for marker in markers if _marker_to_pattern(marker).search(norm)]
+
 INTENT_KEYWORDS = [
     ("nutrition_after_45", ["comer", "alimentacion", "nutricion", "plato", "comida", "dieta", "proteina", "fibra"]),
     ("energy_after_45", ["energia", "cansancio", "fatiga", "bajones", "ritmo"]),
@@ -529,16 +584,38 @@ def detect_language_fit(keyword: str, target_language: str) -> tuple[int, list[s
     if target_language != "spanish":
         return 80, ["language_guardrail_not_configured"]
     norm = normalize_keyword(keyword)
-    pt_hits = [marker for marker in PORTUGUESE_MARKERS if normalize_keyword(marker) in norm]
+    pt_hits = _marker_hits(keyword, PORTUGUESE_MARKERS)
+    en_hits = _marker_hits(keyword, ENGLISH_MARKERS)
+    fr_hits = _marker_hits(keyword, FRENCH_MARKERS)
+    it_hits = _marker_hits(keyword, ITALIAN_MARKERS)
     notes: list[str] = []
     score = 100
+
     if pt_hits:
         score -= 30 * len(pt_hits)
         if len(pt_hits) >= 2:
             score -= 20
         notes.append("language_mismatch_portuguese")
-    elif any(normalize_keyword(marker) in norm for marker in SPANISH_MARKERS):
+    if en_hits:
+        score -= 35 * len(en_hits)
+        if len(en_hits) >= 2:
+            score -= 20
+        notes.append("language_mismatch_english")
+    if fr_hits:
+        score -= 30 * len(fr_hits)
+        notes.append("language_mismatch_french")
+    if it_hits:
+        score -= 25 * len(it_hits)
+        notes.append("language_mismatch_italian")
+
+    spanish_present = bool(_marker_hits(keyword, SPANISH_MARKERS))
+    foreign_hit = bool(pt_hits or en_hits or fr_hits or it_hits)
+    if spanish_present:
         notes.append("spanish_language_ok")
+    elif not foreign_hit and not _has_any(norm, _AGE_CHANNEL_MARKERS):
+        score -= 10
+        notes.append("spanish_language_uncertain")
+
     return _clamp(score), notes
 
 
@@ -582,6 +659,19 @@ def score_intent_strength(keyword: str) -> int:
     return _clamp(score)
 
 
+# High-risk disease topics: still penalized and flagged for medical safety.
+HIGH_RISK_MEDICAL_TOPICS = [
+    "diabetes", "hipertension", "hipertensión", "tiroides",
+    "colesterol", "osteoporosis",
+]
+
+# Valid 45+ wellness pillars: legitimate when handled with a disclaimer.
+# Lightly penalized (or not at all) and flagged — never blindly rejected.
+VALID_45PLUS_SENSITIVE_TOPICS = [
+    "menopausia", "perimenopausia", "sofocos", "cambios hormonales",
+]
+
+
 def score_content_fit(keyword: str, channel_config: dict) -> int:
     norm = normalize_keyword(keyword)
     score = 50
@@ -594,8 +684,13 @@ def score_content_fit(keyword: str, channel_config: dict) -> int:
         score += 15
     if _has_any(norm, ["simple", "practico", "organizar", "habitos", "rutina", "consejos"]):
         score += 10
-    if _has_any(norm, ["diabetes", "hipertension", "tiroides", "colesterol", "menopausia", "osteoporosis"]):
+    if _has_any(norm, HIGH_RISK_MEDICAL_TOPICS):
         score -= 20
+    elif _has_any(norm, VALID_45PLUS_SENSITIVE_TOPICS):
+        # 45+ pillar topic (e.g. menopausia) — gentle nudge only, not a
+        # high-risk penalty, so strong audience/intent signals can still
+        # lift it into long-tail or top opportunity.
+        score -= 5
     if _has_any(norm, UNSAFE_CLAIMS):
         score -= 30
     return _clamp(score)
@@ -691,7 +786,12 @@ def generate_keyword_pack(item: dict) -> dict:
     return item
 
 
-def dedupe_by_normalized_keyword_and_intent(items: list[dict], max_per_cluster: int = 3) -> list[dict]:
+def dedupe_by_normalized_keyword(items: list[dict]) -> list[dict]:
+    """Dedupe by exact normalized keyword only — keep best by (final_score, vidiq).
+
+    Does NOT cap per intent cluster, so the caller can keep a complete
+    ``all_scored_keywords`` debug view of every distinct keyword scanned.
+    """
     best: dict[str, dict] = {}
     for item in items:
         key = item.get("normalized_keyword") or normalize_keyword(item.get("keyword", ""))
@@ -706,8 +806,15 @@ def dedupe_by_normalized_keyword_and_intent(items: list[dict], max_per_cluster: 
             item["notes"] = sorted(set((current.get("notes") or []) + (item.get("notes") or [])))
             item["rejection_reasons"] = sorted(set((current.get("rejection_reasons") or []) + (item.get("rejection_reasons") or [])))
             best[key] = item
+    output = list(best.values())
+    output.sort(key=lambda x: x.get("final_score", 0), reverse=True)
+    return output
+
+
+def select_by_cluster_limit(items: list[dict], max_per_cluster: int) -> list[dict]:
+    """Group by intent cluster, sort by final_score desc, cap per cluster."""
     grouped: dict[str, list[dict]] = {}
-    for item in best.values():
+    for item in items:
         grouped.setdefault(item.get("intent_cluster", "unknown"), []).append(item)
     output: list[dict] = []
     for _cluster, cluster_items in grouped.items():
@@ -715,6 +822,11 @@ def dedupe_by_normalized_keyword_and_intent(items: list[dict], max_per_cluster: 
         output.extend(cluster_items[:max_per_cluster])
     output.sort(key=lambda x: x.get("final_score", 0), reverse=True)
     return output
+
+
+def dedupe_by_normalized_keyword_and_intent(items: list[dict], max_per_cluster: int = 3) -> list[dict]:
+    """Backward-compatible wrapper: dedupe then cluster-cap in one step."""
+    return select_by_cluster_limit(dedupe_by_normalized_keyword(items), max_per_cluster)
 
 
 def merge_keyword_channel_config(channel_config: dict | None) -> dict:
@@ -777,6 +889,17 @@ def enrich_keyword_item(item: dict, channel_config: dict) -> dict:
         "notes": sorted(set(notes + ["serp_inspection_disabled"])),
         "rejection_reasons": [],
     }
+    norm = enriched["normalized_keyword"]
+    extra_notes: list[str] = []
+    if _has_any(norm, HIGH_RISK_MEDICAL_TOPICS):
+        enriched["medical_safety_required"] = True
+        extra_notes.append("sensitive_medical_topic")
+    elif _has_any(norm, VALID_45PLUS_SENSITIVE_TOPICS):
+        enriched["medical_safety_required"] = True
+        extra_notes.append("sensitive_45plus_topic_requires_disclaimer")
+    if extra_notes:
+        enriched["notes"] = sorted(set(enriched["notes"] + extra_notes))
+
     calculate_final_score(enriched)
     enriched["bucket"] = assign_bucket(enriched)
     generate_keyword_pack(enriched)
@@ -807,6 +930,7 @@ async def _discover_top_keywords(
     top_n: int = 8,
     channel_config: dict | None = None,
     use_v2: bool = True,
+    serp_fn: Callable[[list[str]], Awaitable[list[dict]]] | None = None,
 ) -> list[dict] | dict:
     """Score seeds + related keywords and return bucketed V2 keyword data.
 
@@ -853,27 +977,56 @@ async def _discover_top_keywords(
 
     if use_v2:
         cfg = merge_keyword_channel_config(channel_config)
+        max_per_cluster = int(cfg.get("max_keywords_per_intent_cluster", 3))
         enriched = [enrich_keyword_item(item, cfg) for item in raw_scored]
-        deduped = dedupe_by_normalized_keyword_and_intent(
-            enriched,
-            max_per_cluster=int(cfg.get("max_keywords_per_intent_cluster", 3)),
-        )
+        # Dedupe only — keep the full scanned set for the all_scored debug view.
+        deduped_all = dedupe_by_normalized_keyword(enriched)
+
+        # Optional SERP opportunity hook. Disabled by default; fail-soft when
+        # the injected callable raises so idea generation never breaks.
+        serp_status = "disabled"
+        if serp_fn is not None and bool(cfg.get("enable_serp_inspection", False)):
+            try:
+                candidates = [it["keyword"] for it in deduped_all]
+                serp_results = await serp_fn(candidates)
+                serp_map = {
+                    normalize_keyword(str(r.get("keyword", ""))): r
+                    for r in (serp_results or [])
+                    if isinstance(r, dict) and r.get("keyword")
+                }
+                for it in deduped_all:
+                    r = serp_map.get(it["normalized_keyword"])
+                    if not r or not isinstance(r.get("serp_opportunity"), (int, float)):
+                        continue
+                    it["serp_opportunity"] = r["serp_opportunity"]
+                    serp_notes = [str(n) for n in (r.get("serp_notes") or [])]
+                    base_notes = [n for n in (it.get("notes") or []) if n != "serp_inspection_disabled"]
+                    it["notes"] = sorted(set(base_notes + serp_notes))
+                    calculate_final_score(it)
+                    it["bucket"] = assign_bucket(it)
+                serp_status = "enabled"
+            except Exception:
+                serp_status = "failed"
+                for it in deduped_all:
+                    it["notes"] = sorted(set((it.get("notes") or []) + ["serp_inspection_failed"]))
+
+        selectable = select_by_cluster_limit(deduped_all, max_per_cluster)
+
         bucketed = {
             "top_opportunity_keywords": [],
             "long_tail_test_keywords": [],
             "rejected_keywords": [],
-            "all_scored_keywords": [],
+            "all_scored_keywords": deduped_all,
             "metadata": {
                 "version": "keyword_scoring_v2",
                 "enable_serp_inspection": bool(cfg.get("enable_serp_inspection", False)),
-                "serp_inspection": "disabled",
+                "serp_inspection": serp_status,
                 "target_language": cfg.get("target_language", "spanish"),
                 "target_audience": cfg.get("target_audience", "people_45_plus"),
             },
         }
-        for item in deduped:
+        for item in selectable:
             bucket = item["bucket"]
-            bucketed["all_scored_keywords"].append(item)
             if bucket in bucketed:
                 bucketed[bucket].append(item)
         for key in ("top_opportunity_keywords", "long_tail_test_keywords", "rejected_keywords"):
@@ -909,10 +1062,14 @@ async def _discover_top_keywords(
 # Prompt builder (keyword-anchored)
 # ---------------------------------------------------------------------------
 
+MAX_PUBLISHED_TITLES_IN_IDEA_PROMPT = 30
+
+
 def _idea_gen_prompt(
     channel_config: dict,
     top_keywords: list[dict] | list[str],
     count: int,
+    published_titles: list[str] | None = None,
 ) -> str:
     ch = channel_config.get("channel", {})
     audience = channel_config.get("audience", {})
@@ -977,6 +1134,19 @@ def _idea_gen_prompt(
 
     kw_block = "\n".join(kw_lines)
 
+    published_block = ""
+    titles = [str(t).strip() for t in (published_titles or []) if str(t).strip()]
+    titles = titles[:MAX_PUBLISHED_TITLES_IN_IDEA_PROMPT]
+    if titles:
+        title_lines = "\n".join(f"  {i}. {t}" for i, t in enumerate(titles, 1))
+        published_block = (
+            "\n## Already published videos to avoid\n\n"
+            "Do not generate ideas that substantially repeat these titles or angles:\n"
+            f"{title_lines}\n\n"
+            "- Do not reuse the same core angle as any published title.\n"
+            "- If a keyword is close to a published video, choose a clearly different angle.\n"
+        )
+
     prefer_line = ("- Prefer: " + ", ".join(lexical_prefer)) if lexical_prefer else ""
     avoid_line = ("- Avoid: " + ", ".join(lexical_avoid)) if lexical_avoid else ""
     locale_block = "\n".join(
@@ -1007,7 +1177,7 @@ These keywords were scored for search volume and competition. Higher score = bet
 Build your video ideas directly around these keywords — each idea should target one of them.
 
 {kw_block}
-
+{published_block}
 ## Task
 
 Generate exactly **{count} video ideas**, each anchored to one of the keywords above.
@@ -1036,6 +1206,19 @@ Rules:
 - `title_seed` must read naturally — no ALL CAPS, no "¡¡¡", no exaggerated claims.
 - Each idea targets a DIFFERENT keyword from the list.
 - Do NOT include medical diagnoses, supplement recommendations, or miracle cures.
+
+## Variation rules (make each idea distinct)
+- Avoid making every idea about the same night/sleep angle.
+- Prefer a specific viewer pain + practical promise.
+- Each idea should use a DIFFERENT viewer intent when possible: symptom/pain, mistake to avoid, simple routine, checklist, explanation.
+- Do not generate generic "wellness" topics — be concrete.
+- The title should be specific enough to support a strong thumbnail.
+- Prefer concrete {target_locale}-first wording for people over 45.
+
+You MAY also include these optional fields when helpful (they are accepted but not required):
+- `"thumbnail_hook"`: 1–3 word punchy thumbnail text (e.g. "NO DESCANSAS")
+- `"viewer_pain"`: the concrete pain the viewer feels (e.g. "duerme pero se levanta cansado")
+- `"idea_format"`: one of symptom_pain, mistake_to_avoid, simple_routine, mistake_checklist, explanation
 
 Return ONLY a valid JSON array of {count} objects — no markdown fences, no commentary.
 """
@@ -1117,6 +1300,11 @@ def _validate_idea(obj: dict) -> dict:
     }
     if "target_keyword" in obj:
         result["target_keyword"] = str(obj["target_keyword"]).strip()
+    # Preserve known optional fields when present (backward compatible: absent
+    # fields are simply omitted, never injected).
+    for opt in ("thumbnail_hook", "viewer_pain", "idea_format"):
+        if obj.get(opt) is not None:
+            result[opt] = str(obj[opt]).strip()
     return result
 
 
@@ -1174,6 +1362,7 @@ async def generate_ideas(
     seed_topics: list[str] | None = None,
     count: int = 10,
     with_metadata: bool = False,
+    published_titles: list[str] | None = None,
 ) -> list[dict] | tuple[list[dict], list[dict], str]:
     """Discover top keywords via vidIQ, then ask ChatGPT to flesh out ideas.
 
@@ -1207,7 +1396,7 @@ async def generate_ideas(
     if not selected_keywords:
         raise ValueError("vidIQ returned no scoreable keywords from the given seeds. Try different topics.")
 
-    prompt = _idea_gen_prompt(channel_config, selected_keywords, count)
+    prompt = _idea_gen_prompt(channel_config, selected_keywords, count, published_titles=published_titles)
     raw = await chatgpt_fn([prompt])
     ideas = parse_ideas(raw)
     if not ideas:

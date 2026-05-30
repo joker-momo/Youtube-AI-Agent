@@ -43,6 +43,17 @@ def test_chatgpt_login_url_detection():
     assert not chatgpt_is_login("https://chatgpt.com/?model=gpt-4o")
 
 
+def test_chatgpt_stable_detector_requires_streaming_to_stop():
+    from video_agent.browser_worker.drivers.chatgpt import _stable_response_detector_js
+
+    detector = _stable_response_detector_js()
+
+    assert "!streaming" in detector
+    assert "stop-streaming-button" in detector
+    assert "Stop" in detector
+    assert "streaming" in detector
+
+
 def test_gemini_login_url_detection():
     assert gemini_is_login("https://accounts.google.com/signin/v2/identifier")
     assert not gemini_is_login("https://gemini.google.com/app")

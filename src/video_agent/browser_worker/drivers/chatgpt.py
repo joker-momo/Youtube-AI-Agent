@@ -57,53 +57,9 @@ def _is_login_url(url: str) -> bool:
     )
 
 
-async def _wait_for_stable_response(
-    page: "Page",
-    scrape_js: str,
-    prior_text: str,
-    *,
-    response_timeout_ms: int,
-    poll_ms: int | None = None,
-    stable_ms: int | None = None,
-    log_tag: str = "scrape",
-) -> str | None:
-    """Wait for the assistant turn to (a) differ from ``prior_text`` and
-    (b) stop mutating for ``stable_ms``, then return the stable text.
-
-    The watcher runs entirely inside the page using a ``MutationObserver``
-    that records the timestamp of the most recent DOM mutation. The Python
-    side calls ``page.wait_for_function`` once and Playwright polls the
-    page-side predicate roughly every 100 ms — no Python⇄Chrome CDP
-    round-trip per check. Compared to the older "evaluate every 250-500 ms"
-    loop this cuts roughly 50 CDP messages per ChatGPT turn and detects
-    stream-end within ~100 ms of the final mutation instead of one full
-    poll interval. The human-cadence look is preserved because all of the
-    typing, hovering, and pause behavior happens in the calling driver.
-    """
-    if poll_ms is None:
-        poll_ms = STABLE_POLL_MS
-    if stable_ms is None:
-        stable_ms = STABLE_MS
-
-    import sys
-    import time
-
-    deadline = time.monotonic() + response_timeout_ms / 1000.0
-    prior_len = len(prior_text or "")
-    print(
-        f"[{log_tag}] start prior_len={prior_len} timeout_ms={response_timeout_ms} "
-        f"stable_ms={stable_ms} (observer-based)",
-        flush=True,
-        file=sys.stderr,
-    )
-
-    # JS expression executed once per Playwright poll inside the page.
-    # Installs a MutationObserver lazily and only resolves when the
-    # latest assistant turn has been quiet for ``stable_ms``. The
-    # observer survives between calls because state lives on ``window``,
-    # which is fine for the persistent ChatGPT/Claude tabs the pipeline
-    # reuses across stages.
-    detector_js = """
+def _stable_response_detector_js() -> str:
+    """Page-side stable-response predicate shared by ChatGPT and Claude."""
+    return """
         ({scrapeFnSource, priorText, stableMs}) => {
           // Re-eval the scrape function on every check so the latest
           // assistant turn is always considered, not the one that
@@ -167,15 +123,84 @@ async def _wait_for_stable_response(
             tracker.lastMutationTs = Date.now();
           }
 
+          // Root-cause guard against truncated captures: the assistant turn
+          // can pause mutating for longer than stableMs *while still
+          // generating* (token/render gaps, network stalls). Quiet time alone
+          // then latches a half-finished response. So also require that the
+          // model is NOT actively streaming, detected via the "stop
+          // generating" control both ChatGPT and Claude expose only while a
+          // response is in flight. Best-effort: if no known stop control is
+          // present (unknown UI), fall back to quiet-only so we never hang.
+          const stopSelectors = [
+            'button[data-testid="stop-button"]',
+            'button[aria-label^="Stop"]',
+            'button[aria-label*="stop generating" i]',
+            '[data-testid="stop-streaming-button"]',
+          ];
+          let streaming = false;
+          for (const sel of stopSelectors) {
+            const node = document.querySelector(sel);
+            if (node && node.offsetParent !== null) { streaming = true; break; }
+          }
+
           const quietFor = Date.now() - tracker.lastMutationTs;
           const ready = !!(
             current &&
             current !== priorText &&
-            quietFor >= stableMs
+            quietFor >= stableMs &&
+            !streaming
           );
-          return {ready, len: current.length, quietFor};
+          return {ready, len: current.length, quietFor, streaming};
         }
     """
+
+
+async def _wait_for_stable_response(
+    page: "Page",
+    scrape_js: str,
+    prior_text: str,
+    *,
+    response_timeout_ms: int,
+    poll_ms: int | None = None,
+    stable_ms: int | None = None,
+    log_tag: str = "scrape",
+) -> str | None:
+    """Wait for the assistant turn to (a) differ from ``prior_text`` and
+    (b) stop mutating for ``stable_ms``, then return the stable text.
+
+    The watcher runs entirely inside the page using a ``MutationObserver``
+    that records the timestamp of the most recent DOM mutation. The Python
+    side calls ``page.wait_for_function`` once and Playwright polls the
+    page-side predicate roughly every 100 ms — no Python⇄Chrome CDP
+    round-trip per check. Compared to the older "evaluate every 250-500 ms"
+    loop this cuts roughly 50 CDP messages per ChatGPT turn and detects
+    stream-end within ~100 ms of the final mutation instead of one full
+    poll interval. The human-cadence look is preserved because all of the
+    typing, hovering, and pause behavior happens in the calling driver.
+    """
+    if poll_ms is None:
+        poll_ms = STABLE_POLL_MS
+    if stable_ms is None:
+        stable_ms = STABLE_MS
+
+    import sys
+    import time
+
+    deadline = time.monotonic() + response_timeout_ms / 1000.0
+    prior_len = len(prior_text or "")
+    print(
+        f"[{log_tag}] start prior_len={prior_len} timeout_ms={response_timeout_ms} "
+        f"stable_ms={stable_ms} (observer-based)",
+        flush=True,
+        file=sys.stderr,
+    )
+
+    # JS expression executed once per Playwright poll inside the page.
+    # Installs a MutationObserver lazily and only resolves when the latest
+    # assistant turn has been quiet and no visible stop-generating control
+    # remains. The observer survives between calls because state lives on
+    # ``window``, which is fine for persistent ChatGPT/Claude tabs.
+    detector_js = _stable_response_detector_js()
 
     try:
         handle = await page.wait_for_function(
@@ -210,8 +235,9 @@ async def _wait_for_stable_response(
     final_text = await page.evaluate(scrape_js)
     final_len = len(final_text or "")
     quiet_for = (info or {}).get("quietFor") if isinstance(info, dict) else None
+    streaming_flag = (info or {}).get("streaming") if isinstance(info, dict) else None
     print(
-        f"[{log_tag}] STABLE len={final_len} quiet_for_ms={quiet_for}",
+        f"[{log_tag}] STABLE len={final_len} quiet_for_ms={quiet_for} streaming={streaming_flag}",
         flush=True,
         file=sys.stderr,
     )

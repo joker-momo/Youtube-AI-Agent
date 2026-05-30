@@ -500,3 +500,30 @@ def test_extract_json_objects_robustness_with_preamble():
     candidates = extract_json_objects(raw_text)
     assert len(candidates) == 1
     assert candidates[0] == {"title": "Uno"}
+
+
+def test_extract_json_objects_recovers_truncated_root_object():
+    """Model output cut off before the final closing brace must still be
+    recoverable by balancing the open braces/brackets."""
+    from video_agent.operator import extract_json_objects
+    # Root object truncated: missing the final '}'. Inner objects close fine.
+    raw_text = (
+        '{\n'
+        '"channel_id": "ch",\n'
+        '"sections": [{"title": "A"}, {"title": "B"}],\n'
+        '"qa": {\n'
+        '"verdict": "PENDING_CLAUDE_QA"\n'
+        '}\n'
+    )
+    candidates = extract_json_objects(raw_text)
+    assert any(
+        c.get("channel_id") == "ch" and c.get("qa") == {"verdict": "PENDING_CLAUDE_QA"}
+        for c in candidates
+    ), candidates
+
+
+def test_extract_json_objects_leaves_complete_objects_untouched():
+    from video_agent.operator import extract_json_objects
+    raw_text = '{"a": 1}\n{"b": 2}'
+    candidates = extract_json_objects(raw_text)
+    assert candidates == [{"a": 1}, {"b": 2}]

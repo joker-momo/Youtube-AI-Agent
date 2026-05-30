@@ -125,8 +125,77 @@ def extract_json_objects(text: str) -> list[dict[str, Any]]:
         
         if not parsed_successfully:
             index = start + 1
-            
+
+    # Fallback: recover a truncated outermost object. Models occasionally cut
+    # off the stream before the final closing brace(s) (the browser-worker
+    # stability detector can latch a hair early). The inner objects above parse
+    # fine, but the intended root never closes, so it is missing here. Balance
+    # the open braces/brackets from the first '{' and retry. This is a no-op for
+    # already-complete output (nothing is left unclosed).
+    first = text.find("{")
+    if first != -1:
+        repaired_root = _repair_truncated_json_object(text[first:])
+        if repaired_root is not None and repaired_root not in objects:
+            objects.insert(0, repaired_root)
+
     return objects
+
+
+def _repair_truncated_json_object(span: str) -> dict[str, Any] | None:
+    """Best-effort repair of a JSON object truncated mid-stream.
+
+    Tracks string state, builds a stack of unclosed ``{``/``[``, and appends the
+    matching closers in reverse order. Returns the parsed dict, or ``None`` when
+    nothing was unclosed (input already complete) or the repair still fails.
+    """
+    stack: list[str] = []
+    in_string = False
+    escape = False
+    for char in span:
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char in "{[":
+            stack.append(char)
+        elif char == "}":
+            if stack and stack[-1] == "{":
+                stack.pop()
+        elif char == "]":
+            if stack and stack[-1] == "[":
+                stack.pop()
+    if not stack:
+        return None  # already balanced — not truncated
+
+    closers = "".join("}" if opener == "{" else "]" for opener in reversed(stack))
+    repaired = span.rstrip()
+    if in_string:
+        repaired += '"'
+    if repaired.endswith(","):
+        repaired = repaired[:-1]
+    repaired += closers
+
+    for attempt in (
+        repaired,
+        repaired.replace("\r\n", "\\n").replace("\r", "\\n").replace("\n", "\\n"),
+    ):
+        try:
+            parsed = json.loads(attempt)
+        except Exception:
+            continue
+        if isinstance(parsed, dict):
+            print(
+                "[operator] extract_json_objects: recovered truncated root object",
+                flush=True,
+            )
+            return parsed
+    return None
 
 
 def extract_json_object(text: str) -> dict[str, Any]:

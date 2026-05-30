@@ -76,7 +76,40 @@ def _dispatch_queue_job(
     if command == "stage_thumbnail_image_auto":
         asyncio.run(auto_thumbnail_image_stage(job_dir, channel_path, client.generate_image))
         return
+    if command == "shorts_autopilot":
+        _run_shorts_autopilot_job(job, job_dir=job_dir, channel_path=channel_path, client=client)
+        return
     raise ValueError(f"Unknown queue command: {command}")
+
+
+def _run_shorts_autopilot_job(job: dict, *, job_dir: Path, channel_path: Path, client: BrowserClient) -> None:
+    """Run the sequential Shorts autopilot in the worker (Node/Remotion + browser).
+
+    The worker container has Node, so the Short render runs here, not in the web
+    app. Each LLM call is a fresh browser ChatGPT send."""
+    import json as _json
+
+    from video_agent.shorts.autopilot import run_shorts_autopilot
+    from video_agent.shorts.short_builder import build_short
+    from video_agent.utils.json_io import read_yaml
+
+    payload: dict = {}
+    raw = job.get("payload")
+    if raw:
+        try:
+            payload = _json.loads(raw) if isinstance(raw, str) else dict(raw)
+        except Exception:
+            payload = {}
+    force = bool(payload.get("force"))
+    channel_config = read_yaml(channel_path)
+
+    def llm_fn(kind: str, prompt: str) -> str:
+        return asyncio.run(client.chatgpt_send(prompt))
+
+    def build_short_fn(long_job_dir, short_plan, cfg):
+        return build_short(long_job_dir, short_plan, cfg, llm_fn=llm_fn)
+
+    run_shorts_autopilot(job_dir, channel_config, force=force, build_short_fn=build_short_fn)
 
 
 def run_worker_loop(db_path: Path) -> None:

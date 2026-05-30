@@ -50,35 +50,20 @@ class SourceUrlRequest(BaseModel):
 
 # --- background runner (browser-bridged); monkeypatchable in tests ----------
 
-def enqueue_shorts_autopilot(job_dir: Path, channel_config: dict, *, force: bool, client: Any) -> None:
-    """Run the sequential autopilot in a background thread, bridging the
-    blocking per-short pipeline to the async browser worker."""
-    from video_agent.shorts.autopilot import run_shorts_autopilot
-    from video_agent.shorts.short_builder import build_short
+def enqueue_shorts_autopilot(job_dir: Path, channel_config: dict, *, force: bool, client: Any = None) -> None:
+    """Enqueue the Shorts autopilot to the background worker (Node/Remotion +
+    browser). The render needs Node, which the web app container lacks, so the
+    whole sequential autopilot runs in the worker via the job queue."""
+    from video_agent.orchestrator.queue import JobQueue
 
-    loop = asyncio.get_running_loop()
-
-    async def _runner() -> None:
-        sender, close = await client.open_persistent_session("chatgpt")
-
-        def llm_fn(kind: str, prompt: str) -> str:
-            fut = asyncio.run_coroutine_threadsafe(sender([prompt]), loop)
-            return fut.result()
-
-        def build_short_fn(long_job_dir, short_plan, cfg):
-            return build_short(long_job_dir, short_plan, cfg, llm_fn=llm_fn)
-
-        try:
-            await asyncio.to_thread(
-                run_shorts_autopilot, job_dir, channel_config, force=force, build_short_fn=build_short_fn
-            )
-        finally:
-            try:
-                await close()
-            except Exception:
-                pass
-
-    asyncio.create_task(_runner())
+    jobs_root = job_dir.parent
+    queue = JobQueue(jobs_root / "queue.db")
+    queue.enqueue(
+        job_dir.name,
+        enforce_approvals=False,
+        command="shorts_autopilot",
+        payload={"force": bool(force)},
+    )
 
 
 @router.get("/jobs/{job_id}/shorts")
@@ -128,15 +113,9 @@ async def post_render(
 ) -> dict:
     job_dir = _safe_job_dir(jobs_root, job_id)
     cfg = _channel_config(job_dir)
-
-    def _render() -> None:
-        from video_agent.shorts.renderer import render_short_cover, render_short_video
-
-        sd = paths.short_dir(job_dir, short_id)
-        render_short_video(sd, cfg)
-        render_short_cover(sd, cfg)
-
-    asyncio.create_task(asyncio.to_thread(_render))
+    # Render needs Node (worker container). Re-run the autopilot in the worker;
+    # already-rendered shorts are skipped, this short is (re)built + rendered.
+    enqueue_shorts_autopilot(job_dir, cfg, force=False, client=client)
     return {"status": "enqueued", "job_id": job_id, "short_id": short_id}
 
 

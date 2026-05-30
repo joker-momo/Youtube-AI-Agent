@@ -5,18 +5,25 @@ import json
 from pathlib import Path
 
 
-def test_materialize_short_job_aliases_writes_longform_names(tmp_path: Path):
+def test_materialize_short_job_aliases_emits_schema_valid_longform(tmp_path: Path):
     from video_agent.shorts import renderer
     sd = tmp_path / "short-01"
     sd.mkdir()
-    (sd / "short_script.json").write_text(json.dumps({"narration": "n", "hook": "h"}), encoding="utf-8")
-    (sd / "short_scenes.json").write_text(json.dumps({"scenes": [{"id": "s1"}]}), encoding="utf-8")
-    (sd / "short_seo.json").write_text(json.dumps({"title": "t"}), encoding="utf-8")
-    renderer.materialize_short_job_aliases(sd)
-    assert (sd / "script.json").exists()
-    assert (sd / "scenes.json").exists()
-    assert (sd / "seo.json").exists()
-    assert json.loads((sd / "scenes.json").read_text())["scenes"][0]["id"] == "s1"
+    (sd / "short_script.json").write_text(json.dumps({"narration": "n", "hook": "h", "cta": "c"}), encoding="utf-8")
+    (sd / "short_scenes.json").write_text(json.dumps({"scenes": [{"id": "s1", "duration_sec": 3.0}]}), encoding="utf-8")
+    (sd / "short_seo.json").write_text(json.dumps({"title": "t", "description": "d", "hashtags": ["#x"]}), encoding="utf-8")
+    renderer.materialize_short_job_aliases(sd, {"channel": {"id": "vida-plena-45"}})
+    script = json.loads((sd / "script.json").read_text())
+    for k in ("channel_id", "job_id", "hook", "sections", "narration", "cta", "qa"):
+        assert k in script, k
+    scenes = json.loads((sd / "scenes.json").read_text())
+    for k in ("channel_id", "job_id", "scenes", "total_duration_sec", "qa"):
+        assert k in scenes, k
+    assert scenes["scenes"][0]["id"] == "s1"
+    seo = json.loads((sd / "seo.json").read_text())
+    for k in ("job_id", "title", "description", "tags", "language", "ai_disclosure", "thumbnail_path", "thumbnail_text", "suggested_pinned_comments"):
+        assert k in seo, k
+    assert seo["tags"] == ["#x"]
 
 
 def test_build_cover_extract_command_uses_frame_sec(tmp_path: Path):

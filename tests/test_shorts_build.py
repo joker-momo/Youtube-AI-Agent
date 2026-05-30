@@ -234,3 +234,33 @@ def test_build_short_regenerates_then_needs_review_after_limit(tmp_path: Path):
     assert attempts["n"] == 3
     assert "render" not in calls  # never rendered a failing short
     assert not (paths.short_dir(job, "short-02") / "short.mp4").exists()
+
+
+# --- scene normalization (render/TTS compatibility) ------------------------
+
+def test_normalize_short_scenes_renames_scene_id_and_injects_narration():
+    from video_agent.shorts import short_scene_builder
+    scenes_doc = {
+        "scenes": [
+            {"scene_id": "s1", "duration_sec": 2.5, "on_screen_text": "Hook", "layout": "short_hook", "visual_prompt": "v"},
+            {"scene_id": "s2", "duration_sec": 4.0, "on_screen_text": "Tip", "layout": "short_tip", "visual_prompt": "v"},
+        ]
+    }
+    script = {"narration": "Primera idea clave. Segunda idea practica.", "hook": "Hook"}
+    out = short_scene_builder.normalize_short_scenes(scenes_doc, script)
+    scenes = out["scenes"]
+    # scene_id → id for render/TTS
+    assert all("id" in s for s in scenes)
+    assert scenes[0]["id"] == "s1"
+    # every scene has non-empty narration (TTS needs it)
+    assert all(str(s.get("narration", "")).strip() for s in scenes)
+    # narration distributed (not identical empty)
+    assert scenes[0]["narration"] != scenes[1]["narration"]
+
+
+def test_normalize_short_scenes_keeps_existing_narration():
+    from video_agent.shorts import short_scene_builder
+    scenes_doc = {"scenes": [{"scene_id": "s1", "narration": "Ya tengo voz.", "duration_sec": 3.0}]}
+    out = short_scene_builder.normalize_short_scenes(scenes_doc, {"narration": "otra"})
+    assert out["scenes"][0]["narration"] == "Ya tengo voz."
+    assert out["scenes"][0]["id"] == "s1"

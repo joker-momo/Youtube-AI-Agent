@@ -82,3 +82,14 @@ def test_build_mix_command_voice_not_attenuated(tmp_path: Path):
     s = " ".join(cmd)
     # only music gets negative volume; ensure exactly one volume= filter at -18dB
     assert s.count("volume=-18dB") == 1
+
+
+def test_real_channel_music_tracks_resolve_to_existing_files():
+    from pathlib import Path
+    from video_agent.contracts import repo_root
+    from video_agent.utils.json_io import read_yaml
+    from video_agent.shorts import audio_mixer
+    cfg = read_yaml(repo_root() / "configs/vida-plena-45/channel.yaml")
+    for track in ("shorts_movement", "shorts_daily_habit", "shorts_sleep_stress", "shorts_deep_calm"):
+        p = audio_mixer.resolve_music_file(track, cfg)
+        assert p is not None and p.exists(), track

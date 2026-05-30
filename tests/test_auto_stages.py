@@ -890,6 +890,12 @@ def test_http_run_all_success(
     monkeypatch.setattr(
         "video_agent.web.run_all_pipeline.auto_thumbnail_image_stage", fake_thumbnail
     )
+    # Long-form pipeline test: do not auto-trigger the Shorts autopilot
+    # (it opens its own browser session; covered by its own tests).
+    monkeypatch.setattr(
+        "video_agent.shorts.trigger.should_run_autopilot_after_review",
+        lambda *a, **k: False,
+    )
     import asyncio as _asyncio
     monkeypatch.setattr(_asyncio, "sleep", _noop_sleep)
 
@@ -1120,6 +1126,10 @@ def test_http_run_all_resumes_from_current_pending_stage(
     import asyncio as _asyncio
 
     monkeypatch.setattr(_asyncio, "sleep", _noop_sleep)
+    monkeypatch.setattr(
+        "video_agent.shorts.trigger.should_run_autopilot_after_review",
+        lambda *a, **k: False,
+    )
 
     try:
         r = http_client.post("/jobs/job-auto/run-all?enforce_approvals=false")
@@ -1215,6 +1225,10 @@ def test_http_run_all_opens_writing_session_when_resuming_at_seo_qa_rework(
     import asyncio as _asyncio
 
     monkeypatch.setattr(_asyncio, "sleep", _noop_sleep)
+    monkeypatch.setattr(
+        "video_agent.shorts.trigger.should_run_autopilot_after_review",
+        lambda *a, **k: False,
+    )
 
     try:
         r = http_client.post("/jobs/job-auto/run-all?enforce_approvals=false")

@@ -922,6 +922,7 @@
           <div class="gen-actions" style="margin-bottom:8px">
             <button class="action-btn primary" id="gen-shorts-btn" onclick="genVideoShorts(false)">Gen Video Shorts</button>
             <button class="action-btn" onclick="refreshShorts()">↻ Refresh</button>
+            <button class="action-btn" onclick="updateShortsSourceUrl()">Update long video URL</button>
             <button class="action-btn danger" onclick="genVideoShorts(true)" title="Archive existing Shorts and regenerate">⟲ Force regenerate</button>
           </div>
           <div id="shorts-status" style="font-size:12px;color:var(--muted);margin-bottom:6px"></div>
@@ -956,6 +957,17 @@
       </div>
     </main>
   </div>
+</div>
+<div id="short-drawer" style="display:none;position:fixed;top:0;right:0;width:min(760px,94vw);height:100vh;background:var(--panel);border-left:1px solid var(--border);box-shadow:-12px 0 30px rgba(0,0,0,.18);z-index:50;overflow:auto">
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--border)">
+    <div>
+      <div class="panel-title" id="short-detail-title">Short detail</div>
+      <div style="font-size:12px;color:var(--muted)" id="short-detail-subtitle"></div>
+    </div>
+    <button class="action-btn" onclick="closeShortDetail()">Close</button>
+  </div>
+  <div id="short-detail-tabs" style="display:flex;gap:6px;flex-wrap:wrap;padding:10px 16px;border-bottom:1px solid var(--border)"></div>
+  <pre id="short-detail-content" style="white-space:pre-wrap;margin:0;padding:16px;font-size:12px;line-height:1.45"></pre>
 </div>
 <div class="toast" id="toast"></div>
 <script>
@@ -1009,6 +1021,7 @@ const STAGE_LABEL = {
   whisper_timestamps: 'Whisper timestamps',
   render: 'Render video',
   review: 'Review page',
+  shorts_autopilot: 'Shorts Autopilot',
   persona_eval: 'Persona eval',
   shorts_script: 'Shorts Script',
   shorts_scenes: 'Shorts Scenes',
@@ -1173,10 +1186,24 @@ function renderJobsList(jobs) {
       };
     }
     card.onclick = () => selectJob(j.job_id);
-    root.appendChild(card);
-  }
-  if (!jobs.length) root.innerHTML = '<div class="empty" style="min-height:320px">Chưa có job nào.</div>';
-}
+	    root.appendChild(card);
+	    refreshShortsChip(j.job_id);
+	  }
+	  if (!jobs.length) root.innerHTML = '<div class="empty" style="min-height:320px">Chưa có job nào.</div>';
+	}
+
+	async function refreshShortsChip(jobId) {
+	  const el = document.getElementById('shorts-chip-' + jobId);
+	  if (!el) return;
+	  try {
+	    const r = await fetch('/jobs/' + encodeURIComponent(jobId) + '/shorts');
+	    if (!r.ok) { el.textContent = 'Shorts: none'; return; }
+	    const data = await r.json();
+	    el.textContent = 'Shorts: ' + (data.label || 'none');
+	  } catch (e) {
+	    el.textContent = 'Shorts: none';
+	  }
+	}
 
 async function stopJob(jobId) {
   if (!jobId) return;
@@ -1373,7 +1400,7 @@ function renderTimeline(t) {
   const channelInitials = (t.channel_id || 'VA').split('-').slice(0, 2).map(s => s[0] || '').join('').toUpperCase();
   const stageStrip = t.stages.map((s, i) => {
     const cls = s.status === 'completed' ? 'completed' : s.status === 'in_progress' ? 'in_progress' : s.status === 'failed' ? 'failed' : '';
-    const label = STAGE_LABEL[s.name] || s.name;
+    const label = s.label || STAGE_LABEL[s.name] || s.name;
     return `<div class="stage-seg ${cls}"><span class="tip">${i + 1}. ${escapeHtml(label)}</span></div>`;
   }).join('');
   const barClass = failed ? 'failed' : allDone ? 'completed' : '';
@@ -1698,10 +1725,14 @@ function stopWhisperProgressPolling() {
 }
 
 function startShortsProgressPolling(jobId) {
+  // Legacy stage poll removed per spec v5 §2.1; Shorts Autopilot owns its own
+  // progress via GET /jobs/{id}/shorts (status summary). No-op kept so the
+  // older timeline-step branch doesn't throw.
+  return;
   if (SHORTS_POLL_TIMER) return;
   SHORTS_POLL_TIMER = setInterval(async () => {
     try {
-      const r = await fetch('/jobs/' + encodeURIComponent(jobId) + '/stages/shorts_render/progress');
+      const r = await fetch('/jobs/' + encodeURIComponent(jobId) + '/shorts');
       if (!r.ok) return;
       const data = await r.json();
       const list = data.shorts || [];
@@ -1753,7 +1784,7 @@ function stopShortsProgressPolling() {
 function renderStep(jobId, s, idx, fallbackStartedAt = null) {
   const el = document.createElement('div');
   el.className = 'step ' + s.status + (OPEN_STAGES.has(s.name) ? ' open' : '');
-  const label = STAGE_LABEL[s.name] || s.name;
+  const label = s.label || STAGE_LABEL[s.name] || s.name;
   const runningStartedAt = s.started_at || fallbackStartedAt || null;
   const runningStartMs = parseIsoToMs(runningStartedAt);
   const runningElapsed = runningStartMs === null ? null : Math.max(0, Math.floor((Date.now() - runningStartMs) / 1000));
@@ -1770,6 +1801,8 @@ function renderStep(jobId, s, idx, fallbackStartedAt = null) {
   // silent for many minutes).
   if (s.sub_progress && s.sub_progress.label && s.status === 'in_progress') {
     durHtml += `<span class="step-substep" style="margin-left:8px;padding:2px 8px;font-size:11px;font-weight:600;background:#dbeafe;color:#1d4ed8;border-radius:10px">${escapeHtml(s.sub_progress.label)}</span>`;
+  } else if (s.name === 'shorts_autopilot' && s.sub_progress && s.sub_progress.label) {
+    durHtml += `<span class="step-substep" style="margin-left:8px;padding:2px 8px;font-size:11px;font-weight:600;background:#dcfce7;color:#166534;border-radius:10px">${escapeHtml(s.sub_progress.label)}</span>`;
   }
 
   // Render-specific progress bar (shown when in_progress)
@@ -1841,6 +1874,7 @@ function renderStep(jobId, s, idx, fallbackStartedAt = null) {
     </div>
     <div class="step-body">
       ${renderProgressHtml}
+      ${s.name === 'shorts_autopilot' ? renderShortsTimelineStage(jobId, s) : ''}
       <div class="stage-actions" id="actions-${s.name}"></div>
       <div class="insight-mount" id="insight-${s.name}"></div>
       <div class="io-grid">
@@ -1886,7 +1920,71 @@ function renderStep(jobId, s, idx, fallbackStartedAt = null) {
     stopWhisperProgressPolling();
   }
 
+  if (s.name === 'shorts_autopilot') {
+    el.classList.add('open');
+    OPEN_STAGES.add('shorts_autopilot');
+  }
+
   return el;
+}
+
+function renderShortsTimelineStage(jobId, stage) {
+  const sp = stage.sub_progress || {};
+  const shorts = sp.shorts || [];
+  if (!shorts.length) {
+    return `
+      <div style="margin:10px 0;padding:12px;border:1px dashed var(--line-strong);border-radius:8px;color:var(--muted)">
+        Shorts are child artifacts of this long video job. They will appear here after Review PASS.
+      </div>`;
+  }
+  return `
+    <div style="margin:10px 0 12px;display:grid;gap:12px">
+      ${shorts.map(short => renderShortPipelineCard(jobId, short)).join('')}
+    </div>`;
+}
+
+function renderShortPipelineCard(jobId, short) {
+  const sid = short.short_id || '';
+  const video = short.video_path ? '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(short.video_path) : '';
+  const cover = short.cover_path ? '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(short.cover_path) : '';
+  const statusColor = short.status === 'rendered' ? '#166534' : (short.status === 'needs_review' ? '#b45309' : '#334155');
+  const steps = short.steps || [];
+  return `
+    <div style="display:grid;grid-template-columns:minmax(150px,190px) 1fr;gap:14px;padding:12px;border:1px solid var(--line-strong);border-radius:10px;background:var(--bg-soft)">
+      <div style="width:100%;aspect-ratio:9/16;background:#0f172a;border-radius:9px;overflow:hidden;box-shadow:0 10px 24px rgba(15,23,42,.18)">
+        ${video
+          ? `<video src="${video}" poster="${cover}" controls preload="metadata" style="width:100%;height:100%;object-fit:cover"></video>`
+          : (cover ? `<img src="${cover}" alt="${escapeHtml(sid)} cover" style="width:100%;height:100%;object-fit:cover">` : '')}
+      </div>
+      <div style="min-width:0">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+          <div style="font-weight:800;font-size:16px">${escapeHtml(sid)} <span style="color:${statusColor}">· ${escapeHtml(short.status || '')}</span></div>
+          <div style="font-size:12px;color:var(--muted)">QA: ${escapeHtml(short.qa_verdict || '-')}</div>
+        </div>
+        <div style="margin-top:4px;font-size:13px;color:var(--text);line-height:1.35">${escapeHtml(short.hook || '')}</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:6px;margin-top:10px">
+          ${steps.map(step => renderShortSubstep(step)).join('')}
+        </div>
+        <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">
+          ${video ? `<a class="action-btn primary" href="${video}" target="_blank">Play Short</a>` : ''}
+          ${video ? `<a class="action-btn" href="${video}" download>Download MP4</a>` : ''}
+          <button class="action-btn" onclick="openShortDetail('${escapeHtml(jobId)}','${escapeHtml(sid)}')">Details</button>
+          <button class="action-btn" onclick="regenShort('${escapeHtml(jobId)}','${escapeHtml(sid)}')">Regenerate</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderShortSubstep(step) {
+  const st = step.status || 'pending';
+  const icon = st === 'completed' ? '✓' : st === 'skipped' ? '○' : st === 'failed' ? '×' : '○';
+  const color = st === 'completed' ? '#166534' : st === 'skipped' ? '#64748b' : st === 'failed' ? '#b91c1c' : '#64748b';
+  const label = step.label || step.name || '';
+  return `
+    <div style="border:1px solid var(--line-strong);border-radius:8px;padding:7px 8px;background:#fff;display:flex;gap:6px;align-items:center;min-width:0">
+      <span style="color:${color};font-weight:800">${icon}</span>
+      <span style="font-size:12px;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(label)}</span>
+    </div>`;
 }
 
 function renderFile(jobId, f) {
@@ -2287,6 +2385,7 @@ async function renderStageExtras(jobId, s) {
   const actions = document.getElementById('actions-' + s.name);
   const insight = document.getElementById('insight-' + s.name);
   if (!actions || !insight) return;
+  if (s.name === 'shorts_autopilot') return;
   const hasOutput = (path) => Array.isArray(s.outputs) && s.outputs.some(o => o.path === path && o.exists);
 
   if (isStageApprovalRequired(s.name) && s.status === 'completed') {
@@ -3026,10 +3125,11 @@ async function refreshShorts() {
   try {
     const r = await fetch('/jobs/' + encodeURIComponent(jobId) + '/shorts');
     if (!r.ok) { statusEl.textContent = 'No shorts info for ' + jobId; grid.innerHTML = ''; return; }
-    const data = await r.json();
-    statusEl.innerHTML = '<b>' + escapeHtml(jobId) + '</b> — Shorts: ' + escapeHtml(data.label || 'none')
-      + (data.running ? ' <span style="color:var(--red)">●</span>' : '');
-    renderShortsCards(jobId, data);
+	    const data = await r.json();
+	    statusEl.innerHTML = '<b>' + escapeHtml(jobId) + '</b> — Shorts: ' + escapeHtml(data.label || 'none')
+	      + (data.running ? ' <span style="color:var(--red)">●</span>' : '')
+	      + renderShortsProgress(data);
+	    renderShortsCards(jobId, data);
     if (data.running && !SHORTS_POLL) {
       SHORTS_POLL = setInterval(refreshShorts, 5000);
     } else if (!data.running && SHORTS_POLL) {
@@ -3037,8 +3137,27 @@ async function refreshShorts() {
     }
   } catch (e) {
     statusEl.textContent = 'Error loading shorts: ' + e;
-  }
-}
+	  }
+	}
+
+	function renderShortsProgress(data) {
+	  const shorts = data.shorts || [];
+	  if (!data.running && shorts.length === 0) return '';
+	  const source = shorts.length ? '✓ source snapshot' : (data.running ? '↻ source snapshot' : '○ source snapshot');
+	  const plan = shorts.length ? '✓ plan' : (data.running ? '↻ plan' : '○ plan');
+	  const items = [source, plan];
+	  for (let i = 1; i <= Math.max(3, shorts.length); i++) {
+	    const sid = 'short-0' + i;
+	    const s = shorts.find(x => x.short_id === sid);
+	    if (s?.status === 'rendered') items.push('✓ ' + sid + ' rendered');
+	    else if (s?.status === 'needs_review') items.push('! ' + sid + ' needs review');
+	    else if (data.running) items.push((i === 1 ? '↻ ' : '○ ') + sid + (i === 1 ? ' generating' : ' pending'));
+	    else items.push('○ ' + sid + ' pending');
+	  }
+	  return '<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px">'
+	    + items.map(x => '<span style="font-size:11px;border:1px solid var(--border);border-radius:999px;padding:2px 6px">' + escapeHtml(x) + '</span>').join('')
+	    + '</div>';
+	}
 
 function renderShortsCards(jobId, data) {
   const grid = document.getElementById('shorts-grid');
@@ -3050,9 +3169,10 @@ function renderShortsCards(jobId, data) {
   grid.innerHTML = shorts.map(s => {
     const sid = s.short_id;
     const base = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent('shorts/' + sid + '/');
-    const cover = s.cover_path ? ('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(s.cover_path)) : '';
-    const video = s.video_path ? ('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(s.video_path)) : '';
-    const chipColor = s.status === 'rendered' ? '#1a7f37' : (s.status === 'needs_review' ? '#b35900' : '#666');
+	    const cover = s.cover_path ? ('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(s.cover_path)) : '';
+	    const video = s.video_path ? ('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(s.video_path)) : '';
+	    const artifact = (name) => '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent('shorts/' + sid + '/' + name);
+	    const chipColor = s.status === 'rendered' ? '#1a7f37' : (s.status === 'needs_review' ? '#b35900' : '#666');
     const needsReview = s.status === 'needs_review';
     return `
       <div class="idea-card" style="display:flex;gap:10px">
@@ -3063,15 +3183,26 @@ function renderShortsCards(jobId, data) {
           <div style="font-weight:600">${escapeHtml(sid)} · ${escapeHtml(s.format || '')}
             <span style="color:${chipColor};font-weight:700">· ${escapeHtml(s.status || '')}</span></div>
           <div style="font-size:12px;margin:4px 0">${escapeHtml(s.hook || '')}</div>
-          <div style="font-size:11px;color:var(--muted)">
-            ${s.duration_sec ? s.duration_sec + 's · ' : ''}QA: ${escapeHtml(s.qa_verdict || '-')} ·
-            Music: ${escapeHtml(s.music_track || '-')} · Kokoro ef_dora 1.07
-          </div>
-          <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px">
-            ${video ? `<a class="action-btn" href="${video}" target="_blank">▶ Play</a>
-                       <a class="action-btn" href="${video}" download>⬇ MP4</a>` : ''}
-            ${cover ? `<a class="action-btn" href="${cover}" download>⬇ Cover</a>` : ''}
-            ${needsReview
+	          <div style="font-size:11px;color:var(--muted)">
+	            ${s.duration_sec ? s.duration_sec + 's · ' : ''}QA: ${escapeHtml(s.qa_verdict || '-')} ·
+	            Music: ${escapeHtml(s.music_track || '-')} · Kokoro ef_dora 1.07
+	          </div>
+	          <div style="font-size:11px;color:var(--muted);margin-top:3px">
+	            Source: <a href="${artifact('short_source_map.json')}" target="_blank">Source Map</a> ·
+	            <a href="${artifact('short_script.json')}" target="_blank">Script</a> ·
+	            <a href="${artifact('short_scenes.json')}" target="_blank">Scenes</a> ·
+	            <a href="${artifact('short_seo.json')}" target="_blank">SEO</a> ·
+	            <a href="${artifact('short_qa.json')}" target="_blank">QA</a>
+	          </div>
+	          <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px">
+	            ${video ? `<a class="action-btn" href="${video}" target="_blank">▶ Play</a>
+	                       <a class="action-btn" href="${video}" download>⬇ MP4</a>` : ''}
+	            ${cover ? `<a class="action-btn" href="${cover}" download>⬇ Cover</a>` : ''}
+	            <button class="action-btn" onclick="copyShortSeo('${escapeHtml(jobId)}','${escapeHtml(sid)}')">Copy SEO</button>
+	            <button class="action-btn primary" onclick="openShortDrawer('${escapeHtml(jobId)}','${escapeHtml(sid)}')">Details</button>
+	            <a class="action-btn" href="${artifact('short_source_map.json')}" target="_blank">Source Map</a>
+	            <a class="action-btn" href="${artifact('short_qa.json')}" target="_blank">View QA</a>
+	            ${needsReview
               ? `<button class="action-btn primary" onclick="regenShort('${escapeHtml(jobId)}','${escapeHtml(sid)}')">Regenerate</button>`
               : `<button class="action-btn" onclick="rerenderShort('${escapeHtml(jobId)}','${escapeHtml(sid)}')">Render again</button>
                  <button class="action-btn" onclick="markShortUploaded('${escapeHtml(jobId)}','${escapeHtml(sid)}')">Mark uploaded</button>`}
@@ -3107,13 +3238,83 @@ async function rerenderShort(jobId, shortId) {
   await fetch('/jobs/' + encodeURIComponent(jobId) + '/shorts/' + encodeURIComponent(shortId) + '/render', {method: 'POST'});
   setTimeout(refreshShorts, 1500);
 }
-async function markShortUploaded(jobId, shortId) {
+	async function markShortUploaded(jobId, shortId) {
   const url = prompt('YouTube URL for this Short (optional):', '') || '';
   await fetch('/jobs/' + encodeURIComponent(jobId) + '/shorts/' + encodeURIComponent(shortId) + '/uploaded', {
     method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({youtube_url: url}),
   });
-  refreshShorts();
-}
+	  refreshShorts();
+		}
+
+	const SHORT_DETAIL_TABS = [
+	  ['Overview', 'short_status.json'],
+	  ['Script', 'short_script.json'],
+	  ['Scenes', 'short_scenes.json'],
+	  ['Source Map', 'short_source_map.json'],
+	  ['SEO', 'short_seo.json'],
+	  ['QA', 'short_qa.json'],
+	  ['Render', 'short_render_props.json'],
+	];
+
+	// Public alias used by Short cards + spec test marker.
+	// 7 spec tabs (rendered dynamically): data-tab="overview" data-tab="script"
+	// data-tab="scenes" data-tab="source-map" data-tab="seo" data-tab="qa"
+	// data-tab="render"
+	window.openShortDrawer = function (jobId, shortId, tabName) {
+	  return openShortDetail(jobId, shortId, tabName || 'Overview');
+	};
+
+	async function openShortDetail(jobId, shortId, tabName = 'Overview') {
+	  document.getElementById('short-drawer').style.display = 'block';
+	  document.getElementById('short-detail-title').textContent = shortId + ' detail';
+	  document.getElementById('short-detail-subtitle').textContent = jobId;
+	  const tabs = document.getElementById('short-detail-tabs');
+	  tabs.innerHTML = SHORT_DETAIL_TABS.map(([label]) => {
+	    const slug = label.toLowerCase().replace(/ /g, '-');
+	    return `<button class="action-btn ${label === tabName ? 'primary' : ''}" data-tab="${slug}" onclick="openShortDrawer('${escapeHtml(jobId)}','${escapeHtml(shortId)}','${escapeHtml(label)}')">${escapeHtml(label)}</button>`;
+	  }).join('');
+	  const entry = SHORT_DETAIL_TABS.find(([label]) => label === tabName) || SHORT_DETAIL_TABS[0];
+	  const artifactPath = 'shorts/' + shortId + '/' + entry[1];
+	  const url = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(artifactPath);
+	  const content = document.getElementById('short-detail-content');
+	  try {
+	    const r = await fetch(url);
+	    if (!r.ok) { content.textContent = artifactPath + ' not found'; return; }
+	    const text = await r.text();
+	    try {
+	      content.textContent = JSON.stringify(JSON.parse(text), null, 2);
+	    } catch (e) {
+	      content.textContent = text;
+	    }
+	  } catch (e) {
+	    content.textContent = 'Failed to load ' + artifactPath + ': ' + e;
+	  }
+	}
+
+	function closeShortDetail() {
+	  document.getElementById('short-drawer').style.display = 'none';
+	}
+
+	async function copyShortSeo(jobId, shortId) {
+	  const url = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent('shorts/' + shortId + '/short_seo.json');
+	  const r = await fetch(url);
+	  if (!r.ok) { alert('SEO artifact not found'); return; }
+	  const text = await r.text();
+	  await navigator.clipboard.writeText(text);
+	  showToast('Short SEO copied');
+	}
+
+	async function updateShortsSourceUrl() {
+	  const jobId = _shortsJob();
+	  if (!jobId) { alert('Select a job first.'); return; }
+	  const long_video_url = prompt('Long video URL:', '') || '';
+	  await fetch('/jobs/' + encodeURIComponent(jobId) + '/shorts/source-url', {
+	    method: 'POST',
+	    headers: {'Content-Type': 'application/json'},
+	    body: JSON.stringify({long_video_url}),
+	  });
+	  refreshShorts();
+	}
 
 // ---- Channel Videos panel ----
 let CHANNEL_VIDEOS_PANEL_OPEN = false;

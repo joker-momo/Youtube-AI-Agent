@@ -79,6 +79,9 @@ def _dispatch_queue_job(
     if command == "shorts_autopilot":
         _run_shorts_autopilot_job(job, job_dir=job_dir, channel_path=channel_path, client=client)
         return
+    if command == "shorts_render_one":
+        _run_short_render_job(job, job_dir=job_dir, channel_path=channel_path)
+        return
     raise ValueError(f"Unknown queue command: {command}")
 
 
@@ -101,6 +104,7 @@ def _run_shorts_autopilot_job(job: dict, *, job_dir: Path, channel_path: Path, c
         except Exception:
             payload = {}
     force = bool(payload.get("force"))
+    target_short_id = payload.get("short_id") or None
     channel_config = read_yaml(channel_path)
 
     def llm_fn(kind: str, prompt: str) -> str:
@@ -109,7 +113,68 @@ def _run_shorts_autopilot_job(job: dict, *, job_dir: Path, channel_path: Path, c
     def build_short_fn(long_job_dir, short_plan, cfg):
         return build_short(long_job_dir, short_plan, cfg, llm_fn=llm_fn)
 
-    run_shorts_autopilot(job_dir, channel_config, force=force, build_short_fn=build_short_fn)
+    run_shorts_autopilot(
+        job_dir,
+        channel_config,
+        force=force,
+        target_short_id=target_short_id,
+        build_short_fn=build_short_fn,
+    )
+
+
+def _run_short_render_job(job: dict, *, job_dir: Path, channel_path: Path) -> None:
+    """Render one existing Short again without regenerating script/scenes/SEO."""
+    import json as _json
+
+    from video_agent.shorts import manifest as manifest_mod
+    from video_agent.shorts import paths
+    from video_agent.shorts.renderer import render_short_cover, render_short_video
+    from video_agent.utils.json_io import read_yaml
+
+    payload: dict = {}
+    raw = job.get("payload")
+    if raw:
+        try:
+            payload = _json.loads(raw) if isinstance(raw, str) else dict(raw)
+        except Exception:
+            payload = {}
+    short_id = payload.get("short_id")
+    if not short_id:
+        raise ValueError("shorts_render_one requires payload.short_id")
+
+    short_dir = paths.short_dir(job_dir, short_id)
+    if not short_dir.exists():
+        raise FileNotFoundError(f"Unknown short: {short_id}")
+
+    channel_config = read_yaml(channel_path)
+    video_path = render_short_video(short_dir, channel_config)
+    cover_path = render_short_cover(short_dir, channel_config)
+
+    status_path = paths.short_status_path(job_dir, short_id)
+    status = {}
+    if status_path.exists():
+        status = _json.loads(status_path.read_text(encoding="utf-8"))
+    status.update(
+        {
+            "short_id": short_id,
+            "status": "rendered",
+            "rendered": True,
+            "video_path": f"shorts/{short_id}/{paths.SHORT_VIDEO_FILE}",
+            "cover_path": f"shorts/{short_id}/{paths.SHORT_COVER_FILE}",
+        }
+    )
+    manifest_mod.write_short_status(job_dir, short_id, status)
+
+    manifest_path = paths.manifest_path(job_dir)
+    if manifest_path.exists():
+        manifest = _json.loads(manifest_path.read_text(encoding="utf-8"))
+        for entry in manifest.get("shorts") or []:
+            if entry.get("short_id") == short_id:
+                entry["status"] = "rendered"
+                entry["video_path"] = f"shorts/{short_id}/{paths.SHORT_VIDEO_FILE}"
+                entry["cover_path"] = f"shorts/{short_id}/{paths.SHORT_COVER_FILE}"
+                break
+        manifest_mod.write_manifest(job_dir, manifest)
 
 
 def run_worker_loop(db_path: Path) -> None:

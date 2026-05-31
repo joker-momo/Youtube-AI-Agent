@@ -358,6 +358,15 @@ def job_timeline(
             item["sub_progress"] = sub_progress
         items.append(item)
 
+    shorts_stage = _shorts_timeline_stage(job_dir)
+    if shorts_stage is not None:
+        items.append(shorts_stage)
+        total_stages += 1
+        if shorts_stage.get("status") == "completed":
+            completed_so_far += 1
+        elif shorts_stage.get("status") != "completed":
+            remaining_eta += int(shorts_stage.get("eta_seconds") or 0)
+
     pct = (100.0 * completed_so_far / total_stages) if total_stages else 0
     approvals = load_approvals(job_dir)
     stop_requested = stop_request_path(job_dir).exists()
@@ -378,6 +387,100 @@ def job_timeline(
             state.get("current_stage"), approvals
         ),
         "stop_requested": stop_requested,
+    }
+
+
+def _shorts_timeline_stage(job_dir: Path) -> dict | None:
+    """Virtual final timeline stage for Shorts child artifacts.
+
+    DEFAULT_STAGES stays long-form only; this projected stage makes the job
+    detail timeline show Shorts as the final child pipeline of the long job.
+    """
+    try:
+        from video_agent.shorts import status as shorts_status
+
+        summary = shorts_status.summarize_shorts(job_dir)
+    except Exception:
+        return None
+
+    manifest_exists = (job_dir / "shorts" / "shorts_manifest.json").exists()
+    running = bool(summary.get("running"))
+    shorts = list(summary.get("shorts") or [])
+    if not running and not manifest_exists and not shorts:
+        return None
+
+    state = summary.get("state") or "none"
+    if running:
+        stage_status = "in_progress"
+    elif state == "failed":
+        stage_status = "failed"
+    elif manifest_exists:
+        stage_status = "completed"
+    else:
+        stage_status = "pending"
+
+    outputs = [
+        {"path": "shorts/shorts_manifest.json", "exists": manifest_exists, "size": 0},
+        {
+            "path": "shorts/autopilot_run.json",
+            "exists": (job_dir / "shorts" / "autopilot_run.json").exists(),
+            "size": 0,
+        },
+    ]
+    for output in outputs:
+        p = resolve_inside(job_dir, output["path"])
+        if p and p.exists():
+            output["size"] = p.stat().st_size
+
+    short_steps = []
+    for entry in shorts:
+        short_id = entry.get("short_id")
+        qa = entry.get("qa_verdict") or "-"
+        status_name = entry.get("status") or "pending"
+        rendered = status_name == "rendered"
+        needs_review = status_name == "needs_review"
+        steps = [
+            {"name": "idea", "status": "completed"},
+            {"name": "script", "status": "completed"},
+            {"name": "scenes", "status": "completed"},
+            {"name": "source_map", "status": "completed"},
+            {"name": "seo", "status": "completed"},
+            {"name": "qa", "status": "completed" if qa == "PASS" or needs_review else "pending", "label": f"QA {qa}"},
+            {"name": "audio_mix", "status": "completed" if rendered else ("skipped" if needs_review else "pending")},
+            {"name": "render", "status": "completed" if rendered else ("skipped" if needs_review else "pending")},
+        ]
+        short_steps.append(
+            {
+                "short_id": short_id,
+                "status": status_name,
+                "qa_verdict": qa,
+                "hook": entry.get("hook", ""),
+                "video_path": entry.get("video_path", ""),
+                "cover_path": entry.get("cover_path", ""),
+                "steps": steps,
+            }
+        )
+
+    return {
+        "name": "shorts_autopilot",
+        "label": "Shorts Autopilot",
+        "status": stage_status,
+        "started_at": None,
+        "completed_at": None,
+        "error": None,
+        "inputs": [
+            {"path": "video.mp4", "exists": (job_dir / "video.mp4").exists(), "size": ((job_dir / "video.mp4").stat().st_size if (job_dir / "video.mp4").exists() else 0)},
+            {"path": "review.json", "exists": (job_dir / "review.json").exists(), "size": ((job_dir / "review.json").stat().st_size if (job_dir / "review.json").exists() else 0)},
+        ],
+        "outputs": outputs,
+        "actual_seconds": None,
+        "eta_seconds": 0 if stage_status == "completed" else 300,
+        "sub_progress": {
+            "kind": "shorts_autopilot",
+            "label": summary.get("label", "none"),
+            "counts": summary.get("counts") or {},
+            "shorts": short_steps,
+        },
     }
 
 
@@ -886,25 +989,9 @@ def get_whisper_progress(
     }
 
 
-@router.get("/jobs/{job_id}/stages/shorts_render/progress")
-def get_shorts_render_progress(
-    job_id: str,
-    jobs_root: Path = Depends(get_jobs_root),
-) -> dict:
-    """Return current Remotion render progress for all 4 Shorts. Polling-friendly — always 200."""
-    job_dir = _safe_job_dir(jobs_root, job_id)
-    shorts = []
-    for i in range(1, 5):
-        progress_path = job_dir / "shorts" / str(i) / "render_progress.json"
-        if not progress_path.exists():
-            shorts.append({"percent": 0, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""})
-        else:
-            try:
-                import json as _json
-                shorts.append(_json.loads(progress_path.read_text(encoding="utf-8")))
-            except Exception:
-                shorts.append({"percent": 0, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""})
-    return {"shorts": shorts}
+# Legacy Shorts render progress route removed per spec v5 §2.1. The Shorts
+# Autopilot owns shorts/ now; see /jobs/{id}/shorts (status summary) and
+# routes/shorts.py.
 
 
 @router.post("/jobs/{job_id}/stages/review/run")

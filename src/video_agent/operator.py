@@ -394,6 +394,16 @@ def _normalize_youtube_description(desc: str) -> str:
     return "\n".join(cleaned).strip() + "\n"
 
 
+def _canonicalize_channel_name_whitespace(text: str, channel_config: dict[str, Any] | None) -> str:
+    channel = (channel_config or {}).get("channel") or {}
+    channel_name = str(channel.get("name") or "").strip()
+    parts = channel_name.split()
+    if len(parts) < 2:
+        return text
+    pattern = r"\s+".join(re.escape(part) for part in parts)
+    return re.sub(pattern, channel_name, text, flags=re.IGNORECASE)
+
+
 def _score_and_sort_seo_variants(seo: dict[str, Any]) -> dict[str, Any]:
     """Score title_variants, sort best-first, backfill top-level title + thumbnail_text."""
     from video_agent.seo.title_scorer import score_variants
@@ -588,12 +598,21 @@ def _normalize_seo_candidate(
     # then rewrite the chapter block against the real scene timeline when we
     # have scenes.json available.
     if "description" in parsed and isinstance(parsed["description"], str):
+        parsed["description"] = _canonicalize_channel_name_whitespace(
+            parsed["description"], channel_config
+        )
         parsed["description"] = _normalize_youtube_description(parsed["description"])
+        parsed["description"] = _canonicalize_channel_name_whitespace(
+            parsed["description"], channel_config
+        )
         if scene_doc:
             chapters = _compute_chapter_timestamps(scene_doc, script)
             if chapters:
                 parsed["description"] = _rewrite_description_chapters(
                     parsed["description"], chapters
+                )
+                parsed["description"] = _canonicalize_channel_name_whitespace(
+                    parsed["description"], channel_config
                 )
 
     # Normalize title_variants
@@ -639,6 +658,10 @@ def _normalize_seo_candidate(
                 "¿Qué opinas de estos consejos? Cuéntanos en los comentarios. 👇\n\n"
                 "Si te gustó el video, ¡suscríbete para más contenido de bienestar! 🔔 https://www.youtube.com/channel/UCKUswqsAaLsEkcsgzTuKAmw?sub_confirmation=1"
             )
+    if isinstance(parsed.get("suggested_pinned_comments"), str):
+        parsed["suggested_pinned_comments"] = _canonicalize_channel_name_whitespace(
+            parsed["suggested_pinned_comments"], channel_config
+        )
     return parsed
 
 
@@ -1792,30 +1815,3 @@ def write_operator_review(job_dir: Path, output_path: Path | None = None) -> Pat
 # Backward-compatible alias for callers not yet migrated.
 _gemini_qa_prompt = _claude_qa_prompt
 
-def _chatgpt_shorts_script_prompt(channel_config: dict[str, Any], long_script: dict[str, Any]) -> str:
-    from video_agent.operator import escape
-    from video_agent.utils.json_io import write_json
-    return f"""You are an expert YouTube Shorts creator.
-I have a script for a LONG YouTube video.
-Your task is to extract and generate exactly 4 short scripts (Vertical 9:16 format, under 60 seconds) based on the long video script.
-Each short should focus on ONE single sub-topic or highlight.
-End each short with a CTA (Call to action) pointing to the long video on the channel.
-
-The channel is:
-{channel_config.get('name', 'Unknown')}
-Topics: {', '.join(channel_config.get('content_topics', []))}
-
-The long video script is:
-{json.dumps(long_script, ensure_ascii=False, indent=2)}
-
-RETURN A VALID JSON ARRAY OF 4 OBJECTS.
-Schema for each object:
-{{
-  "title": "Short title",
-  "hook": "Strong 3-second hook text",
-  "narration": "Full narration script for the short...",
-  "cta": "Call to action text"
-}}
-
-Output ONLY the raw JSON array.
-"""

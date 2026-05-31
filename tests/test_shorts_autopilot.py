@@ -269,3 +269,88 @@ def test_run_all_pipeline_does_not_import_legacy_shorts_stage_calls():
     src = inspect.getsource(run_all_pipeline)
     assert "auto_shorts_script_stage(" not in src
     assert "auto_shorts_render_stage(" not in src
+
+
+def test_legacy_shorts_prompt_is_removed():
+    """Spec §2.1: _chatgpt_shorts_script_prompt must be removed (not just
+    deprecated) so no caller can use the old prompt path."""
+    import video_agent.operator as op
+    assert not hasattr(op, "_chatgpt_shorts_script_prompt")
+
+
+# ============================================================================
+# Spec compliance v5: §8.3 resume, §18.4 single-short regen, §3.4 exclusive lock
+# ============================================================================
+
+# --- §8.3 resume behavior ---------------------------------------------------
+
+def test_autopilot_resumes_skips_already_rendered_shorts(tmp_path: Path):
+    """When short-01 is already rendered (per short_status.json), autopilot
+    must skip its build and only run remaining shorts."""
+    from video_agent.shorts import autopilot, manifest
+    job = _make_long_job(tmp_path)
+    # Mark short-01 as already rendered in its short_status.json
+    manifest.write_short_status(job, "short-01", {
+        "short_id": "short-01", "status": "rendered", "rendered": True, "qa_verdict": "PASS",
+    })
+
+    built: list[str] = []
+
+    def fake_plan(long_job_dir, channel_config, requested_count=None):
+        return {"selected_shorts": [{"short_id": f"short-0{i}"} for i in (1, 2, 3)], "warnings": []}
+
+    def fake_build(long_job_dir, short_plan, cfg):
+        built.append(short_plan["short_id"])
+        return {"short_id": short_plan["short_id"], "status": "rendered", "qa_verdict": "PASS"}
+
+    cfg = {"shorts": {"autopilot": {}}}
+    result = autopilot.run_shorts_autopilot(job, cfg, plan_fn=fake_plan, build_short_fn=fake_build)
+    # short-01 must be skipped (already rendered), only 02 + 03 built
+    assert built == ["short-02", "short-03"]
+    assert result["rendered_count"] == 3  # 1 skipped (already rendered) + 2 freshly built
+
+
+def test_autopilot_force_rebuilds_already_rendered_shorts(tmp_path: Path):
+    """force=true must rebuild every short even if short_status says rendered."""
+    from video_agent.shorts import autopilot, manifest
+    job = _make_long_job(tmp_path)
+    manifest.write_short_status(job, "short-01", {"short_id": "short-01", "status": "rendered", "rendered": True})
+
+    built: list[str] = []
+
+    def fake_plan(long_job_dir, channel_config, requested_count=None):
+        return {"selected_shorts": [{"short_id": "short-01"}], "warnings": []}
+
+    def fake_build(long_job_dir, short_plan, cfg):
+        built.append(short_plan["short_id"])
+        return {"short_id": short_plan["short_id"], "status": "rendered", "qa_verdict": "PASS"}
+
+    cfg = {"shorts": {"autopilot": {"archive_on_force_regenerate": True}}}
+    autopilot.run_shorts_autopilot(job, cfg, plan_fn=fake_plan, build_short_fn=fake_build, force=True)
+    assert built == ["short-01"]
+
+
+# --- §3.4 exclusive lock ---------------------------------------------------
+
+def test_autopilot_lock_blocks_concurrent_runs(tmp_path: Path):
+    """A second autopilot run while a first is holding the lock must refuse
+    cleanly instead of silently racing."""
+    from video_agent.shorts import autopilot, paths
+    job = _make_long_job(tmp_path)
+
+    # Pre-acquire the lock as if another process held it (fcntl exclusive).
+    import fcntl
+    paths.shorts_dir(job).mkdir(parents=True, exist_ok=True)
+    held = open(paths.autopilot_lock_path(job), "w")
+    fcntl.flock(held.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        cfg = {"shorts": {"autopilot": {}}}
+        result = autopilot.run_shorts_autopilot(
+            job, cfg,
+            plan_fn=lambda *a, **k: {"selected_shorts": [{"short_id": "short-01"}], "warnings": []},
+            build_short_fn=lambda *a, **k: {"short_id": "short-01", "status": "rendered", "qa_verdict": "PASS"},
+        )
+    finally:
+        fcntl.flock(held.fileno(), fcntl.LOCK_UN)
+        held.close()
+    assert result["status"] == "locked"

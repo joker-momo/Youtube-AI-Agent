@@ -23,6 +23,15 @@ def extract_json_envelope(raw_text: str) -> dict[str, Any]:
     candidates = extract_json_objects(raw_text)
     if not candidates:
         raise ShardValidationError("No JSON envelope found in model response.")
+    # Prefer the actual envelope (the object carrying ``artifact_type``). When
+    # the model truncates a long envelope mid-stream, ``extract_json_objects``
+    # also yields the complete inner objects (data / individual scenes) plus a
+    # repaired outer root; blindly taking the last candidate can return an inner
+    # object that lacks ``artifact_type``. Pick the last candidate that is an
+    # envelope; fall back to the last object otherwise.
+    for candidate in reversed(candidates):
+        if isinstance(candidate, dict) and "artifact_type" in candidate:
+            return candidate
     return candidates[-1]
 
 

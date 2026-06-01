@@ -55,6 +55,28 @@ def test_extract_json_envelope_from_raw_text():
     assert extract_json_envelope(raw)["artifact_type"] == "scenes_batch"
 
 
+def test_extract_json_envelope_prefers_envelope_when_truncated_with_inner_scenes():
+    # ChatGPT truncates a long scenes_batch mid-stream: the inner scene objects
+    # are complete and parse individually, but the outer envelope never closes.
+    # extract_json_objects then yields the inner scenes plus a repaired root.
+    # The envelope (the object carrying artifact_type) must win, not the last
+    # complete inner scene object.
+    full = _envelope(
+        data={
+            "scene_start": "scene-01",
+            "scene_end": "scene-02",
+            "scenes": [_scene("scene-01"), _scene("scene-02")],
+        }
+    )
+    raw = json.dumps(full)
+    truncated = raw[: raw.rfind("]")]  # cut before scenes-array close + trailing braces
+
+    env = extract_json_envelope(truncated)
+
+    assert env.get("artifact_type") == "scenes_batch"
+    assert env.get("job_id") == "job-a"
+
+
 def test_validate_envelope_rejects_wrong_job_id():
     env = _envelope(job_id="other")
     with pytest.raises(ShardValidationError, match="job_id"):

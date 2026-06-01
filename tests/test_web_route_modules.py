@@ -75,19 +75,20 @@ def test_dashboard_filters_blocked_keyword_related_keywords_from_insights():
     assert ".filter(r => !isBlockedKeywordLabel" in dashboard_text
 
 
-def test_dashboard_adds_from_idea_title_and_full_idea_job_actions():
+def test_dashboard_adds_idea_from_title_and_full_idea_job_actions():
     dashboard_path = Path(__file__).resolve().parents[1] / "src" / "video_agent" / "web" / "dashboard.html"
     dashboard_text = dashboard_path.read_text(encoding="utf-8")
 
     assert "Create video from idea" in dashboard_text
-    assert "/jobs/from-idea-title" in dashboard_text
+    # Title input now produces an enriched idea (Idea Generator card), not a job.
+    assert "ideas/from-title" in dashboard_text
+    assert "/jobs/from-idea-title" not in dashboard_text
+    # The video is still created via the per-idea Run Job action.
     assert "/jobs/from-idea" in dashboard_text
     assert "Run Job" in dashboard_text
-    assert "duration_mode" in dashboard_text
-    assert "duplicate_policy" in dashboard_text
     assert "id=\"itj-status\"" in dashboard_text
     assert "function isActuallyRunning" in dashboard_text
-    assert "Job created only. Click Resume to start the pipeline." in dashboard_text
+    assert "click Run Job on its card to make the video" in dashboard_text
 
 
 def test_app_service_mounts_inputs_for_generated_ideas():

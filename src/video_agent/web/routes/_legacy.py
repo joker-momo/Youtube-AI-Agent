@@ -1236,6 +1236,10 @@ class GenerateIdeasRequest(BaseModel):
     count: int = 10
 
 
+class IdeaFromTitleRequest(BaseModel):
+    title_seed: str
+
+
 class ScoreIdeasRequest(BaseModel):
     ideas: list[dict]
 
@@ -1728,6 +1732,31 @@ async def post_generate_ideas(
         "duplicate_candidates": duplicate_candidates,
         "duplicate_count": len(duplicate_candidates),
     }
+
+
+@router.post("/channels/{channel_id}/ideas/from-title", status_code=201)
+async def post_idea_from_title(
+    channel_id: str,
+    req: IdeaFromTitleRequest,
+    inputs_root: Path = Depends(get_inputs_root),
+    jobs_root: Path = Depends(get_jobs_root),
+    client: BrowserClient = Depends(get_browser_client),
+) -> dict:
+    """Expand a bare title into one enriched idea (Idea Generator card shape).
+
+    No job is created — the idea is saved and returned so the UI can render it
+    as a card; the video is created later via ``/jobs/from-idea``.
+    """
+    _safe_channel_id(channel_id)
+    from video_agent.web.services.video_job_creator import create_idea_from_title
+
+    return await create_idea_from_title(
+        channel_id=channel_id,
+        title_seed=req.title_seed,
+        jobs_root=jobs_root,
+        inputs_root=inputs_root,
+        browser_client=client,
+    )
 
 
 @router.post("/jobs/{job_id}/stages/script/auto")

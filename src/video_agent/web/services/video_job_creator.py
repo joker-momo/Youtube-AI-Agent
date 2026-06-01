@@ -15,7 +15,11 @@ from video_agent.contracts import repo_root
 from video_agent.orchestrator import JobAlreadyExistsError, create_job
 from video_agent.orchestrator.browser_client import BrowserClient, BrowserClientError
 from video_agent.orchestrator.idea_expander import IdeaExpansionError, expand_title_to_idea
-from video_agent.orchestrator.idea_generator import load_published_videos
+from video_agent.orchestrator.idea_generator import (
+    find_duplicate,
+    load_published_videos,
+    save_ideas,
+)
 from video_agent.orchestrator.queue import JobQueue
 from video_agent.storage.atomic import atomic_write_json
 from video_agent.utils.json_io import read_json, read_yaml
@@ -24,7 +28,6 @@ from video_agent.utils.validation import validate_json
 
 IDEA_FILE = "idea.json"
 _SAFE_JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-_ALLOWED_TITLE_POLICIES = {"block", "rewrite_angle", "warn_only"}
 _ALLOWED_IDEA_POLICIES = {"block", "warn_only"}
 _BANNED_HEALTH_CLAIMS = ("cura", "curar", "garantiza", "elimina", "milagro")
 
@@ -320,127 +323,6 @@ def _apply_duplicate_policy(
     return verdict
 
 
-def _chatgpt_duplicate_verdict(idea: dict) -> DuplicateVerdict | None:
-    dup = idea.get("duplicate_check")
-    if not isinstance(dup, dict):
-        return None
-    raw = str(dup.get("verdict") or "").upper()
-    if raw != "TOO_SIMILAR":
-        return None
-    return DuplicateVerdict(
-        verdict="DUPLICATE",
-        closest_existing_title=str(dup.get("closest_existing_title") or ""),
-        overlap_reason=str(dup.get("overlap_reason") or "ChatGPT marked the idea too similar."),
-        similarity=1.0,
-        policy_action="blocked",
-    )
-
-
-async def create_job_from_title_seed(
-    *,
-    channel_id: str,
-    title_seed: str,
-    job_id: str | None,
-    duration_mode: str,
-    target_duration_sec: int | None,
-    min_duration_sec: int,
-    max_duration_sec: int,
-    run_now: bool,
-    enforce_approvals: bool,
-    duplicate_policy: str,
-    check_duplicates: bool,
-    max_existing_videos: int,
-    notes: str | None,
-    jobs_root: Path,
-    browser_client: BrowserClient,
-) -> dict:
-    _validate_request_title(title_seed)
-    if duplicate_policy not in _ALLOWED_TITLE_POLICIES:
-        raise HTTPException(status_code=400, detail={"error": "invalid_duplicate_policy"})
-    channel_path, channel_config = resolve_channel_config(channel_id)
-    existing = collect_existing_video_ideas(
-        channel_id=channel_id, jobs_root=jobs_root, limit=max_existing_videos
-    ) if check_duplicates else []
-
-    last_verdict = DuplicateVerdict(verdict="UNIQUE")
-    max_attempts = 3
-    validation_feedback = ""
-    for attempt in range(max_attempts):
-        retry_notes = notes or ""
-        if validation_feedback:
-            retry_notes = f"{retry_notes}\nPrevious attempt failed validation: {validation_feedback}".strip()
-        if attempt > 0 and last_verdict.policy_action == "rewrite_requested":
-            retry_notes = f"{retry_notes}\nRewrite to avoid duplicate: {last_verdict.overlap_reason}".strip()
-        try:
-            idea = await expand_title_to_idea(
-                title_seed=title_seed,
-                channel_config=channel_config,
-                session_fn=lambda messages: browser_client.run_session("chatgpt", messages),
-                duration_mode=duration_mode,
-                target_duration_sec=target_duration_sec,
-                min_duration_sec=min_duration_sec,
-                max_duration_sec=max_duration_sec,
-                existing_videos=existing,
-                duplicate_policy=duplicate_policy,
-                notes=retry_notes or None,
-                max_attempts=1,
-            )
-        except BrowserClientError as exc:
-            raise HTTPException(
-                status_code=502,
-                detail={"error": "chatgpt_unavailable", "message": str(exc)},
-            ) from exc
-        except IdeaExpansionError as exc:
-            validation_feedback = str(exc)
-            if attempt < max_attempts - 1:
-                continue
-            raise HTTPException(
-                status_code=422,
-                detail={"error": "idea_expansion_failed", "last_validation_error": str(exc)},
-            ) from exc
-        try:
-            _validate_duration(
-                idea,
-                duration_mode=duration_mode,
-                target_duration_sec=target_duration_sec,
-                min_duration_sec=min_duration_sec,
-                max_duration_sec=max_duration_sec,
-            )
-            _validate_idea(idea)
-        except HTTPException as exc:
-            detail = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
-            validation_feedback = str(
-                detail.get("last_validation_error")
-                or detail.get("message")
-                or detail.get("error")
-                or exc.detail
-            )
-            if attempt < max_attempts - 1:
-                continue
-            raise
-        deterministic = check_content_duplicate(idea=idea, existing_videos=existing) if check_duplicates else DuplicateVerdict(verdict="UNIQUE")
-        chatgpt_verdict = _chatgpt_duplicate_verdict(idea)
-        verdict = chatgpt_verdict if chatgpt_verdict and chatgpt_verdict.verdict != "UNIQUE" else deterministic
-        verdict = _apply_duplicate_policy(verdict=verdict, policy=duplicate_policy, allow_rewrite=True)
-        last_verdict = verdict
-        if verdict.policy_action == "rewrite_requested" and duplicate_policy == "rewrite_angle":
-            continue
-        if verdict.policy_action == "blocked":
-            raise _duplicate_http(verdict)
-        return _create_job_from_validated_idea(
-            channel_id=channel_id,
-            channel_path=channel_path,
-            idea=idea,
-            job_id=job_id,
-            run_now=run_now,
-            enforce_approvals=enforce_approvals,
-            duplicate_verdict=verdict,
-            jobs_root=jobs_root,
-            idea_source="manual_title_expansion",
-        )
-    raise _duplicate_http(last_verdict)
-
-
 async def create_job_from_full_idea(
     *,
     channel_id: str,
@@ -475,6 +357,105 @@ async def create_job_from_full_idea(
         duplicate_verdict=verdict,
         jobs_root=jobs_root,
         idea_source="provided_full_idea",
+    )
+
+
+async def create_idea_from_title(
+    *,
+    channel_id: str,
+    title_seed: str,
+    jobs_root: Path,
+    inputs_root: Path,
+    browser_client: BrowserClient,
+) -> dict:
+    """Expand a bare title into one enriched idea (idea fields + dup flag).
+
+    Mirrors the output of one element of Idea Generator's ``ideas[]`` so the
+    same idea-card UI can render it. Runs ChatGPT expansion with hidden
+    defaults (auto duration 360-1200s, no rewrite), flags duplicates against
+    published videos without blocking, saves the idea to
+    ``inputs/ideas/<channel_id>/``, and returns it. Does NOT create a job;
+    the video is created later via ``/jobs/from-idea`` (Run Job button).
+    """
+    _validate_request_title(title_seed)
+    channel_path, channel_config = resolve_channel_config(channel_id)
+    published = load_published_videos(channel_config, repo_root() / "configs")
+    existing = collect_existing_video_ideas(
+        channel_id=channel_id, jobs_root=jobs_root, limit=100
+    )
+
+    max_attempts = 3
+    validation_feedback = ""
+    for attempt in range(max_attempts):
+        notes = (
+            f"Previous attempt failed validation: {validation_feedback}"
+            if validation_feedback
+            else None
+        )
+        try:
+            idea = await expand_title_to_idea(
+                title_seed=title_seed,
+                channel_config=channel_config,
+                session_fn=lambda messages: browser_client.run_session("chatgpt", messages),
+                duration_mode="auto",
+                target_duration_sec=None,
+                min_duration_sec=360,
+                max_duration_sec=1200,
+                existing_videos=existing,
+                duplicate_policy="warn_only",
+                notes=notes,
+                max_attempts=1,
+            )
+        except BrowserClientError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail={"error": "chatgpt_unavailable", "message": str(exc)},
+            ) from exc
+        except IdeaExpansionError as exc:
+            validation_feedback = str(exc)
+            if attempt < max_attempts - 1:
+                continue
+            raise HTTPException(
+                status_code=422,
+                detail={"error": "idea_expansion_failed", "last_validation_error": str(exc)},
+            ) from exc
+        try:
+            _validate_duration(
+                idea,
+                duration_mode="auto",
+                target_duration_sec=None,
+                min_duration_sec=360,
+                max_duration_sec=1200,
+            )
+            _validate_idea(idea)
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
+            validation_feedback = str(
+                detail.get("last_validation_error")
+                or detail.get("message")
+                or detail.get("error")
+                or exc.detail
+            )
+            if attempt < max_attempts - 1:
+                continue
+            raise
+
+        dup = find_duplicate(idea, published)
+        idea["is_duplicate"] = bool(dup)
+        idea["duplicate_of"] = dup or None
+        paths = save_ideas([idea], channel_id=channel_id, out_dir=inputs_root)
+        rel = str(paths[0].relative_to(inputs_root)) if paths else ""
+        return {
+            "channel_id": channel_id,
+            "idea": idea,
+            "saved": rel,
+            "is_duplicate": idea["is_duplicate"],
+            "duplicate_of": idea["duplicate_of"],
+        }
+
+    raise HTTPException(
+        status_code=422,
+        detail={"error": "idea_expansion_failed", "last_validation_error": validation_feedback},
     )
 
 

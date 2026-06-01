@@ -948,12 +948,12 @@
           <button style="padding:0 14px;height:36px;border:1px solid var(--line);border-radius:8px;background:#fff;font-size:13px;cursor:pointer" type="button" onclick="fetchJobs()">Refresh</button>
         </div>
       </div>
-      <!-- Create video from raw idea/title modal -->
+      <!-- Create idea from a title modal -->
       <div class="modal-overlay hidden" id="idea-title-job-overlay" onclick="if(event.target===this)closeIdeaTitleJobModal()">
         <div class="modal">
-          <div class="modal-title">Create video from idea/title</div>
+          <div class="modal-title">Create video from idea</div>
           <div class="modal-field">
-            <label>Idea/title</label>
+            <label>Title</label>
             <textarea id="itj-title" placeholder="Sarcopenia después de los 60: 5 alimentos que ayudan a proteger tus músculos"></textarea>
           </div>
           <div class="modal-field">
@@ -962,46 +962,15 @@
               <option value="vida-plena-45">vida-plena-45</option>
             </select>
           </div>
-          <div class="modal-field">
-            <label>Duration mode</label>
-            <select id="itj-duration-mode" onchange="ideaTitleDurationModeChanged()">
-              <option value="auto">Auto</option>
-              <option value="fixed">Fixed</option>
-            </select>
-          </div>
-          <div class="modal-field hidden" id="itj-fixed-duration-wrap">
-            <label>Target duration seconds</label>
-            <input type="number" id="itj-target-duration" min="300" max="1800" value="900">
-          </div>
-          <div class="modal-field">
-            <label>Run now</label>
-            <label style="font-size:13px;color:var(--text)"><input type="checkbox" id="itj-run-now" checked> Queue full pipeline after creation</label>
-          </div>
-          <div class="modal-field">
-            <label>Duplicate policy</label>
-            <select id="itj-duplicate-policy">
-              <option value="rewrite_angle">Rewrite angle</option>
-              <option value="block">Block</option>
-              <option value="warn_only">Warn only</option>
-            </select>
-          </div>
-          <details style="margin:8px 0">
-            <summary style="font-size:13px;color:var(--muted);cursor:pointer">Advanced</summary>
-            <div class="modal-field" style="margin-top:10px">
-              <label>Custom job_id</label>
-              <input type="text" id="itj-job-id" placeholder="auto">
-            </div>
-            <div class="modal-field">
-              <label>Notes</label>
-              <textarea id="itj-notes" placeholder="Optional guidance for ChatGPT expansion"></textarea>
-            </div>
-          </details>
-          <div id="itj-status" style="font-size:12px;color:var(--muted);margin-top:-6px;display:none"></div>
-          <div id="itj-error" style="font-size:12px;color:var(--red);margin-top:-6px;display:none"></div>
+          <p style="font-size:12px;color:var(--muted);margin:2px 0 0">
+            ChatGPT expands the title into a full idea (topic, angle, key points, duration).
+            It appears as an idea card below — click <strong>Run Job</strong> there to create the video.
+          </p>
+          <div id="itj-status" style="font-size:12px;color:var(--muted);margin-top:8px;display:none"></div>
+          <div id="itj-error" style="font-size:12px;color:var(--red);margin-top:8px;display:none"></div>
           <div class="modal-actions">
             <button class="modal-cancel" onclick="closeIdeaTitleJobModal()">Cancel</button>
-            <button class="modal-cancel" id="itj-create-only" onclick="submitIdeaTitleJob(false)">Create Job Only</button>
-            <button class="modal-submit" id="itj-submit" onclick="submitIdeaTitleJob(true)">Create & Run Video</button>
+            <button class="modal-submit" id="itj-submit" onclick="submitIdeaTitleJob()">Generate Idea</button>
           </div>
         </div>
       </div>
@@ -3130,23 +3099,13 @@ function openIdeaTitleJobModal() {
   const ch = document.getElementById('itj-channel');
   if (ideaCh && ch) ch.innerHTML = ideaCh.innerHTML;
   document.getElementById('itj-title').value = '';
-  document.getElementById('itj-job-id').value = '';
-  document.getElementById('itj-notes').value = '';
-  document.getElementById('itj-duration-mode').value = 'auto';
-  document.getElementById('itj-run-now').checked = true;
-  document.getElementById('itj-duplicate-policy').value = 'rewrite_angle';
   document.getElementById('itj-error').style.display = 'none';
-  ideaTitleDurationModeChanged();
+  document.getElementById('itj-status').style.display = 'none';
   document.getElementById('idea-title-job-overlay').classList.remove('hidden');
 }
 
 function closeIdeaTitleJobModal() {
   document.getElementById('idea-title-job-overlay').classList.add('hidden');
-}
-
-function ideaTitleDurationModeChanged() {
-  const mode = document.getElementById('itj-duration-mode').value;
-  document.getElementById('itj-fixed-duration-wrap').classList.toggle('hidden', mode !== 'fixed');
 }
 
 function showIdeaTitleJobError(message) {
@@ -3174,64 +3133,46 @@ async function openCreatedJob(jobId) {
   await fetchTimeline(jobId);
 }
 
-async function submitIdeaTitleJob(forceRunNow) {
+async function submitIdeaTitleJob() {
   const titleSeed = document.getElementById('itj-title').value.trim();
   if (!titleSeed) {
-    showIdeaTitleJobError('Paste an idea/title first.');
+    showIdeaTitleJobError('Enter a title first.');
     return;
   }
-  const runNow = forceRunNow ? document.getElementById('itj-run-now').checked : false;
-  const mode = document.getElementById('itj-duration-mode').value;
-  const body = {
-    channel_id: document.getElementById('itj-channel').value || 'vida-plena-45',
-    title_seed: titleSeed,
-    job_id: document.getElementById('itj-job-id').value.trim() || null,
-    duration_mode: mode,
-    target_duration_sec: mode === 'fixed' ? Number(document.getElementById('itj-target-duration').value || 900) : null,
-    run_now: runNow,
-    duplicate_policy: document.getElementById('itj-duplicate-policy').value,
-    notes: document.getElementById('itj-notes').value.trim() || null,
-  };
+  const channelId = document.getElementById('itj-channel').value || 'vida-plena-45';
   const submit = document.getElementById('itj-submit');
-  const createOnly = document.getElementById('itj-create-only');
-  const clicked = forceRunNow ? submit : createOnly;
   const originalSubmitText = submit.textContent;
-  const originalCreateOnlyText = createOnly.textContent;
   const status = document.getElementById('itj-status');
   submit.disabled = true;
-  createOnly.disabled = true;
-  clicked.textContent = 'Creating...';
-  status.textContent = 'Expanding title with ChatGPT, validating idea.json, then creating the job...';
+  submit.textContent = 'Generating...';
+  status.textContent = 'Expanding title with ChatGPT into a full idea...';
   status.style.display = '';
   document.getElementById('itj-error').style.display = 'none';
   try {
-    const r = await fetch('/jobs/from-idea-title', {
+    const r = await fetch('/channels/' + encodeURIComponent(channelId) + '/ideas/from-title', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(body),
+      body: JSON.stringify({title_seed: titleSeed}),
     });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) {
-      showIdeaTitleJobError(endpointErrorMessage(d, 'Create failed: ' + r.status));
+      showIdeaTitleJobError(endpointErrorMessage(d, 'Generate failed: ' + r.status));
       return;
     }
-    if (!runNow) {
-      showToast('Job created only. Click Resume to start the pipeline.');
-    } else if (d.duplicate_verdict && d.duplicate_verdict.policy_action === 'warning') {
-      showToast('Warning: similar to existing video');
-    } else if (d.idea && d.idea.duplicate_check && d.idea.duplicate_check.verdict === 'REWRITTEN_TO_AVOID_DUPLICATE') {
-      showToast('Angle adjusted to avoid repeating previous content');
-    } else {
-      showToast('Pipeline: ' + (d.pipeline_status || 'created'));
-    }
-    await openCreatedJob(d.job_id);
+    closeIdeaTitleJobModal();
+    // Surface the new idea in the same Idea Generator panel; user clicks Run Job there.
+    const ideaCh = document.getElementById('idea-channel');
+    if (ideaCh) ideaCh.value = channelId;
+    if (!IDEAS_PANEL_OPEN) toggleIdeasPanel();
+    await loadSavedIdeas();
+    showToast(d.is_duplicate
+      ? 'Idea created (similar to an existing video) — review and click Run Job'
+      : 'Idea created — click Run Job on its card to make the video');
   } catch (e) {
     showIdeaTitleJobError('Error: ' + e.message);
   } finally {
     submit.disabled = false;
-    createOnly.disabled = false;
-    submit.textContent = originalSubmitText || 'Create & Run Video';
-    createOnly.textContent = originalCreateOnlyText || 'Create Job Only';
+    submit.textContent = originalSubmitText || 'Generate Idea';
   }
 }
 

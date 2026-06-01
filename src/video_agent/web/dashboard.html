@@ -3945,8 +3945,8 @@ function renderIdeaCard(idea, savedPath) {
       ${points ? `<ul class="idea-card-points">${points}</ul>` : ''}
       <div class="idea-card-actions">
         <button class="action-btn primary"
-          ${(finalScore == null && score == null) || idea.is_duplicate ? 'disabled' : ''}
-          title="${idea.is_duplicate ? 'Idea trùng video đã làm' : ((finalScore == null && score == null) ? 'Chưa có điểm — chờ scoring xong' : 'Run job từ idea này')}"
+          ${idea.is_duplicate ? 'disabled' : ''}
+          title="${idea.is_duplicate ? 'Idea trùng video đã làm' : 'Run job từ idea này'}"
           onclick='createJobFromIdea(${safeIdea}, "${safePath}")'>Run Job</button>
       </div>
     </div>`;

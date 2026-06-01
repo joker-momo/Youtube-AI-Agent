@@ -7,9 +7,15 @@ from typing import Any
 
 
 class JobQueue:
-    def __init__(self, db_path: Path, max_attempts: int = 3):
+    def __init__(
+        self,
+        db_path: Path,
+        max_attempts: int = 3,
+        stale_running_seconds: int = 180,
+    ):
         self.db_path = db_path
         self.max_attempts = max(1, int(max_attempts))
+        self.stale_running_seconds = max(30, int(stale_running_seconds))
         self._init_db()
 
     def _init_db(self) -> None:
@@ -26,6 +32,7 @@ class JobQueue:
                     attempts INTEGER NOT NULL DEFAULT 0,
                     command TEXT NOT NULL DEFAULT 'run_all',
                     payload TEXT,
+                    heartbeat_at TIMESTAMP,
                     error TEXT
                 )
             """)
@@ -42,7 +49,29 @@ class JobQueue:
                 )
             if "payload" not in existing:
                 conn.execute("ALTER TABLE job_queue ADD COLUMN payload TEXT")
+            if "heartbeat_at" not in existing:
+                conn.execute("ALTER TABLE job_queue ADD COLUMN heartbeat_at TIMESTAMP")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_status ON job_queue(status)")
+
+    def _is_running_stale_conn(self, conn: sqlite3.Connection, job_id: str) -> bool:
+        row = conn.execute(
+            """
+            SELECT status,
+                   CAST(strftime('%s', 'now') AS INTEGER)
+                   - CAST(strftime('%s', COALESCE(heartbeat_at, started_at)) AS INTEGER) AS age_seconds
+            FROM job_queue
+            WHERE job_id = ?
+            """,
+            (job_id,),
+        ).fetchone()
+        if row is None or row[0] != "running":
+            return False
+        age = row[1]
+        return age is None or int(age) > self.stale_running_seconds
+
+    def is_running_stale(self, job_id: str) -> bool:
+        with sqlite3.connect(self.db_path) as conn:
+            return self._is_running_stale_conn(conn, job_id)
 
     def enqueue(
         self,
@@ -61,8 +90,15 @@ class JobQueue:
                 )
                 return True
             except sqlite3.IntegrityError:
+                row = conn.execute(
+                    "SELECT status FROM job_queue WHERE job_id = ?",
+                    (job_id,),
+                ).fetchone()
+                if row and row[0] == "running":
+                    if not self._is_running_stale_conn(conn, job_id):
+                        return False
                 conn.execute(
-                    "UPDATE job_queue SET status = 'pending', enforce_approvals = ?, command = ?, payload = ?, attempts = 0, error = NULL, started_at = NULL, completed_at = NULL WHERE job_id = ?",
+                    "UPDATE job_queue SET status = 'pending', enforce_approvals = ?, command = ?, payload = ?, attempts = 0, error = NULL, started_at = NULL, completed_at = NULL, heartbeat_at = NULL WHERE job_id = ?",
                     (1 if enforce_approvals else 0, command or "run_all", payload_text, job_id)
                 )
                 return True
@@ -90,21 +126,28 @@ class JobQueue:
     def mark_running(self, job_id: str) -> None:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
-                "UPDATE job_queue SET status = 'running', started_at = CURRENT_TIMESTAMP WHERE job_id = ?",
+                "UPDATE job_queue SET status = 'running', started_at = CURRENT_TIMESTAMP, heartbeat_at = CURRENT_TIMESTAMP, completed_at = NULL WHERE job_id = ?",
                 (job_id,)
+            )
+
+    def touch_running(self, job_id: str) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE job_queue SET heartbeat_at = CURRENT_TIMESTAMP WHERE job_id = ? AND status = 'running'",
+                (job_id,),
             )
 
     def mark_completed(self, job_id: str) -> None:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
-                "UPDATE job_queue SET status = 'completed', completed_at = CURRENT_TIMESTAMP WHERE job_id = ?",
+                "UPDATE job_queue SET status = 'completed', completed_at = CURRENT_TIMESTAMP, heartbeat_at = NULL WHERE job_id = ?",
                 (job_id,)
             )
 
     def mark_failed(self, job_id: str, error: str) -> None:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
-                "UPDATE job_queue SET status = 'failed', completed_at = CURRENT_TIMESTAMP, error = ? WHERE job_id = ?",
+                "UPDATE job_queue SET status = 'failed', completed_at = CURRENT_TIMESTAMP, heartbeat_at = NULL, error = ? WHERE job_id = ?",
                 (error, job_id)
             )
 
@@ -120,12 +163,12 @@ class JobQueue:
             attempts = int(row["attempts"]) + 1
             if attempts >= self.max_attempts:
                 conn.execute(
-                    "UPDATE job_queue SET status = 'failed', attempts = ?, completed_at = CURRENT_TIMESTAMP, error = ? WHERE job_id = ?",
+                    "UPDATE job_queue SET status = 'failed', attempts = ?, completed_at = CURRENT_TIMESTAMP, heartbeat_at = NULL, error = ? WHERE job_id = ?",
                     (attempts, error, job_id),
                 )
                 return False
             conn.execute(
-                "UPDATE job_queue SET status = 'pending', attempts = ?, started_at = NULL, completed_at = NULL, error = ? WHERE job_id = ?",
+                "UPDATE job_queue SET status = 'pending', attempts = ?, started_at = NULL, completed_at = NULL, heartbeat_at = NULL, error = ? WHERE job_id = ?",
                 (attempts, error, job_id),
             )
             return True
@@ -134,6 +177,23 @@ class JobQueue:
         """Recover jobs left in 'running' after worker crash/restart."""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute(
-                "UPDATE job_queue SET status = 'pending', started_at = NULL WHERE status = 'running'"
+                "UPDATE job_queue SET status = 'pending', started_at = NULL, heartbeat_at = NULL WHERE status = 'running'"
+            )
+            return int(cursor.rowcount or 0)
+
+    def requeue_stale_running_jobs(self) -> int:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                """
+                UPDATE job_queue
+                SET status = 'pending', started_at = NULL, heartbeat_at = NULL
+                WHERE status = 'running'
+                  AND (
+                    COALESCE(heartbeat_at, started_at) IS NULL
+                    OR CAST(strftime('%s', 'now') AS INTEGER)
+                       - CAST(strftime('%s', COALESCE(heartbeat_at, started_at)) AS INTEGER) > ?
+                  )
+                """,
+                (self.stale_running_seconds,),
             )
             return int(cursor.rowcount or 0)

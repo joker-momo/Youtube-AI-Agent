@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from video_agent.browser_worker.drivers.base import (
     BrowserDriverError,
     LoginRequiredError,
+    save_layout_diagnostics,
     save_trace_screenshot,
 )
 from video_agent.browser_worker.drivers.humanize import (
@@ -47,6 +48,13 @@ STOP_BUTTON_SELECTORS = (
 
 ASSISTANT_TURN_SELECTOR = "[data-message-author-role='assistant']"
 MARKDOWN_BODY_SELECTOR = ".markdown.prose, [data-message-author-role='assistant'] .markdown"
+CHATGPT_DIAGNOSTIC_SELECTORS = (
+    *COMPOSER_SELECTORS,
+    *SEND_BUTTON_SELECTORS,
+    *STOP_BUTTON_SELECTORS,
+    ASSISTANT_TURN_SELECTOR,
+    MARKDOWN_BODY_SELECTOR,
+)
 
 
 def _is_login_url(url: str) -> bool:
@@ -150,7 +158,7 @@ def _stable_response_detector_js() -> str:
             quietFor >= stableMs &&
             !streaming
           );
-          return {ready, len: current.length, quietFor, streaming};
+          return ready ? {ready, len: current.length, quietFor, streaming} : false;
         }
     """
 
@@ -314,6 +322,33 @@ async def _first_matching(page: "Page", selectors: tuple[str, ...], timeout_ms: 
         except Exception:
             continue
     return None
+
+
+async def _locator_text(locator) -> str:
+    try:
+        value = await locator.evaluate(
+            "(node) => (node.innerText || node.value || node.textContent || '').trim()",
+            timeout=1_000,
+        )
+        return str(value or "").strip()
+    except Exception:
+        return ""
+
+
+async def _raise_chatgpt_layout_warning(
+    page: "Page", *, prefix: str, message: str
+) -> None:
+    shot, diagnostic = await save_layout_diagnostics(
+        page,
+        prefix=prefix,
+        selectors=CHATGPT_DIAGNOSTIC_SELECTORS,
+    )
+    raise BrowserDriverError(
+        f"{message} ChatGPT layout may have changed; inspect diagnostic trace.",
+        screenshot_path=shot,
+        diagnostic_path=diagnostic,
+        layout_warning=True,
+    )
 
 
 async def _dismiss_modals(page: "Page") -> None:
@@ -508,26 +543,52 @@ class ChatGPTDriver:
 
         composer = await _first_matching(self.page, COMPOSER_SELECTORS, 10_000)
         if composer is None:
-            shot = await save_trace_screenshot(self.page, prefix="chatgpt-no-composer")
-            raise BrowserDriverError(
-                "ChatGPT composer not found.", screenshot_path=shot
+            await _raise_chatgpt_layout_warning(
+                self.page,
+                prefix="chatgpt-no-composer",
+                message="ChatGPT composer not found.",
             )
 
         # Pause windows below intentionally use ``human_pause`` defaults
         # so BROWSER_HUMAN_MODE can collapse them in fast pipeline mode.
-        await human_click(composer, hover_pause_min_ms=60, hover_pause_max_ms=200)
-        await composer.focus()
+        try:
+            await human_click(composer, hover_pause_min_ms=60, hover_pause_max_ms=200)
+        except Exception:
+            await composer.focus(timeout=3_000)
         await human_pause(self.page)
         await human_type(self.page, prompt)
         await human_pause(self.page)
 
         send_button = await _first_matching(self.page, SEND_BUTTON_SELECTORS, 5_000)
         if send_button is None:
-            shot = await save_trace_screenshot(self.page, prefix="chatgpt-no-send")
-            raise BrowserDriverError(
-                "ChatGPT send button not found.", screenshot_path=shot
+            await _raise_chatgpt_layout_warning(
+                self.page,
+                prefix="chatgpt-no-send",
+                message="ChatGPT send button not found.",
             )
-        await human_click(send_button)
+        try:
+            await human_click(send_button)
+        except Exception:
+            try:
+                await send_button.click(timeout=3_000, force=True)
+            except Exception:
+                try:
+                    await send_button.evaluate("(node) => node.click()")
+                except Exception:
+                    pass
+        await self.page.wait_for_timeout(400)
+        if await _locator_text(composer):
+            try:
+                await self.page.keyboard.press("Meta+Enter")
+                await self.page.wait_for_timeout(300)
+            except Exception:
+                pass
+        if await _locator_text(composer):
+            await _raise_chatgpt_layout_warning(
+                self.page,
+                prefix="chatgpt-submit-stuck",
+                message="ChatGPT prompt remained in the composer after submit attempts.",
+            )
 
         try:
             stop = await _first_matching(self.page, STOP_BUTTON_SELECTORS, 5_000)
@@ -561,16 +622,16 @@ class ChatGPTDriver:
             await human_pause(self.page, min_ms=600, max_ms=1200)
 
         if text is None:
-            shot = await save_trace_screenshot(self.page, prefix="chatgpt-no-response")
-            raise BrowserDriverError(
-                "ChatGPT response did not arrive in time.",
-                screenshot_path=shot,
+            await _raise_chatgpt_layout_warning(
+                self.page,
+                prefix="chatgpt-no-response",
+                message="ChatGPT response did not arrive in time.",
             )
         if not text:
-            shot = await save_trace_screenshot(self.page, prefix="chatgpt-empty")
-            raise BrowserDriverError(
-                "ChatGPT returned an empty response.",
-                screenshot_path=shot,
+            await _raise_chatgpt_layout_warning(
+                self.page,
+                prefix="chatgpt-empty",
+                message="ChatGPT returned an empty response.",
             )
         await human_pause(
             self.page,

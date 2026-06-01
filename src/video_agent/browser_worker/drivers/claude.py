@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from video_agent.browser_worker.drivers.base import (
     BrowserDriverError,
     LoginRequiredError,
+    save_layout_diagnostics,
     save_trace_screenshot,
 )
 from video_agent.browser_worker.drivers.humanize import (
@@ -57,6 +58,23 @@ STOP_BUTTON_SELECTORS = (
     "button:has-text('Stop')",
 )
 
+ASSISTANT_RESPONSE_SELECTORS = (
+    "[data-testid^='ai-turn']",
+    "[data-testid='assistant-message']",
+    "[data-testid*='assistant-message']",
+    "article[data-role='assistant']",
+    "[data-is-streaming='false'][data-testid*='message']",
+    "[data-is-streaming='false'] .prose",
+    "[class*='font-claude']",
+)
+
+CLAUDE_DIAGNOSTIC_SELECTORS = (
+    *COMPOSER_SELECTORS,
+    *SEND_BUTTON_SELECTORS,
+    *STOP_BUTTON_SELECTORS,
+    *ASSISTANT_RESPONSE_SELECTORS,
+)
+
 
 def _is_login_url(url: str) -> bool:
     lower = (url or "").lower()
@@ -99,6 +117,44 @@ async def _enter_temporary_chat(page: "Page") -> None:
         await human_pause(page, min_ms=600, max_ms=1300)
 
 
+async def _raise_claude_layout_warning(
+    page: "Page", *, prefix: str, message: str
+) -> None:
+    shot, diagnostic = await save_layout_diagnostics(
+        page,
+        prefix=prefix,
+        selectors=CLAUDE_DIAGNOSTIC_SELECTORS,
+    )
+    raise BrowserDriverError(
+        f"{message} Claude layout may have changed; inspect diagnostic trace.",
+        screenshot_path=shot,
+        diagnostic_path=diagnostic,
+        layout_warning=True,
+    )
+
+
+def _assistant_scrape_js() -> str:
+    selectors_json = json.dumps(ASSISTANT_RESPONSE_SELECTORS)
+    return f"""
+        () => {{
+          const selectors = {selectors_json};
+          const candidates = [];
+          for (const s of selectors) {{
+            const nodes = document.querySelectorAll(s);
+            for (const node of nodes) {{
+              const t = (node.innerText || '').trim();
+              if (t && !t.includes('Cambia de sombrero')
+                    && !t.includes('Restricciones absolutas')
+                    && !t.includes('Write your prompt to Claude')) {{
+                candidates.push(t);
+              }}
+            }}
+          }}
+          return candidates.length ? candidates[candidates.length - 1] : '';
+        }}
+    """
+
+
 class ClaudeDriver:
     """Session-style Claude driver for persistent temp-chat workflows."""
 
@@ -130,91 +186,80 @@ class ClaudeDriver:
         if not prompt.strip():
             raise BrowserDriverError("Empty prompt")
 
-        # Composite scrape so stable-wait can detect either a fresh JSON
-        # payload or a simple acknowledgement text.
-        scrape_js = """
-            () => {
-              const text = document.body.innerText || '';
-              const objects = [];
-              let depth = 0;
-              let start = -1;
-              for (let i = 0; i < text.length; i++) {
-                const ch = text[i];
-                if (ch === '{') {
-                  if (depth === 0) start = i;
-                  depth++;
-                } else if (ch === '}') {
-                  if (depth > 0) {
-                    depth--;
-                    if (depth === 0 && start >= 0) {
-                      objects.push(text.slice(start, i + 1));
-                      start = -1;
-                    }
-                  }
-                }
-              }
-              const responses = objects.filter(o =>
-                !o.includes('Cambia de sombrero')
-                && !o.includes('Restricciones absolutas')
-              );
-              const selectors = [
-                "[data-testid^='ai-turn']",
-                "[data-testid='assistant-message']",
-                "div[data-is-streaming='false']",
-                "[data-is-streaming='false']",
-                "[data-testid*='assistant-message']",
-                "article[data-role='assistant']",
-                "[data-is-streaming='false'] .prose",
-                ".prose",
-                "main [role='article']",
-              ];
-              let knownText = '';
-              for (const s of selectors) {
-                const nodes = document.querySelectorAll(s);
-                if (nodes.length === 0) continue;
-                const last = nodes[nodes.length - 1];
-                const t = (last.innerText || '').trim();
-                if (t && !t.includes('Cambia de sombrero')
-                      && !t.includes('Restricciones absolutas')) {
-                  knownText = t;
-                  break;
-                }
-              }
-              const last = knownText || (responses.length ? responses[responses.length - 1] : '');
-              return `[count=${responses.length}]\\n${last}`;
-            }
-        """
+        # Scrape only Claude assistant turns. Do not fall back to scanning the
+        # whole page body: while Claude is still thinking, the user prompt can
+        # contain JSON-like text and make the stable waiter return too early.
+        scrape_js = _assistant_scrape_js()
         prior_text = await self.page.evaluate(scrape_js)
 
         composer = await _first_matching(self.page, COMPOSER_SELECTORS, 10_000)
         if composer is None:
-            shot = await save_trace_screenshot(self.page, prefix="claude-no-composer")
-            raise BrowserDriverError(
-                "Claude composer not found.", screenshot_path=shot
+            await _raise_claude_layout_warning(
+                self.page,
+                prefix="claude-no-composer",
+                message="Claude composer not found.",
             )
 
-        # See chatgpt driver for rationale: use ``human_pause`` defaults so
-        # BROWSER_HUMAN_MODE controls the per-turn cadence centrally.
-        await human_click(composer, hover_pause_min_ms=60, hover_pause_max_ms=200)
-        await composer.focus()
+        # Claude's composer is frequently wrapped by animated containers that
+        # intercept pointer events. Prefer a human click, but fall back to DOM
+        # focus so transient overlays do not turn into hard 502s.
+        try:
+            await human_click(composer, hover_pause_min_ms=60, hover_pause_max_ms=200)
+        except Exception:
+            await composer.focus(timeout=3_000)
         await human_pause(self.page)
         await human_type(self.page, prompt)
         await human_pause(self.page)
 
         send_button = await _first_matching(self.page, SEND_BUTTON_SELECTORS, 5_000)
         if send_button is None:
-            shot = await save_trace_screenshot(self.page, prefix="claude-no-send")
-            raise BrowserDriverError(
-                "Claude send button not found.", screenshot_path=shot
+            await _raise_claude_layout_warning(
+                self.page,
+                prefix="claude-no-send",
+                message="Claude send button not found.",
             )
-        await human_click(send_button)
-        # Claude sometimes ignores a click while composer focus is still
-        # transitioning; an immediate Enter mirrors a human retry and
-        # helps reliably submit without waiting a full timeout window.
         try:
-            await self.page.keyboard.press("Enter")
+            await human_click(send_button)
         except Exception:
             pass
+        await self.page.wait_for_timeout(400)
+        try:
+            still_in_composer = (await composer.inner_text(timeout=1_000)).strip()
+        except Exception:
+            still_in_composer = ""
+        if still_in_composer:
+            try:
+                await send_button.click(timeout=3_000, force=True)
+            except Exception:
+                try:
+                    await send_button.evaluate("(node) => node.click()")
+                except Exception:
+                    pass
+            await self.page.wait_for_timeout(400)
+        # Claude sometimes ignores button clicks while composer focus is still
+        # transitioning. Try the common submit shortcuts after the direct click.
+        for key in ("Meta+Enter", "Control+Enter", "Enter"):
+            try:
+                still_in_composer = (await composer.inner_text(timeout=1_000)).strip()
+            except Exception:
+                still_in_composer = ""
+            if not still_in_composer:
+                break
+            try:
+                await self.page.keyboard.press(key)
+                await self.page.wait_for_timeout(300)
+            except Exception:
+                pass
+        try:
+            still_in_composer = (await composer.inner_text(timeout=1_000)).strip()
+        except Exception:
+            still_in_composer = ""
+        if still_in_composer:
+            await _raise_claude_layout_warning(
+                self.page,
+                prefix="claude-submit-stuck",
+                message="Claude prompt remained in the composer after submit attempts.",
+            )
 
         try:
             stop = await _first_matching(self.page, STOP_BUTTON_SELECTORS, 5_000)
@@ -224,10 +269,10 @@ class ClaudeDriver:
             pass
 
         from video_agent.browser_worker.drivers.chatgpt import (
-            _wait_for_stable_response,
+            _wait_for_stable_response_legacy,
         )
 
-        text = await _wait_for_stable_response(
+        text = await _wait_for_stable_response_legacy(
             self.page,
             scrape_js,
             prior_text,
@@ -235,17 +280,16 @@ class ClaudeDriver:
             log_tag="claude",
         )
         if text is None:
-            shot = await save_trace_screenshot(self.page, prefix="claude-no-response")
-            raise BrowserDriverError(
-                "Claude response did not arrive in time.",
-                screenshot_path=shot,
+            await _raise_claude_layout_warning(
+                self.page,
+                prefix="claude-no-response",
+                message="Claude response did not arrive in time.",
             )
-        text = re.sub(r"^\[count=\d+\]\n", "", text)
         if not text:
-            shot = await save_trace_screenshot(self.page, prefix="claude-empty")
-            raise BrowserDriverError(
-                "Claude returned an empty response.",
-                screenshot_path=shot,
+            await _raise_claude_layout_warning(
+                self.page,
+                prefix="claude-empty",
+                message="Claude returned an empty response.",
             )
         # Claude often prepends commentary and may include multiple JSON
         # blocks. Keep only the last valid QA-like JSON object so

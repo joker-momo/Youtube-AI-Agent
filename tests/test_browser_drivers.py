@@ -21,6 +21,37 @@ def test_login_required_error_is_browser_driver_error():
     assert err.screenshot_path == "/tmp/x.png"
 
 
+def test_browser_driver_error_carries_layout_diagnostics():
+    err = BrowserDriverError(
+        "Claude layout may have changed.",
+        screenshot_path="/tmp/trace.png",
+        diagnostic_path="/tmp/trace.json",
+        layout_warning=True,
+    )
+
+    assert err.screenshot_path == "/tmp/trace.png"
+    assert err.diagnostic_path == "/tmp/trace.json"
+    assert err.layout_warning is True
+
+
+def test_browser_worker_error_detail_includes_layout_warning_metadata():
+    from video_agent.browser_worker.app import _driver_error_detail
+
+    err = BrowserDriverError(
+        "Claude composer not found. Claude layout may have changed.",
+        screenshot_path="/tmp/trace.png",
+        diagnostic_path="/tmp/trace.json",
+        layout_warning=True,
+    )
+
+    assert _driver_error_detail(err) == {
+        "error": "Claude composer not found. Claude layout may have changed.",
+        "screenshot": "/tmp/trace.png",
+        "diagnostic": "/tmp/trace.json",
+        "layout_warning": True,
+    }
+
+
 def test_normalise_response_text_strips_json_fence():
     raw = '```json\n{"a": 1}\n```'
     assert normalise_response_text(raw) == '{"a": 1}'

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 from video_agent.orchestrator.queue import JobQueue
@@ -67,6 +68,59 @@ def test_enqueue_records_command_and_payload(tmp_path: Path):
     assert job is not None
     assert job["command"] == "stage_render"
     assert job["payload"] == '{"reason": "manual"}'
+
+
+def test_enqueue_does_not_reset_running_job(tmp_path: Path):
+    queue = JobQueue(tmp_path / "queue.db", max_attempts=3)
+    assert queue.enqueue("job-a", enforce_approvals=False) is True
+    queue.mark_running("job-a")
+
+    assert queue.enqueue("job-a", enforce_approvals=True) is False
+
+    job = queue.get_job("job-a")
+    assert job is not None
+    assert job["status"] == "running"
+    assert job["enforce_approvals"] == 0
+    assert job["attempts"] == 0
+
+
+def test_enqueue_recovers_stale_running_job(tmp_path: Path):
+    queue = JobQueue(tmp_path / "queue.db", max_attempts=3, stale_running_seconds=30)
+    assert queue.enqueue("job-a", enforce_approvals=False) is True
+    queue.mark_running("job-a")
+    with sqlite3.connect(tmp_path / "queue.db") as conn:
+        conn.execute(
+            """
+            UPDATE job_queue
+            SET started_at = datetime('now', '-10 minutes'),
+                heartbeat_at = datetime('now', '-10 minutes')
+            WHERE job_id = 'job-a'
+            """
+        )
+
+    assert queue.enqueue("job-a", enforce_approvals=True) is True
+
+    job = queue.get_job("job-a")
+    assert job is not None
+    assert job["status"] == "pending"
+    assert job["enforce_approvals"] == 1
+    assert job["attempts"] == 0
+    assert job["heartbeat_at"] is None
+
+
+def test_touch_running_updates_heartbeat(tmp_path: Path):
+    queue = JobQueue(tmp_path / "queue.db", max_attempts=3, stale_running_seconds=30)
+    queue.enqueue("job-a", enforce_approvals=False)
+    queue.mark_running("job-a")
+    with sqlite3.connect(tmp_path / "queue.db") as conn:
+        conn.execute(
+            "UPDATE job_queue SET heartbeat_at = datetime('now', '-10 minutes') WHERE job_id = 'job-a'"
+        )
+
+    assert queue.is_running_stale("job-a") is True
+    queue.touch_running("job-a")
+
+    assert queue.is_running_stale("job-a") is False
 
 
 def test_existing_queue_rows_default_to_run_all(tmp_path: Path):

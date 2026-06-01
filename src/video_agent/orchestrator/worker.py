@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import time
+import threading
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -15,7 +16,7 @@ from video_agent.orchestrator.stages import (
     run_render_stage,
     run_whisper_timestamps_stage,
 )
-from video_agent.web.run_all_pipeline import execute_run_all
+from video_agent.web.run_all_pipeline import execute_run_all, is_run_locked
 
 logger = logging.getLogger("video_agent.worker")
 
@@ -83,6 +84,33 @@ def _dispatch_queue_job(
         _run_short_render_job(job, job_dir=job_dir, channel_path=channel_path)
         return
     raise ValueError(f"Unknown queue command: {command}")
+
+
+class _JobHeartbeat:
+    def __init__(self, queue: JobQueue, job_id: str, interval_seconds: float = 15.0):
+        self.queue = queue
+        self.job_id = job_id
+        self.interval_seconds = interval_seconds
+        self._stop = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run,
+            name=f"job-heartbeat-{job_id}",
+            daemon=True,
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=2.0)
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval_seconds):
+            try:
+                self.queue.touch_running(self.job_id)
+            except Exception:
+                logger.warning("Failed to update heartbeat for job %s.", self.job_id, exc_info=True)
 
 
 def _run_shorts_autopilot_job(job: dict, *, job_dir: Path, channel_path: Path, client: BrowserClient) -> None:
@@ -200,10 +228,10 @@ def run_worker_loop(db_path: Path) -> None:
     logger.info("Starting Youtube-AI-Agent Background Worker...")
 
     queue = JobQueue(db_path)
-    recovered = queue.requeue_running_jobs()
+    recovered = queue.requeue_stale_running_jobs()
     if recovered:
         logger.warning(
-            "Recovered %s job(s) stuck in 'running' state after restart; moved back to 'pending'.",
+            "Recovered %s stale running job(s) after restart; moved back to 'pending'.",
             recovered,
         )
 
@@ -220,15 +248,25 @@ def run_worker_loop(db_path: Path) -> None:
                 job_id = job["job_id"]
                 enforce_approvals = bool(job["enforce_approvals"])
                 logger.info(f"Picked up job {job_id} from queue.")
-                queue.mark_running(job_id)
-
                 job_dir = get_jobs_root() / job_id
                 channel_path = get_channel_path()
+                command = job.get("command") or "run_all"
+                if command == "run_all" and is_run_locked(job_dir):
+                    logger.warning(
+                        "Job %s already has a live /run-all lock; marking queue running and skipping duplicate dispatch.",
+                        job_id,
+                    )
+                    queue.mark_running(job_id)
+                    continue
+
+                queue.mark_running(job_id)
+                heartbeat = _JobHeartbeat(queue, job_id)
+                heartbeat.start()
 
                 try:
                     logger.info(
                         "Executing queue command %s for job %s...",
-                        job.get("command") or "run_all",
+                        command,
                         job_id,
                     )
                     _dispatch_queue_job(
@@ -251,7 +289,31 @@ def run_worker_loop(db_path: Path) -> None:
                         )
                     else:
                         queue.mark_failed(job_id, str(e))
+                        # FINAL failure: notify Telegram/dashboard now (not
+                        # during execute_run_all, which would fire on every
+                        # transient 502 before the worker decides to retry).
+                        try:
+                            from video_agent.notifications.telegram import notify_job_failed
+                            stopped_at = ""
+                            try:
+                                from video_agent.orchestrator import load_job
+                                stopped_at = load_job(get_jobs_root() / job_id).current_stage or ""
+                            except Exception:
+                                pass
+                            asyncio.run(notify_job_failed(
+                                job_id, stopped_at=stopped_at, error=str(e),
+                            ))
+                        except Exception:
+                            logger.exception("notify_job_failed crashed for %s", job_id)
+                finally:
+                    heartbeat.stop()
             else:
+                stale = queue.requeue_stale_running_jobs()
+                if stale:
+                    logger.warning(
+                        "Recovered %s stale running job(s); moved back to 'pending'.",
+                        stale,
+                    )
                 time.sleep(2)
         except Exception as e:
             logger.error(f"Exception in worker loop: {e}", exc_info=True)

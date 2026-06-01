@@ -71,7 +71,7 @@ from video_agent.web.approval_flow import (
     reset_stage_for_regen,
     set_approval,
 )
-from video_agent.web.run_all_pipeline import execute_run_all, stop_request_path
+from video_agent.web.run_all_pipeline import execute_run_all, is_run_locked, stop_request_path
 from video_agent.web.timeline_helpers import (
     STAGE_ARTIFACTS,
     STAGE_ETA_SECONDS,
@@ -185,6 +185,21 @@ def _enqueue_stage_command(
     return {"job_id": job_id, "status": "enqueued", "command": command}
 
 
+def _queue_status(jobs_root: Path, job_id: str, job_dir: Path | None = None) -> str | None:
+    try:
+        if job_dir is not None and is_run_locked(job_dir):
+            return "running"
+        from video_agent.orchestrator.queue import JobQueue
+
+        queue = JobQueue(jobs_root / "queue.db")
+        row = queue.get_job(job_id)
+        if row and row.get("status") == "running" and queue.is_running_stale(job_id):
+            return "stale"
+        return str(row.get("status")) if row and row.get("status") else None
+    except Exception:
+        return None
+
+
 @router.get("/health")
 def health() -> dict:
     return {"ok": True, "service": "app"}
@@ -216,11 +231,20 @@ def list_jobs(jobs_root: Path = Depends(get_jobs_root)) -> dict:
                 continue
             current_stage = payload.get("current_stage")
             stop_requested = stop_request_path(entry).exists()
+            queue_status = _queue_status(
+                jobs_root,
+                str(payload.get("job_id") or entry.name),
+                entry,
+            )
+            current_stage_active = queue_status == "running" or job_has_in_progress_stage(payload)
             stages = []
             for raw_stage in payload.get("stages", []):
                 stage = dict(raw_stage)
                 stage["status"] = effective_stage_status(
-                    stage, current_stage, stop_requested=stop_requested
+                    stage,
+                    current_stage,
+                    stop_requested=stop_requested,
+                    current_stage_active=current_stage_active,
                 )
                 stages.append(stage)
             done = sum(1 for s in stages if s.get("status") == "completed")
@@ -236,6 +260,7 @@ def list_jobs(jobs_root: Path = Depends(get_jobs_root)) -> dict:
                     "current_stage": current_stage,
                     "created_at": payload.get("created_at"),
                     "updated_at": payload.get("updated_at"),
+                    "queue_status": queue_status,
                     "stages_done": done,
                     "stages_total": total,
                     "in_progress": in_progress,
@@ -307,10 +332,15 @@ def job_timeline(
     completed_so_far = 0
     total_stages = len(state.get("stages", []))
     current_stage = state.get("current_stage")
+    queue_status = _queue_status(jobs_root, job_id, job_dir)
+    current_stage_active = queue_status == "running" or job_has_in_progress_stage(state)
     for raw_stage in state.get("stages", []):
         stage = dict(raw_stage)
         stage["status"] = effective_stage_status(
-            stage, current_stage, stop_requested=stop_requested
+            stage,
+            current_stage,
+            stop_requested=stop_requested,
+            current_stage_active=current_stage_active,
         )
         name = stage.get("name")
         cfg = STAGE_ARTIFACTS.get(name, {})
@@ -393,6 +423,7 @@ def job_timeline(
         "current_stage": state.get("current_stage"),
         "created_at": state.get("created_at"),
         "updated_at": state.get("updated_at"),
+        "queue_status": queue_status,
         "stages_done": completed_so_far,
         "stages_total": total_stages,
         "percent": round(pct, 1),
@@ -1984,12 +2015,25 @@ async def post_run_all(
             enforce_approvals=enforce_approvals,
         )
 
+    state = load_job(job_dir)
+    if is_run_locked(job_dir):
+        return {
+            "job_id": job_id,
+            "status": "already_running",
+            "state": state.to_dict(),
+        }
+
     from video_agent.orchestrator.queue import JobQueue
     db_path = jobs_root / "queue.db"
     queue = JobQueue(db_path)
-    queue.enqueue(job_id, enforce_approvals)
+    enqueued = queue.enqueue(job_id, enforce_approvals)
 
-    state = load_job(job_dir)
+    if not enqueued:
+        return {
+            "job_id": job_id,
+            "status": "already_running",
+            "state": state.to_dict(),
+        }
     return {
         "job_id": job_id,
         "status": "enqueued",

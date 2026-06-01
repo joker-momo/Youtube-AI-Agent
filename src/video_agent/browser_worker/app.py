@@ -67,6 +67,22 @@ from video_agent.browser_worker.drivers import (
 app = FastAPI(title="video-agent-browser-worker", version="0.2.0")
 
 
+def _driver_error_detail(
+    exc: BrowserDriverError, *, login_required: bool = False
+) -> dict[str, object]:
+    detail: dict[str, object] = {
+        "error": str(exc),
+        "screenshot": exc.screenshot_path or "",
+    }
+    if exc.diagnostic_path:
+        detail["diagnostic"] = exc.diagnostic_path
+    if exc.layout_warning:
+        detail["layout_warning"] = True
+    if login_required:
+        detail["login_required"] = True
+    return detail
+
+
 def _cdp_url() -> str:
     """CDP endpoint for the Browser Appliance runtime container.
 
@@ -259,11 +275,7 @@ async def _open_session_locked(site: str) -> str:
             await pw_ctx.__aexit__(None, None, None)
             raise HTTPException(
                 status_code=409,
-                detail={
-                    "error": str(exc),
-                    "screenshot": exc.screenshot_path or "",
-                    "login_required": True,
-                },
+                detail=_driver_error_detail(exc, login_required=True),
             ) from exc
         except BrowserDriverError as exc:
             await page.close()
@@ -271,7 +283,7 @@ async def _open_session_locked(site: str) -> str:
             await pw_ctx.__aexit__(None, None, None)
             raise HTTPException(
                 status_code=502,
-                detail={"error": str(exc), "screenshot": exc.screenshot_path or ""},
+                detail=_driver_error_detail(exc),
             ) from exc
     except HTTPException:
         raise
@@ -328,16 +340,12 @@ async def _send_in_session(session_id: str, prompt: str, timeout_ms: int) -> str
     except LoginRequiredError as exc:
         raise HTTPException(
             status_code=409,
-            detail={
-                "error": str(exc),
-                "screenshot": exc.screenshot_path or "",
-                "login_required": True,
-            },
+            detail=_driver_error_detail(exc, login_required=True),
         ) from exc
     except BrowserDriverError as exc:
         raise HTTPException(
             status_code=502,
-            detail={"error": str(exc), "screenshot": exc.screenshot_path or ""},
+            detail=_driver_error_detail(exc),
         ) from exc
     except Exception as exc:
         try:
@@ -391,19 +399,12 @@ async def _drive(site: str, prompt: str, timeout_ms: int) -> dict:
             except LoginRequiredError as exc:
                 raise HTTPException(
                     status_code=409,
-                    detail={
-                        "error": str(exc),
-                        "screenshot": exc.screenshot_path or "",
-                        "login_required": True,
-                    },
+                    detail=_driver_error_detail(exc, login_required=True),
                 ) from exc
             except BrowserDriverError as exc:
                 raise HTTPException(
                     status_code=502,
-                    detail={
-                        "error": str(exc),
-                        "screenshot": exc.screenshot_path or "",
-                    },
+                    detail=_driver_error_detail(exc),
                 ) from exc
             except HTTPException:
                 raise
@@ -529,16 +530,12 @@ async def vidiq_session_score(session_id: str, payload: KeywordRequest) -> dict:
     except LoginRequiredError as exc:
         raise HTTPException(
             status_code=409,
-            detail={
-                "error": str(exc),
-                "screenshot": exc.screenshot_path or "",
-                "login_required": True,
-            },
+            detail=_driver_error_detail(exc, login_required=True),
         ) from exc
     except BrowserDriverError as exc:
         raise HTTPException(
             status_code=502,
-            detail={"error": str(exc), "screenshot": exc.screenshot_path or ""},
+            detail=_driver_error_detail(exc),
         ) from exc
 
 
@@ -616,19 +613,12 @@ async def chatgpt_image(payload: ImagePromptRequest) -> dict:
             except LoginRequiredError as exc:
                 raise HTTPException(
                     status_code=409,
-                    detail={
-                        "error": str(exc),
-                        "screenshot": exc.screenshot_path or "",
-                        "login_required": True,
-                    },
+                    detail=_driver_error_detail(exc, login_required=True),
                 ) from exc
             except BrowserDriverError as exc:
                 raise HTTPException(
                     status_code=502,
-                    detail={
-                        "error": str(exc),
-                        "screenshot": exc.screenshot_path or "",
-                    },
+                    detail=_driver_error_detail(exc),
                 ) from exc
             finally:
                 try:
@@ -692,19 +682,12 @@ async def chatgpt_image_batch(payload: BatchImagePromptRequest) -> dict:
             except LoginRequiredError as exc:
                 raise HTTPException(
                     status_code=409,
-                    detail={
-                        "error": str(exc),
-                        "screenshot": exc.screenshot_path or "",
-                        "login_required": True,
-                    },
+                    detail=_driver_error_detail(exc, login_required=True),
                 ) from exc
             except BrowserDriverError as exc:
                 raise HTTPException(
                     status_code=502,
-                    detail={
-                        "error": str(exc),
-                        "screenshot": exc.screenshot_path or "",
-                    },
+                    detail=_driver_error_detail(exc),
                 ) from exc
             finally:
                 try:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import fcntl
 import time
 from pathlib import Path
 
@@ -50,6 +51,28 @@ def stop_request_path(job_dir: Path) -> Path:
     return job_dir / STOP_REQUEST_FILE
 
 
+def is_run_locked(job_dir: Path) -> bool:
+    lock_path = job_dir / ".run.lock"
+    if not lock_path.exists():
+        return False
+    lock_fd = lock_path.open("a+")
+    try:
+        try:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno in (errno.EWOULDBLOCK, errno.EAGAIN):
+                return True
+            raise
+        finally:
+            try:
+                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+    finally:
+        lock_fd.close()
+    return False
+
+
 def _browser_http_exception(exc: BrowserClientError) -> HTTPException:
     if isinstance(exc, LoginRequiredFromWorker):
         return HTTPException(
@@ -83,8 +106,6 @@ async def execute_run_all(
     duration so two concurrent ``/run-all`` calls on the same job don't
     stomp each other's state writes.
     """
-    import fcntl
-
     job_dir.mkdir(parents=True, exist_ok=True)
     # Clear stale stop marker from older runs.
     try:
@@ -491,9 +512,13 @@ async def _execute_run_all_locked(
             },
         ) from exc
     except BrowserClientError as exc:
+        # Browser-worker hiccups (502/504/HTTP 5xx) are usually transient.
+        # Do NOT notify Telegram / dashboard here — that flips the job to
+        # "❌ Failed" even when the queue layer is about to retry. The
+        # worker (orchestrator/worker.py) is the only place that fires the
+        # user-visible failure alert, and only after retries are exhausted.
         state = load_job(job_dir)
         http_exc = _browser_http_exception(exc)
-        # Re-pack the detail to include progress.
         detail = (
             http_exc.detail
             if isinstance(http_exc.detail, dict)
@@ -502,11 +527,6 @@ async def _execute_run_all_locked(
         detail["completed"] = completed
         detail["stopped_at"] = state.current_stage
         detail["state"] = state.to_dict()
-        await notify_job_failed(
-            state.job_id,
-            stopped_at=state.current_stage,
-            error=str(exc),
-        )
         raise HTTPException(status_code=http_exc.status_code, detail=detail) from exc
     finally:
         # Always close the persistent tabs so a failure never leaks

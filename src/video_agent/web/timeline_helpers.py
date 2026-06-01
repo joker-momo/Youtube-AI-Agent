@@ -152,12 +152,16 @@ def stage_duration_seconds(stage: dict) -> float | None:
 
 
 def effective_stage_status(
-    stage: dict, current_stage: str | None, *, stop_requested: bool = False
+    stage: dict,
+    current_stage: str | None,
+    *,
+    stop_requested: bool = False,
+    current_stage_active: bool = True,
 ) -> str:
     status = str(stage.get("status") or "pending")
     if stop_requested:
         return status
-    if status == "pending" and stage.get("name") == current_stage:
+    if current_stage_active and status == "pending" and stage.get("name") == current_stage:
         return "in_progress"
     return status
 

@@ -943,8 +943,66 @@
           <p>Track generation, QA, render artifacts, and final YouTube metadata.</p>
         </div>
         <div style="display:flex;gap:10px;align-items:center">
+          <button class="primary-action" type="button" onclick="openIdeaTitleJobModal()">Create video from idea</button>
           <button class="primary-action" type="button" onclick="openNewJobModal()">＋ New Job</button>
           <button style="padding:0 14px;height:36px;border:1px solid var(--line);border-radius:8px;background:#fff;font-size:13px;cursor:pointer" type="button" onclick="fetchJobs()">Refresh</button>
+        </div>
+      </div>
+      <!-- Create video from raw idea/title modal -->
+      <div class="modal-overlay hidden" id="idea-title-job-overlay" onclick="if(event.target===this)closeIdeaTitleJobModal()">
+        <div class="modal">
+          <div class="modal-title">Create video from idea/title</div>
+          <div class="modal-field">
+            <label>Idea/title</label>
+            <textarea id="itj-title" placeholder="Sarcopenia después de los 60: 5 alimentos que ayudan a proteger tus músculos"></textarea>
+          </div>
+          <div class="modal-field">
+            <label>Channel</label>
+            <select id="itj-channel">
+              <option value="vida-plena-45">vida-plena-45</option>
+            </select>
+          </div>
+          <div class="modal-field">
+            <label>Duration mode</label>
+            <select id="itj-duration-mode" onchange="ideaTitleDurationModeChanged()">
+              <option value="auto">Auto</option>
+              <option value="fixed">Fixed</option>
+            </select>
+          </div>
+          <div class="modal-field hidden" id="itj-fixed-duration-wrap">
+            <label>Target duration seconds</label>
+            <input type="number" id="itj-target-duration" min="300" max="1800" value="900">
+          </div>
+          <div class="modal-field">
+            <label>Run now</label>
+            <label style="font-size:13px;color:var(--text)"><input type="checkbox" id="itj-run-now" checked> Queue full pipeline after creation</label>
+          </div>
+          <div class="modal-field">
+            <label>Duplicate policy</label>
+            <select id="itj-duplicate-policy">
+              <option value="rewrite_angle">Rewrite angle</option>
+              <option value="block">Block</option>
+              <option value="warn_only">Warn only</option>
+            </select>
+          </div>
+          <details style="margin:8px 0">
+            <summary style="font-size:13px;color:var(--muted);cursor:pointer">Advanced</summary>
+            <div class="modal-field" style="margin-top:10px">
+              <label>Custom job_id</label>
+              <input type="text" id="itj-job-id" placeholder="auto">
+            </div>
+            <div class="modal-field">
+              <label>Notes</label>
+              <textarea id="itj-notes" placeholder="Optional guidance for ChatGPT expansion"></textarea>
+            </div>
+          </details>
+          <div id="itj-status" style="font-size:12px;color:var(--muted);margin-top:-6px;display:none"></div>
+          <div id="itj-error" style="font-size:12px;color:var(--red);margin-top:-6px;display:none"></div>
+          <div class="modal-actions">
+            <button class="modal-cancel" onclick="closeIdeaTitleJobModal()">Cancel</button>
+            <button class="modal-cancel" id="itj-create-only" onclick="submitIdeaTitleJob(false)">Create Job Only</button>
+            <button class="modal-submit" id="itj-submit" onclick="submitIdeaTitleJob(true)">Create & Run Video</button>
+          </div>
         </div>
       </div>
       <!-- New Job Modal -->
@@ -1191,8 +1249,17 @@ function jobState(job) {
   const stages = job.stages || [];
   if (stages.some(s => s.status === 'failed')) return 'failed';
   if (job.stages_total > 0 && job.stages_done === job.stages_total) return 'completed';
-  if (stages.some(s => s.status === 'in_progress')) return 'in_progress';
+  if (stages.some(isActuallyRunning)) return 'in_progress';
   return 'pending';
+}
+
+function isActuallyRunning(s) {
+  return !!s && s.status === 'in_progress';
+}
+
+function displayStageStatus(s) {
+  if (!s) return 'pending';
+  return s.status || 'pending';
 }
 
 async function fetchJobs() {
@@ -1218,7 +1285,7 @@ async function fetchJobs() {
     if (!hasSelected) {
       SELECTED_ID = null;
       if (jobs.length) {
-        const runningJob = jobs.find((j) => Array.isArray(j.stages) && j.stages.some((s) => s.status === 'in_progress'));
+        const runningJob = jobs.find((j) => Array.isArray(j.stages) && j.stages.some(isActuallyRunning));
         selectJob((runningJob || jobs[0]).job_id);
         return;
       }
@@ -1391,7 +1458,7 @@ async function resumeJob(jobId) {
       showToast('Resume failed: ' + String(msg));
       return;
     }
-    showToast('Resume started');
+    showToast(d.status === 'already_running' ? 'Job is already running' : 'Resume started');
     LAST_TIMELINE_JSON = '';
     if (SELECTED_ID === jobId) fetchTimeline(jobId);
     fetchJobs();
@@ -1425,8 +1492,8 @@ function updateVncPanel() {
   if (!panel) return;
   const vncUrl = 'http://localhost:7900/vnc.html?autoconnect=1&resize=scale&view_only=false';
   const selected = SELECTED_ID ? JOBS_BY_ID[SELECTED_ID] : null;
-  const selectedRunning = selected && Array.isArray(selected.stages) && selected.stages.some(s => s.status === 'in_progress');
-  const runningFallback = Object.values(JOBS_BY_ID).find((job) => Array.isArray(job.stages) && job.stages.some((s) => s.status === 'in_progress'));
+  const selectedRunning = selected && Array.isArray(selected.stages) && selected.stages.some(isActuallyRunning);
+  const runningFallback = Object.values(JOBS_BY_ID).find((job) => Array.isArray(job.stages) && job.stages.some(isActuallyRunning));
   const j = selectedRunning ? selected : runningFallback;
   if (!j) {
     if (VNC_MOUNTED_JOB_ID === VNC_IDLE_SENTINEL && panel.querySelector('iframe.vnc-frame')) {
@@ -1464,7 +1531,7 @@ function stableTimelineKey(t) {
   // every poll tick even though nothing meaningful has changed.
   const copy = JSON.parse(JSON.stringify(t));
   for (const s of copy.stages || []) {
-    if (s.status === 'in_progress') {
+    if (displayStageStatus(s) === 'in_progress') {
       for (const o of s.outputs || []) o.size = 0;
     }
   }
@@ -1516,7 +1583,7 @@ function renderTimeline(t) {
   const root = document.getElementById('detail-panel');
   const allDone = t.stages_total > 0 && t.stages_done === t.stages_total;
   const failed = (t.stages || []).some(s => s.status === 'failed');
-  const anyRunning = (t.stages || []).some(s => s.status === 'in_progress');
+  const anyRunning = (t.stages || []).some(isActuallyRunning);
   const hasPending = (t.stages || []).some(s => s.status !== 'completed');
   const stopped = !!t.stop_requested;
   const renderStage = t.stages.find(s => s.name === 'render');
@@ -1527,7 +1594,8 @@ function renderTimeline(t) {
     (renderStage.outputs || []).some(o => o.path === 'video.mp4' && o.exists);
   const channelInitials = (t.channel_id || 'VA').split('-').slice(0, 2).map(s => s[0] || '').join('').toUpperCase();
   const stageStrip = t.stages.map((s, i) => {
-    const cls = s.status === 'completed' ? 'completed' : s.status === 'in_progress' ? 'in_progress' : s.status === 'failed' ? 'failed' : '';
+    const shownStatus = displayStageStatus(s);
+    const cls = shownStatus === 'completed' ? 'completed' : shownStatus === 'in_progress' ? 'in_progress' : shownStatus === 'failed' ? 'failed' : '';
     const label = s.label || STAGE_LABEL[s.name] || s.name;
     return `<div class="stage-seg ${cls}"><span class="tip">${i + 1}. ${escapeHtml(label)}</span></div>`;
   }).join('');
@@ -1546,13 +1614,13 @@ function renderTimeline(t) {
           </div>
           <div class="sum-actions">
             <button class="action-btn primary" type="button" onclick="resumeJob('${escapeJs(t.job_id)}')" ${(anyRunning || !hasPending) ? 'disabled' : ''}>Resume</button>
-            <button class="action-btn warn" type="button" onclick="stopJob('${escapeJs(t.job_id)}')" ${t.stages.some(s => s.status === 'in_progress') ? '' : 'disabled'}>Stop Job</button>
-            <button class="action-btn" type="button" onclick="deleteJob('${escapeJs(t.job_id)}')" ${t.stages.some(s => s.status === 'in_progress') ? 'disabled' : ''}>Delete Job</button>
+            <button class="action-btn warn" type="button" onclick="stopJob('${escapeJs(t.job_id)}')" ${t.stages.some(isActuallyRunning) ? '' : 'disabled'}>Stop Job</button>
+            <button class="action-btn" type="button" onclick="deleteJob('${escapeJs(t.job_id)}')" ${t.stages.some(isActuallyRunning) ? 'disabled' : ''}>Delete Job</button>
           </div>
         </div>
         <div class="sum-right">
           <div class="sum-pct">${Math.round(t.percent)}<span class="pct-unit">%</span></div>
-          <div class="sum-eta">${stopped ? '<b style="color:var(--amber)">Stopped by operator</b>' : failed ? '<b style="color:var(--red)">Failed</b>' : allDone ? '<b>Completed</b>' : anyRunning ? 'Running…' : 'Waiting…'}</div>
+          <div class="sum-eta">${stopped ? '<b style="color:var(--amber)">Stopped by operator</b>' : failed ? '<b style="color:var(--red)">Failed</b>' : allDone ? '<b>Completed</b>' : anyRunning ? 'Running…' : 'Ready to start'}</div>
         </div>
       </div>
       <div class="sum-bar ${barClass}"><div style="width:${t.percent}%"></div></div>
@@ -1913,7 +1981,8 @@ function stopShortsProgressPolling() {
 
 function renderStep(jobId, s, idx, fallbackStartedAt = null) {
   const el = document.createElement('div');
-  el.className = 'step ' + s.status + (OPEN_STAGES.has(s.name) ? ' open' : '');
+  const shownStatus = displayStageStatus(s);
+  el.className = 'step ' + shownStatus + (OPEN_STAGES.has(s.name) ? ' open' : '');
   const label = s.label || STAGE_LABEL[s.name] || s.name;
   const stageTitle = `${idx + 1}. ${label} (${s.name})`;
   const runningStartedAt = s.started_at || fallbackStartedAt || null;
@@ -1922,7 +1991,7 @@ function renderStep(jobId, s, idx, fallbackStartedAt = null) {
   let durHtml = '';
   if (s.actual_seconds !== null && s.actual_seconds !== undefined) {
     durHtml = `<span class="step-dur">${fmtSec(s.actual_seconds)}</span>`;
-  } else if (s.status === 'in_progress' && runningStartedAt) {
+  } else if (shownStatus === 'in_progress' && runningStartedAt) {
     durHtml = `<span class="step-dur step-dur-live" data-started-at="${escapeHtml(runningStartedAt)}">${runningElapsed === null ? '' : fmtSec(runningElapsed)}</span>`;
   } else {
     durHtml = '<span class="step-dur"></span>';
@@ -1930,7 +1999,7 @@ function renderStep(jobId, s, idx, fallbackStartedAt = null) {
   // Inline sub-progress for sharded stages (e.g. scenes_promote runs 6-8
   // ChatGPT batches; surface the saved/total count so the row doesn't sit
   // silent for many minutes).
-  if (s.sub_progress && s.sub_progress.label && s.status === 'in_progress') {
+  if (s.sub_progress && s.sub_progress.label && shownStatus === 'in_progress') {
     durHtml += `<span class="step-substep" style="margin-left:8px;padding:2px 8px;font-size:11px;font-weight:600;background:#dbeafe;color:#1d4ed8;border-radius:10px">${escapeHtml(s.sub_progress.label)}</span>`;
   } else if (s.name === 'shorts_autopilot' && s.sub_progress && s.sub_progress.label) {
     durHtml += `<span class="step-substep" style="margin-left:8px;padding:2px 8px;font-size:11px;font-weight:600;background:#dcfce7;color:#166534;border-radius:10px">${escapeHtml(s.sub_progress.label)}</span>`;
@@ -1938,9 +2007,9 @@ function renderStep(jobId, s, idx, fallbackStartedAt = null) {
 
   // Render-specific progress bar (shown when in_progress)
   // Read from RENDER_PROGRESS_CACHE — a global that survives DOM rebuilds.
-  const _rpc = (s.name === 'render' && s.status === 'in_progress') ? RENDER_PROGRESS_CACHE : null;
-  const _spc = (s.name === 'shorts_render' && s.status === 'in_progress') ? SHORTS_PROGRESS_CACHE : null;
-  const _wpc = (s.name === 'whisper_timestamps' && s.status === 'in_progress') ? WHISPER_PROGRESS_CACHE : null;
+  const _rpc = (s.name === 'render' && shownStatus === 'in_progress') ? RENDER_PROGRESS_CACHE : null;
+  const _spc = (s.name === 'shorts_render' && shownStatus === 'in_progress') ? SHORTS_PROGRESS_CACHE : null;
+  const _wpc = (s.name === 'whisper_timestamps' && shownStatus === 'in_progress') ? WHISPER_PROGRESS_CACHE : null;
   
   let renderProgressHtml = '';
   if (_rpc) {
@@ -1996,9 +2065,9 @@ function renderStep(jobId, s, idx, fallbackStartedAt = null) {
   }
 
   const compactStepGlyph = (
-    s.status === 'completed'
+    shownStatus === 'completed'
       ? checkIcon()
-      : s.status === 'failed'
+      : shownStatus === 'failed'
         ? xIcon()
         : '<span class="step-flow-dot" aria-hidden="true"></span>'
   );
@@ -2008,7 +2077,7 @@ function renderStep(jobId, s, idx, fallbackStartedAt = null) {
       <span class="step-num"><span class="step-order">${String(idx + 1).padStart(2, '0')}</span><span class="step-check">${compactStepGlyph}</span></span>
       <span class="step-label" title="${escapeHtml(stageTitle)}"><span class="name">${escapeHtml(label)}</span><span class="code">${escapeHtml(s.name)}</span></span>
       <span class="step-meta">
-        <span class="pill ${s.status}">${statusText(s.status)}</span>${durHtml}<span class="caret">›</span>
+        <span class="pill ${shownStatus}">${statusText(shownStatus)}</span>${durHtml}<span class="caret">›</span>
       </span>
       <span class="stage-flow-link" aria-hidden="true"></span>
     </div>
@@ -2036,27 +2105,27 @@ function renderStep(jobId, s, idx, fallbackStartedAt = null) {
     else OPEN_STAGES.delete(s.name);
   };
   // Start/stop render progress polling based on stage status
-  if (s.name === 'render' && s.status === 'in_progress') {
+  if (s.name === 'render' && shownStatus === 'in_progress') {
     startRenderProgressPolling(jobId);
     el.classList.add('open');
     OPEN_STAGES.add('render');
-  } else if (s.name === 'render' && s.status !== 'in_progress') {
+  } else if (s.name === 'render' && shownStatus !== 'in_progress') {
     stopRenderProgressPolling();
   }
 
-  if (s.name === 'shorts_render' && s.status === 'in_progress') {
+  if (s.name === 'shorts_render' && shownStatus === 'in_progress') {
     startShortsProgressPolling(jobId);
     el.classList.add('open');
     OPEN_STAGES.add('shorts_render');
-  } else if (s.name === 'shorts_render' && s.status !== 'in_progress') {
+  } else if (s.name === 'shorts_render' && shownStatus !== 'in_progress') {
     stopShortsProgressPolling();
   }
 
-  if (s.name === 'whisper_timestamps' && s.status === 'in_progress') {
+  if (s.name === 'whisper_timestamps' && shownStatus === 'in_progress') {
     startWhisperProgressPolling(jobId);
     el.classList.add('open');
     OPEN_STAGES.add('whisper_timestamps');
-  } else if (s.name === 'whisper_timestamps' && s.status !== 'in_progress') {
+  } else if (s.name === 'whisper_timestamps' && shownStatus !== 'in_progress') {
     stopWhisperProgressPolling();
   }
 
@@ -3090,6 +3159,117 @@ fetchJobs();
 setInterval(fetchJobs, 4000);
 startTimelinePolling();
 
+// ---- Create Job from raw idea/title ----
+function openIdeaTitleJobModal() {
+  const ideaCh = document.getElementById('idea-channel');
+  const ch = document.getElementById('itj-channel');
+  if (ideaCh && ch) ch.innerHTML = ideaCh.innerHTML;
+  document.getElementById('itj-title').value = '';
+  document.getElementById('itj-job-id').value = '';
+  document.getElementById('itj-notes').value = '';
+  document.getElementById('itj-duration-mode').value = 'auto';
+  document.getElementById('itj-run-now').checked = true;
+  document.getElementById('itj-duplicate-policy').value = 'rewrite_angle';
+  document.getElementById('itj-error').style.display = 'none';
+  ideaTitleDurationModeChanged();
+  document.getElementById('idea-title-job-overlay').classList.remove('hidden');
+}
+
+function closeIdeaTitleJobModal() {
+  document.getElementById('idea-title-job-overlay').classList.add('hidden');
+}
+
+function ideaTitleDurationModeChanged() {
+  const mode = document.getElementById('itj-duration-mode').value;
+  document.getElementById('itj-fixed-duration-wrap').classList.toggle('hidden', mode !== 'fixed');
+}
+
+function showIdeaTitleJobError(message) {
+  const err = document.getElementById('itj-error');
+  err.textContent = message;
+  err.style.display = '';
+}
+
+function endpointErrorMessage(payload, fallback) {
+  const detail = payload && payload.detail;
+  if (typeof detail === 'string') return detail;
+  if (detail && typeof detail === 'object') {
+    return detail.message || detail.error || detail.overlap_reason || JSON.stringify(detail);
+  }
+  return fallback;
+}
+
+async function openCreatedJob(jobId) {
+  closeIdeaTitleJobModal();
+  closeNewJobModal();
+  showToast('Created job: ' + jobId);
+  await fetchJobs();
+  SELECTED_ID = jobId;
+  LAST_TIMELINE_JSON = '';
+  await fetchTimeline(jobId);
+}
+
+async function submitIdeaTitleJob(forceRunNow) {
+  const titleSeed = document.getElementById('itj-title').value.trim();
+  if (!titleSeed) {
+    showIdeaTitleJobError('Paste an idea/title first.');
+    return;
+  }
+  const runNow = forceRunNow ? document.getElementById('itj-run-now').checked : false;
+  const mode = document.getElementById('itj-duration-mode').value;
+  const body = {
+    channel_id: document.getElementById('itj-channel').value || 'vida-plena-45',
+    title_seed: titleSeed,
+    job_id: document.getElementById('itj-job-id').value.trim() || null,
+    duration_mode: mode,
+    target_duration_sec: mode === 'fixed' ? Number(document.getElementById('itj-target-duration').value || 900) : null,
+    run_now: runNow,
+    duplicate_policy: document.getElementById('itj-duplicate-policy').value,
+    notes: document.getElementById('itj-notes').value.trim() || null,
+  };
+  const submit = document.getElementById('itj-submit');
+  const createOnly = document.getElementById('itj-create-only');
+  const clicked = forceRunNow ? submit : createOnly;
+  const originalSubmitText = submit.textContent;
+  const originalCreateOnlyText = createOnly.textContent;
+  const status = document.getElementById('itj-status');
+  submit.disabled = true;
+  createOnly.disabled = true;
+  clicked.textContent = 'Creating...';
+  status.textContent = 'Expanding title with ChatGPT, validating idea.json, then creating the job...';
+  status.style.display = '';
+  document.getElementById('itj-error').style.display = 'none';
+  try {
+    const r = await fetch('/jobs/from-idea-title', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      showIdeaTitleJobError(endpointErrorMessage(d, 'Create failed: ' + r.status));
+      return;
+    }
+    if (!runNow) {
+      showToast('Job created only. Click Resume to start the pipeline.');
+    } else if (d.duplicate_verdict && d.duplicate_verdict.policy_action === 'warning') {
+      showToast('Warning: similar to existing video');
+    } else if (d.idea && d.idea.duplicate_check && d.idea.duplicate_check.verdict === 'REWRITTEN_TO_AVOID_DUPLICATE') {
+      showToast('Angle adjusted to avoid repeating previous content');
+    } else {
+      showToast('Pipeline: ' + (d.pipeline_status || 'created'));
+    }
+    await openCreatedJob(d.job_id);
+  } catch (e) {
+    showIdeaTitleJobError('Error: ' + e.message);
+  } finally {
+    submit.disabled = false;
+    createOnly.disabled = false;
+    submit.textContent = originalSubmitText || 'Create & Run Video';
+    createOnly.textContent = originalCreateOnlyText || 'Create Job Only';
+  }
+}
+
 // ---- New Job Modal ----
 let _NJ_SAVED_IDEAS = [];   // [{idea, path}]
 let _NJ_SAVED_LOADED = '';  // last channel loaded
@@ -3865,68 +4045,36 @@ function renderIdeaCard(idea, savedPath) {
       <div class="idea-card-actions">
         <button class="action-btn primary"
           ${(finalScore == null && score == null) || idea.is_duplicate ? 'disabled' : ''}
-          title="${idea.is_duplicate ? 'Idea trùng video đã làm' : ((finalScore == null && score == null) ? 'Chưa có điểm — chờ scoring xong' : 'Tạo job từ idea này')}"
-          onclick='createJobFromIdea(${safeIdea}, "${safePath}")'>+ Create Job</button>
+          title="${idea.is_duplicate ? 'Idea trùng video đã làm' : ((finalScore == null && score == null) ? 'Chưa có điểm — chờ scoring xong' : 'Run job từ idea này')}"
+          onclick='createJobFromIdea(${safeIdea}, "${safePath}")'>Run Job</button>
       </div>
     </div>`;
 }
 
 async function createJobFromIdea(idea, savedPath) {
   const channelId = document.getElementById('idea-channel').value;
-  // Generate job ID: slug from title_seed + timestamp
-  const slug = (idea.title_seed || idea.topic || 'idea')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 30);
-  const jobId = slug + '-' + Math.floor(Date.now() / 1000);
-
   try {
-    // 1. Create job
-    const r1 = await fetch('/jobs', {
+    const r = await fetch('/jobs/from-idea', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({job_id: jobId, channel_id: channelId, idea_path: savedPath}),
+      body: JSON.stringify({
+        channel_id: channelId,
+        idea,
+        run_now: true,
+        duplicate_policy: 'block',
+      }),
     });
-    if (!r1.ok) {
-      const d = await r1.json();
-      showToast('Create job failed: ' + (d.detail || r1.status));
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      showToast('Create job failed: ' + endpointErrorMessage(d, 'HTTP ' + r.status));
       return;
     }
-
-    // 2. Write idea.json into the job dir
-    const r2 = await fetch('/jobs/' + encodeURIComponent(jobId) + '/idea', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(idea),
-    });
-    if (!r2.ok) {
-      showToast('Idea upload failed');
-      return;
-    }
-
-    showToast('Job created — pipeline starting…');
+    const jobId = d.job_id;
+    showToast('Job created — ' + (d.pipeline_status || 'queued'));
     await fetchJobs();
-    // Select the new job
     SELECTED_ID = jobId;
     LAST_TIMELINE_JSON = '';
     await fetchTimeline(jobId);
-
-    // Auto-run full pipeline (fire-and-forget — UI polls for progress)
-    fetch('/jobs/' + encodeURIComponent(jobId) + '/run-all', { method: 'POST' })
-      .then(async (r) => {
-        const d = await r.json().catch(() => ({}));
-        if (!r.ok) {
-          const msg = (d && (d.error || d.detail?.error || d.detail)) || ('HTTP ' + r.status);
-          throw new Error(String(msg));
-        }
-        return d;
-      })
-      .then(() => {
-        LAST_TIMELINE_JSON = '';
-        if (SELECTED_ID === jobId) fetchTimeline(jobId);
-      })
-      .catch(e => showToast('Pipeline error: ' + e.message));
   } catch (e) {
     showToast('Error: ' + e.message);
   }

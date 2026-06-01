@@ -354,7 +354,16 @@
   }
   .job-del:hover { border-color: #e0b7b7; color: var(--red); background: #fff6f6; }
   .job-del:disabled { opacity: .5; cursor: not-allowed; color: var(--muted-2); }
-  .job-id { font-size: 12px; font-weight: 750; line-height: 1.35; word-break: break-word; }
+  .job-title {
+    font-size: 13px;
+    font-weight: 800;
+    line-height: 1.28;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+  .job-id { margin-top: 3px; font-size: 10px; font-weight: 650; line-height: 1.25; word-break: break-word; color: var(--muted-2); }
   .job-count { color: var(--muted); font-size: 12px; white-space: nowrap; }
   .job-stage { margin-top: 8px; color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 7px; }
   .state-dot { width: 7px; height: 7px; border-radius: 999px; background: #b8bcc2; flex: 0 0 auto; }
@@ -380,6 +389,8 @@
   .summary-card { border: 1px solid var(--line); border-radius: 8px; padding: 18px; background: #fff; }
   .sum-row { display: flex; justify-content: space-between; gap: 24px; align-items: start; }
   .sum-id { font-size: 20px; font-weight: 780; line-height: 1.2; word-break: break-word; }
+  .sum-title { font-size: 23px; font-weight: 820; line-height: 1.18; word-break: break-word; }
+  .sum-job-id { margin-top: 6px; color: var(--muted-2); font-size: 12px; font-weight: 650; word-break: break-word; }
   .sum-meta { margin-top: 9px; color: var(--muted); font-size: 12px; display: flex; flex-wrap: wrap; gap: 9px; align-items: center; }
   .sum-actions { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
   .channel-pill { display: inline-flex; align-items: center; gap: 7px; }
@@ -450,10 +461,50 @@
     font-weight: 650;
   }
   .timeline { display: grid; gap: 10px; }
+  .timeline.compact {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 10px 18px;
+    align-items: start;
+    overflow: visible;
+  }
   .step { border: 1px solid var(--line); border-radius: 8px; background: #fff; overflow: hidden; }
+  .timeline.compact .step {
+    position: relative;
+    overflow: visible;
+  }
   .step.completed { border-color: #d6eadb; }
   .step.in_progress { border-color: #b9d7f7; background: #fbfdff; }
   .step.failed { border-color: #f0c9c9; background: #fffafa; }
+  .timeline.compact .step.open { grid-column: 1 / -1; }
+  .timeline.compact .step:not(.open):not(:last-child)::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: calc(100% + 3px);
+    width: 12px;
+    height: 2px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, rgba(45, 155, 79, .2), rgba(45, 155, 79, .95), rgba(45, 155, 79, .2));
+    background-size: 200% 100%;
+    animation: stageFlow 1.4s linear infinite;
+  }
+  .timeline.compact .step:not(.open):not(:last-child)::before {
+    content: "";
+    position: absolute;
+    top: calc(50% - 4px);
+    left: calc(100% + 14px);
+    border-left: 6px solid rgba(45, 155, 79, .65);
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+  }
+  @keyframes stageFlow {
+    from { background-position: 100% 0; }
+    to { background-position: -100% 0; }
+  }
+  .stage-flow-link {
+    display: none;
+  }
   .step-head {
     min-height: 58px;
     display: grid;
@@ -462,6 +513,12 @@
     align-items: center;
     padding: 12px 14px;
     cursor: pointer;
+  }
+  .timeline.compact .step-head {
+    min-height: 50px;
+    grid-template-columns: 22px minmax(0, 1fr) auto;
+    gap: 8px;
+    padding: 7px 9px;
   }
   .step-head:hover { background: #fafafa; }
   .step-num {
@@ -475,13 +532,78 @@
     font-size: 12px;
     font-weight: 750;
   }
+  .timeline.compact .step-num {
+    width: 22px;
+    height: 22px;
+    font-size: 10px;
+  }
   .step.completed .step-num { background: var(--green); color: #fff; }
   .step.in_progress .step-num { background: var(--blue); color: #fff; }
   .step.failed .step-num { background: var(--red); color: #fff; }
+  .step-num .step-order {
+    font-size: 10px;
+    line-height: 1;
+    font-weight: 850;
+  }
+  .step-num .step-check {
+    display: none;
+    width: 14px;
+    height: 14px;
+  }
+  .step-flow-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 999px;
+    background: currentColor;
+    display: block;
+  }
+  .step.pending .step-flow-dot {
+    color: #9aa1aa;
+  }
+  .step.in_progress .step-flow-dot {
+    animation: stagePulse 1.2s ease-in-out infinite;
+  }
+  @keyframes stagePulse {
+    0%, 100% { transform: scale(.72); opacity: .7; }
+    50% { transform: scale(1.08); opacity: 1; }
+  }
+  .timeline.compact .step-num .step-order { display: none; }
+  .timeline.compact .step-num .step-check { display: block; }
   .step-label .name { display: block; font-size: 13px; font-weight: 750; }
   .step-label .code { display: block; margin-top: 4px; font-size: 11px; color: var(--muted-2); }
+  .timeline.compact .step-label {
+    display: block;
+    min-width: 0;
+  }
+  .timeline.compact .step-label .name {
+    display: block;
+    font-size: 12px;
+    line-height: 1.18;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: normal;
+    word-break: normal;
+  }
+  .timeline.compact .step-label .code {
+    display: none;
+  }
+  .timeline.compact .step.open .step-label .code {
+    display: block;
+    margin-top: 2px;
+    font-size: 10px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .timeline.compact .step.open .step-label .name {
+    white-space: normal;
+    overflow: visible;
+  }
   .step-meta { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
+  .timeline.compact .step-meta { gap: 6px; font-size: 11px; }
   .pill { border-radius: 999px; padding: 4px 9px; background: #f1f2f4; color: var(--muted); font-size: 11px; font-weight: 700; }
+  .timeline.compact .pill { padding: 2px 7px; font-size: 10px; }
   .pill.completed { background: var(--green-soft); color: var(--green); }
   .pill.in_progress { background: var(--blue-soft); color: var(--blue); }
   .pill.failed { background: #ffe8e8; color: var(--red); }
@@ -489,8 +611,10 @@
   .run-btn:hover { opacity: 0.85; }
   .run-btn:disabled { opacity: 0.5; cursor: not-allowed; }
   .caret { color: var(--muted-2); font-size: 20px; line-height: 1; transition: transform 150ms; }
+  .timeline.compact .caret { font-size: 16px; }
   .step.open .caret { transform: rotate(90deg); }
   .step-body { display: none; padding: 0 14px 14px 55px; }
+  .timeline.compact .step-body { padding: 0 10px 10px 37px; }
   .step.open .step-body { display: block; }
   .io-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .io-box { border: 1px solid var(--line); border-radius: 8px; background: #fafafa; padding: 10px; min-height: 68px; }
@@ -1148,9 +1272,13 @@ function renderJobsList(jobs) {
       : 'Delete job';
     const card = document.createElement('div');
     card.className = 'job-card' + (SELECTED_ID === j.job_id ? ' active' : '');
+    const displayTitle = j.idea_title || j.job_id;
     card.innerHTML = `
       <div class="job-row">
-        <div class="job-main"><div class="job-id">${escapeHtml(j.job_id)}</div></div>
+        <div class="job-main">
+          <div class="job-title">${escapeHtml(displayTitle)}</div>
+          <div class="job-id">${escapeHtml(j.job_id)}</div>
+        </div>
         <div class="job-tools">
           <div class="job-count"><b>${j.stages_done}</b>/${j.stages_total}</div>
           <button class="job-stop" data-action="stop-job" data-job="${escapeHtml(j.job_id)}" ${stopDisabled} title="${escapeHtml(stopTitle)}">Stop</button>
@@ -1158,7 +1286,7 @@ function renderJobsList(jobs) {
           <button class="job-stop" onclick="openShortsFor('${escapeHtml(j.job_id)}')" title="Shorts Autopilot">🎬</button>
         </div>
       </div>
-      <div class="job-shorts-chip" id="shorts-chip-${escapeHtml(j.job_id)}" style="font-size:11px;color:var(--muted);margin-top:2px"></div>
+      <div class="job-shorts-chip" id="shorts-chip-${escapeHtml(j.job_id)}" style="font-size:11px;color:var(--muted);margin-top:4px"></div>
       <div class="job-stage">
         <span class="state-dot ${state}"></span>
         <span>${escapeHtml(STAGE_LABEL[j.current_stage] || j.current_stage || 'pending')}</span>
@@ -1404,11 +1532,13 @@ function renderTimeline(t) {
     return `<div class="stage-seg ${cls}"><span class="tip">${i + 1}. ${escapeHtml(label)}</span></div>`;
   }).join('');
   const barClass = failed ? 'failed' : allDone ? 'completed' : '';
+  const summaryTitle = t.idea_title || t.job_id;
   root.innerHTML = `
     <div class="summary-card">
       <div class="sum-row">
         <div class="sum-left">
-          <div class="sum-id">${escapeHtml(t.job_id)}</div>
+          <div class="sum-title">${escapeHtml(summaryTitle)}</div>
+          <div class="sum-job-id">${escapeHtml(t.job_id)}</div>
           <div class="sum-meta">
             <span class="channel-pill"><span class="avatar">${escapeHtml(channelInitials)}</span>${escapeHtml(t.channel_id || '-')}</span>
             <span>updated ${fmtTime(t.updated_at)}</span>
@@ -1437,8 +1567,8 @@ function renderTimeline(t) {
       <button type="button" class="detail-tab-btn ${ACTIVE_DETAIL_TAB === 'logs' ? 'active' : ''}" onclick="switchDetailTab('logs')">Logs</button>
     </div>
     <div id="detail-tab-timeline" class="detail-tab-content ${ACTIVE_DETAIL_TAB === 'timeline' ? '' : 'hidden'}">
-      <div class="section-title"><span>Pipeline stages</span><span>${t.stages_done}/${t.stages_total} done</span></div>
-      <div class="timeline" id="timeline"></div>
+      <div class="section-title" style="margin:14px 0 8px"><span>Pipeline stages</span><span>${t.stages_done}/${t.stages_total} done</span></div>
+      <div class="timeline compact" id="timeline"></div>
       ${videoReady ? '<div id="final-mount"></div>' : ''}
       <div class="events ${EVENTS_OPEN ? 'open' : ''}" id="events-panel">
         <div class="events-head" onclick="toggleEvents()">
@@ -1785,6 +1915,7 @@ function renderStep(jobId, s, idx, fallbackStartedAt = null) {
   const el = document.createElement('div');
   el.className = 'step ' + s.status + (OPEN_STAGES.has(s.name) ? ' open' : '');
   const label = s.label || STAGE_LABEL[s.name] || s.name;
+  const stageTitle = `${idx + 1}. ${label} (${s.name})`;
   const runningStartedAt = s.started_at || fallbackStartedAt || null;
   const runningStartMs = parseIsoToMs(runningStartedAt);
   const runningElapsed = runningStartMs === null ? null : Math.max(0, Math.floor((Date.now() - runningStartMs) / 1000));
@@ -1864,13 +1995,22 @@ function renderStep(jobId, s, idx, fallbackStartedAt = null) {
       </div>`;
   }
 
+  const compactStepGlyph = (
+    s.status === 'completed'
+      ? checkIcon()
+      : s.status === 'failed'
+        ? xIcon()
+        : '<span class="step-flow-dot" aria-hidden="true"></span>'
+  );
+
   el.innerHTML = `
-    <div class="step-head">
-      <span class="step-num">${s.status === 'completed' ? checkIcon() : s.status === 'failed' ? xIcon() : idx + 1}</span>
-      <span class="step-label"><span class="name">${escapeHtml(label)}</span><span class="code">${escapeHtml(s.name)}</span></span>
+    <div class="step-head" title="${escapeHtml(stageTitle)}">
+      <span class="step-num"><span class="step-order">${String(idx + 1).padStart(2, '0')}</span><span class="step-check">${compactStepGlyph}</span></span>
+      <span class="step-label" title="${escapeHtml(stageTitle)}"><span class="name">${escapeHtml(label)}</span><span class="code">${escapeHtml(s.name)}</span></span>
       <span class="step-meta">
         <span class="pill ${s.status}">${statusText(s.status)}</span>${durHtml}<span class="caret">›</span>
       </span>
+      <span class="stage-flow-link" aria-hidden="true"></span>
     </div>
     <div class="step-body">
       ${renderProgressHtml}
@@ -2157,6 +2297,19 @@ function scoreColor(n) {
   return '#dc2626';
 }
 
+function isBlockedKeywordLabel(value) {
+  const text = String(value || '').trim().toLowerCase();
+  return [
+    'best camera settings',
+    'weight loss',
+    'sleep tips',
+    'morning routine',
+    'diet plan',
+    'workout routine',
+    'healthy aging',
+  ].includes(text);
+}
+
 function renderResearchInsight(data) {
   const scores = Array.isArray(data.scores) ? data.scores : [];
   const verdict = (data.verdict || '').toLowerCase();
@@ -2166,7 +2319,14 @@ function renderResearchInsight(data) {
   const scoreRows = scores.slice(0, 8).map(s => {
     const n = s.score ?? 0;
     const pct = Math.min(100, Math.round((n / 100) * 100));
-    const related = Array.isArray(s.related) ? s.related.slice(0, 3).map(r => `<span class="tag-chip">${escapeHtml(r.keyword || '')}</span>`).join('') : '';
+    const related = Array.isArray(s.related)
+      ? s.related
+          .map(r => r.keyword || r.term || r || '')
+          .filter(r => !isBlockedKeywordLabel(r))
+          .slice(0, 3)
+          .map(r => `<span class="tag-chip">${escapeHtml(r)}</span>`)
+          .join('')
+      : '';
     return `
       <div class="score-row">
         <span class="score-kw" title="${escapeHtml(s.keyword || '')}">${escapeHtml(s.keyword || '')}</span>
@@ -3621,7 +3781,11 @@ function renderIdeaScoreBlock(res) {
   const pct = n != null ? Math.min(n, 100) : 0;
   const comp = res.competition ? `<span class="idea-comp-badge">⚔️ ${escapeHtml(res.competition)}</span>` : '';
   const bucket = res.bucket ? `<span class="idea-bucket-badge">${escapeHtml(bucketLabel(res.bucket))}</span>` : '';
-  const related = (res.related || []).slice(0, 6).map(r => `<span style="background:#f3f4f6;border-radius:4px;padding:1px 7px;font-size:11px">${escapeHtml(r)}</span>`).join(' ');
+  const related = (res.related || [])
+    .filter(r => !isBlockedKeywordLabel(r))
+    .slice(0, 6)
+    .map(r => `<span style="background:#f3f4f6;border-radius:4px;padding:1px 7px;font-size:11px">${escapeHtml(r)}</span>`)
+    .join(' ');
   const err = res.error ? `<div style="font-size:11px;color:var(--muted)">vidIQ unavailable</div>` : '';
   return `
     <div class="idea-score-row">

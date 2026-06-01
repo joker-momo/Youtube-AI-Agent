@@ -56,6 +56,25 @@ def test_dashboard_idea_v2_badges_are_wrappable():
     assert "function bucketLabel" in dashboard_text
 
 
+def test_dashboard_compact_pipeline_uses_animated_flow_with_full_labels():
+    dashboard_path = Path(__file__).resolve().parents[1] / "src" / "video_agent" / "web" / "dashboard.html"
+    dashboard_text = dashboard_path.read_text(encoding="utf-8")
+
+    assert "@keyframes stageFlow" in dashboard_text
+    assert "step-flow-dot" in dashboard_text
+    assert "stage-flow-link" in dashboard_text
+    assert "title=\"${escapeHtml(stageTitle)}\"" in dashboard_text
+
+
+def test_dashboard_filters_blocked_vidiq_related_keywords_from_insights():
+    dashboard_path = Path(__file__).resolve().parents[1] / "src" / "video_agent" / "web" / "dashboard.html"
+    dashboard_text = dashboard_path.read_text(encoding="utf-8")
+
+    assert "function isBlockedKeywordLabel" in dashboard_text
+    assert "best camera settings" in dashboard_text
+    assert ".filter(r => !isBlockedKeywordLabel" in dashboard_text
+
+
 def test_app_service_mounts_inputs_for_generated_ideas():
     compose_path = Path(__file__).resolve().parents[1] / "docker-compose.yml"
     compose_text = compose_path.read_text(encoding="utf-8")

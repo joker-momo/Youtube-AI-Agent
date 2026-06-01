@@ -7,7 +7,10 @@ from video_agent.browser_worker.drivers.base import (
     LoginRequiredError,
     normalise_response_text,
 )
-from video_agent.browser_worker.drivers.chatgpt import _is_login_url as chatgpt_is_login
+from video_agent.browser_worker.drivers.chatgpt import (
+    CHATGPT_URL,
+    _is_login_url as chatgpt_is_login,
+)
 from video_agent.browser_worker.drivers.claude import _is_login_url as claude_is_login
 from video_agent.browser_worker.drivers.gemini import _is_login_url as gemini_is_login
 
@@ -40,7 +43,11 @@ def test_chatgpt_login_url_detection():
     assert chatgpt_is_login("https://auth.openai.com/login")
     assert chatgpt_is_login("https://chatgpt.com/login")
     assert chatgpt_is_login("https://chatgpt.com/auth/login")
-    assert not chatgpt_is_login("https://chatgpt.com/?model=gpt-4o")
+    assert not chatgpt_is_login("https://chatgpt.com/?temporary-chat=true")
+
+
+def test_chatgpt_driver_uses_temporary_chat_url_without_model_pin():
+    assert CHATGPT_URL == "https://chatgpt.com/?temporary-chat=true"
 
 
 def test_chatgpt_stable_detector_requires_streaming_to_stop():

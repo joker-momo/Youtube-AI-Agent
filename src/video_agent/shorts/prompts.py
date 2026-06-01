@@ -137,3 +137,148 @@ def short_qa_prompt(channel_config: dict, short_script: dict, short_scenes: dict
         f"SCENES:\n{json.dumps(short_scenes, ensure_ascii=False)[:1500]}\n\n"
         f"{_OUTPUT_RULES}\nReturn JSON exactly:\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n"
     )
+
+
+# ---------------------------------------------------------------------------
+# Spec v6 §9 — additional prompts (planner, scene v6, claude_qa)
+# ---------------------------------------------------------------------------
+
+_SHORT_LAYOUT_NAMES = (
+    "short_hook", "short_pain", "short_tip", "short_checklist",
+    "short_myth", "short_quote", "short_cta",
+)
+
+
+def planner_prompt(channel_config: dict, candidates: list[dict],
+                   long_summary: dict, formats: list[str]) -> str:
+    """ChatGPT planner: pick 1-3 Shorts from provided candidates only."""
+    schema = {
+        "source_long_job_id": long_summary.get("job_id", ""),
+        "source_title": long_summary.get("title", ""),
+        "detected_pillar": long_summary.get("pillar", "routine"),
+        "target_count": 3,
+        "selected_shorts": [{
+            "short_id": "short-01",
+            "format": "pain_to_tip",
+            "candidate_id": "candidate-XX",
+            "source_scene_ids": ["scene-NN"],
+            "hook_angle": "...",
+            "viewer_pain": "...",
+            "practical_payoff": "...",
+            "music_track": "shorts_sleep_stress",
+            "cta_type": "long_video_channel_cta",
+            "reason": "...",
+        }],
+        "warnings": [],
+    }
+    rules = (
+        "PLANNER RULES (spec v6 §2.2):\n"
+        "- Choose 1-3 Shorts (max 5).\n"
+        "- Only select candidate_id values present in CANDIDATES below.\n"
+        "- Do NOT invent source scenes. source_scene_ids must come from the candidate.\n"
+        "- Each selected Short MUST include a 'reason'.\n"
+        "- Allowed formats: " + ", ".join(formats) + ".\n"
+        "- Do not force weak Shorts; lower target_count if candidates are weak.\n"
+    )
+    cand_blob = json.dumps(
+        [{"candidate_id": c.get("candidate_id"),
+          "scene_ids": c.get("scene_ids"),
+          "tier": c.get("tier"),
+          "final_score": c.get("final_score"),
+          "narration": str(c.get("narration", ""))[:280]}
+         for c in candidates[:20]],
+        ensure_ascii=False)[:6000]
+    return (
+        "You are the Shorts planner for a Spain-first wellness channel (45+).\n\n"
+        f"LONG VIDEO TITLE: {long_summary.get('title', '')}\n"
+        f"DETECTED PILLAR: {long_summary.get('pillar', '')}\n\n"
+        f"CANDIDATES (only choose from these candidate_id values):\n{cand_blob}\n\n"
+        f"{_OUTPUT_RULES}\n{rules}\n"
+        f"Return JSON exactly:\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n"
+    )
+
+
+def short_scene_prompt_v6(channel_config: dict, short_plan: dict,
+                          short_script: dict) -> str:
+    """Spec v6 §2.4 / §9.3 — ChatGPT chooses each scene's layout."""
+    schema = {
+        "channel_id": (channel_config.get("channel") or {}).get("id", ""),
+        "job_id": short_plan.get("source_long_job_id", ""),
+        "short_id": short_plan.get("short_id", "short-01"),
+        "total_duration_sec": short_script.get("target_duration_sec", 35),
+        "scenes": [
+            {
+                "id": "short-scene-01",
+                "duration_sec": 2.4,
+                "layout": "short_hook",
+                "narration": "...",
+                "caption": "...",
+                "on_screen_text": "TWO TO FIVE WORDS",
+                "visual_prompt": "English vertical-friendly shot",
+                "motion": "slow_push",
+                "layout_payload": {"title": "TWO TO FIVE WORDS"},
+                "source_scene_ids": ["scene-09"],
+            }
+        ],
+        "qa": {"verdict": "PENDING_SHORTS_QA"},
+    }
+    rules = (
+        "SCENE LAYOUT RULES (spec v6 §2.4 + §9.3):\n"
+        "- Use ONLY these layouts: " + ", ".join(_SHORT_LAYOUT_NAMES) + ".\n"
+        "- First scene MUST be short_hook.\n"
+        "- Last scene SHOULD be short_cta if a CTA is present.\n"
+        "- on_screen_text 2-5 words. layout_payload.title 2-5 words.\n"
+        "- visual_prompt: English, vertical-friendly framing (close-up face, "
+        "hands, kitchen, bed, yoga mat, chair, walking).\n"
+        "- No long bottom subtitle paragraphs.\n"
+        "- Do NOT use long-form layouts (hook, subtitle, warning, checklist, "
+        "quote, cta WITHOUT the short_ prefix).\n"
+        "- ChatGPT decides each scene's layout — sequence examples are "
+        "recommendations, not deterministic code output.\n"
+    )
+    return (
+        "Turn this Short script into vertical (9:16) scenes.\n\n"
+        f"SCRIPT:\n{json.dumps(short_script, ensure_ascii=False)[:2000]}\n\n"
+        f"{_OUTPUT_RULES}\n{rules}\n"
+        f"Return JSON exactly:\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n"
+    )
+
+
+def claude_qa_prompt(channel_config: dict, short_script: dict,
+                     short_scenes: dict, short_source_map: dict | None = None) -> str:
+    """Spec v6 §2.5 / §9.4 — Claude QA validates layout + safety + funnel."""
+    schema = {
+        "verdict": "PASS",
+        "issues": [],
+        "required_changes": [],
+        "warnings": [],
+        "scores": {
+            "hook": 90, "payoff": 85, "funnel": 80,
+            "source_fidelity": 90, "safety": 95,
+            "mobile_readability": 90, "layout": 90,
+        },
+    }
+    rules = (
+        "CLAUDE QA RULES (spec v6 §13):\n"
+        "- duration 20-45s; first 2s = pain/curiosity/number/mistake; no greeting.\n"
+        "- one main idea; payoff before CTA; CTA short; CTA <= 20% of duration.\n"
+        "- on_screen_text 2-5 words; captions <= 2 lines.\n"
+        "- visuals match the pain/topic; source_map exists; source fidelity OK.\n"
+        "- no medical overclaim, no miracle promise, no long disclaimer.\n"
+        "- music selected; cover text valid.\n"
+        "- layout choices correct; first scene is short_hook; only short_* layouts used.\n"
+        "- primary text not too low.\n"
+        "- PASS only if ready to render. FAIL with specific required_changes "
+        "when regeneration is needed.\n"
+    )
+    body = (
+        f"SCRIPT:\n{json.dumps(short_script, ensure_ascii=False)[:1500]}\n\n"
+        f"SCENES:\n{json.dumps(short_scenes, ensure_ascii=False)[:1500]}\n\n"
+    )
+    if short_source_map:
+        body += f"SOURCE MAP:\n{json.dumps(short_source_map, ensure_ascii=False)[:600]}\n\n"
+    return (
+        "You are the Shorts QA reviewer for a Spain-first wellness channel (45+).\n\n"
+        f"{body}{_OUTPUT_RULES}\n{rules}\n"
+        f"Return JSON exactly:\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n"
+    )

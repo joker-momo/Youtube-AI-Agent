@@ -20,7 +20,7 @@ from video_agent.browser_worker.drivers.humanize import (
 if TYPE_CHECKING:
     from playwright.async_api import Page
 
-CHATGPT_URL = "https://chatgpt.com/?model=gpt-4o&temporary-chat=true"
+CHATGPT_URL = "https://chatgpt.com/?temporary-chat=true"
 CHATGPT_FALLBACK_URL = "https://chatgpt.com/"
 
 # Composer textarea is a contenteditable div in the current UI; the

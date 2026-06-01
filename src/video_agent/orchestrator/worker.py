@@ -107,17 +107,32 @@ def _run_shorts_autopilot_job(job: dict, *, job_dir: Path, channel_path: Path, c
     target_short_id = payload.get("short_id") or None
     channel_config = read_yaml(channel_path)
 
-    def llm_fn(kind: str, prompt: str) -> str:
+    # Spec v6 §2 + §3: ChatGPT for planner/script/scenes, Claude for QA.
+    # Every call opens a fresh temporary conversation via _send().
+    def chatgpt_fn(prompt: str) -> str:
         return asyncio.run(client.chatgpt_send(prompt))
 
+    def claude_fn(prompt: str) -> str:
+        return asyncio.run(client.claude_send(prompt))
+
+    def plan_fn(long_job_dir, channel_config, requested_count=None):
+        from video_agent.shorts.planner import plan_shorts_from_long_video
+        return plan_shorts_from_long_video(
+            long_job_dir, channel_config, requested_count, llm_fn=chatgpt_fn,
+        )
+
     def build_short_fn(long_job_dir, short_plan, cfg):
-        return build_short(long_job_dir, short_plan, cfg, llm_fn=llm_fn)
+        return build_short(
+            long_job_dir, short_plan, cfg,
+            llm_fn=chatgpt_fn, claude_fn=claude_fn,
+        )
 
     run_shorts_autopilot(
         job_dir,
         channel_config,
         force=force,
         target_short_id=target_short_id,
+        plan_fn=plan_fn,
         build_short_fn=build_short_fn,
     )
 

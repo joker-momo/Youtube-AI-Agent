@@ -226,6 +226,13 @@ shorts:
       tts: 2
       audio_mix: 1
       render: 1
+  llm:
+    # Spec v6 §2 — AI role contract. Every call uses a fresh temporary chat.
+    use_temporary_conversations: true
+    planner_provider: "chatgpt"
+    script_provider: "chatgpt"
+    scenes_provider: "chatgpt"
+    qa_provider: "claude"
   auto_generate:
     enabled: true
     default_count: 3

@@ -58,6 +58,17 @@ def test_send_noop_when_unconfigured(monkeypatch):
     asyncio.run(send("hello"))
 
 
+def test_send_noop_when_telegram_disabled(monkeypatch):
+    monkeypatch.setenv("VIDEO_AGENT_DISABLE_TELEGRAM", "1")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "real-looking-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "123")
+
+    with patch("video_agent.notifications.telegram.Bot") as bot_cls:
+        asyncio.run(send("hello"))
+
+    bot_cls.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # send — calls API when configured
 # ---------------------------------------------------------------------------

@@ -1737,6 +1737,25 @@ def _seo_vidiq_min_score(channel_path: Path) -> int:
         return _DEFAULT_MIN_TAG_SCORE
 
 
+def _seo_replacement_rejection_reason(candidate: str, channel_cfg: dict) -> str | None:
+    from video_agent.orchestrator.idea_generator import (
+        detect_language_fit,
+        merge_keyword_channel_config,
+        score_content_fit,
+    )
+
+    scoring_cfg = merge_keyword_channel_config(channel_cfg)
+    language_fit, language_notes = detect_language_fit(
+        candidate, scoring_cfg["target_language"]
+    )
+    if language_fit < 80:
+        return "language_fit_below_80:" + ",".join(language_notes)
+    content_fit = score_content_fit(candidate, scoring_cfg)
+    if content_fit < 60:
+        return f"content_fit_below_60:{content_fit}"
+    return None
+
+
 async def auto_seo_vidiq_stage(
     job_dir: Path,
     channel_path: Path,
@@ -1765,6 +1784,7 @@ async def auto_seo_vidiq_stage(
     seo = json.loads(seo_path.read_text(encoding="utf-8"))
     original_tags: list[str] = list(seo.get("tags") or [])
     min_score = _seo_vidiq_min_score(channel_path)
+    channel_cfg = read_yaml(channel_path)
 
     tag_scores: list[dict] = []
     vidiq_error: str | None = None
@@ -1778,6 +1798,7 @@ async def auto_seo_vidiq_stage(
         "min_score": min_score,
         "tag_scores": tag_scores,
         "swaps": [],
+        "rejected_replacements": [],
         "final_tags": list(original_tags),
         "vidiq_error": vidiq_error,
     }
@@ -1796,11 +1817,35 @@ async def auto_seo_vidiq_stage(
                 reverse=True,
             )
             replacement = None
+            replacement_score = None
             for r in related:
                 candidate = r.get("keyword", "").strip()
-                if candidate and candidate.lower() not in {t.lower() for t in new_tags}:
-                    replacement = candidate
-                    break
+                if not candidate:
+                    continue
+                if candidate.lower() in {t.lower() for t in new_tags}:
+                    report["rejected_replacements"].append(
+                        {
+                            "original": kw,
+                            "candidate": candidate,
+                            "candidate_score": r.get("score"),
+                            "reason": "duplicate_tag",
+                        }
+                    )
+                    continue
+                rejection_reason = _seo_replacement_rejection_reason(candidate, channel_cfg)
+                if rejection_reason:
+                    report["rejected_replacements"].append(
+                        {
+                            "original": kw,
+                            "candidate": candidate,
+                            "candidate_score": r.get("score"),
+                            "reason": rejection_reason,
+                        }
+                    )
+                    continue
+                replacement = candidate
+                replacement_score = r.get("score")
+                break
             if replacement:
                 idx = next(
                     (i for i, t in enumerate(new_tags) if t.lower() == kw.lower()), None
@@ -1812,7 +1857,7 @@ async def auto_seo_vidiq_stage(
                             "original": kw,
                             "score": score,
                             "replacement": replacement,
-                            "replacement_score": related[0].get("score") if related else None,
+                            "replacement_score": replacement_score,
                         }
                     )
         report["final_tags"] = new_tags

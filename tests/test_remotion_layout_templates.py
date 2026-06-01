@@ -28,7 +28,12 @@ def test_retention_overlay_dispatches_through_layout_template_registry():
     source = _source()
 
     assert "const layoutTemplates: Record<RetentionLayout, React.FC<RetentionTemplateProps>>" in source
-    assert "const Template = layoutTemplates[layout]" in source
+    # SceneLayout now includes short_* values; long-form ChannelVideo casts
+    # to keep the registry tolerant of new short layout names.
+    assert (
+        "layoutTemplates as any)[layout]" in source
+        or "const Template = layoutTemplates[layout]" in source
+    )
 
 
 def test_retention_templates_do_not_invent_script_text():

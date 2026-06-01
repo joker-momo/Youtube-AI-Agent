@@ -59,6 +59,41 @@ def test_get_unknown_job_returns_404(client: TestClient):
     assert response.status_code == 404
 
 
+def test_list_jobs_includes_original_idea_title(client: TestClient, tmp_path: Path):
+    _create(client, "job-title")
+    idea = {
+        "topic": "Tema fallback",
+        "title_seed": "Cómo dormir mejor después de los 45 sin complicarte",
+    }
+    (tmp_path / "job-title" / "idea.json").write_text(
+        json.dumps(idea, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    response = client.get("/jobs")
+
+    assert response.status_code == 200
+    [job] = response.json()["jobs"]
+    assert job["idea_title"] == "Cómo dormir mejor después de los 45 sin complicarte"
+
+
+def test_timeline_includes_original_idea_title(client: TestClient, tmp_path: Path):
+    _create(client, "job-timeline-title")
+    idea = {
+        "topic": "Tema fallback",
+        "title_seed": "Rutina breve para dormir mejor después de los 45",
+    }
+    (tmp_path / "job-timeline-title" / "idea.json").write_text(
+        json.dumps(idea, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    response = client.get("/jobs/job-timeline-title/timeline")
+
+    assert response.status_code == 200
+    assert response.json()["idea_title"] == "Rutina breve para dormir mejor después de los 45"
+
+
 def test_advance_progresses_and_emits_events(client: TestClient):
     _create(client, "job-b")
 

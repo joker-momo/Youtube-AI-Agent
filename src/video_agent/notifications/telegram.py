@@ -41,6 +41,10 @@ def _esc(value: Any) -> str:
 
 _TELEGRAM_FILE_LIMIT = 50 * 1024 * 1024  # 50 MB — Bot API hard cap
 
+def _disabled() -> bool:
+    return os.environ.get("VIDEO_AGENT_DISABLE_TELEGRAM", "").strip() in {"1", "true", "TRUE", "yes", "YES"}
+
+
 def _bot_token() -> str | None:
     return os.environ.get("TELEGRAM_BOT_TOKEN", "").strip() or None
 
@@ -76,6 +80,8 @@ async def _with_retries(fn, *, attempts: int = 4) -> None:
 
 async def _send_message(text: str, *, parse_mode: str = "HTML") -> None:
     """Raw async send. Swallows all errors."""
+    if _disabled():
+        return
     chat_id = _chat_id()
     bot = _bot()
     if not bot or not chat_id:
@@ -103,6 +109,8 @@ async def send(text: str) -> None:
 
 async def _send_photo_file(path: Path, caption: str = "") -> None:
     """Send an image file via sendPhoto. Swallows all errors."""
+    if _disabled():
+        return
     chat_id = _chat_id()
     bot = _bot()
     if not bot or not chat_id or not path.exists():
@@ -243,6 +251,8 @@ async def _send_video_file(path: Path, caption: str = "") -> None:
     - Falls back to sendDocument only if sendVideo fails (rare — e.g. unsupported codec).
     Original file is never touched.
     """
+    if _disabled():
+        return
     chat_id = _chat_id()
     bot = _bot()
     if not bot or not chat_id or not path.exists():

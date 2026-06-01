@@ -69,7 +69,8 @@ def build_short(
     short_plan: dict,
     channel_config: dict,
     *,
-    llm_fn: Callable[[str, str], str] = _default_llm_fn,
+    llm_fn: Callable[..., str] = _default_llm_fn,
+    claude_fn: Callable[[str], str] | None = None,
     tts_fn: Callable[..., Path] = _default_tts_fn,
     mix_fn: Callable[..., Path] = _default_mix_fn,
     render_fn: Callable[..., Path] = _default_render_fn,
@@ -98,10 +99,12 @@ def build_short(
         attempts = attempt + 1
         plan_for_prompt = {**short_plan, "source_long_job_id": long_job_dir.name}
         short_script = short_script_builder.build_short_script(
-            long_job_dir, plan_for_prompt, channel_config, llm_fn, feedback=feedback
+            long_job_dir, plan_for_prompt, channel_config, llm_fn,
+            feedback=feedback, attempt=attempts,
         )
         short_scenes = short_scene_builder.build_short_scenes(
-            long_job_dir, plan_for_prompt, short_script, channel_config, llm_fn
+            long_job_dir, plan_for_prompt, short_script, channel_config, llm_fn,
+            attempt=attempts,
         )
 
         sm = source_map.build_source_map(long_job_dir, short_plan, short_script, channel_config, long_video_url)
@@ -111,7 +114,10 @@ def build_short(
             long_job_dir, short_id, plan_for_prompt, short_script, channel_config, llm_fn, long_video_url
         )
 
-        qa_result = qa.run_short_qa(long_job_dir, short_id, channel_config, music_track=music_track)
+        qa_result = qa.run_short_qa(
+            long_job_dir, short_id, channel_config,
+            music_track=music_track, claude_fn=claude_fn, attempt=attempts,
+        )
         atomic_write_json(sd / paths.SHORT_QA_FILE, qa_result)
 
         if qa_result["verdict"] == "PASS":

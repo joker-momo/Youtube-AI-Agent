@@ -14,13 +14,19 @@ export type SubtitleConfig = {
   background_opacity?: number;
 };
 
-export type SceneLayout = 'hook' | 'subtitle' | 'checklist' | 'warning' | 'quote' | 'cta';
+export type SceneLayout =
+  | 'hook' | 'subtitle' | 'checklist' | 'warning' | 'quote' | 'cta'
+  | 'short_hook' | 'short_pain' | 'short_tip' | 'short_checklist'
+  | 'short_myth' | 'short_quote' | 'short_cta';
 
 export type LayoutPayload = {
   title?: string;
+  subtitle?: string;
   body?: string;
   bullets?: string[];
+  emphasis?: string;
   cta?: string;
+  cover_text?: string;
 };
 
 export type Scene = {

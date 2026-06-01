@@ -231,6 +231,7 @@ def list_jobs(jobs_root: Path = Depends(get_jobs_root)) -> dict:
             items.append(
                 {
                     "job_id": payload.get("job_id"),
+                    "idea_title": _job_idea_title(entry),
                     "channel_id": payload.get("channel_id"),
                     "current_stage": current_stage,
                     "created_at": payload.get("created_at"),
@@ -242,6 +243,21 @@ def list_jobs(jobs_root: Path = Depends(get_jobs_root)) -> dict:
                 }
             )
     return {"count": len(items), "jobs": items}
+
+
+def _job_idea_title(job_dir: Path) -> str:
+    idea_path = job_dir / IDEA_FILE
+    if not idea_path.exists():
+        return ""
+    try:
+        idea = json.loads(idea_path.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    for key in ("title_seed", "recommended_angle", "topic", "target_keyword"):
+        value = idea.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -372,6 +388,7 @@ def job_timeline(
     stop_requested = stop_request_path(job_dir).exists()
     return {
         "job_id": job_id,
+        "idea_title": _job_idea_title(job_dir),
         "channel_id": state.get("channel_id"),
         "current_stage": state.get("current_stage"),
         "created_at": state.get("created_at"),
@@ -1293,6 +1310,71 @@ def keyword_score_payload(kw_data: dict, target_kw: str, summary: dict, match_so
     }
 
 
+def _keyword_is_safe_for_ui(keyword: str, channel_config: dict) -> bool:
+    from video_agent.orchestrator.idea_generator import (
+        detect_language_fit,
+        merge_keyword_channel_config,
+        score_content_fit,
+    )
+
+    text = str(keyword or "").strip()
+    if not text:
+        return False
+    scoring_cfg = merge_keyword_channel_config(channel_config)
+    language_fit, _notes = detect_language_fit(text, scoring_cfg["target_language"])
+    if language_fit < 80:
+        return False
+    return score_content_fit(text, scoring_cfg) >= 60
+
+
+def _filter_keyword_result_for_ui(keyword_result, channel_config: dict):
+    def clean_item(item: dict) -> dict | None:
+        if not _keyword_is_safe_for_ui(item.get("keyword", ""), channel_config):
+            return None
+        cleaned = dict(item)
+        if isinstance(cleaned.get("related"), list):
+            related = []
+            for raw in cleaned["related"]:
+                if isinstance(raw, str):
+                    kw = raw
+                    value = raw
+                elif isinstance(raw, dict):
+                    kw = raw.get("keyword") or raw.get("term") or ""
+                    value = dict(raw)
+                else:
+                    continue
+                if _keyword_is_safe_for_ui(kw, channel_config):
+                    related.append(value)
+            cleaned["related"] = related
+        return cleaned
+
+    if isinstance(keyword_result, list):
+        filtered = []
+        for item in keyword_result:
+            if isinstance(item, dict):
+                cleaned = clean_item(item)
+                if cleaned is not None:
+                    filtered.append(cleaned)
+        return filtered
+    if isinstance(keyword_result, dict):
+        filtered = dict(keyword_result)
+        for key in (
+            "top_opportunity_keywords",
+            "long_tail_test_keywords",
+            "rejected_keywords",
+            "all_scored_keywords",
+        ):
+            cleaned_items = []
+            for item in keyword_result.get(key) or []:
+                if isinstance(item, dict):
+                    cleaned = clean_item(item)
+                    if cleaned is not None:
+                        cleaned_items.append(cleaned)
+            filtered[key] = cleaned_items
+        return filtered
+    return keyword_result
+
+
 @router.get("/channels")
 def list_channels() -> dict:
     """List available channel configs."""
@@ -1357,6 +1439,11 @@ async def post_score_ideas(
     Scoring is best-effort — if vidIQ is unavailable all scores are null.
     """
     _safe_channel_id(channel_id)
+    from video_agent.utils.json_io import read_yaml as _read_yaml
+    channel_path = repo_root() / "configs" / channel_id / "channel.yaml"
+    if not channel_path.exists():
+        raise HTTPException(status_code=404, detail=f"No config for channel: {channel_id}")
+    channel_config = _read_yaml(channel_path)
     # Collect all keywords from all ideas in one flat list, track ranges
     all_keywords: list[str] = []
     ranges: list[tuple[int, int]] = []
@@ -1394,7 +1481,13 @@ async def post_score_ideas(
                         related.append(str(kw))
         # deduplicate while preserving order
         seen_set: set[str] = set()
-        related_unique = [r for r in related if r not in seen_set and not seen_set.add(r)]  # type: ignore[func-returns-value]
+        related_unique = [
+            r
+            for r in related
+            if r not in seen_set
+            and not seen_set.add(r)  # type: ignore[func-returns-value]
+            and _keyword_is_safe_for_ui(r, channel_config)
+        ]
         # pick best competition label
         competition = None
         for s in valid:
@@ -1537,7 +1630,8 @@ async def post_generate_ideas(
         MAX_PUBLISHED_TITLES_IN_IDEA_PROMPT,
     )
     from video_agent.utils.json_io import read_yaml as _read_yaml
-    published = load_published_videos(_read_yaml(channel_path), repo_root() / "configs")
+    channel_config = _read_yaml(channel_path)
+    published = load_published_videos(channel_config, repo_root() / "configs")
     published_titles = [v["title"] for v in published if v.get("title")]
     published_titles = published_titles[:MAX_PUBLISHED_TITLES_IN_IDEA_PROMPT]
 
@@ -1556,8 +1650,9 @@ async def post_generate_ideas(
     except ValueError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    keywords_for_ui = flatten_keyword_result_for_ui(top_keywords)
-    summary = keyword_result_summary(top_keywords)
+    top_keywords_for_ui = _filter_keyword_result_for_ui(top_keywords, channel_config)
+    keywords_for_ui = flatten_keyword_result_for_ui(top_keywords_for_ui)
+    summary = keyword_result_summary(top_keywords_for_ui)
     kw_score_map = {
         normalize_keyword(kw["keyword"]): kw
         for kw in keywords_for_ui
@@ -1660,8 +1755,8 @@ async def post_generate_ideas(
         "channel_id": channel_id,
         "count": len(ideas_with_scores),
         "ideas": ideas_with_scores,
-        "keyword_result": top_keywords,
-        "top_keywords": top_keywords,
+        "keyword_result": top_keywords_for_ui,
+        "top_keywords": top_keywords_for_ui,
         "summary": summary,
         "seed_source": seed_source,
         "published_videos_checked": len(published),

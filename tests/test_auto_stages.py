@@ -1983,6 +1983,76 @@ def test_seo_vidiq_swaps_weak_tag(tmp_path, channel_path):
     assert state["current_stage"] == "thumbnail_image"
 
 
+async def _off_topic_related_tag_vidiq_fn(keywords: list[str]) -> list[dict]:
+    results = []
+    for i, kw in enumerate(keywords):
+        if i == 0:
+            results.append({
+                "keyword": kw,
+                "score": 10,
+                "related": [
+                    {"keyword": "best camera settings", "score": 85},
+                    {"keyword": "sueño reparador", "score": 55},
+                ],
+            })
+        else:
+            results.append({"keyword": kw, "score": 60, "related": []})
+    return results
+
+
+async def _only_off_topic_related_tag_vidiq_fn(keywords: list[str]) -> list[dict]:
+    results = []
+    for i, kw in enumerate(keywords):
+        if i == 0:
+            results.append({
+                "keyword": kw,
+                "score": 10,
+                "related": [{"keyword": "best camera settings", "score": 85}],
+            })
+        else:
+            results.append({"keyword": kw, "score": 60, "related": []})
+    return results
+
+
+def test_seo_vidiq_ignores_off_language_related_replacements(tmp_path, channel_path):
+    from video_agent.orchestrator.stages import auto_seo_vidiq_stage
+
+    job_dir = tmp_path / "job-research"
+    _seed_at_stage(job_dir, "seo_vidiq", {"seo.json": _SEO_PAYLOAD})
+
+    output = asyncio.run(
+        auto_seo_vidiq_stage(job_dir, channel_path, _off_topic_related_tag_vidiq_fn)
+    )
+
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["swaps"][0]["original"] == "dormir mejor"
+    assert report["swaps"][0]["replacement"] == "sueño reparador"
+
+    seo = json.loads((job_dir / "seo.json").read_text(encoding="utf-8"))
+    assert "sueño reparador" in seo["tags"]
+    assert "best camera settings" not in seo["tags"]
+
+
+def test_seo_vidiq_keeps_original_tag_when_related_replacements_are_invalid(
+    tmp_path, channel_path
+):
+    from video_agent.orchestrator.stages import auto_seo_vidiq_stage
+
+    job_dir = tmp_path / "job-research"
+    _seed_at_stage(job_dir, "seo_vidiq", {"seo.json": _SEO_PAYLOAD})
+
+    output = asyncio.run(
+        auto_seo_vidiq_stage(job_dir, channel_path, _only_off_topic_related_tag_vidiq_fn)
+    )
+
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["swaps"] == []
+    assert report["rejected_replacements"][0]["candidate"] == "best camera settings"
+
+    seo = json.loads((job_dir / "seo.json").read_text(encoding="utf-8"))
+    assert seo["tags"] == _SEO_PAYLOAD["tags"]
+
+
 def test_seo_vidiq_soft_fails_on_vidiq_error(tmp_path, channel_path):
     from video_agent.orchestrator.stages import auto_seo_vidiq_stage
 

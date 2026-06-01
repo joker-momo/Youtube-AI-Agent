@@ -359,6 +359,56 @@ def test_promote_operator_artifact_preserves_wrong_language_for_qa_rework(tmp_pa
     assert promoted["language"] == "es-MX"
 
 
+def test_promote_operator_artifact_repairs_channel_name_line_break_in_description(tmp_path):
+    raw_path = tmp_path / "seo.raw.txt"
+    raw_path.write_text(
+        json.dumps(
+            {
+                "job_id": "operator-job",
+                "title_variants": [
+                    {
+                        "title": "Dormir mejor despues de los 45 con una rutina",
+                        "thumbnail_text": "DUERME MEJOR HOY",
+                    }
+                ],
+                "title": "Dormir mejor despues de los 45 con una rutina",
+                "description": (
+                    "Dormir mejor despues de los 45 puede empezar con una rutina sencilla.\n\n"
+                    "00:00 - Inicio\n"
+                    "01:30 - Rutina tranquila\n\n"
+                    "Vida\n"
+                    "Plena 45+ comparte habitos sencillos para descansar mejor."
+                ),
+                "tags": [
+                    "dormir mejor",
+                    "descanso",
+                    "rutina nocturna",
+                    "bienestar 45",
+                    "vida plena 45",
+                ],
+                "language": "es-ES",
+                "ai_disclosure": True,
+                "thumbnail_path": "thumbnail.jpg",
+                "thumbnail_text": "DUERME MEJOR HOY",
+                "suggested_pinned_comments": "Que habito probaras esta noche? Suscribete a Vida Plena 45+.",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = promote_operator_artifact(
+        tmp_path / "operator-job",
+        "seo",
+        raw_path,
+        channel_path=ROOT / "configs/vida-plena-45/channel.yaml",
+    )
+    promoted = json.loads(result.output_path.read_text(encoding="utf-8"))
+
+    assert "Vida Plena 45+ comparte" in promoted["description"]
+    assert "Vida\nPlena" not in promoted["description"]
+    assert "00:00 - Inicio\n01:30 - Rutina tranquila" in promoted["description"]
+
+
 def test_promote_operator_qa_normalizes_gemini_response(tmp_path):
     raw_path = tmp_path / "script_qa.raw.txt"
     raw_path.write_text(

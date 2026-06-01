@@ -371,6 +371,50 @@ def test_select_keywords_for_prompt_uses_top_opportunity_then_long_tail():
     assert [item["keyword"] for item in _select_keywords_for_prompt(result, 2)] == ["top", "tail"]
 
 
+def test_select_keywords_for_prompt_fallback_excludes_rejected_language_mismatch():
+    result = {
+        "top_opportunity_keywords": [],
+        "long_tail_test_keywords": [],
+        "all_scored_keywords": [
+            {
+                "keyword": "best camera settings",
+                "language_fit": 65,
+                "content_fit": 50,
+                "rejection_reasons": ["language_mismatch"],
+            },
+            {
+                "keyword": "dormir mejor despues de los 45",
+                "language_fit": 100,
+                "content_fit": 85,
+                "rejection_reasons": [],
+            },
+        ],
+    }
+
+    selected = _select_keywords_for_prompt(result, 2)
+
+    assert [item["keyword"] for item in selected] == ["dormir mejor despues de los 45"]
+
+
+def test_select_keywords_for_prompt_fallback_keeps_safe_low_score_spanish_keywords():
+    result = {
+        "top_opportunity_keywords": [],
+        "long_tail_test_keywords": [],
+        "all_scored_keywords": [
+            {
+                "keyword": "dormir mejor despues de los 45",
+                "language_fit": 100,
+                "content_fit": 85,
+                "rejection_reasons": ["low_final_score"],
+            },
+        ],
+    }
+
+    selected = _select_keywords_for_prompt(result, 1)
+
+    assert [item["keyword"] for item in selected] == ["dormir mejor despues de los 45"]
+
+
 def test_discover_top_keywords_v2_returns_bucketed_dict():
     async def fake_vidiq(keywords: list[str]) -> list[dict]:
         return [
@@ -579,6 +623,42 @@ def test_post_generate_ideas_success(http_client: TestClient, tmp_path: Path):
         assert (tmp_path / rel).exists()
 
 
+def test_post_score_ideas_filters_off_language_related_keywords(
+    http_client: TestClient,
+):
+    class RelatedNoiseBrowserClient(FakeBrowserClient):
+        async def run_vidiq_scores(self, keywords: list[str]) -> list[dict]:
+            self.vidiq_calls.append(list(keywords))
+            return [
+                {
+                    "keyword": keyword,
+                    "score": 82,
+                    "volume": "Medium",
+                    "competition": "Low",
+                    "related": [
+                        {"keyword": "best camera settings", "score": 85},
+                        {"keyword": "dormir mejor despues de los 45", "score": 55},
+                    ],
+                }
+                for keyword in keywords
+            ]
+
+    fake = RelatedNoiseBrowserClient()
+    app.dependency_overrides[get_browser_client] = lambda: fake
+    try:
+        r = http_client.post(
+            "/channels/vida-plena-45/ideas/score",
+            json={"ideas": [SAMPLE_IDEAS[0]]},
+        )
+    finally:
+        app.dependency_overrides.pop(get_browser_client, None)
+
+    assert r.status_code == 200
+    related = r.json()["results"][0]["related"]
+    assert "dormir mejor despues de los 45" in related
+    assert "best camera settings" not in related
+
+
 def test_post_generate_ideas_returns_and_saves_v2_keyword_metadata(
     http_client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -619,6 +699,60 @@ def test_post_generate_ideas_returns_and_saves_v2_keyword_metadata(
     saved = json.loads((tmp_path / body["saved"][0]).read_text(encoding="utf-8"))
     assert saved["keyword_final_score"] == idea["keyword_final_score"]
     assert saved["bucket"] == idea["bucket"]
+
+
+def test_post_generate_ideas_filters_off_language_nested_related_keywords(
+    http_client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    ideas = [
+        {
+            **SAMPLE_IDEAS[0],
+            "target_keyword": "dormir mejor despues de los 45",
+            "title_seed": "Dormir mejor después de los 45 con una rutina sencilla",
+        }
+    ]
+    keyword_result = {
+        "top_opportunity_keywords": [
+            {
+                "keyword": "dormir mejor despues de los 45",
+                "vidiq_score": 82,
+                "final_score": 75.0,
+                "language_fit": 100,
+                "content_fit": 85,
+                "bucket": "top_opportunity_keywords",
+                "related": [
+                    {"keyword": "best camera settings", "score": 85},
+                    {"keyword": "sueño reparador", "score": 55},
+                ],
+            }
+        ],
+        "long_tail_test_keywords": [],
+        "rejected_keywords": [],
+        "all_scored_keywords": [],
+        "metadata": {"version": "keyword_scoring_v2", "target_language": "spanish"},
+    }
+
+    async def fake_generate_ideas(**kwargs):
+        return ideas, keyword_result, "trend"
+
+    monkeypatch.setattr(legacy_routes, "generate_ideas", fake_generate_ideas)
+    monkeypatch.setattr(legacy_routes, "load_published_videos", lambda *a, **k: [])
+    fake = FakeBrowserClient(response=_make_raw(ideas))
+    app.dependency_overrides[get_browser_client] = lambda: fake
+    try:
+        r = http_client.post(
+            "/channels/vida-plena-45/ideas/generate",
+            json={"seed_topics": [], "count": 1},
+        )
+    finally:
+        app.dependency_overrides.pop(get_browser_client, None)
+
+    assert r.status_code == 201, r.text
+    body_text = json.dumps(r.json(), ensure_ascii=False).lower()
+    assert "best camera settings" not in body_text
+    assert "sueño reparador" in body_text
 
 
 def test_post_generate_ideas_keeps_v2_score_when_target_keyword_is_paraphrased(
@@ -728,6 +862,68 @@ def test_post_generate_ideas_attaches_rejected_keyword_scores(
 
     saved = json.loads((tmp_path / body["saved"][0]).read_text(encoding="utf-8"))
     assert saved["keyword_final_score"] >= 50.0
+
+
+def test_post_generate_ideas_ordered_fallback_skips_off_language_rejected_keywords(
+    http_client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    ideas = [
+        {
+            **SAMPLE_IDEAS[0],
+            "target_keyword": "keyword que no coincide",
+            "title_seed": "Dormir mejor después de los 45 con una rutina sencilla",
+        }
+    ]
+    keyword_result = {
+        "top_opportunity_keywords": [],
+        "long_tail_test_keywords": [],
+        "rejected_keywords": [
+            {
+                "keyword": "best camera settings",
+                "vidiq_score": 85,
+                "final_score": 45.0,
+                "language_fit": 65,
+                "content_fit": 50,
+                "rejection_reasons": ["language_mismatch"],
+                "bucket": "rejected_keywords",
+            },
+            {
+                "keyword": "dormir mejor despues de los 45",
+                "vidiq_score": 55,
+                "final_score": 50.0,
+                "language_fit": 100,
+                "content_fit": 85,
+                "rejection_reasons": ["low_final_score"],
+                "bucket": "rejected_keywords",
+            },
+        ],
+        "all_scored_keywords": [],
+        "metadata": {"version": "keyword_scoring_v2", "target_language": "spanish"},
+    }
+
+    async def fake_generate_ideas(**kwargs):
+        return ideas, keyword_result, "trend"
+
+    monkeypatch.setattr(legacy_routes, "generate_ideas", fake_generate_ideas)
+    monkeypatch.setattr(legacy_routes, "load_published_videos", lambda *a, **k: [])
+    fake = FakeBrowserClient(response=_make_raw(ideas))
+    app.dependency_overrides[get_browser_client] = lambda: fake
+    try:
+        r = http_client.post(
+            "/channels/vida-plena-45/ideas/generate",
+            json={"seed_topics": [], "count": 1},
+        )
+    finally:
+        app.dependency_overrides.pop(get_browser_client, None)
+
+    assert r.status_code == 201, r.text
+    idea = r.json()["ideas"][0]
+    assert idea["target_keyword"] == "dormir mejor despues de los 45"
+    assert idea["keyword_match_source"] == "ordered_fallback"
+    assert idea["vidiq_score"] == 55
+    assert "best camera settings" not in json.dumps(r.json()).lower()
 
 
 def test_post_generate_ideas_unknown_channel(http_client: TestClient):

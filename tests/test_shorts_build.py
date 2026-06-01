@@ -291,7 +291,27 @@ def test_normalize_short_scenes_maps_layout_to_render_enum():
         ]},
         {"narration": "Uno. Dos. Tres."},
     )
-    valid = {"hook", "subtitle", "checklist", "warning", "quote", "cta"}
+    # Spec v6 §10: short_* is the first-class layout family. Long-form names
+    # are only accepted via the legacy adapter (separate test).
+    valid = {"short_hook", "short_pain", "short_tip", "short_checklist",
+             "short_myth", "short_quote", "short_cta"}
     assert all(s["layout"] in valid for s in out["scenes"])
-    assert out["scenes"][0]["layout"] == "hook"
-    assert out["scenes"][1]["layout"] == "cta"
+    assert out["scenes"][0]["layout"] == "short_hook"
+    assert out["scenes"][1]["layout"] == "short_cta"
+
+
+def test_normalize_short_scenes_maps_legacy_long_form_layouts():
+    """Legacy adapter (spec v6 §10): old short artifacts using long-form
+    layout names must round-trip to short_* equivalents."""
+    from video_agent.shorts import short_scene_builder
+    out = short_scene_builder.normalize_short_scenes(
+        {"scenes": [
+            {"id": "s1", "layout": "hook", "duration_sec": 2.0, "narration": "n"},
+            {"id": "s2", "layout": "subtitle", "duration_sec": 3.0, "narration": "n"},
+            {"id": "s3", "layout": "warning", "duration_sec": 3.0, "narration": "n"},
+            {"id": "s4", "layout": "cta", "duration_sec": 3.0, "narration": "n"},
+        ]},
+        {"narration": "x"},
+    )
+    layouts = [s["layout"] for s in out["scenes"]]
+    assert layouts == ["short_hook", "short_tip", "short_pain", "short_cta"]

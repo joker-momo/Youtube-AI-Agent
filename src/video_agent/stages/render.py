@@ -387,6 +387,8 @@ def _notify_render_done(job_dir: Path) -> None:
     module is unavailable. Errors are swallowed because notify failures must
     never invalidate a successful render.
     """
+    if os.environ.get("VIDEO_AGENT_DISABLE_TELEGRAM", "").strip() in {"1", "true", "TRUE", "yes", "YES"}:
+        return
     if not (os.environ.get("TELEGRAM_BOT_TOKEN") and os.environ.get("TELEGRAM_CHAT_ID")):
         return
     if os.environ.get("RENDER_NOTIFY_TELEGRAM", "1") == "0":

@@ -1,4 +1,4 @@
-"""Generate + persist Short scenes (short_scenes.json) from a Short script."""
+"""Spec v6 §2.4 — ChatGPT generates Short scenes AND picks layouts."""
 from __future__ import annotations
 
 import re
@@ -6,7 +6,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from video_agent.shorts import paths, prompts
+from video_agent.shorts.llm import LLMCallLog, log_llm_call
 from video_agent.storage.atomic import atomic_write_json
+
+PROVIDER = "chatgpt"
 
 
 def _parse(raw: str) -> dict:
@@ -20,26 +23,36 @@ def _split_sentences(text: str) -> list[str]:
     return [s.strip() for s in re.split(r"(?<=[.!?])\s+|\n+", str(text or "").strip()) if s.strip()]
 
 
-# Short-native scene layouts → long-form render layout enum
-# (render-props.schema: hook|subtitle|checklist|warning|quote|cta).
-_LAYOUT_MAP = {
-    "short_hook": "hook",
-    "short_pain": "warning",
-    "short_tip": "subtitle",
-    "short_checklist": "checklist",
-    "short_quote": "quote",
-    "short_cta": "cta",
-    "hook": "hook",
-    "warning": "warning",
-    "subtitle": "subtitle",
-    "checklist": "checklist",
-    "quote": "quote",
-    "cta": "cta",
+SHORT_LAYOUTS = (
+    "short_hook", "short_pain", "short_tip", "short_checklist",
+    "short_myth", "short_quote", "short_cta",
+)
+
+# Backward-compat adapter (spec v6 §10). Legacy long-form layout names map to
+# their nearest short_* equivalent ONLY for legacy artifacts. New
+# short_scene_builder output must already use short_* directly.
+_LEGACY_TO_SHORT = {
+    "hook": "short_hook",
+    "subtitle": "short_tip",
+    "warning": "short_pain",
+    "checklist": "short_checklist",
+    "quote": "short_quote",
+    "cta": "short_cta",
 }
 
 
 def _map_layout(layout: str) -> str:
-    return _LAYOUT_MAP.get(str(layout or "").strip().lower(), "subtitle")
+    """Return a schema-valid short_* layout.
+
+    short_* is the first-class layout family. Long-form legacy values are
+    mapped through the legacy adapter so old artifacts keep rendering.
+    Unknown → ``short_tip`` (safest neutral)."""
+    raw = str(layout or "").strip().lower()
+    if raw in SHORT_LAYOUTS:
+        return raw
+    if raw in _LEGACY_TO_SHORT:
+        return _LEGACY_TO_SHORT[raw]
+    return "short_tip"
 
 
 def _chunk(seq: list, n: int) -> list[list]:
@@ -102,9 +115,33 @@ def build_short_scenes(
     short_plan: dict,
     short_script: dict,
     channel_config: dict,
-    llm_fn: Callable[[str, str], str],
+    llm_fn: Callable[..., str],
+    *,
+    attempt: int = 1,
 ) -> dict[str, Any]:
-    prompt = prompts.short_scene_prompt(channel_config, short_plan, short_script)
-    scenes = normalize_short_scenes(_parse(llm_fn("scenes", prompt)), short_script)
-    atomic_write_json(paths.short_dir(long_job_dir, short_plan["short_id"]) / paths.SHORT_SCENES_FILE, scenes)
+    """Spec v6 §2.4: ChatGPT writes scenes AND picks each scene's layout.
+
+    The deterministic ``normalize_short_scenes`` only fills missing fields and
+    maps any legacy long-form layout names (backward compat); it must NOT
+    overwrite layouts the LLM emitted."""
+    prompt = prompts.short_scene_prompt_v6(channel_config, short_plan, short_script)
+    log_llm_call(LLMCallLog(
+        task="short_scene_builder", provider=PROVIDER,
+        short_id=short_plan.get("short_id", "-"), attempt=attempt,
+        input_artifacts=["short_script.json"],
+        output_artifact="short_scenes.json",
+    ))
+    raw = _invoke(llm_fn, "scenes", prompt)
+    scenes = normalize_short_scenes(_parse(raw), short_script)
+    atomic_write_json(
+        paths.short_dir(long_job_dir, short_plan["short_id"]) / paths.SHORT_SCENES_FILE,
+        scenes,
+    )
     return scenes
+
+
+def _invoke(llm_fn: Callable[..., str], kind: str, prompt: str) -> str:
+    try:
+        return llm_fn(prompt)
+    except TypeError:
+        return llm_fn(kind, prompt)

@@ -138,7 +138,7 @@ async def _resolve_browser_ws(base_cdp_url: str) -> str:
 
 def _target_url(site: str) -> str:
     targets = {
-        "chatgpt": "https://chatgpt.com/",
+        "chatgpt": "https://chatgpt.com/?temporary-chat=true",
         "gemini": "https://gemini.google.com/app",
         "claude": "https://claude.ai/new",
     }

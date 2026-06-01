@@ -73,7 +73,9 @@ const LogoWatermark: React.FC<{logoPath: string}> = ({logoPath}) => (
   </div>
 );
 
-type RetentionLayout = SceneLayout;
+// Long-form layouts only — short_* layouts are handled by ShortVideo / the
+// shorts/ layout registry, so they are intentionally NOT in this map.
+type RetentionLayout = 'hook' | 'subtitle' | 'checklist' | 'warning' | 'quote' | 'cta';
 
 type RetentionTemplateProps = {
   scene: Scene;
@@ -263,7 +265,9 @@ const RetentionOverlay: React.FC<{
     textShadow: '0 5px 22px rgba(0,0,0,0.72)',
   };
 
-  const Template = layoutTemplates[layout] ?? layoutTemplates.subtitle;
+  // SceneLayout includes short_* values; long-form layoutTemplates only
+  // handles legacy layouts, so cast & fall back to 'subtitle'.
+  const Template = (layoutTemplates as any)[layout] ?? layoutTemplates.subtitle;
   return (
     <Template
       scene={scene}

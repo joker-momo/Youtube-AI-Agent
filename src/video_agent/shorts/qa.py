@@ -1,20 +1,33 @@
-"""Rule-based Shorts QA gate (deterministic, no browser).
+"""Shorts QA — dual gate (spec v6 §2.5 + §13).
 
-At least as strict as long-form QA plus Shorts-specific retention/funnel/mobile/
-safety checks (spec §14). Returns a verdict + issues so the builder can
-regenerate with feedback.
+Pipeline:
+
+1. ``_run_rule_qa`` (deterministic, no LLM) catches hard violations cheaply:
+   greeting, long disclaimer, medical overclaim, duration, missing source map,
+   etc. If the rule gate FAILS, we short-circuit and skip the LLM call.
+2. ``_run_claude_qa`` (LLM) is the final verdict for everything else:
+   layout choices, source fidelity, mobile readability, funnel quality.
+
+This matches spec v6 §2.5 (Claude is the QA gate) while keeping cheap rule
+checks first per §13 (which doesn't forbid pre-filtering).
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from video_agent.shorts import paths
+from video_agent.shorts import paths, prompts
+from video_agent.shorts.llm import LLMCallLog, log_llm_call
 
-_GREETINGS = ["hola", "bienvenid", "hoy vamos a", "en este short", "en este vídeo", "en este video", "buenas"]
-_DISCLAIMER = ["no sustituye", "consulta a tu médico", "consulta siempre a tu médico", "profesional de salud"]
-_OVERCLAIM = ["cura", "curar", "para siempre", "garantizado", "milagro", "elimina para siempre", "diagnóstico", "tratamiento"]
+LLM_PROVIDER = "claude"
+
+_GREETINGS = ["hola", "bienvenid", "hoy vamos a", "en este short",
+              "en este vídeo", "en este video", "buenas"]
+_DISCLAIMER = ["no sustituye", "consulta a tu médico",
+               "consulta siempre a tu médico", "profesional de salud"]
+_OVERCLAIM = ["cura", "curar", "para siempre", "garantizado", "milagro",
+              "elimina para siempre", "diagnóstico", "tratamiento"]
 
 
 def _load(path: Path) -> dict:
@@ -25,13 +38,12 @@ def _word_count(text: str) -> int:
     return len([w for w in str(text).split() if w.strip()])
 
 
-def run_short_qa(
+def _run_rule_qa(
     long_job_dir: Path,
     short_id: str,
     channel_config: dict,
     *,
-    music_track: str | None = None,
-    cover_text: str | None = None,
+    music_track: str | None,
 ) -> dict[str, Any]:
     sd = paths.short_dir(long_job_dir, short_id)
     script = _load(sd / "short_script.json")
@@ -51,32 +63,23 @@ def run_short_qa(
     issues: list[str] = []
     warnings: list[str] = []
 
-    # greeting / generic recap
     if any(g in low for g in _GREETINGS) or any(g in hook.lower() for g in _GREETINGS):
         issues.append("greeting_or_generic_intro")
-
-    # long disclaimer
     if sum(1 for d in _DISCLAIMER if d in low) >= 2 or "no sustituye" in low:
         issues.append("long_disclaimer")
-
-    # medical overclaim / miracle promise
     if any(o in low for o in _OVERCLAIM):
         issues.append("medical_overclaim")
 
-    # duration
-    total = scenes_doc.get("total_duration_sec") or sum(float(s.get("duration_sec") or 0) for s in scenes)
+    total = scenes_doc.get("total_duration_sec") or sum(
+        float(s.get("duration_sec") or 0) for s in scenes
+    )
     if total and not (min_sec <= float(total) <= max_sec):
         issues.append(f"duration_out_of_range_{round(float(total),1)}s")
-
-    # standalone payoff before CTA
     if not narration.strip():
         issues.append("empty_narration")
-
-    # source map present + scenes recorded
     if not source_map or not (source_map.get("used_source_scenes")):
         issues.append("missing_source_map")
 
-    # on-screen text 2-5 words; CTA not dominating
     cta_scene_dur = 0.0
     for s in scenes:
         ost_words = _word_count(s.get("on_screen_text", ""))
@@ -87,11 +90,8 @@ def run_short_qa(
     if total and cta_scene_dur > 0.2 * float(total):
         issues.append("cta_dominates")
 
-    # CTA short
     if _word_count(script.get("cta", "")) > cta_max_words:
         warnings.append("cta_too_long")
-
-    # music selected
     if not music_track:
         issues.append("music_not_selected")
 
@@ -109,4 +109,76 @@ def run_short_qa(
             "safety": 95 if not ({"long_disclaimer", "medical_overclaim"} & set(issues)) else 40,
             "mobile_readability": 90,
         },
+        "provider": "rule_based",
     }
+
+
+def _parse_claude(raw: str) -> dict:
+    from video_agent.operator import extract_json_objects
+    objs = extract_json_objects(raw or "")
+    return objs[0] if objs else {}
+
+
+def _run_claude_qa(
+    long_job_dir: Path,
+    short_id: str,
+    channel_config: dict,
+    *,
+    claude_fn: Callable[[str], str],
+    attempt: int,
+) -> dict[str, Any]:
+    sd = paths.short_dir(long_job_dir, short_id)
+    script = _load(sd / "short_script.json")
+    scenes_doc = _load(sd / "short_scenes.json")
+    source_map = _load(sd / "short_source_map.json")
+    prompt = prompts.claude_qa_prompt(channel_config, script, scenes_doc, source_map)
+    log_llm_call(LLMCallLog(
+        task="short_qa", provider=LLM_PROVIDER, short_id=short_id,
+        attempt=attempt,
+        input_artifacts=["short_script.json", "short_scenes.json", "short_source_map.json"],
+        output_artifact="short_qa.json",
+    ))
+    raw = claude_fn(prompt)
+    parsed = _parse_claude(raw) or {}
+    verdict = str(parsed.get("verdict", "")).upper() or "FAIL"
+    if verdict not in ("PASS", "FAIL"):
+        verdict = "FAIL"
+    return {
+        "verdict": verdict,
+        "issues": list(parsed.get("issues") or []),
+        "required_changes": list(parsed.get("required_changes") or []),
+        "warnings": list(parsed.get("warnings") or []),
+        "scores": dict(parsed.get("scores") or {}),
+        "provider": LLM_PROVIDER,
+    }
+
+
+def run_short_qa(
+    long_job_dir: Path,
+    short_id: str,
+    channel_config: dict,
+    *,
+    music_track: str | None = None,
+    cover_text: str | None = None,
+    claude_fn: Callable[[str], str] | None = None,
+    attempt: int = 1,
+) -> dict[str, Any]:
+    """Dual-gate Shorts QA.
+
+    1. Run cheap rule checks. If FAIL, return without calling Claude.
+    2. Otherwise, call Claude for the final verdict (spec v6 §2.5).
+    3. If no ``claude_fn`` is provided, return the rule verdict as-is
+       (test/no-browser path).
+    """
+    rule = _run_rule_qa(long_job_dir, short_id, channel_config, music_track=music_track)
+    if rule["verdict"] == "FAIL":
+        return rule
+    if claude_fn is None:
+        return rule
+    claude = _run_claude_qa(long_job_dir, short_id, channel_config,
+                            claude_fn=claude_fn, attempt=attempt)
+    # Merge rule warnings (mostly soft) into Claude's output for diagnostics.
+    merged_warnings = sorted(set(claude["warnings"] + rule["warnings"]))
+    out = dict(claude)
+    out["warnings"] = merged_warnings
+    return out

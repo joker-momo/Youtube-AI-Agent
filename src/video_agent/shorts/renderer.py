@@ -111,11 +111,51 @@ def render_short_video(short_dir: Path, channel_config: dict) -> Path:  # pragma
     return out
 
 
-def render_short_cover(short_dir: Path, channel_config: dict) -> Path:  # pragma: no cover - needs ffmpeg
+def build_remotion_short_cover_command(
+    entry: Path, render_props: Path, out_path: Path,
+) -> list[str]:
+    """Pure command builder for the Remotion ShortCover still."""
+    return [
+        "npx", "--prefix", str(entry.parent.parent),
+        "remotion", "still",
+        str(entry), "ShortCover", str(out_path),
+        "--props", str(render_props),
+        "--image-format", "jpeg",
+    ]
+
+
+def render_short_cover(short_dir: Path, channel_config: dict) -> Path:  # pragma: no cover - needs Remotion/ffmpeg
+    """Spec v6 §12 — primary cover renderer is the Remotion ShortCover comp.
+
+    ffmpeg frame extraction is the emergency fallback only, used when the
+    Remotion still render fails or when the worker container has no Node.
+    """
+    from video_agent.contracts import repo_root
+
+    out = short_dir / paths.SHORT_COVER_FILE
+    materialize_short_job_aliases(short_dir, channel_config)
+
+    remotion_root = repo_root() / "remotion"
+    entry = remotion_root / "src/index.ts"
+    render_props = short_dir / "render_props.json"
+
+    # Primary: Remotion ShortCover still.
+    if render_props.exists():
+        try:
+            cmd = build_remotion_short_cover_command(entry, render_props, out)
+            subprocess.run(cmd, check=True, capture_output=True, cwd=str(remotion_root))
+            if out.exists():
+                return out
+        except Exception:
+            pass  # fall through to fallback
+
+    # Fallback: ffmpeg frame extraction from the rendered video.
     cover_cfg = (channel_config.get("shorts") or {}).get("cover") or {}
     frame_sec = float(cover_cfg.get("cover_frame_sec", 0.3))
     video = short_dir / paths.SHORT_VIDEO_FILE
-    out = short_dir / paths.SHORT_COVER_FILE
     if video.exists():
-        subprocess.run(build_cover_extract_command(video, out, frame_sec), check=True, capture_output=True)
+        subprocess.run(
+            build_cover_extract_command(video, out, frame_sec),
+            check=True, capture_output=True,
+        )
     return out

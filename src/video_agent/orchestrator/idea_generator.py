@@ -1234,7 +1234,15 @@ def _select_keywords_for_prompt(keyword_result: list[dict] | dict, count: int) -
     if selected:
         return selected[: max(count, 8)]
     legacy = keyword_result.get("all_scored_keywords", [])
-    return legacy[: max(count, 8)]
+    hard_rejections = {"language_mismatch", "audience_mismatch", "content_mismatch"}
+    safe_fallback = [
+        item
+        for item in legacy
+        if item.get("language_fit", 0) >= 80
+        and item.get("content_fit", 0) >= 60
+        and not hard_rejections.intersection(set(item.get("rejection_reasons") or []))
+    ]
+    return safe_fallback[: max(count, 8)]
 
 
 # ---------------------------------------------------------------------------

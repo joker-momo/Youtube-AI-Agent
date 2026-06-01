@@ -1,21 +1,16 @@
-"""Idea generator: vidIQ keyword discovery → ChatGPT idea expansion.
+"""Idea generator: seed keyword selection → ChatGPT idea expansion.
 
 Correct flow:
-  1. Score seed keywords on vidIQ.
-  2. Collect ``related`` keywords from each result, score those too.
-  3. Merge all scored keywords, enrich with V2 scoring signals, and assign buckets.
-  4. Select top-opportunity plus long-tail candidates for prompt input.
-  5. Ask ChatGPT to flesh out one video idea per top keyword.
-
-This ensures every idea is anchored to a keyword that YouTube search data confirms
-has real demand — not a topic ChatGPT invented in a vacuum.
+  1. Collect user-provided seeds or channel-matched trend seeds.
+  2. Enrich keyword candidates with local audience, language, intent, and content signals.
+  3. Select top-opportunity plus long-tail candidates for prompt input.
+  4. Ask ChatGPT to flesh out one video idea per top keyword.
 
 Usage::
 
     ideas = await generate_ideas(
         channel_path,
         chatgpt_fn=lambda msgs: client.run_session("chatgpt", msgs),
-        vidiq_fn=client.run_vidiq_scores,
         seed_topics=["insomnio", "menopausia"],
         count=5,
     )
@@ -701,10 +696,10 @@ def _is_too_generic(keyword: str) -> bool:
 
 
 def calculate_final_score(item: dict) -> float:
-    vidiq = item.get("vidiq_score")
-    vidiq_component = vidiq if isinstance(vidiq, (int, float)) else 35
+    source_score = item.get("keyword_source_score")
+    source_component = source_score if isinstance(source_score, (int, float)) else 35
     score = (
-        0.40 * vidiq_component
+        0.40 * source_component
         + 0.22 * item["audience_fit"]
         + 0.15 * item["intent_strength"]
         + 0.10 * item["content_fit"]
@@ -757,7 +752,7 @@ def assign_bucket(item: dict) -> str:
         and item.get("audience_fit", 0) >= 70
         and item.get("intent_strength", 0) >= 60
         and item.get("content_fit", 0) >= 60
-        and item.get("vidiq_score") is not None
+        and item.get("keyword_source_score") is not None
     ):
         return "top_opportunity_keywords"
     if (
@@ -787,7 +782,7 @@ def generate_keyword_pack(item: dict) -> dict:
 
 
 def dedupe_by_normalized_keyword(items: list[dict]) -> list[dict]:
-    """Dedupe by exact normalized keyword only — keep best by (final_score, vidiq).
+    """Dedupe by exact normalized keyword only, keeping the best scoring item.
 
     Does NOT cap per intent cluster, so the caller can keep a complete
     ``all_scored_keywords`` debug view of every distinct keyword scanned.
@@ -800,8 +795,8 @@ def dedupe_by_normalized_keyword(items: list[dict]) -> list[dict]:
         if current is None:
             best[key] = item
             continue
-        cur_tuple = (current.get("final_score", 0), current.get("vidiq_score") or 0)
-        new_tuple = (item.get("final_score", 0), item.get("vidiq_score") or 0)
+        cur_tuple = (current.get("final_score", 0), current.get("keyword_source_score") or 0)
+        new_tuple = (item.get("final_score", 0), item.get("keyword_source_score") or 0)
         if new_tuple > cur_tuple:
             item["notes"] = sorted(set((current.get("notes") or []) + (item.get("notes") or [])))
             item["rejection_reasons"] = sorted(set((current.get("rejection_reasons") or []) + (item.get("rejection_reasons") or [])))
@@ -866,7 +861,7 @@ def merge_keyword_channel_config(channel_config: dict | None) -> dict:
 def enrich_keyword_item(item: dict, channel_config: dict) -> dict:
     keyword = str(item.get("keyword") or "").strip()
     score = item.get("score")
-    vidiq_score = score if isinstance(score, (int, float)) else None
+    keyword_source_score = score if isinstance(score, (int, float)) else None
     notes = list(item.get("notes") or [])
     if item.get("note"):
         notes.append(str(item["note"]))
@@ -877,7 +872,7 @@ def enrich_keyword_item(item: dict, channel_config: dict) -> dict:
         "keyword": keyword,
         "normalized_keyword": normalize_keyword(keyword),
         "intent_cluster": classify_intent_cluster(keyword),
-        "vidiq_score": vidiq_score,
+        "keyword_source_score": keyword_source_score,
         "score": score if isinstance(score, (int, float)) else None,
         "audience_fit": score_audience_fit(keyword, channel_config),
         "intent_strength": score_intent_strength(keyword),
@@ -907,11 +902,11 @@ def enrich_keyword_item(item: dict, channel_config: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# vidIQ helpers
+# Keyword scoring helpers
 # ---------------------------------------------------------------------------
 
 def _extract_related_strings(score_result: dict) -> list[str]:
-    """Pull related keyword strings from a vidIQ score dict (handles str or dict items)."""
+    """Pull related keyword strings from a score dict."""
     out: list[str] = []
     for r in (score_result.get("related") or []):
         if isinstance(r, str):
@@ -925,7 +920,7 @@ def _extract_related_strings(score_result: dict) -> list[str]:
 
 async def _discover_top_keywords(
     seeds: list[str],
-    vidiq_fn: Callable[[list[str]], Awaitable[list[dict]]],
+    score_fn: Callable[[list[str]], Awaitable[list[dict]]],
     max_related: int = 15,
     top_n: int = 8,
     channel_config: dict | None = None,
@@ -942,7 +937,7 @@ async def _discover_top_keywords(
     seed_results: list[dict] = []
     if seeds:
         try:
-            seed_results = await vidiq_fn(seeds)
+            seed_results = await score_fn(seeds)
         except Exception:
             seed_results = []
 
@@ -961,7 +956,7 @@ async def _discover_top_keywords(
     related_results: list[dict] = []
     if related_pool:
         try:
-            related_results = await vidiq_fn(related_pool[:max_related])
+            related_results = await score_fn(related_pool[:max_related])
         except Exception:
             related_results = []
 
@@ -1111,15 +1106,15 @@ def _idea_gen_prompt(
             kw_lines.append(f'  {i}. "{kw}"')
             continue
         score = kw.get("final_score", kw.get("score", "?"))
-        vidiq_score = kw.get("vidiq_score", kw.get("score"))
+        keyword_source_score = kw.get("keyword_source_score", kw.get("score"))
         vol = kw.get("volume", "")
         comp = kw.get("competition", "")
         cluster = kw.get("intent_cluster", "")
         angle = kw.get("recommended_angle", "")
         hooks = kw.get("thumbnail_hook_options", [])
         meta = f"final score {score}/100"
-        if vidiq_score is not None:
-            meta += f", vidIQ: {vidiq_score}/100"
+        if keyword_source_score is not None:
+            meta += f", external score: {keyword_source_score}/100"
         if vol:
             meta += f", volume: {vol}"
         if comp:
@@ -1171,9 +1166,9 @@ def _idea_gen_prompt(
 
 {locale_block}
 
-## High-opportunity keywords (real YouTube search data from vidIQ)
+## High-opportunity keywords
 
-These keywords were scored for search volume and competition. Higher score = better opportunity.
+These keywords were scored for audience fit, search intent, language fit, and content fit. Higher score = better opportunity.
 Build your video ideas directly around these keywords — each idea should target one of them.
 
 {kw_block}
@@ -1366,13 +1361,12 @@ def save_ideas(ideas: list[dict], channel_id: str, out_dir: Path) -> list[Path]:
 async def generate_ideas(
     channel_path: Path,
     chatgpt_fn: Callable[[list[str]], Awaitable[str]],
-    vidiq_fn: Callable[[list[str]], Awaitable[list[dict]]] | None = None,
     seed_topics: list[str] | None = None,
     count: int = 10,
     with_metadata: bool = False,
     published_titles: list[str] | None = None,
 ) -> list[dict] | tuple[list[dict], list[dict], str]:
-    """Discover top keywords via vidIQ, then ask ChatGPT to flesh out ideas.
+    """Select top keywords, then ask ChatGPT to flesh out ideas.
 
     Returns ideas list by default.
     If ``with_metadata=True``, returns (ideas, top_keywords, seed_source) where seed_source is one of:
@@ -1394,15 +1388,31 @@ async def generate_ideas(
         seed_source = "trend" if any(_trend_matches_niche(s, niche_kws) for s in seeds) else "fallback"
         print(f"[idea_generator] Seed source={seed_source}, seeds={seeds}", file=sys.stderr)
 
-    if vidiq_fn is not None:
-        top_keywords = await _discover_top_keywords(seeds, vidiq_fn, channel_config=channel_config)
-    else:
-        # Fallback: no vidIQ — use seeds as pseudo-keywords
-        top_keywords = [{"keyword": s, "score": None, "volume": "", "competition": ""} for s in seeds]
+    cfg = merge_keyword_channel_config(channel_config)
+    raw_keywords = [{"keyword": s, "score": None, "volume": "", "competition": ""} for s in seeds]
+    enriched = [enrich_keyword_item(item, cfg) for item in raw_keywords if item["keyword"]]
+    top_keywords = {
+        "top_opportunity_keywords": select_by_cluster_limit(
+            [item for item in enriched if item.get("bucket") == "top_opportunity_keywords"],
+            int(cfg.get("max_keywords_per_intent_cluster", 3)),
+        ),
+        "long_tail_test_keywords": select_by_cluster_limit(
+            [item for item in enriched if item.get("bucket") == "long_tail_test_keywords"],
+            int(cfg.get("max_keywords_per_intent_cluster", 3)),
+        ),
+        "rejected_keywords": [item for item in enriched if item.get("bucket") == "rejected_keywords"],
+        "all_scored_keywords": enriched,
+        "metadata": {
+            "version": "local_keyword_scoring_v1",
+            "target_language": cfg.get("target_language", "spanish"),
+            "target_audience": cfg.get("target_audience", "people_45_plus"),
+            "serp_inspection": "disabled",
+        },
+    }
 
     selected_keywords = _select_keywords_for_prompt(top_keywords, count)
     if not selected_keywords:
-        raise ValueError("vidIQ returned no scoreable keywords from the given seeds. Try different topics.")
+        raise ValueError("No scoreable keywords were found from the given seeds. Try different topics.")
 
     prompt = _idea_gen_prompt(channel_config, selected_keywords, count, published_titles=published_titles)
     raw = await chatgpt_fn([prompt])

@@ -1,7 +1,7 @@
-# Coding Spec — Nâng cấp logic chấm điểm từ khóa vidIQ cho YouTube
+# Coding Spec — Nâng cấp logic chấm điểm từ khóa keyword scoring cho YouTube
 
 Tài liệu này là **yêu cầu triển khai trực tiếp cho Codex / Claude Code**.  
-Mục tiêu là nâng cấp pipeline chọn keyword trong module `Idea Generator` để không còn phụ thuộc đơn thuần vào `score DESC` của vidIQ, mà dùng điểm tổng hợp theo mức độ phù hợp với kênh, ngôn ngữ, intent, khả năng sản xuất nội dung và độ khó SERP.
+Mục tiêu là nâng cấp pipeline chọn keyword trong module `Idea Generator` để không còn phụ thuộc đơn thuần vào `score DESC` của keyword scoring, mà dùng điểm tổng hợp theo mức độ phù hợp với kênh, ngôn ngữ, intent, khả năng sản xuất nội dung và độ khó SERP.
 
 ---
 
@@ -9,7 +9,7 @@ Mục tiêu là nâng cấp pipeline chọn keyword trong module `Idea Generator
 
 1. **Không hỏi lại người dùng trong lúc code.** Các quyết định mặc định đã được chốt trong tài liệu này.
 2. **Không phá vỡ flow cũ.** Nếu nơi nào đang kỳ vọng `top_keywords` là `list`, phải có backward compatibility.
-3. **Không làm crash pipeline khi vidIQ / Playwright / YouTube SERP lỗi.** Ghi note/error vào item và tiếp tục.
+3. **Không làm crash pipeline khi keyword scoring / Playwright / YouTube SERP lỗi.** Ghi note/error vào item và tiếp tục.
 4. **Ưu tiên deterministic logic.** Tránh phụ thuộc LLM ở phần scoring.
 5. **Giữ code testable.** Các hàm scoring nên là pure function càng nhiều càng tốt.
 6. **SERP inspection là optional.** Mặc định tắt để không làm chậm pipeline; có thể bật bằng config.
@@ -22,7 +22,7 @@ Pipeline hiện tại:
 
 ```text
 seeds
--> score seeds bằng vidIQ
+-> score seeds bằng keyword scoring
 -> lấy related keywords
 -> score related keywords
 -> merge + dedupe
@@ -33,7 +33,7 @@ seeds
 
 Vấn đề:
 
-- Chọn keyword chỉ dựa vào điểm thô `score` của vidIQ.
+- Chọn keyword chỉ dựa vào điểm thô `score` của keyword scoring.
 - Dễ chọn nhầm keyword tiếng Bồ Đào Nha nếu kênh đang target tiếng Tây Ban Nha.
 - Dễ chọn keyword quá chung, không sát audience 45+.
 - Keyword có `score = None` / `not_enough_search_data` đang bị xem là tín hiệu yếu, trong khi nhiều long-tail keyword ngách có thể đáng test.
@@ -138,7 +138,7 @@ Mỗi keyword item phải có schema tối thiểu:
   "normalized_keyword": "comer mejor despues de los 45",
   "intent_cluster": "nutrition_after_45",
 
-  "vidiq_score": 78,
+  "keyword_score": 78,
   "score": 78,
   "volume": "Medium",
   "competition": "Low",
@@ -168,8 +168,8 @@ Mỗi keyword item phải có schema tối thiểu:
 Yêu cầu tương thích:
 
 - Giữ field `score` nếu code cũ đang dùng.
-- Thêm field `vidiq_score` bằng giá trị score gốc để rõ nghĩa.
-- Nếu `score` gốc là `None`, giữ `score=None`, `vidiq_score=None`.
+- Thêm field `keyword_score` bằng giá trị score gốc để rõ nghĩa.
+- Nếu `score` gốc là `None`, giữ `score=None`, `keyword_score=None`.
 
 ---
 
@@ -461,10 +461,10 @@ Failure handling:
 Formula:
 
 ```python
-vidiq_component = item["vidiq_score"] if isinstance(item["vidiq_score"], (int, float)) else 35
+keyword_component = item["keyword_score"] if isinstance(item["keyword_score"], (int, float)) else 35
 
 base_score = (
-    0.40 * vidiq_component +
+    0.40 * keyword_component +
     0.22 * item["audience_fit"] +
     0.15 * item["intent_strength"] +
     0.10 * item["content_fit"] +
@@ -545,7 +545,7 @@ language_fit >= 80
 audience_fit >= 70
 intent_strength >= 60
 content_fit >= 60
-vidiq_score is not None
+keyword_score is not None
 ```
 
 #### Long-tail test
@@ -558,7 +558,7 @@ audience_fit >= 70
 intent_strength >= 60
 content_fit >= 55
 AND (
-    vidiq_score is None
+    keyword_score is None
     OR note == "not_enough_search_data"
     OR 60 <= final_score < 70
 )
@@ -585,7 +585,7 @@ Requirements:
 1. Exact normalized duplicate:
    - Same `normalized_keyword`.
    - Keep item with highest `final_score`.
-   - If tie, keep higher `vidiq_score`.
+   - If tie, keep higher `keyword_score`.
    - Merge notes/rejection reasons.
 
 2. Intent-level cap:
@@ -658,7 +658,7 @@ Suggested flow:
 def _discover_top_keywords(..., channel_config=None, use_v2=True):
     config = merge_default_channel_config(channel_config)
 
-    seed_results = score seeds with vidIQ
+    seed_results = score seeds with keyword scoring
     related_pool = extract related keywords
     related_results = score related keywords
 
@@ -843,7 +843,7 @@ Create item with:
 ```python
 {
     "keyword": "como comer bem depois dos 45",
-    "vidiq_score": 85,
+    "keyword_score": 85,
     "audience_fit": 80,
     "intent_strength": 80,
     "content_fit": 80,
@@ -860,7 +860,7 @@ Expected:
 final_score < 70
 ```
 
-Because Portuguese mismatch penalty must beat high vidIQ score.
+Because Portuguese mismatch penalty must beat high keyword score.
 
 ### 9.8. `test_bucket_assignment_top_opportunity`
 
@@ -872,7 +872,7 @@ language_fit=100
 audience_fit=90
 intent_strength=80
 content_fit=80
-vidiq_score=75
+keyword_score=75
 ```
 
 Expected:
@@ -886,7 +886,7 @@ Expected:
 Item:
 
 ```python
-vidiq_score=None
+keyword_score=None
 score=None
 notes=["not_enough_search_data"]
 final_score=65
@@ -941,7 +941,7 @@ Implementation is done only when:
 
 1. `pytest tests/test_idea_generator.py` passes.
 2. Existing idea generation flow still works.
-3. Portuguese keyword with high vidIQ score does not enter `top_opportunity_keywords` for Spanish channel.
+3. Portuguese keyword with high keyword score does not enter `top_opportunity_keywords` for Spanish channel.
 4. Spanish 45+ keyword with clear intent can enter `top_opportunity_keywords`.
 5. `not_enough_search_data` but high audience/intent fit can enter `long_tail_test_keywords`.
 6. `generate_ideas(...)` sends only Spanish-compatible keywords to ChatGPT.
@@ -984,7 +984,7 @@ Implementation is done only when:
       "keyword": "como comer mejor después de los 45 sin dietas",
       "normalized_keyword": "como comer mejor despues de los 45 sin dietas",
       "intent_cluster": "nutrition_after_45",
-      "vidiq_score": 76,
+      "keyword_score": 76,
       "score": 76,
       "volume": "Medium",
       "competition": "Low",
@@ -1006,7 +1006,7 @@ Implementation is done only when:
       "keyword": "bajones de energía después de comer 45",
       "normalized_keyword": "bajones de energia despues de comer 45",
       "intent_cluster": "energy_after_45",
-      "vidiq_score": null,
+      "keyword_score": null,
       "score": null,
       "volume": "Low",
       "competition": "Very Low",
@@ -1028,7 +1028,7 @@ Implementation is done only when:
       "keyword": "como comer bem depois dos 45",
       "normalized_keyword": "como comer bem depois dos 45",
       "intent_cluster": "unknown",
-      "vidiq_score": 88,
+      "keyword_score": 88,
       "score": 88,
       "audience_fit": 70,
       "intent_strength": 60,
@@ -1059,7 +1059,7 @@ Implementation is done only when:
 
 Không cần triển khai:
 
-- Paid vidIQ API.
+- Paid keyword scoring API.
 - Full semantic embeddings.
 - LLM-based keyword scoring.
 - UI redesign.

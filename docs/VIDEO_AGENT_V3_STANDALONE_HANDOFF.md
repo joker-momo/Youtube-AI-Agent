@@ -77,7 +77,7 @@ User browser
       -> KasmVNC bound to 127.0.0.1:7900 for manual sign-ins
 ```
 
-The app owns orchestration and state. The browser worker owns all ChatGPT, Claude, vidIQ, and ChatGPT image-generation browser actions.
+The app owns orchestration and state. The browser worker owns all ChatGPT, Claude, keyword scoring, and ChatGPT image-generation browser actions.
 
 ## Services
 
@@ -98,7 +98,7 @@ Future FastAPI service:
 
 - `POST /chatgpt/run`
 - `POST /claude/run`
-- `POST /vidiq/scrape`
+- `POST /keyword/scrape`
 - `POST /chatgpt/images`
 - `GET /health`
 

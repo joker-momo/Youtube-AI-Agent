@@ -36,6 +36,10 @@ class LoginRequiredError(BrowserDriverError):
     """
 
 
+class QuotaExceededError(BrowserDriverError):
+    """The target model account is temporarily out of messages/credits."""
+
+
 def trace_root() -> Path:
     """Directory under which screenshots/HTML dumps are written.
 

@@ -44,7 +44,6 @@ from video_agent.orchestrator.stages import (
     StageInputMissingError,
     _idea_keywords,
     auto_idea_research_stage,
-    auto_seo_vidiq_stage,
     auto_scenes_qa_stage,
     auto_scenes_stage,
     auto_script_qa_stage,
@@ -1201,7 +1200,6 @@ async def post_auto_idea_research(
         output = await auto_idea_research_stage(
             job_dir,
             channel_path,
-            client.run_vidiq_scores,
         )
     except StageInputMissingError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1209,30 +1207,6 @@ async def post_auto_idea_research(
         raise _handle_browser_client_error(exc) from exc
     # Fresh research run invalidates prior manual confirmation.
     set_approval(job_dir, "idea_research", False)
-    state = load_job(job_dir)
-    return {"output": str(output.relative_to(job_dir)), "state": state.to_dict()}
-
-
-@router.post("/jobs/{job_id}/stages/seo_vidiq/auto")
-async def post_auto_seo_vidiq(
-    job_id: str,
-    jobs_root: Path = Depends(get_jobs_root),
-    channel_path: Path = Depends(get_channel_path),
-    client: BrowserClient = Depends(get_browser_client),
-) -> dict:
-    job_dir = _safe_job_dir(jobs_root, job_id)
-    if not (job_dir / "job.json").exists():
-        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
-    try:
-        output = await auto_seo_vidiq_stage(
-            job_dir,
-            channel_path,
-            client.run_vidiq_scores,
-        )
-    except StageInputMissingError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except BrowserClientError as exc:
-        raise _handle_browser_client_error(exc) from exc
     state = load_job(job_dir)
     return {"output": str(output.relative_to(job_dir)), "state": state.to_dict()}
 
@@ -1321,10 +1295,8 @@ def keyword_result_summary(keyword_result) -> dict:
 def keyword_score_payload(kw_data: dict, target_kw: str, summary: dict, match_source: str) -> dict:
     return {
         "target_keyword": kw_data.get("keyword", target_kw),
-        "vidiq_score": kw_data.get("vidiq_score", kw_data.get("score")),
+        "keyword_source_score": kw_data.get("keyword_source_score", kw_data.get("score")),
         "keyword_final_score": kw_data.get("final_score", kw_data.get("score")),
-        "vidiq_volume": kw_data.get("volume", ""),
-        "vidiq_competition": kw_data.get("competition", ""),
         "intent_cluster": kw_data.get("intent_cluster"),
         "audience_fit": kw_data.get("audience_fit"),
         "intent_strength": kw_data.get("intent_strength"),
@@ -1464,11 +1436,7 @@ async def post_score_ideas(
     req: ScoreIdeasRequest,
     client: BrowserClient = Depends(get_browser_client),
 ) -> dict:
-    """Score a list of ideas via vidIQ in a single browser session.
-
-    Returns per-idea: keywords scored, best_score, competition, related keywords.
-    Scoring is best-effort — if vidIQ is unavailable all scores are null.
-    """
+    """Estimate keyword quality for a list of ideas using local channel rules."""
     _safe_channel_id(channel_id)
     from video_agent.utils.json_io import read_yaml as _read_yaml
     channel_path = repo_root() / "configs" / channel_id / "channel.yaml"
@@ -1483,14 +1451,16 @@ async def post_score_ideas(
         ranges.append((len(all_keywords), len(all_keywords) + len(kws)))
         all_keywords.extend(kws)
 
-    all_scores: list[dict] = []
-    score_error: str | None = None
-    if all_keywords:
-        try:
-            all_scores = await client.run_vidiq_scores(all_keywords)
-        except Exception as exc:
-            score_error = str(exc)
-            all_scores = [{}] * len(all_keywords)
+    from video_agent.orchestrator.idea_generator import (
+        enrich_keyword_item,
+        merge_keyword_channel_config,
+    )
+
+    scoring_cfg = merge_keyword_channel_config(channel_config)
+    all_scores = [
+        enrich_keyword_item({"keyword": keyword, "score": None}, scoring_cfg)
+        for keyword in all_keywords
+    ]
 
     results = []
     for i, idea in enumerate(req.ideas):
@@ -1498,46 +1468,18 @@ async def post_score_ideas(
         idea_scores = all_scores[start:end]
         valid = [s for s in idea_scores if isinstance(s.get("score"), (int, float))]
         best = int(max(s["score"] for s in valid)) if valid else None
-        # collect related keywords from all keyword results for this idea
-        related: list[str] = []
-        for s in idea_scores:
-            raw_rel = s.get("related", []) or []
-            for r in raw_rel:
-                # vidIQ returns related as strings or {keyword, score} dicts
-                if isinstance(r, str):
-                    related.append(r)
-                elif isinstance(r, dict):
-                    kw = r.get("keyword") or r.get("term") or ""
-                    if kw:
-                        related.append(str(kw))
-        # deduplicate while preserving order
-        seen_set: set[str] = set()
-        related_unique = [
-            r
-            for r in related
-            if r not in seen_set
-            and not seen_set.add(r)  # type: ignore[func-returns-value]
-            and _keyword_is_safe_for_ui(r, channel_config)
-        ]
-        # pick best competition label
-        competition = None
-        for s in valid:
-            comp = (s.get("competition") or "").strip()
-            if comp:
-                competition = comp
-                break
         results.append({
             "topic": idea.get("topic", ""),
             "title_seed": idea.get("title_seed", ""),
             "keywords": all_keywords[start:end],
             "scores": idea_scores,
             "best_score": best,
-            "competition": competition,
-            "related": related_unique[:10],
-            "error": score_error if score_error else None,
+            "competition": None,
+            "related": [],
+            "error": None,
         })
 
-    return {"results": results, "error": score_error}
+    return {"results": results, "error": None}
 
 
 @router.get("/channels/{channel_id}/sync-videos")
@@ -1637,15 +1579,7 @@ async def post_generate_ideas(
     inputs_root: Path = Depends(get_inputs_root),
     client: BrowserClient = Depends(get_browser_client),
 ) -> dict:
-    """Discover high-opportunity keywords via vidIQ, then generate ideas via ChatGPT.
-
-    Flow:
-      1. Score seed_topics on vidIQ + expand to related keywords.
-      2. Pick top-N keywords by score (high volume / low competition).
-      3. ChatGPT fleshes out one idea per top keyword.
-
-    Returns ideas with pre-computed keyword scores so the UI shows scores immediately.
-    """
+    """Generate ideas via ChatGPT from user seeds or local trend seeds."""
     _safe_channel_id(channel_id)
     channel_path = repo_root() / "configs" / channel_id / "channel.yaml"
     if not channel_path.exists():
@@ -1670,7 +1604,6 @@ async def post_generate_ideas(
         ideas, top_keywords, seed_source = await generate_ideas(
             channel_path=channel_path,
             chatgpt_fn=lambda msgs: client.run_session("chatgpt", msgs),
-            vidiq_fn=getattr(client, "run_vidiq_scores", None),
             seed_topics=req.seed_topics,
             count=req.count,
             with_metadata=True,
@@ -1709,9 +1642,9 @@ async def post_generate_ideas(
             used_fallback_keywords.add(normalize_keyword(kw_data.get("keyword", "")))
             enriched.update(keyword_score_payload(kw_data, target_kw, summary, match_source))
         # Re-score the idea using its richer title_seed (multi-word, intent
-        # verbs) instead of the bare vidIQ keyword. The keyword-discovery
-        # phase scores a 1-2 word vidIQ term that almost always lands in
-        # rejected_keywords (intent_strength=25). The ChatGPT-fleshed idea
+        # verbs) instead of the bare seed keyword. The keyword-discovery
+        # phase may score a 1-2 word term that lands in rejected_keywords
+        # (intent_strength=25). The ChatGPT-fleshed idea
         # title carries the real intent signal — re-scoring against the
         # title reflects the actual quality the user judges in the UI.
         from video_agent.orchestrator.idea_generator import (
@@ -1745,7 +1678,7 @@ async def post_generate_ideas(
             combined_notes = sorted(set(existing_notes + list(language_notes)))
             scoring = {
                 "keyword": title_for_scoring,
-                "vidiq_score": enriched.get("vidiq_score"),
+                "keyword_source_score": enriched.get("keyword_source_score"),
                 "audience_fit": max(enriched.get("audience_fit") or 0, new_audience),
                 "intent_strength": max(enriched.get("intent_strength") or 0, new_intent),
                 "content_fit": max(enriched.get("content_fit") or 0, new_content),

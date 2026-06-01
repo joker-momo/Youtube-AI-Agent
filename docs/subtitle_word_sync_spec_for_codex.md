@@ -537,7 +537,7 @@ docker compose run --rm video-agent pytest -q
 Then run a real job through:
 
 ```text
-script -> script_promote -> script_qa -> scenes -> scenes_promote -> scenes_qa -> seo -> seo_promote -> seo_qa -> seo_vidiq -> thumbnail_image -> whisper_timestamps -> render -> review
+script -> script_promote -> script_qa -> scenes -> scenes_promote -> scenes_qa -> seo -> seo_promote -> seo_qa -> seo_keyword -> thumbnail_image -> whisper_timestamps -> render -> review
 ```
 
 Check:

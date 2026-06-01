@@ -157,10 +157,6 @@ def _fake_pass_idea_research(job_dir: Path) -> None:
     _fake_pass_stage(job_dir, "idea_research")
 
 
-def _fake_pass_seo_vidiq(job_dir: Path) -> None:
-    _fake_pass_stage(job_dir, "seo_vidiq")
-
-
 def _fake_pass_assets_chatgpt(job_dir: Path) -> None:
     """Mark assets_chatgpt as completed and advance to whisper stage."""
     _fake_pass_stage(job_dir, "assets_chatgpt")
@@ -491,7 +487,6 @@ def test_run_render_stage_uses_operator_render_without_qa_gate(
     run_seo_stage(job_dir, channel_path)
     promote_seo_stage(job_dir, channel_path, raw_response=json.dumps(valid_seo_payload))
     _fake_pass_qa(job_dir, "seo")
-    _fake_pass_seo_vidiq(job_dir)
     _fake_pass_assets_chatgpt(job_dir)
     _fake_pass_thumbnail_image(job_dir)
     _fake_pass_whisper_timestamps(job_dir)
@@ -541,7 +536,6 @@ def test_run_review_stage_writes_review_and_completes_job(
     run_seo_stage(job_dir, channel_path)
     promote_seo_stage(job_dir, channel_path, raw_response=json.dumps(valid_seo_payload))
     _fake_pass_qa(job_dir, "seo")
-    _fake_pass_seo_vidiq(job_dir)
     _fake_pass_assets_chatgpt(job_dir)
     _fake_pass_thumbnail_image(job_dir)
     _fake_pass_whisper_timestamps(job_dir)
@@ -890,7 +884,6 @@ def test_post_run_render_via_http(
         json={"raw_response": json.dumps(valid_seo_payload, ensure_ascii=False)},
     )
     _fake_pass_qa(tmp_path / "job-s1", "seo")
-    _fake_pass_seo_vidiq(tmp_path / "job-s1")
     _fake_pass_assets_chatgpt(tmp_path / "job-s1")
     _fake_pass_thumbnail_image(tmp_path / "job-s1")
     _fake_pass_whisper_timestamps(tmp_path / "job-s1")
@@ -949,7 +942,6 @@ def test_post_run_review_via_http(
         json={"raw_response": json.dumps(valid_seo_payload, ensure_ascii=False)},
     )
     _fake_pass_qa(tmp_path / "job-s1", "seo")
-    _fake_pass_seo_vidiq(tmp_path / "job-s1")
     _fake_pass_assets_chatgpt(tmp_path / "job-s1")
     _fake_pass_thumbnail_image(tmp_path / "job-s1")
     _fake_pass_whisper_timestamps(tmp_path / "job-s1")

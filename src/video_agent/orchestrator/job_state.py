@@ -19,7 +19,6 @@ DEFAULT_STAGES: tuple[str, ...] = (
     "seo",
     "seo_promote",
     "seo_qa",
-    "seo_vidiq",
     "thumbnail_image",
     # assets_chatgpt removed — default pipeline uses stock video (pexels_video provider).
     # Run assets_chatgpt manually via ▶ Run button if ChatGPT images needed.

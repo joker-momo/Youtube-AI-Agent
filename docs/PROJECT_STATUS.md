@@ -31,9 +31,9 @@ Decisions already chosen:
 
 - Standalone Python web app; Hermes is dropped.
 - Local FastAPI UI with WebSocket realtime progress.
-- Browser web UI access for ChatGPT Plus, Claude, vidIQ, and ChatGPT image generation; no LLM API client in Phase 1.
+- Browser web UI access for ChatGPT Plus, Claude, keyword scoring, and ChatGPT image generation; no LLM API client in Phase 1.
 - Separate `browser-worker` container using Playwright CDP attach to the in-cluster `browser-runtime` container over the internal Docker network. CDP port 9222 is internal-only and never published to host.
-- The `browser-runtime` container runs Chromium with a persisted profile mounted from `browser_profiles/default`. The user signs in to ChatGPT/Claude/vidIQ manually through the KasmVNC console bound to `127.0.0.1:7900`. The system must not auto-login.
+- The `browser-runtime` container runs Chromium with a persisted profile mounted from `browser_profiles/default`. The user signs in to ChatGPT/Claude/keyword scoring manually through the KasmVNC console bound to `127.0.0.1:7900`. The system must not auto-login.
 - A non-default profile directory is required because Chrome blocks remote debugging on the default user-data directory (`DevTools remote debugging requires a non-default data directory`). Mounting `browser_profiles/default` satisfies that requirement and keeps the sign-ins persistent across container restarts. Browser-worker auth checks should open the target page and report `login_required` when the profile is not signed in.
 - Sequential per-step flow with file-based state detection.
 - Fail-soft browser handling: save trace, expose prompt path, allow user retry.
@@ -677,25 +677,25 @@ Live DNA consistency check against the real Browser Appliance:
 
 Docker verification: ``143 passed in 18.48s``.
 
-### V3 Phase 1 Step 17 vidIQ driver (free tier via YouTube extension overlay)
+### V3 Phase 1 Step 17 keyword scoring driver (free tier via YouTube extension overlay)
 
-- New `src/video_agent/browser_worker/drivers/vidiq.py` scrapes the
-  Search Companion sidebar the vidIQ Chrome extension injects into
+- New `src/video_agent/browser_worker/drivers/keyword.py` scrapes the
+  Search Companion sidebar the keyword scoring Chrome extension injects into
   YouTube search results pages. Free tier covers keyword score,
   volume, competition, related keywords — no paid API needed.
-- HTTP routes: `POST /vidiq/sessions`, `POST /vidiq/sessions/{sid}/score`,
-  `POST /vidiq/sessions/{sid}/score_batch`, `DELETE /vidiq/sessions/{sid}`.
+- HTTP routes: `POST /keyword/sessions`, `POST /keyword/sessions/{sid}/score`,
+  `POST /keyword/sessions/{sid}/score_batch`, `DELETE /keyword/sessions/{sid}`.
 - Robust scrape: wait for digit + ``SEARCH TERM:`` match to defend
   against stale panel between queries; ``about:blank`` detour forces
   the SPA to remount the panel each query; soft-fail
   ``Not enough search data`` instead of raising.
-- Live verified end-to-end with the user signed into vidIQ free tier:
+- Live verified end-to-end with the user signed into keyword scoring free tier:
   - ``dormir mejor 50`` -> score 25, related = [dormir, musica para
     relajarse, dormirse rapido].
   - ``rutina matutina 45`` -> score 25, distinct related set.
   - ``habitos saludables despues de los 50`` -> soft-fail
     ``not_enough_search_data``.
-- Driver not yet wired into the orchestrator; `seo_vidiq` stage to
+- Driver not yet wired into the orchestrator; `seo_keyword` stage to
   follow.
 
 ### V3 Phase 1 Step 18 Long-form 20-30 min pipeline
@@ -750,7 +750,7 @@ Docker verification: ``143 passed in 18.48s``.
   session, humanized cadence, login URL detection at
   `claude.ai/login` and `/sign-in`).
 - Worker dispatch + auth status routes know about a "claude" site;
-  `_open_session("claude")` works alongside chatgpt/gemini/vidiq.
+  `_open_session("claude")` works alongside chatgpt/gemini/keyword.
 - Orchestrator `/run-all` opens a persistent Claude tab for the QA
   trio instead of Gemini.
 - ``operator.py`` gained `extract_json_objects` which extracts every
@@ -833,8 +833,8 @@ system added:
 - **Webapp A/B grid**: dashboard `renderFinal()` shows 3-card AB grid;
   gold border + ⭐ badge on winner (highest score); score badge on
   each card.
-- **`POST /jobs/{id}/stages/seo_vidiq/auto`**: standalone route to
-  run seo_vidiq outside of `/run-all`.
+- **`POST /jobs/{id}/stages/seo_keyword/auto`**: standalone route to
+  run seo_keyword outside of `/run-all`.
 - **`POST /run-batch`**: queue multiple `/run-all` calls back-to-back
   for overnight batch production. Soft-fails individual jobs; returns
   `{total, succeeded, failed, results}`.
@@ -848,7 +848,7 @@ system added:
   all through the Browser Appliance (host noVNC for manual login once).
 - Full pipeline stage order: `idea_research → script → script_promote →
   script_qa → scenes → scenes_promote → scenes_qa → seo → seo_promote →
-  seo_qa → seo_vidiq → thumbnail_image → assets_chatgpt →
+  seo_qa → seo_keyword → thumbnail_image → assets_chatgpt →
   whisper_timestamps → render → review`.
 - `persona_eval` implementation exists but is intentionally out of default
   `/run-all`; run it manually only when needed via
@@ -875,7 +875,7 @@ User browser
       -> existing assets/TTS/render code
   -> browser-worker container
       -> Playwright drivers
-      -> ChatGPT/Claude/vidIQ/image generation browser operations
+      -> ChatGPT/Claude/keyword scoring/image generation browser operations
       -> browser-runtime container (Chromium + Xvfb + noVNC + CDP) over internal appliance_net
 ```
 
@@ -1059,7 +1059,7 @@ Skipped: `qa/script_qa.py` disclaimer phrase variant list — intentional QA gat
 - `a9dca52 Make dashboard step-by-step with artifacts, ETA, video, metadata`
 - `ba026ce Add minimal web dashboard for live job progress`
 - `0c21556 Switch pipeline to 20-30 min long-form format`
-- `3fe40c2 Add vidIQ driver (free tier via YouTube Chrome extension overlay)`
+- `3fe40c2 Add keyword scoring driver (free tier via YouTube Chrome extension overlay)`
 - `0a181e8 Document auto QA rework loop and 2-video DNA consistency`
 - `5e3f590 Add QA rework loop and fix Gemini scrape for byte-identical responses`
 - `374f668 Persist Gemini QA result even on NEEDS_REWORK verdict`

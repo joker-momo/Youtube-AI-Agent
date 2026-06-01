@@ -46,6 +46,27 @@ class BrowserClient:
     def _timeout_for_response(self, response_timeout_ms: int) -> float:
         return max(self.request_timeout, response_timeout_ms / 1000.0 + 30.0)
 
+    def _wrap_transport_error(self, op: str, exc: httpx.HTTPError) -> BrowserClientError:
+        return BrowserClientError(
+            f"browser-worker {op} request failed: {exc}",
+            status_code=502,
+            detail={"error": str(exc), "type": exc.__class__.__name__},
+        )
+
+    async def _post(self, op: str, *, json: object | None = None, timeout: float):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as http:
+                return await http.post(f"{self.base_url}/{op}", json=json)
+        except httpx.HTTPError as exc:
+            raise self._wrap_transport_error(op, exc) from exc
+
+    async def _delete(self, op: str, *, timeout: float = 30.0):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as http:
+                return await http.delete(f"{self.base_url}/{op}")
+        except httpx.HTTPError as exc:
+            raise self._wrap_transport_error(op, exc) from exc
+
     async def chatgpt_send(
         self,
         prompt: str,
@@ -94,10 +115,11 @@ class BrowserClient:
             "out_path": out_path,
             "response_timeout_ms": response_timeout_ms,
         }
-        async with httpx.AsyncClient(
-            timeout=self._timeout_for_response(response_timeout_ms)
-        ) as http:
-            response = await http.post(f"{self.base_url}/chatgpt/image", json=body)
+        response = await self._post(
+            "chatgpt/image",
+            json=body,
+            timeout=self._timeout_for_response(response_timeout_ms),
+        )
         if response.status_code in (200, 201):
             return response.json()
         try:
@@ -136,10 +158,11 @@ class BrowserClient:
             "out_paths": out_paths,
             "response_timeout_ms": response_timeout_ms,
         }
-        async with httpx.AsyncClient(
-            timeout=self._timeout_for_response(response_timeout_ms * len(prompts))
-        ) as http:
-            response = await http.post(f"{self.base_url}/chatgpt/image/batch", json=body)
+        response = await self._post(
+            "chatgpt/image/batch",
+            json=body,
+            timeout=self._timeout_for_response(response_timeout_ms * len(prompts)),
+        )
         if response.status_code in (200, 201):
             return response.json()
         try:
@@ -161,11 +184,11 @@ class BrowserClient:
         )
 
     async def _send(self, site: str, prompt: str, ms: int) -> str:
-        async with httpx.AsyncClient(timeout=self._timeout_for_response(ms)) as http:
-            response = await http.post(
-                f"{self.base_url}/{site}/send",
-                json={"prompt": prompt, "response_timeout_ms": ms},
-            )
+        response = await self._post(
+            f"{site}/send",
+            json={"prompt": prompt, "response_timeout_ms": ms},
+            timeout=self._timeout_for_response(ms),
+        )
         return self._unwrap(site, "send", response)
 
     def _unwrap(self, site: str, op: str, response) -> str:
@@ -194,8 +217,7 @@ class BrowserClient:
     # ------------------------------------------------------------------
 
     async def open_session(self, site: str) -> str:
-        async with httpx.AsyncClient(timeout=self.request_timeout) as http:
-            response = await http.post(f"{self.base_url}/{site}/sessions")
+        response = await self._post(f"{site}/sessions", timeout=self.request_timeout)
         if response.status_code in (200, 201):
             return response.json()["session_id"]
         # Reuse _unwrap's error handling.
@@ -226,18 +248,15 @@ class BrowserClient:
         response_timeout_ms: int = 300_000,
     ) -> str:
         timeout = self._timeout_for_response(response_timeout_ms)
-        async with httpx.AsyncClient(timeout=timeout) as http:
-            response = await http.post(
-                f"{self.base_url}/{site}/sessions/{session_id}/send",
-                json={"prompt": prompt, "response_timeout_ms": response_timeout_ms},
-            )
+        response = await self._post(
+            f"{site}/sessions/{session_id}/send",
+            json={"prompt": prompt, "response_timeout_ms": response_timeout_ms},
+            timeout=timeout,
+        )
         return self._unwrap(site, f"sessions/{session_id}/send", response)
 
     async def close_session(self, site: str, session_id: str) -> None:
-        async with httpx.AsyncClient(timeout=30.0) as http:
-            response = await http.delete(
-                f"{self.base_url}/{site}/sessions/{session_id}"
-            )
+        response = await self._delete(f"{site}/sessions/{session_id}")
         if response.status_code in (200, 204, 404):
             return  # 404 = already closed; treat as success for idempotency
         raise BrowserClientError(
@@ -245,75 +264,6 @@ class BrowserClient:
             status_code=response.status_code,
             detail=response.text,
         )
-
-    # ------------------------------------------------------------------
-    # vidIQ keyword scoring helpers.
-    # ------------------------------------------------------------------
-
-    async def vidiq_score(
-        self,
-        keyword: str,
-        *,
-        session_id: str,
-        response_timeout_ms: int = 30_000,
-    ) -> dict:
-        """Score a single keyword via the vidIQ session."""
-        timeout = self._timeout_for_response(response_timeout_ms)
-        async with httpx.AsyncClient(timeout=timeout) as http:
-            response = await http.post(
-                f"{self.base_url}/vidiq/sessions/{session_id}/score",
-                json={"keyword": keyword, "response_timeout_ms": response_timeout_ms},
-            )
-        if response.status_code in (200, 201):
-            return response.json()
-        try:
-            detail = response.json().get("detail", response.text)
-        except Exception:
-            detail = response.text
-        raise BrowserClientError(
-            f"browser-worker /vidiq/score returned HTTP {response.status_code}",
-            status_code=response.status_code,
-            detail=detail,
-        )
-
-    async def vidiq_score_batch(
-        self,
-        keywords: list[str],
-        *,
-        session_id: str,
-        response_timeout_ms: int = 60_000,
-    ) -> list[dict]:
-        """Score a list of keywords via the vidIQ session (sequential in worker)."""
-        timeout = self._timeout_for_response(response_timeout_ms * len(keywords))
-        async with httpx.AsyncClient(timeout=timeout) as http:
-            response = await http.post(
-                f"{self.base_url}/vidiq/sessions/{session_id}/score_batch",
-                json={"keywords": keywords, "response_timeout_ms": response_timeout_ms},
-            )
-        if response.status_code in (200, 201):
-            data = response.json()
-            # Worker returns {"session_id": ..., "results": [...]}
-            return data["results"] if isinstance(data, dict) and "results" in data else data
-        try:
-            detail = response.json().get("detail", response.text)
-        except Exception:
-            detail = response.text
-        raise BrowserClientError(
-            f"browser-worker /vidiq/score_batch returned HTTP {response.status_code}",
-            status_code=response.status_code,
-            detail=detail,
-        )
-
-    async def run_vidiq_scores(self, keywords: list[str]) -> list[dict]:
-        """Open a vidIQ session, score all keywords, close. Return scores."""
-        session_id = await self.open_session("vidiq")
-        try:
-            return await self.vidiq_score_batch(keywords, session_id=session_id)
-        finally:
-            try:
-                await self.close_session("vidiq", session_id)
-            except Exception as exc:
-                _log.warning("close_session(vidiq, %s) failed: %s", session_id, exc)
 
     async def run_session(
         self,

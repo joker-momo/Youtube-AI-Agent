@@ -1,8 +1,8 @@
-# Yêu cầu nâng cấp logic chấm điểm từ khóa vidIQ cho YouTube
+# Yêu cầu nâng cấp logic chấm điểm từ khóa keyword scoring cho YouTube
 
 ## Mục tiêu
 
-Nâng cấp pipeline tìm và chấm điểm từ khóa hiện tại để không chỉ phụ thuộc vào `vidiq_score`, mà còn xét thêm mức độ phù hợp với kênh, ý định tìm kiếm, độ khó SERP thực tế và mức độ phù hợp ngôn ngữ/thị trường.
+Nâng cấp pipeline tìm và chấm điểm từ khóa hiện tại để không chỉ phụ thuộc vào `keyword_score`, mà còn xét thêm mức độ phù hợp với kênh, ý định tìm kiếm, độ khó SERP thực tế và mức độ phù hợp ngôn ngữ/thị trường.
 
 Kênh mục tiêu hiện tại:
 
@@ -16,10 +16,10 @@ Kênh mục tiêu hiện tại:
 Pipeline hiện tại đã có:
 
 1. Nhận danh sách seed keywords.
-2. Dùng Playwright mở YouTube Search với extension vidIQ.
-3. Lấy các chỉ số từ vidIQ: `score`, `volume`, `competition`, `related`.
+2. Dùng Playwright mở YouTube Search với extension keyword scoring.
+3. Lấy các chỉ số từ keyword scoring: `score`, `volume`, `competition`, `related`.
 4. Chấm điểm seed keywords.
-5. Lấy related keywords từ vidIQ.
+5. Lấy related keywords từ keyword scoring.
 6. Chấm điểm related keywords.
 7. Gộp seed + related.
 8. Deduplicate.
@@ -34,8 +34,8 @@ Yêu cầu nâng cấp: thay vì chỉ sort theo `score DESC`, hãy tạo hệ t
 
 - Không rewrite toàn bộ project nếu không cần thiết.
 - Trước tiên hãy tìm hàm hiện tại có vai trò giống `_discover_top_keywords` hoặc keyword discovery pipeline.
-- Giữ nguyên phần Playwright + vidIQ scraping nếu nó đang hoạt động.
-- Chỉ thêm các lớp xử lý sau khi đã thu được dữ liệu keyword từ vidIQ.
+- Giữ nguyên phần Playwright + keyword scoring scraping nếu nó đang hoạt động.
+- Chỉ thêm các lớp xử lý sau khi đã thu được dữ liệu keyword từ keyword scoring.
 - Code phải dễ test, tách thành các hàm nhỏ.
 - Không hard-code quá sâu vào một video cụ thể; nhưng có thể cấu hình mặc định cho kênh `Vida Plena 45+`.
 - Không làm vỡ output cũ nếu nơi khác trong app đang dùng. Nếu cần, giữ field cũ và thêm field mới.
@@ -53,7 +53,7 @@ Mỗi keyword sau khi xử lý nên có schema gần như sau:
   "intent_cluster": "nutrition_after_45",
   "source": "seed|related",
   "source_seed": "alimentación después de los 45",
-  "vidiq_score": 78,
+  "keyword_score": 78,
   "volume": "Medium",
   "competition": "Low",
   "related": [],
@@ -406,7 +406,7 @@ Công thức đề xuất:
 
 ```python
 final_score = (
-    vidiq_component * 0.40 +
+    keyword_component * 0.40 +
     audience_fit * 0.22 +
     intent_strength * 0.15 +
     content_fit * 0.10 +
@@ -418,7 +418,7 @@ final_score = (
 Trong đó:
 
 ```python
-vidiq_component = item["vidiq_score"] if item["vidiq_score"] is not None else 45
+keyword_component = item["keyword_score"] if item["keyword_score"] is not None else 45
 ```
 
 Penalty:
@@ -466,7 +466,7 @@ serp_difficulty <= 75
 
 ```python
 (
-    item["vidiq_score"] is None
+    item["keyword_score"] is None
     and item.get("note") == "not_enough_search_data"
     and audience_fit >= 80
     and intent_strength >= 75
@@ -531,7 +531,7 @@ Nhưng reject biến thể quá giống nếu chỉ đổi chữ nhẹ.
 
 ## 12. Output cuối cho ChatGPT/video idea generator
 
-Thay vì chỉ gửi Top N theo vidIQ, output cuối nên gồm 3 nhóm:
+Thay vì chỉ gửi Top N theo keyword scoring, output cuối nên gồm 3 nhóm:
 
 ```json
 {
@@ -555,7 +555,7 @@ Mỗi item trong `top_opportunity_keywords` và `long_tail_test_keywords` cần 
 {
   "keyword": "...",
   "final_score": 84.2,
-  "vidiq_score": 78,
+  "keyword_score": 78,
   "volume": "Medium",
   "competition": "Low",
   "intent_cluster": "nutrition_after_45",
@@ -732,7 +732,7 @@ Input item:
 ```json
 {
   "keyword": "comer sin culpa después de los 45",
-  "vidiq_score": null,
+  "keyword_score": null,
   "note": "not_enough_search_data",
   "audience_fit": 90,
   "intent_strength": 85,
@@ -767,7 +767,7 @@ bucket == "rejected"
 
 Implementation được coi là đạt khi:
 
-1. Pipeline vẫn lấy được seed + related keywords từ vidIQ như trước.
+1. Pipeline vẫn lấy được seed + related keywords từ keyword scoring như trước.
 2. Không còn chọn Top N chỉ bằng `score DESC`.
 3. Mỗi keyword output có `final_score`, `audience_fit`, `intent_strength`, `content_fit`, `language_fit`, `intent_cluster`, `bucket`.
 4. Portuguese keywords bị phạt/reject khi target language là Spanish.
@@ -783,13 +783,13 @@ Implementation được coi là đạt khi:
 
 ```python
 async def discover_top_keywords_v2(seeds, channel_config, top_n=8, max_related=15):
-    seed_results = await score_keywords_with_vidiq(seeds)
+    seed_results = await score_keywords_with_keyword(seeds)
 
     related_pool = extract_related_keywords(seed_results)
     related_pool = remove_seed_duplicates(related_pool, seeds)
     related_pool = related_pool[:max_related]
 
-    related_results = await score_keywords_with_vidiq(related_pool)
+    related_results = await score_keywords_with_keyword(related_pool)
 
     all_items = merge_results(seed_results, related_results)
 

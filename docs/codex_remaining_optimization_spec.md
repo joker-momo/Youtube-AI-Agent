@@ -243,7 +243,7 @@ Move all stage run/promote/auto routes:
 /stages/review/run
 /stages/persona_eval/run
 /stages/idea_research/auto
-/stages/seo_vidiq/auto
+/stages/seo_keyword/auto
 /stages/{stage_name}/regenerate
 /stages/script/auto
 /stages/scenes/auto
@@ -517,7 +517,7 @@ Keep tests deterministic and fast.
 
 - New tests pass locally.
 - Existing tests still pass.
-- Tests do not require real Docker browser runtime, ChatGPT, Claude, or vidIQ.
+- Tests do not require real Docker browser runtime, ChatGPT, Claude, or keyword scoring.
 
 ---
 
@@ -537,7 +537,7 @@ Examples:
 /jobs/{job_id}/stages/scenes/auto
 /jobs/{job_id}/stages/seo/auto
 /jobs/{job_id}/stages/idea_research/auto
-/jobs/{job_id}/stages/seo_vidiq/auto
+/jobs/{job_id}/stages/seo_keyword/auto
 /jobs/{job_id}/scenes/{scene_id}/generate_asset
 ```
 
@@ -699,7 +699,7 @@ class BrowserClientKeywordScorer:
         self.client = client
 
     async def score_keywords(self, keywords: list[str]) -> list[dict]:
-        return await self.client.run_vidiq_scores(keywords)
+        return await self.client.run_keyword_scores(keywords)
 
 class BrowserClientImageProvider:
     def __init__(self, client: BrowserClient):
@@ -843,8 +843,8 @@ Add tests:
 
 ```text
 test_discover_top_keywords_v2_returns_bucketed_dict
-test_discover_top_keywords_v2_rejects_portuguese_even_with_high_vidiq_score
-test_generate_ideas_with_metadata_returns_v2_keywords_when_vidiq_available
+test_discover_top_keywords_v2_rejects_portuguese_even_with_high_keyword_score
+test_generate_ideas_with_metadata_returns_v2_keywords_when_keyword_available
 test_select_keywords_for_prompt_uses_top_opportunity_then_long_tail
 ```
 
@@ -865,7 +865,7 @@ Do not implement:
 - Kubernetes/cloud deployment.
 - YouTube upload automation.
 - Full provider migration away from browser automation.
-- Real paid vidIQ API integration.
+- Real paid keyword scoring API integration.
 - Full semantic embeddings.
 - Large UI redesign.
 - Database migration beyond minimal SQLite queue columns.

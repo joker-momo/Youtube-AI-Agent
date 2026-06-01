@@ -58,6 +58,36 @@ STOP_BUTTON_SELECTORS = (
     "button[aria-label*='Stop' i]",
 )
 ASSISTANT_IMG_SELECTOR = "[data-message-author-role='assistant'] img"
+CREATE_IMAGE_MODE_SELECTORS = (
+    "button:has-text('Create image')",
+    "button:has-text('Create an image')",
+    "[role='menuitem']:has-text('Create image')",
+    "[role='menuitem']:has-text('Create an image')",
+    "[role='option']:has-text('Create image')",
+    "[aria-label*='Create image' i]",
+)
+IMAGE_TOOL_MENU_SELECTORS = (
+    "button[aria-label*='Tools' i]",
+    "button:has-text('Tools')",
+    "button[aria-label*='Add' i]",
+    "button[aria-label*='More' i]",
+    "[data-testid='composer-plus-btn']",
+)
+ASPECT_RATIO_TRIGGER_SELECTORS = (
+    "button:has-text('Aspect ratio')",
+    "button[aria-label*='Aspect ratio' i]",
+    "button:has-text('Size')",
+    "button:has-text('Square')",
+    "button:has-text('Landscape')",
+)
+ASPECT_RATIO_16_9_SELECTORS = (
+    "button:has-text('16:9')",
+    "[role='menuitem']:has-text('16:9')",
+    "[role='option']:has-text('16:9')",
+    "button:has-text('Landscape')",
+    "[role='menuitem']:has-text('Landscape')",
+    "[role='option']:has-text('Landscape')",
+)
 
 
 def _is_login_url(url: str) -> bool:
@@ -76,8 +106,7 @@ class ChatGPTImageDriver:
          available in temporary chat).
       2. Expand "Projects" header if collapsed.
       3. Click "New project", fill projectName, click "Create project".
-      4. Inside the new project, click "Create an image" quick action
-         (optional; falls back to typing a "Generate image:" prefix).
+      4. Inside the new project, select "Create image" mode and 16:9.
       5. Send the prompt, wait for an assistant <img> to appear.
       6. Download the rendered image bytes via Playwright APIRequest.
     """
@@ -224,6 +253,75 @@ class ChatGPTImageDriver:
             )
         await human_pause(self.page, min_ms=200, max_ms=500)
 
+    async def _click_first_visible(self, selectors: tuple[str, ...], *, timeout_ms: int = 1_500) -> bool:
+        for sel in selectors:
+            try:
+                loc = self.page.locator(sel).first
+                if await loc.is_visible(timeout=timeout_ms):
+                    await human_click(loc, hover_pause_min_ms=80, hover_pause_max_ms=200)
+                    await human_pause(self.page, min_ms=350, max_ms=800)
+                    return True
+            except Exception:
+                continue
+        return False
+
+    async def _click_text_exact(self, labels: tuple[str, ...], *, timeout_ms: int = 1_500) -> bool:
+        for label in labels:
+            try:
+                loc = self.page.get_by_text(label, exact=True).first
+                if await loc.is_visible(timeout=timeout_ms):
+                    await human_click(loc, hover_pause_min_ms=80, hover_pause_max_ms=200)
+                    await human_pause(self.page, min_ms=350, max_ms=800)
+                    return True
+            except Exception:
+                continue
+        return False
+
+    async def _select_create_image_mode_and_aspect_ratio(self) -> None:
+        """Select ChatGPT's image tool and 16:9 aspect ratio before prompting.
+
+        ChatGPT's current UI no longer reliably infers image generation from
+        text alone. If these controls move again, fail with a diagnostic
+        screenshot instead of silently sending a text-only prompt.
+        """
+        clicked_image_mode = await self._click_first_visible(
+            CREATE_IMAGE_MODE_SELECTORS
+        ) or await self._click_text_exact(("Create image", "Create an image"))
+        if not clicked_image_mode:
+            opened_tool_menu = await self._click_first_visible(IMAGE_TOOL_MENU_SELECTORS)
+            if opened_tool_menu:
+                clicked_image_mode = await self._click_first_visible(
+                    CREATE_IMAGE_MODE_SELECTORS, timeout_ms=3_000
+                ) or await self._click_text_exact(
+                    ("Create image", "Create an image"), timeout_ms=3_000
+                )
+
+        if not clicked_image_mode:
+            shot = await save_trace_screenshot(self.page, prefix="chatgpt-image-no-create-image-mode")
+            raise BrowserDriverError(
+                "ChatGPT image UI changed: 'Create image' control not found.",
+                screenshot_path=shot,
+            )
+
+        clicked_aspect_ratio = await self._click_first_visible(
+            ASPECT_RATIO_16_9_SELECTORS
+        ) or await self._click_text_exact(("16:9", "Landscape"))
+        if not clicked_aspect_ratio:
+            opened_aspect_menu = await self._click_first_visible(ASPECT_RATIO_TRIGGER_SELECTORS)
+            if opened_aspect_menu:
+                clicked_aspect_ratio = await self._click_first_visible(
+                    ASPECT_RATIO_16_9_SELECTORS, timeout_ms=3_000
+                ) or await self._click_text_exact(
+                    ("16:9", "Landscape"), timeout_ms=3_000
+                )
+
+        if not clicked_aspect_ratio:
+            shot = await save_trace_screenshot(self.page, prefix="chatgpt-image-no-16-9-aspect")
+            raise BrowserDriverError(
+                "ChatGPT image UI changed: 16:9 aspect ratio control not found.",
+                screenshot_path=shot,
+            )
+
     async def _click_send(self) -> None:
         for sel in SEND_BUTTON_SELECTORS:
             try:
@@ -323,9 +421,7 @@ class ChatGPTImageDriver:
         try:
             await self._create_project(project_name)
             await self._focus_composer()
-            # Prepend an explicit "Generate one image" instruction; ChatGPT
-            # interprets it as image-gen tool invocation when a project chat
-            # is fresh.
+            await self._select_create_image_mode_and_aspect_ratio()
             full_prompt = build_image_gen_prompt(prompt)
             await human_type(self.page, full_prompt)
             await human_pause(self.page, min_ms=500, max_ms=1200)
@@ -382,6 +478,7 @@ class ChatGPTImageDriver:
                     raise BrowserDriverError(f"Empty prompt at index {i}")
 
                 await self._focus_composer()
+                await self._select_create_image_mode_and_aspect_ratio()
                 full_prompt = build_image_gen_prompt(prompt)
                 await human_type(self.page, full_prompt)
                 await human_pause(self.page, min_ms=500, max_ms=1200)

@@ -1197,7 +1197,6 @@ const STAGE_LABEL = {
   seo: 'SEO prompt',
   seo_promote: 'SEO JSON',
   seo_qa: 'SEO QA',
-  seo_vidiq: 'SEO vidIQ',
   thumbnail_image: 'Thumbnail image',
   assets_chatgpt: 'Asset generation',
   whisper_timestamps: 'Whisper timestamps',
@@ -2384,7 +2383,7 @@ function renderResearchInsight(data) {
   const verdict = (data.verdict || '').toLowerCase();
   const vbCls = verdict === 'pass' ? 'vb-pass' : verdict === 'skipped' ? 'vb-skip' : 'vb-block';
   const vbIcon = verdict === 'pass' ? '✅' : verdict === 'skipped' ? '⏭' : '❌';
-  const vbLabel = verdict === 'pass' ? 'Approved — topic has demand' : verdict === 'skipped' ? 'Skipped (vidIQ unavailable)' : 'Blocked — demand too low';
+  const vbLabel = verdict === 'pass' ? 'Research recorded' : verdict === 'skipped' ? 'Skipped' : 'Blocked';
   const scoreRows = scores.slice(0, 8).map(s => {
     const n = s.score ?? 0;
     const pct = Math.min(100, Math.round((n / 100) * 100));
@@ -2557,36 +2556,6 @@ function renderQaInsight(data) {
   `;
 }
 
-function renderSeoVidiqInsight(data) {
-  const swaps = Array.isArray(data.swaps) ? data.swaps : [];
-  const finalTags = Array.isArray(data.final_tags) ? data.final_tags : [];
-  const origTags = Array.isArray(data.original_tags) ? data.original_tags : [];
-  const swappedSet = new Set(swaps.map(s => s.replacement));
-  const tagChips = finalTags.map(t =>
-    `<span class="tag-chip" style="${swappedSet.has(t) ? 'background:#d1fae5;border-color:#6ee7b7;color:#065f46' : ''}">#${escapeHtml(t)}</span>`
-  ).join('');
-  const swapRows = swaps.map(s => `
-    <div class="score-row">
-      <span class="score-kw" style="text-decoration:line-through;color:#9ca3af">${escapeHtml(s.original || '')}</span>
-      <span style="font-size:13px;color:#6b7280">→</span>
-      <span style="font-weight:600;color:#065f46">${escapeHtml(s.replacement || '')}</span>
-      <span class="score-meta">was ${s.score ?? '-'}</span>
-    </div>
-  `).join('');
-  return `
-    <div class="insight">
-      <div class="insight-grid">
-        <div class="insight-kv"><b>Tags scored:</b>${origTags.length}</div>
-        <div class="insight-kv"><b>Swaps made:</b>${swaps.length}</div>
-        <div class="insight-kv"><b>Min score threshold:</b>${data.min_score ?? '-'}</div>
-        ${data.vidiq_error ? `<div class="insight-kv"><b>⚠ Error:</b>${escapeHtml(data.vidiq_error.slice(0,80))}</div>` : ''}
-      </div>
-      ${swapRows ? `<div class="insight-section">Tags swapped</div>${swapRows}` : '<div style="margin-top:8px;font-size:12px;color:#16a34a">✅ All tags above threshold — no swaps needed</div>'}
-      ${tagChips ? `<div class="insight-section">Final tags <span style="font-size:11px;color:var(--muted)">(green = replaced)</span></div><div class="tag-chips">${tagChips}</div>` : ''}
-    </div>
-  `;
-}
-
 function toShortText(v) {
   if (v === null || v === undefined) return '-';
   if (typeof v === 'boolean') return v ? 'yes' : 'no';
@@ -2650,10 +2619,6 @@ async function renderStageExtras(jobId, s) {
     } else if (s.name === 'seo_qa') {
       if (!hasOutput('operator/claude/seo_qa.json')) return;
       insight.innerHTML = renderQaInsight(await fetchArtifactJson(jobId, 'operator/claude/seo_qa.json'));
-      rendered = true;
-    } else if (s.name === 'seo_vidiq') {
-      if (!hasOutput('seo_vidiq_report.json')) return;
-      insight.innerHTML = renderSeoVidiqInsight(await fetchArtifactJson(jobId, 'seo_vidiq_report.json'));
       rendered = true;
     } else if (s.name === 'thumbnail_image') {
       if (!hasOutput('thumbnail_bg.png') && !hasOutput('thumbnail_1.jpg') && !hasOutput('thumbnail_2.jpg') && !hasOutput('thumbnail_3.jpg') && !hasOutput('thumbnail.jpg')) return;
@@ -3826,9 +3791,9 @@ async function generateAndScore() {
   btn.disabled = true;
   document.getElementById('ideas-grid').innerHTML = '';
 
-  // Single request: backend does vidIQ discovery → ChatGPT expansion internally
-  btn.innerHTML = '<span class="spinner-inline"></span>Scanning vidIQ…';
-  status.textContent = 'Step 1/2 — scoring keywords on vidIQ to find high-opportunity topics…';
+  // Single request: backend analyzes seed keywords, then asks ChatGPT for ideas.
+  btn.innerHTML = '<span class="spinner-inline"></span>Analyzing keywords…';
+  status.textContent = 'Step 1/2 — analyzing seed keywords for channel fit…';
 
   let ideas = [], savedPaths = [];
   try {
@@ -3857,7 +3822,7 @@ async function generateAndScore() {
     ideas = d.ideas || [];
     savedPaths = (d.saved || []).map(p => 'ideas/' + p.split('ideas/').pop());
 
-    // Ideas already have vidiq_score/vidiq_volume/vidiq_competition from backend
+    // Ideas already include local keyword-fit metadata from the backend.
     renderIdeaCards(ideas, savedPaths);
 
     const topKws = d.top_keywords || [];
@@ -3966,7 +3931,7 @@ function renderIdeaScoreBlock(res) {
     .slice(0, 6)
     .map(r => `<span style="background:#f3f4f6;border-radius:4px;padding:1px 7px;font-size:11px">${escapeHtml(r)}</span>`)
     .join(' ');
-  const err = res.error ? `<div style="font-size:11px;color:var(--muted)">vidIQ unavailable</div>` : '';
+  const err = res.error ? `<div style="font-size:11px;color:var(--muted)">Keyword analysis unavailable</div>` : '';
   return `
     <div class="idea-score-row">
       <span class="idea-score-badge ${cls}">${finalScore != null ? 'Final ' + finalScore + '/100' : (n != null ? n + '/100' : 'N/A')}</span>
@@ -3994,11 +3959,9 @@ function renderIdeaCard(idea, savedPath) {
   const safeIdea = escapeHtml(JSON.stringify(idea));
   const safePath = escapeHtml(savedPath);
 
-  // Inline score block from pre-computed vidiq_score (no extra fetch needed)
+  // Inline score block from pre-computed local keyword analysis.
   const finalScore = idea.keyword_final_score ?? null;
-  const score = idea.vidiq_score ?? null;
-  const vol = idea.vidiq_volume || '';
-  const comp = idea.vidiq_competition || '';
+  const sourceScore = idea.keyword_source_score ?? null;
   const kw = idea.target_keyword || '';
   const bucket = idea.bucket || '';
   const cluster = idea.intent_cluster || '';
@@ -4007,8 +3970,8 @@ function renderIdeaCard(idea, savedPath) {
   const intentStrength = idea.intent_strength ?? null;
   const contentFit = idea.content_fit ?? null;
   let scoreHtml = '';
-  if (finalScore !== null || score !== null || kw || bucket || cluster) {
-    const mainScore = finalScore ?? score;
+  if (finalScore !== null || sourceScore !== null || kw || bucket || cluster) {
+    const mainScore = finalScore ?? sourceScore;
     const cls = _scoreClass(mainScore);
     const color = _scoreColor(mainScore);
     const pct = mainScore != null ? Math.min(100, mainScore) : 0;
@@ -4017,9 +3980,6 @@ function renderIdeaCard(idea, savedPath) {
       <div class="idea-score-row">
         ${mainScore !== null ? `<span class="idea-score-badge ${cls}">Final ${mainScore}/100</span>` : ''}
         ${mainScore !== null ? `<div class="idea-score-bar"><div class="idea-score-bar-fill" style="width:${pct}%;background:${color}"></div></div>` : ''}
-        ${score !== null ? `<span class="idea-comp-badge">vidIQ ${score}/100</span>` : ''}
-        ${comp ? `<span class="idea-comp-badge">${escapeHtml(comp)}</span>` : ''}
-        ${vol ? `<span class="idea-comp-badge" style="background:#eff6ff;color:#1d4ed8">${escapeHtml(vol)}</span>` : ''}
         ${bucket ? `<span class="idea-bucket-badge">${escapeHtml(bucketLabel(bucket))}</span>` : ''}
       </div>
       ${kw ? `<div class="idea-related" style="margin-top:4px">🔑 <b>${escapeHtml(kw)}</b>${cluster ? ' · ' + escapeHtml(cluster) : ''}</div>` : ''}

@@ -372,7 +372,6 @@ async def notify_stage_done(job_id: str, stage: str, output: str | None = None) 
         "assets_chatgpt": "🖼 Assets done",
         "thumbnail_image": "🖼 Thumbnail generated",
         "idea_research": "🔍 Research done",
-        "seo_vidiq": "📊 vidIQ tag scoring done",
     }
     label = label_map.get(stage)
     if not label:

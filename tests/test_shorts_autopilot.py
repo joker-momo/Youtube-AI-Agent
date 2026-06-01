@@ -253,7 +253,6 @@ def test_long_form_default_stages_unchanged():
         "seo",
         "seo_promote",
         "seo_qa",
-        "seo_vidiq",
         "thumbnail_image",
         "whisper_timestamps",
         "render",

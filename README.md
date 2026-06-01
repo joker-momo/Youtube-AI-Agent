@@ -56,7 +56,7 @@ User browser
       -> browser-runtime container (Chromium + persisted profile)
 ```
 
-Browser access uses the user's logged-in ChatGPT Plus, Claude, and vidIQ sessions through a persisted Chromium profile mounted into the `browser-runtime` container at `browser_profiles/default`. The system must not auto-login or inspect browser secrets. CDP port 9222 is not published to the host; KasmVNC is bound to `127.0.0.1:7900` for manual sign-ins only.
+Browser access uses the user's logged-in ChatGPT Plus, Claude, and keyword scoring sessions through a persisted Chromium profile mounted into the `browser-runtime` container at `browser_profiles/default`. The system must not auto-login or inspect browser secrets. CDP port 9222 is not published to the host; KasmVNC is bound to `127.0.0.1:7900` for manual sign-ins only.
 
 ## Requirements
 
@@ -124,7 +124,7 @@ This runner automatically verifies that Docker is running (and launches it if no
 
 Open in your browser:
 - **Web Dashboard**: `http://localhost:8000` (To manage jobs, generate ideas, and trigger renders)
-- **Browser Runtime (VNC)**: `http://localhost:7900` (Manual sign-ins for ChatGPT, Claude, vidIQ)
+- **Browser Runtime (VNC)**: `http://localhost:7900` (Manual sign-ins for ChatGPT, Claude, keyword scoring)
 
 In KasmVNC, sign in manually to the sites used by the pipeline. The profile is persisted in `browser_profiles/default`, so you will not need to login repeatedly.
 

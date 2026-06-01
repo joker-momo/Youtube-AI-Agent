@@ -1245,6 +1245,164 @@ async def _request_shard_envelope(
     )
 
 
+def _scene_id_to_batch_index(batch_envelopes: list[dict]) -> dict[str, int]:
+    scene_to_batch: dict[str, int] = {}
+    for env in batch_envelopes:
+        batch_index = int(((env.get("data") or {}).get("batch_index") or env.get("batch_index") or 0))
+        for scene in (env.get("data") or {}).get("scenes") or []:
+            scene_id = str(scene.get("id") or "")
+            if scene_id:
+                scene_to_batch[scene_id] = batch_index
+    return scene_to_batch
+
+
+def _scene_ids_from_validation_error(error: str) -> list[str]:
+    seen: set[str] = set()
+    ids: list[str] = []
+    for match in re.finditer(r"\bScene\s+(scene-\d+)\b", error):
+        scene_id = match.group(1)
+        if scene_id not in seen:
+            ids.append(scene_id)
+            seen.add(scene_id)
+    return ids
+
+
+def _scene_batch_repair_prompt(
+    *,
+    channel_config: dict,
+    script: dict,
+    plan_envelope: dict,
+    batch: dict,
+    previous_envelope: dict,
+    validation_error: str,
+) -> str:
+    base_prompt = _chatgpt_scenes_batch_prompt(
+        channel_config,
+        script,
+        plan_envelope,
+        batch,
+    )
+    return "\n".join(
+        [
+            "Validation failed for your previous scenes_batch.",
+            "Regenerate the SAME batch only, fixing every validation error.",
+            "Do not change scene IDs, requested scene range, job_id, channel_id, batch_index, or batch_total.",
+            "Keep all valid narration/caption/on_screen_text/layout fields unless needed to satisfy validation.",
+            "visual_prompt must be plain English ASCII for Pexels search. Do not use Spanish words or accented characters.",
+            "",
+            "Validation error:",
+            validation_error,
+            "",
+            "Previous invalid envelope:",
+            json.dumps(previous_envelope, ensure_ascii=False, indent=2),
+            "",
+            base_prompt,
+        ]
+    )
+
+
+async def _merge_scene_batches_with_repair(
+    *,
+    job_dir: Path,
+    job_id: str,
+    channel_id: str,
+    channel_config: dict,
+    script: dict,
+    plan_envelope: dict,
+    batches: list[dict],
+    batch_envelopes: list[dict],
+    session_fn: SessionFn,
+    scenes_logger: EventLogger,
+    max_repair_attempts: int = 2,
+) -> dict:
+    batch_by_index = {int(batch.get("batch_index") or 0): batch for batch in batches}
+    batch_total = len(batches)
+    for repair_attempt in range(1, max_repair_attempts + 2):
+        try:
+            return merge_scene_batches(
+                job_id=job_id,
+                channel_id=channel_id,
+                batch_envelopes=batch_envelopes,
+                script=script,
+            )
+        except ShardValidationError as exc:
+            if repair_attempt > max_repair_attempts:
+                raise
+            error_text = str(exc)
+            scene_ids = _scene_ids_from_validation_error(error_text)
+            scene_to_batch = _scene_id_to_batch_index(batch_envelopes)
+            affected_indexes = sorted(
+                {scene_to_batch[scene_id] for scene_id in scene_ids if scene_id in scene_to_batch}
+            )
+            if not affected_indexes:
+                raise
+            for batch_index in affected_indexes:
+                batch = batch_by_index.get(batch_index)
+                if batch is None:
+                    raise
+                previous = next(
+                    (
+                        env
+                        for env in batch_envelopes
+                        if int(((env.get("data") or {}).get("batch_index") or env.get("batch_index") or 0))
+                        == batch_index
+                    ),
+                    None,
+                )
+                if previous is None:
+                    raise
+                scene_start = str(batch.get("scene_start") or "")
+                scene_end = str(batch.get("scene_end") or "")
+                scenes_logger.log(
+                    "SCENES_PROMOTE_PROGRESS",
+                    {
+                        "job_id": job_id,
+                        "step": "batch_repair_started",
+                        "batch_index": batch_index,
+                        "repair_attempt": repair_attempt,
+                        "reason": error_text[:500],
+                    },
+                )
+                repair_prompt = _scene_batch_repair_prompt(
+                    channel_config=channel_config,
+                    script=script,
+                    plan_envelope=plan_envelope,
+                    batch=batch,
+                    previous_envelope=previous,
+                    validation_error=error_text,
+                )
+                repaired = await _request_shard_envelope(
+                    session_fn=session_fn,
+                    prompt=repair_prompt,
+                    expected_artifact_type="scenes_batch",
+                    expected_job_id=job_id,
+                    expected_channel_id=channel_id,
+                )
+                validate_scenes_batch(
+                    repaired,
+                    expected_batch_index=batch_index,
+                    expected_batch_total=batch_total,
+                    scene_start=scene_start,
+                    scene_end=scene_end,
+                )
+                batch_path = job_dir / SCENES_BATCHES_DIR / f"scenes_batch_{batch_index:02d}.json"
+                save_envelope(batch_path, repaired)
+                for idx, env in enumerate(batch_envelopes):
+                    env_index = int(((env.get("data") or {}).get("batch_index") or env.get("batch_index") or 0))
+                    if env_index == batch_index:
+                        batch_envelopes[idx] = repaired
+                        break
+                scenes_logger.log(
+                    "SCENES_PROMOTE_PROGRESS",
+                    {
+                        "job_id": job_id,
+                        "step": "batch_repaired",
+                        "batch_index": batch_index,
+                        "repair_attempt": repair_attempt,
+                    },
+                )
+
+
 async def auto_scenes_stage_sharded(
     job_dir: Path,
     channel_path: Path,
@@ -1306,7 +1464,7 @@ async def auto_scenes_stage_sharded(
             for f in sorted((job_dir / SCENES_BATCHES_DIR).glob("scenes_batch_*.json")):
                 try:
                     env = json.loads(f.read_text(encoding="utf-8"))
-                    idx = int(((env.get("data") or {}).get("batch_index") or 0))
+                    idx = int(((env.get("data") or {}).get("batch_index") or env.get("batch_index") or 0))
                     existing_batches[idx] = env
                 except Exception:
                     continue
@@ -1384,11 +1542,17 @@ async def auto_scenes_stage_sharded(
                 },
             )
 
-        merged = merge_scene_batches(
+        merged = await _merge_scene_batches_with_repair(
+            job_dir=job_dir,
             job_id=job_id,
             channel_id=channel_id,
-            batch_envelopes=batch_envelopes,
+            channel_config=channel_config,
             script=script,
+            plan_envelope=plan_envelope,
+            batches=batches,
+            batch_envelopes=batch_envelopes,
+            session_fn=session_fn,
+            scenes_logger=scenes_logger,
         )
         scenes_path = job_dir / "scenes.json"
         _write_json(scenes_path, merged)
@@ -1519,6 +1683,8 @@ async def auto_scenes_qa_stage_sharded(
     if not channel_path.exists():
         raise StageInputMissingError(f"Missing channel config {channel_path}")
 
+    _start_stage(job_dir, "scenes_qa")
+    state = load_job(job_dir)
     scenes_doc = read_json(scenes_path)
     channel_config = read_yaml(channel_path)
     scenes = scenes_doc.get("scenes") or []
@@ -1532,6 +1698,35 @@ async def auto_scenes_qa_stage_sharded(
     ]
     qa_envelopes: list[dict] = []
     batch_total = len(scene_batches)
+    scenes_logger = EventLogger(job_dir / EVENT_LOG)
+    existing_batches: dict[int, dict] = {}
+    batch_dir = job_dir / SCENES_QA_BATCHES_DIR
+    scenes_mtime = scenes_path.stat().st_mtime
+    for f in sorted(batch_dir.glob("scenes_qa_batch_*.json")):
+        try:
+            if f.stat().st_mtime < scenes_mtime:
+                continue
+            env = json.loads(f.read_text(encoding="utf-8"))
+            validate_envelope(
+                env,
+                expected_artifact_type="scenes_qa_batch",
+                expected_job_id=state.job_id,
+                expected_channel_id=state.channel_id,
+            )
+            idx = int(env.get("batch_index") or 0)
+            if idx:
+                existing_batches[idx] = env
+        except Exception:
+            continue
+    scenes_logger.log(
+        "SCENES_QA_PROGRESS",
+        {
+            "job_id": state.job_id,
+            "step": "plan_received",
+            "batches_total": batch_total,
+            "batches_done": 0,
+        },
+    )
     try:
         for batch_index, batch_scenes in enumerate(scene_batches, start=1):
             batch_doc = {
@@ -1541,6 +1736,29 @@ async def auto_scenes_qa_stage_sharded(
                 "batch_total": batch_total,
                 "scenes": batch_scenes,
             }
+            if batch_index in existing_batches:
+                qa_envelopes.append(existing_batches[batch_index])
+                scenes_logger.log(
+                    "SCENES_QA_PROGRESS",
+                    {
+                        "job_id": state.job_id,
+                        "step": "batch_reused",
+                        "batch_index": batch_index,
+                        "batches_total": batch_total,
+                        "batches_done": len(qa_envelopes),
+                    },
+                )
+                continue
+            scenes_logger.log(
+                "SCENES_QA_PROGRESS",
+                {
+                    "job_id": state.job_id,
+                    "step": "batch_started",
+                    "batch_index": batch_index,
+                    "batches_total": batch_total,
+                    "batches_done": len(qa_envelopes),
+                },
+            )
             prompt = _claude_scenes_qa_batch_prompt(
                 channel_config,
                 batch_doc,
@@ -1557,6 +1775,16 @@ async def auto_scenes_qa_stage_sharded(
             batch_path = job_dir / SCENES_QA_BATCHES_DIR / f"scenes_qa_batch_{batch_index:02d}.json"
             save_envelope(batch_path, envelope)
             qa_envelopes.append(envelope)
+            scenes_logger.log(
+                "SCENES_QA_PROGRESS",
+                {
+                    "job_id": state.job_id,
+                    "step": "batch_saved",
+                    "batch_index": batch_index,
+                    "batches_total": batch_total,
+                    "batches_done": len(qa_envelopes),
+                },
+            )
 
         merged = merge_scenes_qa_batches(
             job_id=state.job_id,
@@ -1590,29 +1818,10 @@ async def auto_seo_qa_stage(
 
 
 # ---------------------------------------------------------------------------
-# idea_research stage: vidIQ keyword gate before script.
+# idea_research stage: record topic keywords before script.
 # ---------------------------------------------------------------------------
 
 RESEARCH_FILE = "research.json"
-_DEFAULT_MIN_SCORE = 40
-_DEFAULT_MAX_COMPETITION = "High"  # vidIQ labels: Low / Medium / High / Very High
-_COMPETITION_RANK = {"low": 0, "medium": 1, "high": 2, "very high": 3}
-
-
-def _competition_rank(label: str | None) -> int:
-    return _COMPETITION_RANK.get((label or "").strip().lower(), 99)
-
-
-def _research_gate_config(channel_path: Path) -> dict:
-    try:
-        cfg = read_yaml(channel_path)
-        gate = cfg.get("research_gate") or {}
-        return {
-            "min_score": int(gate.get("min_score", _DEFAULT_MIN_SCORE)),
-            "max_competition": gate.get("max_competition", _DEFAULT_MAX_COMPETITION),
-        }
-    except Exception:
-        return {"min_score": _DEFAULT_MIN_SCORE, "max_competition": _DEFAULT_MAX_COMPETITION}
 
 
 def _idea_keywords(idea: dict) -> list[str]:
@@ -1636,16 +1845,8 @@ def _idea_keywords(idea: dict) -> list[str]:
 async def auto_idea_research_stage(
     job_dir: Path,
     channel_path: Path,
-    vidiq_fn,
 ) -> Path:
-    """Score idea keywords via vidIQ and gate low-potential topics.
-
-    ``vidiq_fn(keywords: list[str]) -> list[dict]`` is typically
-    ``BrowserClient.run_vidiq_scores``. Returns ``research.json``.
-    Raises ``StageInputMissingError`` when the best keyword score is
-    below ``channel.yaml -> research_gate.min_score`` (default 40),
-    so ``/run-all`` halts and the operator can choose a better idea.
-    """
+    """Record topic keyword variants and advance the research stage."""
     stage_name = "idea_research"
     state = load_job(job_dir)
     if state.current_stage != stage_name:
@@ -1659,225 +1860,22 @@ async def auto_idea_research_stage(
     idea = json.loads(idea_path.read_text(encoding="utf-8"))
     keywords = _idea_keywords(idea)
     if not keywords:
-        raise StageInputMissingError("idea.json has no topic or title_seed to score")
-
-    gate = _research_gate_config(channel_path)
-
-    try:
-        scores = await vidiq_fn(keywords)
-    except Exception as exc:
-        # vidIQ unavailable: skip gate, log warning, advance.
-        EventLogger(job_dir / EVENT_LOG).log(
-            "RESEARCH_VIDIQ_UNAVAILABLE",
-            {"job_id": state.job_id, "error": str(exc)},
-        )
-        research = {
-            "keywords": keywords,
-            "scores": [],
-            "gate": gate,
-            "best_score": None,
-            "verdict": "skipped",
-            "note": f"vidIQ unavailable: {exc}",
-        }
-        output_path = job_dir / RESEARCH_FILE
-        _write_json(output_path, research)
-        _complete_stage(job_dir, stage_name, output_path)
-        return output_path
-
-    valid_scores = [s for s in scores if isinstance(s.get("score"), int)]
-    best = max((s["score"] for s in valid_scores), default=None)
-
-    verdict = "pass"
-    block_reason = None
-    if best is not None and best < gate["min_score"]:
-        verdict = "blocked_low_score"
-        block_reason = (
-            f"Best keyword score {best} < min_score {gate['min_score']}. "
-            "Choose a higher-demand topic."
-        )
+        raise StageInputMissingError("idea.json has no topic or title_seed for research")
 
     research = {
         "keywords": keywords,
-        "scores": scores,
-        "gate": gate,
-        "best_score": best,
-        "verdict": verdict,
-        "block_reason": block_reason,
+        "verdict": "pass",
     }
     output_path = job_dir / RESEARCH_FILE
     _write_json(output_path, research)
 
     EventLogger(job_dir / EVENT_LOG).log(
         "IDEA_RESEARCH_COMPLETE",
-        {"job_id": state.job_id, "best_score": best, "verdict": verdict},
+        {"job_id": state.job_id, "keywords": keywords, "verdict": "pass"},
     )
-
-    if verdict != "pass":
-        raise StageInputMissingError(block_reason or "idea_research gate failed")
 
     _complete_stage(job_dir, stage_name, output_path)
     return output_path
-
-
-# ---------------------------------------------------------------------------
-# seo_vidiq stage: score + swap weak tags after seo_qa.
-# ---------------------------------------------------------------------------
-
-SEO_VIDIQ_REPORT_FILE = "seo_vidiq_report.json"
-_DEFAULT_MIN_TAG_SCORE = 30
-
-
-def _seo_vidiq_min_score(channel_path: Path) -> int:
-    try:
-        cfg = read_yaml(channel_path)
-        return int(
-            cfg.get("research_gate", {}).get("min_tag_score", _DEFAULT_MIN_TAG_SCORE)
-        )
-    except Exception:
-        return _DEFAULT_MIN_TAG_SCORE
-
-
-def _seo_replacement_rejection_reason(candidate: str, channel_cfg: dict) -> str | None:
-    from video_agent.orchestrator.idea_generator import (
-        detect_language_fit,
-        merge_keyword_channel_config,
-        score_content_fit,
-    )
-
-    scoring_cfg = merge_keyword_channel_config(channel_cfg)
-    language_fit, language_notes = detect_language_fit(
-        candidate, scoring_cfg["target_language"]
-    )
-    if language_fit < 80:
-        return "language_fit_below_80:" + ",".join(language_notes)
-    content_fit = score_content_fit(candidate, scoring_cfg)
-    if content_fit < 60:
-        return f"content_fit_below_60:{content_fit}"
-    return None
-
-
-async def auto_seo_vidiq_stage(
-    job_dir: Path,
-    channel_path: Path,
-    vidiq_fn,
-) -> Path:
-    """Score SEO tags via vidIQ and swap low-scoring ones for related suggestions.
-
-    Reads ``seo.json``, scores every tag, replaces tags whose score is
-    below ``channel.yaml -> research_gate.min_tag_score`` (default 30)
-    with the highest-scoring related keyword from that tag's vidIQ panel.
-    Writes the updated ``seo.json`` and a ``seo_vidiq_report.json``.
-
-    vidIQ failures are soft: the stage always completes; a ``note``
-    field records any errors so the operator can review.
-    """
-    stage_name = "seo_vidiq"
-    state = load_job(job_dir)
-    if state.current_stage != stage_name:
-        raise StageInputMissingError(
-            f"Cannot run {stage_name} from current_stage={state.current_stage!r}"
-        )
-    seo_path = job_dir / "seo.json"
-    if not seo_path.exists():
-        raise StageInputMissingError(f"Missing {seo_path}")
-
-    seo = json.loads(seo_path.read_text(encoding="utf-8"))
-    original_tags: list[str] = list(seo.get("tags") or [])
-    min_score = _seo_vidiq_min_score(channel_path)
-    channel_cfg = read_yaml(channel_path)
-
-    tag_scores: list[dict] = []
-    vidiq_error: str | None = None
-    try:
-        tag_scores = await vidiq_fn(original_tags)
-    except Exception as exc:
-        vidiq_error = str(exc)
-
-    report: dict = {
-        "original_tags": original_tags,
-        "min_score": min_score,
-        "tag_scores": tag_scores,
-        "swaps": [],
-        "rejected_replacements": [],
-        "final_tags": list(original_tags),
-        "vidiq_error": vidiq_error,
-    }
-
-    if not vidiq_error and tag_scores:
-        new_tags = list(original_tags)
-        for entry in tag_scores:
-            kw = entry.get("keyword", "")
-            score = entry.get("score")
-            if score is None or score >= min_score:
-                continue
-            # Find the best related keyword not already in the tag list.
-            related = sorted(
-                entry.get("related") or [],
-                key=lambda r: r.get("score", 0),
-                reverse=True,
-            )
-            replacement = None
-            replacement_score = None
-            for r in related:
-                candidate = r.get("keyword", "").strip()
-                if not candidate:
-                    continue
-                if candidate.lower() in {t.lower() for t in new_tags}:
-                    report["rejected_replacements"].append(
-                        {
-                            "original": kw,
-                            "candidate": candidate,
-                            "candidate_score": r.get("score"),
-                            "reason": "duplicate_tag",
-                        }
-                    )
-                    continue
-                rejection_reason = _seo_replacement_rejection_reason(candidate, channel_cfg)
-                if rejection_reason:
-                    report["rejected_replacements"].append(
-                        {
-                            "original": kw,
-                            "candidate": candidate,
-                            "candidate_score": r.get("score"),
-                            "reason": rejection_reason,
-                        }
-                    )
-                    continue
-                replacement = candidate
-                replacement_score = r.get("score")
-                break
-            if replacement:
-                idx = next(
-                    (i for i, t in enumerate(new_tags) if t.lower() == kw.lower()), None
-                )
-                if idx is not None:
-                    new_tags[idx] = replacement
-                    report["swaps"].append(
-                        {
-                            "original": kw,
-                            "score": score,
-                            "replacement": replacement,
-                            "replacement_score": replacement_score,
-                        }
-                    )
-        report["final_tags"] = new_tags
-        seo["tags"] = new_tags
-        _write_json(seo_path, seo)
-
-    report_path = job_dir / SEO_VIDIQ_REPORT_FILE
-    _write_json(report_path, report)
-
-    EventLogger(job_dir / EVENT_LOG).log(
-        "SEO_VIDIQ_COMPLETE",
-        {
-            "job_id": state.job_id,
-            "swaps": len(report["swaps"]),
-            "vidiq_error": vidiq_error,
-        },
-    )
-
-    _complete_stage(job_dir, stage_name, report_path)
-    return report_path
 
 
 # ---------------------------------------------------------------------------
@@ -2329,6 +2327,7 @@ async def auto_rework_artifact(
     job_dir: Path,
     channel_path: Path,
     chatgpt_fn: SessionFn,
+    validation_feedback: str | None = None,
 ) -> Path:
     """Send QA issues back to ChatGPT and re-promote the artifact.
 
@@ -2359,6 +2358,21 @@ async def auto_rework_artifact(
         "\n".join(f"- {c}" for c in required_changes)
         or "- (sin required_changes listadas)"
     )
+    validation_block = ""
+    if validation_feedback and validation_feedback.strip():
+        validation_block = (
+            "\n\n## Error de validación del intento anterior\n"
+            f"{validation_feedback.strip()}\n"
+            "Ese error es obligatorio de corregir antes de devolver el JSON."
+        )
+    artifact_rules = ""
+    if artifact == "scenes":
+        artifact_rules = (
+            "\n\n## Reglas obligatorias para scenes\n"
+            "- narration, caption y on_screen_text deben mantener el idioma del canal.\n"
+            "- visual_prompt debe estar en inglés, preferiblemente ASCII, porque se usa para búsqueda en Pexels.\n"
+            "- No uses palabras españolas dentro de visual_prompt."
+        )
     rework_msg = (
         f"# Rework del artefacto `{artifact}`\n"
         f"Tu artefacto anterior recibió verdict NEEDS_REWORK del revisor "
@@ -2367,6 +2381,8 @@ async def auto_rework_artifact(
         f"channel_id.\n\n"
         f"## Issues detectadas\n{issue_lines}\n\n"
         f"## Cambios requeridos\n{change_lines}\n\n"
+        f"{validation_block}"
+        f"{artifact_rules}\n\n"
         f"Devuelve UN SOLO objeto JSON válido del artefacto `{artifact}` "
         f"completo (no solo el diff). Sin markdown ni comentarios."
     )
@@ -2437,7 +2453,11 @@ async def auto_qa_with_rework(
             if qa_path.exists():
                 try:
                     await auto_rework_artifact(
-                        artifact, job_dir, channel_path, chatgpt_fn
+                        artifact,
+                        job_dir,
+                        channel_path,
+                        chatgpt_fn,
+                        validation_feedback=str(exc),
                     )
                 except StageInputMissingError:
                     # Rework failed (e.g. qa.json vanished) — retry qa_fn directly.

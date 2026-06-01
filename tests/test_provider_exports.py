@@ -12,26 +12,23 @@ def test_provider_exports_include_mock_provider():
 def test_provider_exports_include_interfaces():
     from video_agent.providers import (
         ImageProvider,
-        KeywordScorer,
         LLMProvider,
         Renderer,
         TTSProvider,
     )
 
-    for cls in (ImageProvider, KeywordScorer, LLMProvider, Renderer, TTSProvider):
+    for cls in (ImageProvider, LLMProvider, Renderer, TTSProvider):
         assert cls is not None
 
 
 def test_provider_exports_include_browser_client_adapters():
     from video_agent.providers import (
         BrowserClientImageProvider,
-        BrowserClientKeywordScorer,
         BrowserClientLLMProvider,
     )
 
     for cls in (
         BrowserClientImageProvider,
-        BrowserClientKeywordScorer,
         BrowserClientLLMProvider,
     ):
         assert cls is not None

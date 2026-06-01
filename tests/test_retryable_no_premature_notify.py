@@ -47,3 +47,18 @@ def test_worker_mark_failed_sends_notify_job_failed():
     assert "notify_job_failed" in src, (
         "Worker queue loop must own the final-failure notification."
     )
+
+
+def test_worker_does_not_retry_browser_quota_exhaustion():
+    from fastapi import HTTPException
+    from video_agent.orchestrator import worker
+
+    exc = HTTPException(
+        status_code=429,
+        detail={
+            "error": "Claude quota exhausted",
+            "browser_worker_detail": {"quota_exhausted": True},
+        },
+    )
+
+    assert worker._is_retryable_exception(exc) is False

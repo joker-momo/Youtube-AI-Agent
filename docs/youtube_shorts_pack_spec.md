@@ -12,7 +12,7 @@ idea_research
 → scenes_qa
 → seo
 → seo_qa
-→ seo_vidiq
+→ seo_keyword
 → thumbnail_image
 → whisper_timestamps
 → render

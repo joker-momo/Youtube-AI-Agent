@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 from video_agent.browser_worker.drivers.base import (
     BrowserDriverError,
     LoginRequiredError,
+    save_layout_diagnostics,
     save_trace_screenshot,
 )
 from video_agent.browser_worker.drivers.humanize import (
@@ -21,18 +22,13 @@ GEMINI_URL = "https://gemini.google.com/app"
 
 # Selectors that toggle Gemini's temporary chat (no history, no model
 # training). Tried in order; any visible match is clicked. If none
-# match (rollout/locale variation), the driver falls back to "New chat".
+# match (rollout/locale variation), the driver fails before sending so
+# prompts never leak into a normal history-backed chat.
 TEMP_CHAT_TOGGLE_SELECTORS = (
     "button[aria-label*='Temporary chat' i]",
     "button[aria-label*='Temporary' i]",
     "[data-test-id*='temporary' i]",
     "button:has-text('Temporary chat')",
-)
-
-NEW_CHAT_SELECTORS = (
-    "a[aria-label*='New chat' i]",
-    "button[aria-label*='New chat' i]",
-    "button:has-text('New chat')",
 )
 
 COMPOSER_SELECTORS = (
@@ -89,7 +85,7 @@ async def _try_click(page: "Page", selectors: tuple[str, ...], timeout_ms: int =
     return False
 
 
-async def _enter_temporary_chat(page: "Page") -> None:
+async def _enter_temporary_chat(page: "Page") -> bool:
     """Switch Gemini into temporary chat mode.
 
     Tries the temporary-chat toggle first; if the rollout/locale does
@@ -99,9 +95,29 @@ async def _enter_temporary_chat(page: "Page") -> None:
     """
     if await _try_click(page, TEMP_CHAT_TOGGLE_SELECTORS):
         await human_pause(page, min_ms=600, max_ms=1300)
-        return
-    if await _try_click(page, NEW_CHAT_SELECTORS):
-        await human_pause(page, min_ms=600, max_ms=1300)
+        return True
+    return False
+
+
+async def _raise_gemini_layout_warning(
+    page: "Page", *, prefix: str, message: str
+) -> None:
+    shot, diagnostic = await save_layout_diagnostics(
+        page,
+        prefix=prefix,
+        selectors=(
+            *TEMP_CHAT_TOGGLE_SELECTORS,
+            *COMPOSER_SELECTORS,
+            *SEND_BUTTON_SELECTORS,
+            *STOP_BUTTON_SELECTORS,
+        ),
+    )
+    raise BrowserDriverError(
+        f"{message} Gemini layout may have changed; inspect diagnostic trace.",
+        screenshot_path=shot,
+        diagnostic_path=diagnostic,
+        layout_warning=True,
+    )
 
 
 RESPONSE_BLOCK_FOR_SCRAPE = (
@@ -132,7 +148,12 @@ class GeminiDriver:
                 screenshot_path=shot,
             )
 
-        await _enter_temporary_chat(self.page)
+        if not await _enter_temporary_chat(self.page):
+            await _raise_gemini_layout_warning(
+                self.page,
+                prefix="gemini-not-temporary",
+                message="Gemini temporary chat control not found.",
+            )
         await human_pause(self.page)
         self._opened = True
 

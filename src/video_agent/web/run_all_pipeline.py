@@ -8,6 +8,7 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
+from video_agent.contracts import EVENT_LOG
 from video_agent.orchestrator import load_job
 from video_agent.orchestrator.browser_client import (
     BrowserClient,
@@ -23,7 +24,6 @@ from video_agent.orchestrator.stages import (
     auto_scenes_stage,
     auto_script_stage,
     auto_seo_stage,
-    auto_seo_vidiq_stage,
     auto_thumbnail_image_stage,
     run_render_stage,
     run_review_stage,
@@ -37,6 +37,7 @@ from video_agent.notifications.telegram import (
 # Legacy auto_shorts_* stages are deprecated and intentionally NOT imported.
 # Shorts are produced by the sequential Shorts Autopilot (video_agent.shorts).
 from video_agent.utils.json_io import read_yaml
+from video_agent.utils.logging import EventLogger
 from video_agent.web.approval_flow import (
     APPROVAL_REQUIRED_STAGES,
     approval_block_for_current_stage,
@@ -45,6 +46,8 @@ from video_agent.web.approval_flow import (
 )
 
 STOP_REQUEST_FILE = ".stop_requested"
+BRIEFING_RESPONSE_TIMEOUT_MS = 60_000
+MODEL_TASK_RESPONSE_TIMEOUT_MS = 300_000
 
 
 def stop_request_path(job_dir: Path) -> Path:
@@ -84,7 +87,7 @@ def _browser_http_exception(exc: BrowserClientError) -> HTTPException:
             },
         )
     return HTTPException(
-        status_code=502,
+        status_code=exc.status_code if exc.status_code == 429 else 502,
         detail={
             "error": str(exc),
             "browser_worker_status": exc.status_code,
@@ -220,9 +223,7 @@ async def _execute_run_all_locked(
             },
         )
 
-    # idea_research uses run_vidiq_scores (not the session tab API) so
-    # run it BEFORE opening persistent tabs. This way a browser-worker
-    # error on the ChatGPT/Claude briefing doesn't hide a gate block.
+    # Run lightweight idea research before opening persistent model tabs.
     start_idx = stage_order.index(pending_stage)
     remaining = set(stage_order[start_idx:])
 
@@ -231,9 +232,7 @@ async def _execute_run_all_locked(
         try:
             await _record_gate_and_stop(
                 "idea_research",
-                await auto_idea_research_stage(
-                    job_dir, channel_path, client.run_vidiq_scores
-                ),
+                await auto_idea_research_stage(job_dir, channel_path),
             )
         except StageInputMissingError as exc:
             state = load_job(job_dir)
@@ -294,15 +293,40 @@ async def _execute_run_all_locked(
         assert last_exc is not None
         raise last_exc
 
-    async def _send_with_retry(sender, messages, attempts: int = 3) -> str:
+    model_event_logger = EventLogger(job_dir / EVENT_LOG)
+
+    async def _send_with_retry(
+        sender,
+        messages,
+        attempts: int = 3,
+        *,
+        site: str,
+        phase: str,
+        response_timeout_ms: int = MODEL_TASK_RESPONSE_TIMEOUT_MS,
+    ) -> str:
         last_exc: BrowserClientError | None = None
         for idx in range(attempts):
             try:
-                return await sender(list(messages))
+                return await sender(
+                    list(messages),
+                    response_timeout_ms=response_timeout_ms,
+                )
             except BrowserClientError as exc:
                 last_exc = exc
                 if exc.status_code < 500 or idx == attempts - 1:
                     raise
+                model_event_logger.log(
+                    "MODEL_SEND_RETRY",
+                    {
+                        "job_id": state.job_id,
+                        "site": site,
+                        "phase": phase,
+                        "attempt": idx + 1,
+                        "attempts": attempts,
+                        "status_code": exc.status_code,
+                        "error": str(exc),
+                    },
+                )
                 await asyncio.sleep(1.0 + idx * 0.5)
         assert last_exc is not None
         raise last_exc
@@ -348,45 +372,128 @@ async def _execute_run_all_locked(
         if need_qa_tab:
             qa_sender, qa_close = await _open_with_retry("claude")
 
+        writing_briefing = build_initial_briefing(
+            channel_config,
+            kind="writing",
+            job_id=state.job_id,
+            channel_id=state.channel_id,
+        )
+        qa_briefing = build_initial_briefing(
+            channel_config,
+            kind="qa",
+            job_id=state.job_id,
+            channel_id=state.channel_id,
+        )
+
+        async def _reopen_chatgpt_session() -> None:
+            nonlocal chatgpt_sender, chatgpt_close
+            try:
+                await chatgpt_close()
+            except Exception:
+                pass
+            chatgpt_sender, chatgpt_close = await _open_with_retry("chatgpt")
+            await _send_with_retry(
+                chatgpt_sender,
+                [writing_briefing],
+                site="chatgpt",
+                phase="briefing",
+                response_timeout_ms=BRIEFING_RESPONSE_TIMEOUT_MS,
+            )
+
+        async def _reopen_qa_session() -> None:
+            nonlocal qa_sender, qa_close
+            try:
+                await qa_close()
+            except Exception:
+                pass
+            qa_sender, qa_close = await _open_with_retry("claude")
+            await _send_with_retry(
+                qa_sender,
+                [qa_briefing],
+                site="claude",
+                phase="briefing",
+                response_timeout_ms=BRIEFING_RESPONSE_TIMEOUT_MS,
+            )
+
         async def chatgpt_fn(msgs):
+            nonlocal chatgpt_sender
             if chatgpt_sender is None:
                 raise StageInputMissingError(
                     "ChatGPT session not available for writing stage."
                 )
-            return await _send_with_retry(chatgpt_sender, msgs)
+            try:
+                return await _send_with_retry(
+                    chatgpt_sender,
+                    msgs,
+                    site="chatgpt",
+                    phase="task",
+                )
+            except BrowserClientError as exc:
+                if exc.status_code < 500:
+                    raise
+                await _reopen_chatgpt_session()
+                if chatgpt_sender is None:
+                    raise
+                return await _send_with_retry(
+                    chatgpt_sender,
+                    msgs,
+                    site="chatgpt",
+                    phase="task",
+                )
 
         async def qa_fn(msgs):
+            nonlocal qa_sender
             if qa_sender is None:
                 raise StageInputMissingError(
                     "Claude session not available for QA stage."
                 )
-            return await _send_with_retry(qa_sender, msgs)
+            try:
+                return await _send_with_retry(
+                    qa_sender,
+                    msgs,
+                    site="claude",
+                    phase="task",
+                )
+            except BrowserClientError as exc:
+                if exc.status_code < 500:
+                    raise
+                await _reopen_qa_session()
+                if qa_sender is None:
+                    raise
+                return await _send_with_retry(
+                    qa_sender,
+                    msgs,
+                    site="claude",
+                    phase="task",
+                )
 
         # Brief each tab once before any task message.
         if need_writing_tab:
-            await _send_with_retry(
-                chatgpt_sender,
-                [
-                    build_initial_briefing(
-                        channel_config,
-                        kind="writing",
-                        job_id=state.job_id,
-                        channel_id=state.channel_id,
-                    )
-                ],
-            )
+            try:
+                await _send_with_retry(
+                    chatgpt_sender,
+                    [writing_briefing],
+                    site="chatgpt",
+                    phase="briefing",
+                    response_timeout_ms=BRIEFING_RESPONSE_TIMEOUT_MS,
+                )
+            except BrowserClientError as exc:
+                if exc.status_code < 500:
+                    raise
+                await _reopen_chatgpt_session()
         if need_qa_tab:
-            await _send_with_retry(
-                qa_sender,
-                [
-                    build_initial_briefing(
-                        channel_config,
-                        kind="qa",
-                        job_id=state.job_id,
-                        channel_id=state.channel_id,
-                    )
-                ],
-            )
+            try:
+                await _send_with_retry(
+                    qa_sender,
+                    [qa_briefing],
+                    site="claude",
+                    phase="briefing",
+                    response_timeout_ms=BRIEFING_RESPONSE_TIMEOUT_MS,
+                )
+            except BrowserClientError as exc:
+                if exc.status_code < 500:
+                    raise
+                await _reopen_qa_session()
 
         if "script" in remaining or "script_promote" in remaining:
             _check_stop_requested()
@@ -433,7 +540,6 @@ async def _execute_run_all_locked(
         if any(
             s in remaining
             for s in (
-                "seo_vidiq",
                 "thumbnail_image",
                 "assets_chatgpt",
                 "whisper_timestamps",
@@ -442,14 +548,6 @@ async def _execute_run_all_locked(
             )
         ):
             await _close_model_sessions()
-        if "seo_vidiq" in remaining:
-            _check_stop_requested()
-            await _record(
-                "seo_vidiq",
-                await auto_seo_vidiq_stage(
-                    job_dir, channel_path, client.run_vidiq_scores
-                ),
-            )
         if "thumbnail_image" in remaining:
             _check_stop_requested()
             await _record_gate_and_stop(

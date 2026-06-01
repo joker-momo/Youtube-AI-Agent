@@ -17,7 +17,7 @@ User browser
 -> stage modules
 -> browser-worker
 -> browser-runtime Chromium + Playwright CDP
--> ChatGPT / Claude / vidIQ sessions
+-> ChatGPT / Claude / keyword scoring sessions
 -> local artifacts under jobs/<job_id>/
 -> TTS / Whisper / Remotion render
 -> review page / final video
@@ -423,7 +423,7 @@ events.jsonl
 
 ### 6.1. Vấn đề
 
-Browser automation hiện là lợi thế lớn, nhưng cũng là điểm brittle. Nếu orchestrator phụ thuộc trực tiếp vào ChatGPT/Claude/vidIQ browser workflow, sau này khó đổi sang API/provider khác.
+Browser automation hiện là lợi thế lớn, nhưng cũng là điểm brittle. Nếu orchestrator phụ thuộc trực tiếp vào ChatGPT/Claude/keyword scoring browser workflow, sau này khó đổi sang API/provider khác.
 
 ### 6.2. Mục tiêu
 
@@ -485,12 +485,12 @@ class VideoRenderer(Protocol):
 
 ### 6.5. Adapter requirement
 
-Existing browser-worker based ChatGPT/Claude/vidIQ should become adapter implementations:
+Existing browser-worker based ChatGPT/Claude/keyword scoring should become adapter implementations:
 
 ```text
 BrowserChatGPTProvider
 BrowserClaudeProvider
-BrowserVidiqKeywordScorer
+BrowserKeywordScorer
 ```
 
 Do not remove old code immediately. Wrap/reuse it.

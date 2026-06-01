@@ -44,6 +44,9 @@ def _is_retryable_exception(exc: Exception) -> bool:
                 return False
             if detail.get("login_required"):
                 return False
+            browser_detail = detail.get("browser_worker_detail")
+            if isinstance(browser_detail, dict) and browser_detail.get("quota_exhausted"):
+                return False
         if 400 <= exc.status_code < 500 and exc.status_code not in {408, 429}:
             return False
     return True

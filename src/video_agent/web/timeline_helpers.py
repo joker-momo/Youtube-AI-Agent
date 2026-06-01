@@ -47,10 +47,6 @@ STAGE_ARTIFACTS = {
         "input": ["seo.json"],
         "output": ["operator/claude/seo_qa.json"],
     },
-    "seo_vidiq": {
-        "input": ["seo.json"],
-        "output": ["seo_vidiq_report.json"],
-    },
     "thumbnail_image": {
         "input": ["seo.json"],
         "output": [
@@ -108,7 +104,6 @@ STAGE_ETA_SECONDS = {
     "seo": 60,
     "seo_promote": 30,
     "seo_qa": 90,
-    "seo_vidiq": 45,
     "thumbnail_image": 120,
     "assets_chatgpt": 420,
     "whisper_timestamps": 30,

@@ -66,7 +66,7 @@ def test_dashboard_compact_pipeline_uses_animated_flow_with_full_labels():
     assert "title=\"${escapeHtml(stageTitle)}\"" in dashboard_text
 
 
-def test_dashboard_filters_blocked_vidiq_related_keywords_from_insights():
+def test_dashboard_filters_blocked_keyword_related_keywords_from_insights():
     dashboard_path = Path(__file__).resolve().parents[1] / "src" / "video_agent" / "web" / "dashboard.html"
     dashboard_text = dashboard_path.read_text(encoding="utf-8")
 

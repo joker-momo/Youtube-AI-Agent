@@ -5,6 +5,7 @@ import asyncio
 from video_agent.browser_worker.drivers.base import (
     BrowserDriverError,
     LoginRequiredError,
+    QuotaExceededError,
     normalise_response_text,
 )
 from video_agent.browser_worker.drivers.chatgpt import (
@@ -49,6 +50,23 @@ def test_browser_worker_error_detail_includes_layout_warning_metadata():
         "screenshot": "/tmp/trace.png",
         "diagnostic": "/tmp/trace.json",
         "layout_warning": True,
+    }
+
+
+def test_browser_worker_error_detail_marks_quota_exhaustion():
+    from video_agent.browser_worker.app import _driver_error_detail
+
+    err = QuotaExceededError(
+        "Claude quota exhausted",
+        screenshot_path="/tmp/trace.png",
+        diagnostic_path="/tmp/trace.json",
+    )
+
+    assert _driver_error_detail(err) == {
+        "error": "Claude quota exhausted",
+        "screenshot": "/tmp/trace.png",
+        "diagnostic": "/tmp/trace.json",
+        "quota_exhausted": True,
     }
 
 
@@ -126,7 +144,7 @@ def test_humanize_defaults():
     assert h_mod.PAUSE_MAX_MS > h_mod.PAUSE_MIN_MS
 
 
-def test_chatgpt_open_falls_back_when_temporary_url_fails(monkeypatch):
+def test_chatgpt_open_fails_when_temporary_url_cannot_open(monkeypatch):
     from video_agent.browser_worker.drivers import chatgpt as mod
 
     async def _noop(*args, **kwargs):
@@ -154,7 +172,82 @@ def test_chatgpt_open_falls_back_when_temporary_url_fails(monkeypatch):
 
     page = _FakePage()
     driver = mod.ChatGPTDriver(page)
-    asyncio.run(driver.open())
 
-    assert page.calls[:2] == [mod.CHATGPT_URL, mod.CHATGPT_URL]
-    assert mod.CHATGPT_FALLBACK_URL in page.calls
+    try:
+        asyncio.run(driver.open())
+    except BrowserDriverError as exc:
+        assert "temporary chat" in str(exc).lower()
+    else:
+        raise AssertionError("ChatGPTDriver.open should require temporary chat")
+
+    assert page.calls == [mod.CHATGPT_URL, mod.CHATGPT_URL]
+
+
+def test_claude_open_fails_when_temporary_chat_control_missing(monkeypatch):
+    from video_agent.browser_worker.drivers import claude as mod
+
+    async def _noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(mod, "human_pause", _noop)
+
+    class _FakeLocator:
+        @property
+        def first(self):
+            return self
+
+        async def is_visible(self, timeout=0):
+            return False
+
+    class _FakePage:
+        url = mod.CLAUDE_URL
+
+        async def goto(self, url: str, **kwargs):
+            self.url = url
+            return None
+
+        def locator(self, selector: str):
+            return _FakeLocator()
+
+    driver = mod.ClaudeDriver(_FakePage())
+    try:
+        asyncio.run(driver.open())
+    except BrowserDriverError as exc:
+        assert "temporary chat" in str(exc).lower()
+    else:
+        raise AssertionError("ClaudeDriver.open should require temporary chat")
+
+
+def test_gemini_open_fails_when_temporary_chat_control_missing(monkeypatch):
+    from video_agent.browser_worker.drivers import gemini as mod
+
+    async def _noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(mod, "human_pause", _noop)
+
+    class _FakeLocator:
+        @property
+        def first(self):
+            return self
+
+        async def is_visible(self, timeout=0):
+            return False
+
+    class _FakePage:
+        url = mod.GEMINI_URL
+
+        async def goto(self, url: str, **kwargs):
+            self.url = url
+            return None
+
+        def locator(self, selector: str):
+            return _FakeLocator()
+
+    driver = mod.GeminiDriver(_FakePage())
+    try:
+        asyncio.run(driver.open())
+    except BrowserDriverError as exc:
+        assert "temporary chat" in str(exc).lower()
+    else:
+        raise AssertionError("GeminiDriver.open should require temporary chat")

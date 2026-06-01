@@ -108,7 +108,7 @@ is the worker itself. The worker calls
 3. `curl http://127.0.0.1:8001/runtime` should return `{ok: true, ...}`.
 4. Open `http://127.0.0.1:7900/vnc.html` (noVNC) and click *Connect*.
    You'll see the live Chromium window.
-5. Inside that Chromium, navigate to ChatGPT, Gemini, vidIQ, etc. and
+5. Inside that Chromium, navigate to ChatGPT, Gemini, keyword scoring, etc. and
    log in once. Cookies persist into `./browser_profiles/default/`.
 6. `curl http://127.0.0.1:8001/auth/chatgpt/status` should report
    `logged_in: true` after login.

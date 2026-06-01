@@ -282,7 +282,7 @@ def test_intent_cluster_nutrition():
 def test_composite_final_score_with_language_penalty():
     item = {
         "keyword": "como comer bem depois dos 45",
-        "vidiq_score": 85,
+        "keyword_source_score": 85,
         "audience_fit": 80,
         "intent_strength": 80,
         "content_fit": 80,
@@ -303,7 +303,7 @@ def test_bucket_assignment_top_opportunity():
         "audience_fit": 90,
         "intent_strength": 80,
         "content_fit": 80,
-        "vidiq_score": 75,
+        "keyword_source_score": 75,
         "rejection_reasons": [],
     }
     assert assign_bucket(item) == "top_opportunity_keywords"
@@ -312,7 +312,7 @@ def test_bucket_assignment_top_opportunity():
 def test_bucket_assignment_long_tail_not_enough_data():
     item = {
         "keyword": "bajones de energia despues de comer 45",
-        "vidiq_score": None,
+        "keyword_source_score": None,
         "score": None,
         "notes": ["not_enough_search_data"],
         "final_score": 65,
@@ -333,7 +333,7 @@ def test_bucket_assignment_rejected_language():
         "audience_fit": 80,
         "intent_strength": 80,
         "content_fit": 80,
-        "vidiq_score": 90,
+        "keyword_source_score": 90,
         "rejection_reasons": [],
     }
     assert assign_bucket(item) == "rejected_keywords"
@@ -342,8 +342,8 @@ def test_bucket_assignment_rejected_language():
 
 def test_dedupe_keeps_highest_final_score():
     items = [
-        {"keyword": "A", "normalized_keyword": "a", "intent_cluster": "nutrition_after_45", "final_score": 60, "vidiq_score": 90, "notes": [], "rejection_reasons": []},
-        {"keyword": "Á", "normalized_keyword": "a", "intent_cluster": "nutrition_after_45", "final_score": 70, "vidiq_score": 50, "notes": ["x"], "rejection_reasons": []},
+        {"keyword": "A", "normalized_keyword": "a", "intent_cluster": "nutrition_after_45", "final_score": 60, "keyword_source_score": 90, "notes": [], "rejection_reasons": []},
+        {"keyword": "Á", "normalized_keyword": "a", "intent_cluster": "nutrition_after_45", "final_score": 70, "keyword_source_score": 50, "notes": ["x"], "rejection_reasons": []},
     ]
     result = dedupe_by_normalized_keyword_and_intent(items)
     assert len(result) == 1
@@ -416,7 +416,7 @@ def test_select_keywords_for_prompt_fallback_keeps_safe_low_score_spanish_keywor
 
 
 def test_discover_top_keywords_v2_returns_bucketed_dict():
-    async def fake_vidiq(keywords: list[str]) -> list[dict]:
+    async def fake_keyword(keywords: list[str]) -> list[dict]:
         return [
             {
                 "keyword": keyword,
@@ -431,7 +431,7 @@ def test_discover_top_keywords_v2_returns_bucketed_dict():
     result = asyncio.run(
         _discover_top_keywords(
             ["como comer mejor despues de los 45"],
-            fake_vidiq,
+            fake_keyword,
             channel_config={"audience": {"language": "es-ES"}},
         )
     )
@@ -443,8 +443,8 @@ def test_discover_top_keywords_v2_returns_bucketed_dict():
     assert "serp_inspection_disabled" in result["top_opportunity_keywords"][0]["notes"]
 
 
-def test_discover_top_keywords_v2_rejects_portuguese_even_with_high_vidiq_score():
-    async def fake_vidiq(keywords: list[str]) -> list[dict]:
+def test_discover_top_keywords_v2_rejects_portuguese_even_with_high_keyword_source_score():
+    async def fake_keyword(keywords: list[str]) -> list[dict]:
         return [
             {
                 "keyword": keyword,
@@ -459,7 +459,7 @@ def test_discover_top_keywords_v2_rejects_portuguese_even_with_high_vidiq_score(
     result = asyncio.run(
         _discover_top_keywords(
             ["como comer bem depois dos 45"],
-            fake_vidiq,
+            fake_keyword,
             channel_config={"audience": {"language": "es-ES"}},
         )
     )
@@ -469,8 +469,8 @@ def test_discover_top_keywords_v2_rejects_portuguese_even_with_high_vidiq_score(
     assert result["rejected_keywords"][0]["keyword"] == "como comer bem depois dos 45"
 
 
-def test_generate_ideas_with_metadata_returns_v2_keywords_when_vidiq_available(channel_path: Path):
-    async def fake_vidiq(keywords: list[str]) -> list[dict]:
+def test_generate_ideas_with_metadata_returns_v2_keywords_when_keyword_available(channel_path: Path):
+    async def fake_keyword(keywords: list[str]) -> list[dict]:
         return [
             {
                 "keyword": keyword,
@@ -497,7 +497,6 @@ def test_generate_ideas_with_metadata_returns_v2_keywords_when_vidiq_available(c
         generate_ideas(
             channel_path,
             fake_chatgpt,
-            vidiq_fn=fake_vidiq,
             seed_topics=["como comer mejor despues de los 45"],
             count=1,
             with_metadata=True,
@@ -505,7 +504,7 @@ def test_generate_ideas_with_metadata_returns_v2_keywords_when_vidiq_available(c
     )
 
     assert ideas[0]["target_keyword"] == "como comer mejor despues de los 45"
-    assert top_keywords["metadata"]["version"] == "keyword_scoring_v2"
+    assert top_keywords["metadata"]["version"] == "local_keyword_scoring_v1"
     assert seed_source == "user"
 
 
@@ -570,7 +569,7 @@ class FakeBrowserClient:
         self.response = response
         self.error = error
         self.calls: list[list[str]] = []
-        self.vidiq_calls: list[list[str]] = []
+        self.keyword_calls: list[list[str]] = []
 
     async def run_session(self, site: str, messages, **kwargs) -> str:
         self.calls.append(list(messages))
@@ -578,8 +577,8 @@ class FakeBrowserClient:
             raise self.error
         return self.response
 
-    async def run_vidiq_scores(self, keywords: list[str]) -> list[dict]:
-        self.vidiq_calls.append(list(keywords))
+    async def run_keyword_source_scores(self, keywords: list[str]) -> list[dict]:
+        self.keyword_calls.append(list(keywords))
         return [
             {
                 "keyword": keyword,
@@ -623,27 +622,10 @@ def test_post_generate_ideas_success(http_client: TestClient, tmp_path: Path):
         assert (tmp_path / rel).exists()
 
 
-def test_post_score_ideas_filters_off_language_related_keywords(
+def test_post_score_ideas_uses_local_analysis_without_related_keywords(
     http_client: TestClient,
 ):
-    class RelatedNoiseBrowserClient(FakeBrowserClient):
-        async def run_vidiq_scores(self, keywords: list[str]) -> list[dict]:
-            self.vidiq_calls.append(list(keywords))
-            return [
-                {
-                    "keyword": keyword,
-                    "score": 82,
-                    "volume": "Medium",
-                    "competition": "Low",
-                    "related": [
-                        {"keyword": "best camera settings", "score": 85},
-                        {"keyword": "dormir mejor despues de los 45", "score": 55},
-                    ],
-                }
-                for keyword in keywords
-            ]
-
-    fake = RelatedNoiseBrowserClient()
+    fake = FakeBrowserClient()
     app.dependency_overrides[get_browser_client] = lambda: fake
     try:
         r = http_client.post(
@@ -654,9 +636,10 @@ def test_post_score_ideas_filters_off_language_related_keywords(
         app.dependency_overrides.pop(get_browser_client, None)
 
     assert r.status_code == 200
-    related = r.json()["results"][0]["related"]
-    assert "dormir mejor despues de los 45" in related
-    assert "best camera settings" not in related
+    result = r.json()["results"][0]
+    assert result["related"] == []
+    assert result["best_score"] is None
+    assert fake.keyword_calls == []
 
 
 def test_post_generate_ideas_returns_and_saves_v2_keyword_metadata(
@@ -684,15 +667,15 @@ def test_post_generate_ideas_returns_and_saves_v2_keyword_metadata(
 
     assert r.status_code == 201, r.text
     body = r.json()
-    assert body["keyword_result"]["metadata"]["version"] == "keyword_scoring_v2"
+    assert body["keyword_result"]["metadata"]["version"] == "local_keyword_scoring_v1"
     assert body["summary"]["total_scanned"] >= 1
     assert body["summary"]["target_language"] == "spanish"
 
     idea = body["ideas"][0]
-    assert idea["vidiq_score"] == 82
-    assert idea["keyword_final_score"] >= 70
+    assert idea["keyword_source_score"] is None
+    assert idea["keyword_final_score"] >= 60
     assert idea["intent_cluster"] == "nutrition_after_45"
-    assert idea["bucket"] == "top_opportunity_keywords"
+    assert idea["bucket"] in {"top_opportunity_keywords", "long_tail_test_keywords"}
     assert idea["recommended_angle"]
     assert idea["thumbnail_hook_options"]
 
@@ -717,7 +700,7 @@ def test_post_generate_ideas_filters_off_language_nested_related_keywords(
         "top_opportunity_keywords": [
             {
                 "keyword": "dormir mejor despues de los 45",
-                "vidiq_score": 82,
+                "keyword_source_score": 82,
                 "final_score": 75.0,
                 "language_fit": 100,
                 "content_fit": 85,
@@ -781,9 +764,9 @@ def test_post_generate_ideas_keeps_v2_score_when_target_keyword_is_paraphrased(
     idea = body["ideas"][0]
     assert idea["target_keyword"] == "como comer mejor despues de los 45"
     assert idea["keyword_match_source"] == "ordered_fallback"
-    assert idea["vidiq_score"] == 82
-    assert idea["keyword_final_score"] >= 70
-    assert idea["bucket"] == "top_opportunity_keywords"
+    assert idea["keyword_source_score"] is None
+    assert idea["keyword_final_score"] >= 60
+    assert idea["bucket"] in {"top_opportunity_keywords", "long_tail_test_keywords"}
 
     saved = json.loads((tmp_path / body["saved"][0]).read_text(encoding="utf-8"))
     assert saved["keyword_final_score"] == idea["keyword_final_score"]
@@ -808,7 +791,7 @@ def test_post_generate_ideas_attaches_rejected_keyword_scores(
         "rejected_keywords": [
             {
                 "keyword": "sueño",
-                "vidiq_score": 64,
+                "keyword_source_score": 64,
                 "final_score": 50.0,
                 "volume": "High",
                 "competition": "Medium",
@@ -846,12 +829,12 @@ def test_post_generate_ideas_attaches_rejected_keyword_scores(
     assert r.status_code == 201, r.text
     body = r.json()
     idea = body["ideas"][0]
-    # vidIQ scored the 1-word keyword "sueño" as rejected_keywords
+    # The keyword scorer scored the 1-word keyword "sueño" as rejected_keywords
     # (intent_strength=25 on a single bare word). The route now
     # re-scores the richer title_seed so the idea bucket reflects the
-    # full multi-word intent signal. Raw vidIQ score stays exposed.
-    assert idea["vidiq_score"] == 64
-    # Final score must be >= the raw vidIQ-derived score (50.0); the
+    # full multi-word intent signal. Raw keyword source score stays exposed.
+    assert idea["keyword_source_score"] == 64
+    # Final score must be >= the raw keyword scoring-derived score (50.0); the
     # title-based re-score can only boost, never lower, the verdict.
     assert idea["keyword_final_score"] >= 50.0
     assert idea["bucket"] in {
@@ -882,7 +865,7 @@ def test_post_generate_ideas_ordered_fallback_skips_off_language_rejected_keywor
         "rejected_keywords": [
             {
                 "keyword": "best camera settings",
-                "vidiq_score": 85,
+                "keyword_source_score": 85,
                 "final_score": 45.0,
                 "language_fit": 65,
                 "content_fit": 50,
@@ -891,7 +874,7 @@ def test_post_generate_ideas_ordered_fallback_skips_off_language_rejected_keywor
             },
             {
                 "keyword": "dormir mejor despues de los 45",
-                "vidiq_score": 55,
+                "keyword_source_score": 55,
                 "final_score": 50.0,
                 "language_fit": 100,
                 "content_fit": 85,
@@ -922,7 +905,7 @@ def test_post_generate_ideas_ordered_fallback_skips_off_language_rejected_keywor
     idea = r.json()["ideas"][0]
     assert idea["target_keyword"] == "dormir mejor despues de los 45"
     assert idea["keyword_match_source"] == "ordered_fallback"
-    assert idea["vidiq_score"] == 55
+    assert idea["keyword_source_score"] == 55
     assert "best camera settings" not in json.dumps(r.json()).lower()
 
 
@@ -983,12 +966,12 @@ def test_post_generate_ideas_prompt_includes_seeds(http_client: TestClient, tmp_
     try:
         http_client.post(
             "/channels/vida-plena-45/ideas/generate",
-            json={"seed_topics": ["yoga matutino"], "count": 2},
+            json={"seed_topics": ["dormir mejor despues de los 45"], "count": 2},
         )
     finally:
         app.dependency_overrides.pop(get_browser_client, None)
 
-    assert any("yoga matutino" in m for m in captured)
+    assert any("dormir mejor despues de los 45" in m for m in captured)
 
 
 # ---------------------------------------------------------------------------
@@ -1168,13 +1151,13 @@ def test_language_marker_phrase_matching_handles_extra_spaces():
 
 # --- Section 4: full scored keyword debug data ----------------------------
 
-def _mk_item(kw, cluster, final, vidiq=50):
+def _mk_item(kw, cluster, final, keyword=50):
     return {
         "keyword": kw,
         "normalized_keyword": normalize_keyword(kw),
         "intent_cluster": cluster,
         "final_score": final,
-        "vidiq_score": vidiq,
+        "keyword_source_score": keyword,
         "notes": [],
         "rejection_reasons": [],
     }
@@ -1197,8 +1180,8 @@ def test_top_opportunity_keywords_still_respects_cluster_cap():
 
 def test_dedupe_by_normalized_keyword_keeps_best_duplicate():
     items = [
-        _mk_item("Comer mejor", "nutrition_after_45", 60, vidiq=90),
-        _mk_item("comer  mejor", "nutrition_after_45", 70, vidiq=50),
+        _mk_item("Comer mejor", "nutrition_after_45", 60, keyword=90),
+        _mk_item("comer  mejor", "nutrition_after_45", 70, keyword=50),
     ]
     deduped = dedupe_by_normalized_keyword(items)
     assert len(deduped) == 1
@@ -1434,7 +1417,7 @@ def test_title_rescore_appends_language_notes_without_overwriting_existing_notes
 
 # --- Section 7: optional SERP hook ----------------------------------------
 
-async def _fake_vidiq(keywords):
+async def _fake_keyword(keywords):
     return [
         {
             "keyword": kw,
@@ -1450,7 +1433,7 @@ async def _fake_vidiq(keywords):
 def test_serp_inspection_disabled_by_default():
     result = asyncio.run(
         _discover_top_keywords(
-            ["dormir mejor despues de los 45"], _fake_vidiq,
+            ["dormir mejor despues de los 45"], _fake_keyword,
             channel_config={"audience": {"language": "es-ES"}},
         )
     )
@@ -1465,7 +1448,7 @@ def test_serp_hook_updates_serp_opportunity_when_enabled():
 
     result = asyncio.run(
         _discover_top_keywords(
-            ["dormir mejor despues de los 45"], _fake_vidiq,
+            ["dormir mejor despues de los 45"], _fake_keyword,
             channel_config={"audience": {"language": "es-ES"}, "keyword_scoring": {"enable_serp_inspection": True}},
             serp_fn=serp_fn,
         )
@@ -1482,13 +1465,13 @@ def test_serp_hook_recalculates_final_score_when_enabled():
 
     base = asyncio.run(
         _discover_top_keywords(
-            ["dormir mejor despues de los 45"], _fake_vidiq,
+            ["dormir mejor despues de los 45"], _fake_keyword,
             channel_config={"audience": {"language": "es-ES"}},
         )
     )
     boosted = asyncio.run(
         _discover_top_keywords(
-            ["dormir mejor despues de los 45"], _fake_vidiq,
+            ["dormir mejor despues de los 45"], _fake_keyword,
             channel_config={"audience": {"language": "es-ES"}, "keyword_scoring": {"enable_serp_inspection": True}},
             serp_fn=serp_high,
         )
@@ -1504,7 +1487,7 @@ def test_serp_hook_failure_is_fail_soft():
 
     result = asyncio.run(
         _discover_top_keywords(
-            ["dormir mejor despues de los 45"], _fake_vidiq,
+            ["dormir mejor despues de los 45"], _fake_keyword,
             channel_config={"audience": {"language": "es-ES"}, "keyword_scoring": {"enable_serp_inspection": True}},
             serp_fn=serp_boom,
         )

@@ -59,7 +59,7 @@ from video_agent.browser_worker.drivers import (
     ClaudeDriver,
     GeminiDriver,
     LoginRequiredError,
-    VidIQDriver,
+    QuotaExceededError,
     human_pause,
     save_trace_screenshot,
 )
@@ -80,6 +80,8 @@ def _driver_error_detail(
         detail["layout_warning"] = True
     if login_required:
         detail["login_required"] = True
+    if isinstance(exc, QuotaExceededError):
+        detail["quota_exhausted"] = True
     return detail
 
 
@@ -236,7 +238,7 @@ async def _connect_runtime():
 
 async def _open_session(site: str) -> str:
     """Create a new session: connect runtime, open page, run driver.open()."""
-    if site not in {"chatgpt", "gemini", "claude", "vidiq"}:
+    if site not in {"chatgpt", "gemini", "claude"}:
         raise HTTPException(status_code=404, detail=f"Unsupported site: {site}")
     async with _site_lock(site):
         return await _open_session_locked(site)
@@ -266,7 +268,7 @@ async def _open_session_locked(site: str) -> str:
         elif site == "claude":
             driver = ClaudeDriver(page)
         else:
-            driver = VidIQDriver(page)
+            raise HTTPException(status_code=404, detail=f"Unsupported site: {site}")
         try:
             await driver.open()
         except LoginRequiredError as exc:
@@ -276,6 +278,14 @@ async def _open_session_locked(site: str) -> str:
             raise HTTPException(
                 status_code=409,
                 detail=_driver_error_detail(exc, login_required=True),
+            ) from exc
+        except QuotaExceededError as exc:
+            await page.close()
+            await browser.close()
+            await pw_ctx.__aexit__(None, None, None)
+            raise HTTPException(
+                status_code=429,
+                detail=_driver_error_detail(exc),
             ) from exc
         except BrowserDriverError as exc:
             await page.close()
@@ -342,6 +352,11 @@ async def _send_in_session(session_id: str, prompt: str, timeout_ms: int) -> str
             status_code=409,
             detail=_driver_error_detail(exc, login_required=True),
         ) from exc
+    except QuotaExceededError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail=_driver_error_detail(exc),
+        ) from exc
     except BrowserDriverError as exc:
         raise HTTPException(
             status_code=502,
@@ -400,6 +415,11 @@ async def _drive(site: str, prompt: str, timeout_ms: int) -> dict:
                 raise HTTPException(
                     status_code=409,
                     detail=_driver_error_detail(exc, login_required=True),
+                ) from exc
+            except QuotaExceededError as exc:
+                raise HTTPException(
+                    status_code=429,
+                    detail=_driver_error_detail(exc),
                 ) from exc
             except BrowserDriverError as exc:
                 raise HTTPException(
@@ -495,64 +515,6 @@ async def claude_session_send(session_id: str, payload: SendPromptRequest) -> di
 
 @app.delete("/claude/sessions/{session_id}", status_code=204)
 async def claude_close_session(session_id: str):
-    closed = await _close_session(session_id)
-    if not closed:
-        raise HTTPException(status_code=404, detail=f"Unknown session: {session_id}")
-    return None
-
-
-class KeywordRequest(BaseModel):
-    keyword: str
-    response_timeout_ms: int = 30_000
-
-
-class KeywordsRequest(BaseModel):
-    keywords: list[str]
-    response_timeout_ms: int = 30_000
-
-
-@app.post("/vidiq/sessions", response_model=OpenSessionResponse)
-async def vidiq_open_session() -> dict:
-    sid = await _open_session("vidiq")
-    return {"session_id": sid, "site": "vidiq"}
-
-
-@app.post("/vidiq/sessions/{session_id}/score")
-async def vidiq_session_score(session_id: str, payload: KeywordRequest) -> dict:
-    entry = _SESSIONS.get(session_id)
-    if entry is None or entry["site"] != "vidiq":
-        raise HTTPException(status_code=404, detail=f"Unknown vidiq session: {session_id}")
-    driver: VidIQDriver = entry["driver"]
-    try:
-        return await driver.score_keyword(
-            payload.keyword, response_timeout_ms=payload.response_timeout_ms
-        )
-    except LoginRequiredError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail=_driver_error_detail(exc, login_required=True),
-        ) from exc
-    except BrowserDriverError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=_driver_error_detail(exc),
-        ) from exc
-
-
-@app.post("/vidiq/sessions/{session_id}/score_batch")
-async def vidiq_session_score_batch(
-    session_id: str, payload: KeywordsRequest
-) -> dict:
-    entry = _SESSIONS.get(session_id)
-    if entry is None or entry["site"] != "vidiq":
-        raise HTTPException(status_code=404, detail=f"Unknown vidiq session: {session_id}")
-    driver: VidIQDriver = entry["driver"]
-    results = await driver.score_keywords(payload.keywords)
-    return {"session_id": session_id, "results": results}
-
-
-@app.delete("/vidiq/sessions/{session_id}", status_code=204)
-async def vidiq_close_session(session_id: str):
     closed = await _close_session(session_id)
     if not closed:
         raise HTTPException(status_code=404, detail=f"Unknown session: {session_id}")
@@ -721,7 +683,6 @@ _SITE_DOMAINS = {
     "chatgpt": "chatgpt.com",
     "gemini": "google.com",
     "claude": "claude.ai",
-    "vidiq": "vidiq.com",
 }
 
 

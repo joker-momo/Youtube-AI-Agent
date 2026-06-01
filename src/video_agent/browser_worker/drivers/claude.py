@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from video_agent.browser_worker.drivers.base import (
     BrowserDriverError,
     LoginRequiredError,
+    QuotaExceededError,
     save_layout_diagnostics,
     save_trace_screenshot,
 )
@@ -31,12 +32,6 @@ TEMP_CHAT_TOGGLE_SELECTORS = (
     "button:has-text('Incognito')",
     "button:has-text('Temporary')",
     "[data-testid*='incognito' i]",
-)
-
-NEW_CHAT_SELECTORS = (
-    "a[href='/new']",
-    "button[aria-label*='New chat' i]",
-    "button:has-text('New chat')",
 )
 
 COMPOSER_SELECTORS = (
@@ -66,6 +61,12 @@ ASSISTANT_RESPONSE_SELECTORS = (
     "[data-is-streaming='false'][data-testid*='message']",
     "[data-is-streaming='false'] .prose",
     "[class*='font-claude']",
+)
+QUOTA_TEXT_MARKERS = (
+    "out of free messages",
+    "message limit",
+    "it resets at",
+    "upgrade to keep chatting",
 )
 
 CLAUDE_DIAGNOSTIC_SELECTORS = (
@@ -109,12 +110,11 @@ async def _try_click(page: "Page", selectors: tuple[str, ...], timeout_ms: int =
     return False
 
 
-async def _enter_temporary_chat(page: "Page") -> None:
+async def _enter_temporary_chat(page: "Page") -> bool:
     if await _try_click(page, TEMP_CHAT_TOGGLE_SELECTORS):
         await human_pause(page, min_ms=600, max_ms=1300)
-        return
-    if await _try_click(page, NEW_CHAT_SELECTORS):
-        await human_pause(page, min_ms=600, max_ms=1300)
+        return True
+    return False
 
 
 async def _raise_claude_layout_warning(
@@ -130,6 +130,27 @@ async def _raise_claude_layout_warning(
         screenshot_path=shot,
         diagnostic_path=diagnostic,
         layout_warning=True,
+    )
+
+
+async def _raise_if_claude_quota_exhausted(page: "Page") -> None:
+    try:
+        body = await page.locator("body").inner_text(timeout=2_000)
+    except Exception:
+        return
+    lower = body.lower()
+    if not any(marker in lower for marker in QUOTA_TEXT_MARKERS):
+        return
+    shot, diagnostic = await save_layout_diagnostics(
+        page,
+        prefix="claude-quota-exhausted",
+        selectors=CLAUDE_DIAGNOSTIC_SELECTORS,
+    )
+    raise QuotaExceededError(
+        "Claude quota exhausted: account is out of free messages. "
+        "Open Claude in the browser runtime to confirm the reset time or upgrade.",
+        screenshot_path=shot,
+        diagnostic_path=diagnostic,
     )
 
 
@@ -176,8 +197,15 @@ class ClaudeDriver:
                 screenshot_path=shot,
             )
 
-        await _enter_temporary_chat(self.page)
+        await _raise_if_claude_quota_exhausted(self.page)
+        if not await _enter_temporary_chat(self.page):
+            await _raise_claude_layout_warning(
+                self.page,
+                prefix="claude-not-temporary",
+                message="Claude temporary chat/incognito control not found.",
+            )
         await human_pause(self.page)
+        await _raise_if_claude_quota_exhausted(self.page)
         self._opened = True
 
     async def send_message(self, prompt: str, *, response_timeout_ms: int = 300_000) -> str:
@@ -185,6 +213,7 @@ class ClaudeDriver:
             await self.open()
         if not prompt.strip():
             raise BrowserDriverError("Empty prompt")
+        await _raise_if_claude_quota_exhausted(self.page)
 
         # Scrape only Claude assistant turns. Do not fall back to scanning the
         # whole page body: while Claude is still thinking, the user prompt can
@@ -255,6 +284,7 @@ class ClaudeDriver:
         except Exception:
             still_in_composer = ""
         if still_in_composer:
+            await _raise_if_claude_quota_exhausted(self.page)
             await _raise_claude_layout_warning(
                 self.page,
                 prefix="claude-submit-stuck",
@@ -280,6 +310,7 @@ class ClaudeDriver:
             log_tag="claude",
         )
         if text is None:
+            await _raise_if_claude_quota_exhausted(self.page)
             await _raise_claude_layout_warning(
                 self.page,
                 prefix="claude-no-response",

@@ -20,7 +20,15 @@ def test_detector_flags_accented_spanish():
         "Habitación cálida al atardecer"
     )
     assert is_sp
-    assert reason and "accent" in reason.lower()
+    assert reason
+
+
+def test_detector_allows_english_loanword_with_accent():
+    is_sp, reason = _looks_like_spanish_visual_prompt(
+        "Mature adult cooking scrambled eggs with sautéed vegetables in a home kitchen"
+    )
+    assert not is_sp
+    assert reason is None
 
 
 def test_detector_flags_unaccented_spanish_by_lexical_signal():

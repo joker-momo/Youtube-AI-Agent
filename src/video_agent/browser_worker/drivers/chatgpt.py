@@ -22,7 +22,6 @@ if TYPE_CHECKING:
     from playwright.async_api import Page
 
 CHATGPT_URL = "https://chatgpt.com/?temporary-chat=true"
-CHATGPT_FALLBACK_URL = "https://chatgpt.com/"
 
 # Composer textarea is a contenteditable div in the current UI; the
 # textarea fallback covers legacy renders.
@@ -465,29 +464,23 @@ class ChatGPTDriver:
         if self._opened:
             return
 
-        # ChatGPT temporary-chat URL can intermittently return HTTP
-        # failure pages (cloud edge / anti-bot / transient network).
-        # Fall back to the root URL so we can still continue in the
-        # same signed-in profile.
         nav_errors: list[str] = []
         navigated = False
-        for url in (CHATGPT_URL, CHATGPT_FALLBACK_URL):
-            for _ in range(2):
-                try:
-                    await self.page.goto(
-                        url, wait_until="domcontentloaded", timeout=30_000
-                    )
-                    navigated = True
-                    break
-                except Exception as exc:
-                    nav_errors.append(f"{url}: {exc}")
-                    await self.page.wait_for_timeout(800)
-            if navigated:
+        for _ in range(2):
+            try:
+                await self.page.goto(
+                    CHATGPT_URL, wait_until="domcontentloaded", timeout=30_000
+                )
+                navigated = True
                 break
+            except Exception as exc:
+                nav_errors.append(f"{CHATGPT_URL}: {exc}")
+                await self.page.wait_for_timeout(800)
         if not navigated:
             shot = await save_trace_screenshot(self.page, prefix="chatgpt-goto-failed")
             raise BrowserDriverError(
-                "ChatGPT navigation failed: " + " | ".join(nav_errors[-3:]),
+                "ChatGPT temporary chat navigation failed: "
+                + " | ".join(nav_errors[-3:]),
                 screenshot_path=shot,
             )
 
@@ -503,6 +496,17 @@ class ChatGPTDriver:
 
         await _dismiss_modals(self.page)
         await human_pause(self.page)
+        if "temporary-chat=true" not in (self.page.url or ""):
+            try:
+                body = await self.page.locator("body").inner_text(timeout=1_000)
+            except Exception:
+                body = ""
+            if "temporary chat" not in body.lower():
+                await _raise_chatgpt_layout_warning(
+                    self.page,
+                    prefix="chatgpt-not-temporary",
+                    message="ChatGPT did not confirm temporary chat mode.",
+                )
         self._opened = True
 
     async def send_message(self, prompt: str, *, response_timeout_ms: int = 300_000) -> str:

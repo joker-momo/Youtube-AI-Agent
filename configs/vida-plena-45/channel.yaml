@@ -110,7 +110,7 @@ positioning:
     - "mediana edad"
     - "bienestar práctico"
 research_gate:
-  # vidIQ free tier scores Spanish long-tail phrases lower than English.
+  # keyword scoring free tier scores Spanish long-tail phrases lower than English.
   # Calibrated to 20 after observing that "insomnio" (short keyword) = 63
   # while "Insomnio despues de los 45..." (long phrase) = 26.
   # Topics with best_score >= 20 have real search presence; null scores

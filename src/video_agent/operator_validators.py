@@ -35,7 +35,7 @@ class ValidationResult:
 
 
 SCENE_ID_PATTERN = re.compile(r"^scene-\d{2}$")
-SPANISH_SPECIFIC_CHARS = set("áéíóúñ¿¡üÁÉÍÓÚÑÜ")
+SPANISH_SPECIFIC_CHARS = set("ñ¿¡üÑÜ")
 ALLOWED_ASSET_REF_KEYS = {"background", "primary", "secondary", "bg", "overlay"}
 FORBIDDEN_QA_VALUES = {"PASS", "PASSED", "TRUE", "OK", "APPROVED", "VERIFIED"}
 ALLOWED_LAYOUTS = {"hook", "subtitle", "checklist", "warning", "quote", "cta"}
@@ -198,7 +198,7 @@ def _looks_like_spanish_visual_prompt(prompt: str) -> tuple[bool, str | None]:
     """Detect Spanish-language visual_prompt.
 
     Returns ``(is_spanish, reason)``. Triggers when any of these hold:
-    - Spanish-specific accented characters appear (á, é, í, ó, ú, ñ, ¿, ¡, ü).
+    - Spanish-specific characters appear (ñ, ¿, ¡, ü).
     - At least one ≥5-char Spanish content word appears (e.g. ``habitación``,
       ``persona``) — a single such hit is already proof.
     - Three or more general Spanish stopwords appear (raised from two to
@@ -212,7 +212,7 @@ def _looks_like_spanish_visual_prompt(prompt: str) -> tuple[bool, str | None]:
     if not prompt:
         return False, None
     if any(char in SPANISH_SPECIFIC_CHARS for char in prompt):
-        return True, "Spanish accent characters detected (á/é/í/ó/ú/ñ/¿/¡/ü)."
+        return True, "Spanish-specific characters detected (ñ/¿/¡/ü)."
     tokens = re.findall(r"[A-Za-zÁÉÍÓÚÑÜáéíóúñü]+", prompt.lower())
     content_hits = [t for t in tokens if t in _SPANISH_CONTENT_HEADWORDS]
     if content_hits:

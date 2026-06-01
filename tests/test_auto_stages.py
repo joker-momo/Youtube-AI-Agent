@@ -4,6 +4,7 @@ import asyncio
 import json
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -127,6 +128,7 @@ class FakeBrowserClient:
         self.queue = list(queue or [])
         self.sessions: list[list[str]] = []
         self.events: list[str] = []
+        self.send_timeouts: list[tuple[str, int]] = []
         self.error: Exception | None = None
 
     async def chatgpt_send(
@@ -143,6 +145,7 @@ class FakeBrowserClient:
         response_timeout_ms: int = 180_000,
     ) -> str:
         self.events.append(f"send:{site}")
+        self.send_timeouts.append((site, response_timeout_ms))
         self.sessions.append(list(messages))
         if self.error is not None:
             raise self.error
@@ -160,7 +163,11 @@ class FakeBrowserClient:
         self.events.append(f"open:{site}")
 
         async def sender(messages, *, response_timeout_ms: int = 180_000) -> str:
-            return await self.run_session(site, messages)
+            return await self.run_session(
+                site,
+                messages,
+                response_timeout_ms=response_timeout_ms,
+            )
 
         async def closer() -> None:
             self.events.append(f"close:{site}")
@@ -182,11 +189,6 @@ class FakeBrowserClient:
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
         Image.new("RGB", (640, 360), (12, 34, 56)).save(out_path, format="PNG")
         return {"src": "https://example.com/img.png", "local_path": out_path, "project_name": project_name, "bytes": 9}
-
-    async def run_vidiq_scores(self, keywords: list[str]) -> list[dict]:
-        self.events.append("vidiq")
-        return [{"keyword": kw, "score": 55, "volume": "Medium", "competition": "Low", "related": []} for kw in keywords]
-
 
 # ---------- direct module-level auto stage tests ---------------------------
 
@@ -443,6 +445,92 @@ def test_auto_scenes_can_run_sharded_when_enabled(
     assert state["current_stage"] == "scenes_qa"
 
 
+def test_auto_scenes_repairs_invalid_batch_before_failing(
+    tmp_path: Path,
+    channel_path: Path,
+    idea_payload: dict,
+    valid_script_payload: dict,
+    valid_scenes_payload: dict,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    job_dir = tmp_path / "job-auto"
+    _seed_script(job_dir, channel_path, idea_payload)
+    run_script_stage(job_dir, channel_path)
+    promote_script_stage(
+        job_dir,
+        channel_path,
+        raw_response=json.dumps(valid_script_payload, ensure_ascii=False),
+    )
+    _fake_pass_qa(job_dir, "script")
+    plan = {
+        "artifact_type": "scenes_plan",
+        "schema_version": "2026-05-json-shards-v1",
+        "job_id": "job-auto",
+        "channel_id": "vida-plena-45",
+        "status": "complete",
+        "batch_index": None,
+        "batch_total": None,
+        "data": {
+            "target_scene_count": 2,
+            "target_total_duration_sec": 48,
+            "batch_size": 2,
+            "batches": [
+                {
+                    "batch_index": 1,
+                    "scene_start": "scene-01",
+                    "scene_end": "scene-02",
+                    "purpose": "full test batch",
+                    "script_sections": ["section-01"],
+                }
+            ],
+        },
+        "warnings": [],
+    }
+    bad_batch = {
+        "artifact_type": "scenes_batch",
+        "schema_version": "2026-05-json-shards-v1",
+        "job_id": "job-auto",
+        "channel_id": "vida-plena-45",
+        "status": "complete",
+        "batch_index": 1,
+        "batch_total": 1,
+        "data": {
+            "scene_start": "scene-01",
+            "scene_end": "scene-02",
+            "scenes": [
+                {**valid_scenes_payload["scenes"][0], "visual_prompt": "cocina tranquila con lámpara cálida"},
+                valid_scenes_payload["scenes"][1],
+            ],
+        },
+        "warnings": [],
+    }
+    fixed_batch = {
+        **bad_batch,
+        "data": {
+            **bad_batch["data"],
+            "scenes": valid_scenes_payload["scenes"],
+        },
+    }
+    fake = FakeBrowserClient(
+        queue=[json.dumps(plan), json.dumps(bad_batch), json.dumps(fixed_batch)]
+    )
+    monkeypatch.setenv("SCENES_SHARDED_GENERATION", "1")
+
+    output = asyncio.run(
+        auto_scenes_stage(job_dir, channel_path, lambda msgs: fake.run_session("chatgpt", msgs))
+    )
+
+    assert output == job_dir / "scenes.json"
+    assert len(fake.calls) == 3
+    assert "Validation failed" in fake.calls[-1][0]
+    repaired = json.loads(
+        (job_dir / "operator/chatgpt/scenes_batches/scenes_batch_01.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert repaired["data"]["scenes"][0]["visual_prompt"] == "Calm evening bedroom with warm lamp light"
+
+
 def test_auto_scenes_qa_can_run_sharded_when_enabled(
     tmp_path: Path,
     channel_path: Path,
@@ -514,6 +602,85 @@ def test_auto_scenes_qa_can_run_sharded_when_enabled(
     assert [row["batch_index"] for row in merged["batch_results"]] == [1, 2]
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
     assert state["current_stage"] == "seo"
+
+
+def test_auto_scenes_qa_sharded_reuses_existing_batches_and_logs_progress(
+    tmp_path: Path,
+    channel_path: Path,
+    idea_payload: dict,
+    valid_script_payload: dict,
+    valid_scenes_payload: dict,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    job_dir = tmp_path / "job-auto"
+    _seed_script(job_dir, channel_path, idea_payload)
+    run_script_stage(job_dir, channel_path)
+    promote_script_stage(
+        job_dir,
+        channel_path,
+        raw_response=json.dumps(valid_script_payload, ensure_ascii=False),
+    )
+    _fake_pass_qa(job_dir, "script")
+    run_scenes_stage(job_dir, channel_path)
+    many_scenes_payload = {
+        **valid_scenes_payload,
+        "total_duration_sec": 54,
+        "scenes": [
+            {
+                **valid_scenes_payload["scenes"][index % 2],
+                "id": f"scene-{index + 1:02d}",
+                "duration_sec": 6,
+            }
+            for index in range(9)
+        ],
+    }
+    promote_scenes_stage(
+        job_dir,
+        channel_path,
+        raw_response=json.dumps(many_scenes_payload, ensure_ascii=False),
+    )
+    qa_batch_1 = {
+        "artifact_type": "scenes_qa_batch",
+        "schema_version": "2026-05-json-shards-v1",
+        "job_id": "job-auto",
+        "channel_id": "vida-plena-45",
+        "status": "complete",
+        "batch_index": 1,
+        "batch_total": 2,
+        "data": {
+            "verdict": "PASS",
+            "youtube_policy": {"compliant": True, "risk_level": "none", "violations": []},
+            "scene_checks": [],
+            "issues": [],
+            "required_changes": [],
+            "scores": {"schema_fit": 5, "channel_fit": 5, "safety": 5, "clarity": 5, "youtube_policy": 5},
+        },
+        "warnings": [],
+    }
+    qa_batch_2 = {**qa_batch_1, "batch_index": 2}
+    batch_dir = job_dir / "operator/claude/scenes_qa_batches"
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    (batch_dir / "scenes_qa_batch_01.json").write_text(
+        json.dumps(qa_batch_1, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    fake = FakeBrowserClient(queue=[json.dumps(qa_batch_2)])
+    monkeypatch.setenv("SCENES_SHARDED_GENERATION", "1")
+
+    output = asyncio.run(
+        auto_scenes_qa_stage(job_dir, channel_path, lambda msgs: fake.run_session("claude", msgs))
+    )
+
+    assert output == job_dir / "operator/claude/scenes_qa.json"
+    assert len(fake.calls) == 1
+    events = (job_dir / "events.jsonl").read_text(encoding="utf-8")
+    assert '"SCENES_QA_PROGRESS"' in events
+    assert '"step": "batch_reused"' in events
+    assert '"step": "batch_saved"' in events
+    state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    scenes_qa = next(stage for stage in state["stages"] if stage["name"] == "scenes_qa")
+    assert scenes_qa["status"] == "completed"
+    assert scenes_qa["started_at"] is not None
 
 
 def test_auto_seo_runs_after_scenes_promoted(
@@ -805,6 +972,19 @@ def test_browser_client_keeps_larger_configured_http_timeout():
     assert client._timeout_for_response(300_000) == 420.0
 
 
+def test_browser_client_wraps_transport_errors_as_retryable_502():
+    client = BrowserClient()
+
+    wrapped = client._wrap_transport_error(
+        "claude/sessions",
+        httpx.RemoteProtocolError("Server disconnected without sending a response."),
+    )
+
+    assert isinstance(wrapped, BrowserClientError)
+    assert wrapped.status_code == 502
+    assert wrapped.detail["type"] == "RemoteProtocolError"
+
+
 # ---------- /run-all -------------------------------------------------------
 
 
@@ -915,7 +1095,6 @@ def test_http_run_all_success(
         "scenes_qa",
         "seo_promote",
         "seo_qa",
-        "seo_vidiq",
         "thumbnail_image",
         "whisper_timestamps",
         "render",
@@ -923,11 +1102,9 @@ def test_http_run_all_success(
     ]
     assert all(s["status"] == "completed" for s in body["state"]["stages"])
     # 2 briefing sends + 3 ChatGPT task sends + 3 Gemini task sends = 8
-    # idea_research + seo_vidiq use run_vidiq_scores (not session queue)
     assert len(fake.calls) == 8
-    seo_vidiq_event = len(fake.events) - 1 - fake.events[::-1].index("vidiq")
-    assert fake.events.index("close:chatgpt") < seo_vidiq_event
-    assert fake.events.index("close:claude") < seo_vidiq_event
+    assert fake.send_timeouts[:2] == [("chatgpt", 60_000), ("claude", 60_000)]
+    assert all(timeout == 300_000 for _, timeout in fake.send_timeouts[2:8])
 
 
 def test_http_run_all_requires_idea_research_confirmation(
@@ -1143,7 +1320,6 @@ def test_http_run_all_resumes_from_current_pending_stage(
         "scenes_qa",
         "seo_promote",
         "seo_qa",
-        "seo_vidiq",
         "thumbnail_image",
         "whisper_timestamps",
         "render",
@@ -1261,8 +1437,7 @@ def test_http_run_all_stops_on_worker_error(
 
     assert r.status_code == 502
     detail = r.json()["detail"]
-    # idea_research calls run_vidiq_scores (not run_session), so it
-    # completes before the ChatGPT briefing fails.
+    # idea_research completes before the ChatGPT briefing fails.
     assert "idea_research" in [c["stage"] for c in detail["completed"]]
     # Persistent-session /run-all fails on the very first briefing
     # send, before run_script_stage advances the state.
@@ -1590,6 +1765,61 @@ def test_auto_qa_with_rework_passes_after_one_retry(
     assert len(fake.calls) == 3
 
 
+def test_auto_qa_with_rework_feeds_promotion_validation_errors_back_to_chatgpt(
+    tmp_path: Path,
+    channel_path: Path,
+    idea_payload: dict,
+    valid_script_payload: dict,
+    valid_scenes_payload: dict,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from video_agent.orchestrator.stages import auto_qa_with_rework
+
+    monkeypatch.delenv("SCENES_SHARDED_GENERATION", raising=False)
+    job_dir = tmp_path / "job-auto"
+    _advance_through_script_promote(
+        job_dir, channel_path, idea_payload, valid_script_payload
+    )
+    _fake_pass_qa(job_dir, "script")
+    run_scenes_stage(job_dir, channel_path)
+    promote_scenes_stage(
+        job_dir,
+        channel_path,
+        raw_response=json.dumps(valid_scenes_payload, ensure_ascii=False),
+    )
+    invalid_rework = {
+        **valid_scenes_payload,
+        "scenes": [
+            {**scene, "visual_prompt": "Persona caminando en una cocina española"}
+            for scene in valid_scenes_payload["scenes"]
+        ],
+    }
+    fake = FakeBrowserClient(
+        queue=[
+            json.dumps(_qa_fail_payload(["visual prompts need rework"])),
+            json.dumps(invalid_rework, ensure_ascii=False),
+            json.dumps(valid_scenes_payload, ensure_ascii=False),
+            json.dumps(_qa_pass_payload()),
+        ]
+    )
+
+    output = asyncio.run(
+        auto_qa_with_rework(
+            "scenes",
+            job_dir,
+            channel_path,
+            chatgpt_fn=lambda msgs: fake.run_session("chatgpt", msgs),
+            qa_session_fn=lambda msgs: fake.run_session("gemini", msgs),
+        )
+    )
+
+    assert output == job_dir / "operator" / "claude" / "scenes_qa.json"
+    assert len(fake.calls) == 4
+    repair_prompt = fake.calls[2][0]
+    assert "scenes validation failed" in repair_prompt
+    assert "visual_prompt must be ENGLISH" in repair_prompt
+
+
 def test_auto_qa_with_rework_gives_up_after_max_retries(
     tmp_path: Path,
     channel_path: Path,
@@ -1815,7 +2045,7 @@ def test_auto_assets_chatgpt_wrong_stage_raises(tmp_path, channel_path):
 
 
 # ---------------------------------------------------------------------------
-# idea_research + seo_vidiq stage tests
+# idea_research stage tests
 # ---------------------------------------------------------------------------
 
 
@@ -1870,260 +2100,20 @@ _IDEA_PAYLOAD = {
 }
 
 
-async def _good_vidiq_fn(keywords: list[str]) -> list[dict]:
-    return [{"keyword": kw, "score": 55, "volume": "Medium", "competition": "Low", "related": []} for kw in keywords]
-
-
-async def _low_vidiq_fn(keywords: list[str]) -> list[dict]:
-    return [{"keyword": kw, "score": -1, "volume": "Low", "competition": "High", "related": []} for kw in keywords]
-
-
-async def _fail_vidiq_fn(keywords: list[str]) -> list[dict]:
-    raise RuntimeError("vidIQ down")
-
-
-# --- idea_research tests ---
-
 def test_idea_research_pass(tmp_path, channel_path):
     from video_agent.orchestrator.stages import auto_idea_research_stage
 
     job_dir = tmp_path / "job-research"
     _seed_at_stage(job_dir, "idea_research", {"idea.json": _IDEA_PAYLOAD})
 
-    output = asyncio.run(auto_idea_research_stage(job_dir, channel_path, _good_vidiq_fn))
+    output = asyncio.run(auto_idea_research_stage(job_dir, channel_path))
 
     assert output == job_dir / "research.json"
     research = json.loads(output.read_text(encoding="utf-8"))
     assert research["verdict"] == "pass"
-    assert research["best_score"] == 55
+    assert research["keywords"]
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
     assert state["current_stage"] == "script"
-
-
-def test_idea_research_blocked_low_score(tmp_path, channel_path):
-    from video_agent.orchestrator.stages import auto_idea_research_stage
-
-    job_dir = tmp_path / "job-research"
-    _seed_at_stage(job_dir, "idea_research", {"idea.json": _IDEA_PAYLOAD})
-
-    with pytest.raises(StageInputMissingError, match="score"):
-        asyncio.run(auto_idea_research_stage(job_dir, channel_path, _low_vidiq_fn))
-
-    research = json.loads((job_dir / "research.json").read_text(encoding="utf-8"))
-    assert research["verdict"] == "blocked_low_score"
-    # stage NOT completed — current_stage stays idea_research
-    state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
-    assert state["current_stage"] == "idea_research"
-
-
-def test_idea_research_vidiq_unavailable_skips_gate(tmp_path, channel_path):
-    from video_agent.orchestrator.stages import auto_idea_research_stage
-    from video_agent.contracts import EVENT_LOG
-
-    job_dir = tmp_path / "job-research"
-    _seed_at_stage(job_dir, "idea_research", {"idea.json": _IDEA_PAYLOAD})
-
-    output = asyncio.run(auto_idea_research_stage(job_dir, channel_path, _fail_vidiq_fn))
-
-    research = json.loads(output.read_text(encoding="utf-8"))
-    assert research["verdict"] == "skipped"
-    state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
-    assert state["current_stage"] == "script"
-    events = (job_dir / EVENT_LOG).read_text(encoding="utf-8")
-    assert "RESEARCH_VIDIQ_UNAVAILABLE" in events
-
-
-# --- seo_vidiq tests ---
-
-_SEO_PAYLOAD = {
-    "job_id": "job-research",
-    "title": "5 hábitos nocturnos para dormir mejor",
-    "description": "Rutina suave y realista para descansar.",
-    "tags": ["dormir mejor", "rutina nocturna", "vida plena 45", "bienestar", "descanso"],
-    "language": "es-ES",
-    "ai_disclosure": True,
-    "thumbnail_path": "thumbnail.jpg",
-}
-
-
-async def _tag_vidiq_fn(keywords: list[str]) -> list[dict]:
-    """Return score=10 for first tag (will be swapped), 60 for the rest."""
-    results = []
-    for i, kw in enumerate(keywords):
-        if i == 0:
-            results.append({
-                "keyword": kw,
-                "score": 10,
-                "related": [{"keyword": "sueño reparador", "score": 55}],
-            })
-        else:
-            results.append({"keyword": kw, "score": 60, "related": []})
-    return results
-
-
-def test_seo_vidiq_swaps_weak_tag(tmp_path, channel_path):
-    from video_agent.orchestrator.stages import auto_seo_vidiq_stage
-
-    job_dir = tmp_path / "job-research"
-    _seed_at_stage(job_dir, "seo_vidiq", {"seo.json": _SEO_PAYLOAD})
-
-    output = asyncio.run(auto_seo_vidiq_stage(job_dir, channel_path, _tag_vidiq_fn))
-
-    assert output == job_dir / "seo_vidiq_report.json"
-    report = json.loads(output.read_text(encoding="utf-8"))
-    assert len(report["swaps"]) == 1
-    assert report["swaps"][0]["original"] == "dormir mejor"
-    assert report["swaps"][0]["replacement"] == "sueño reparador"
-
-    seo = json.loads((job_dir / "seo.json").read_text(encoding="utf-8"))
-    assert "sueño reparador" in seo["tags"]
-    assert "dormir mejor" not in seo["tags"]
-
-    state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
-    assert state["current_stage"] == "thumbnail_image"
-
-
-async def _off_topic_related_tag_vidiq_fn(keywords: list[str]) -> list[dict]:
-    results = []
-    for i, kw in enumerate(keywords):
-        if i == 0:
-            results.append({
-                "keyword": kw,
-                "score": 10,
-                "related": [
-                    {"keyword": "best camera settings", "score": 85},
-                    {"keyword": "sueño reparador", "score": 55},
-                ],
-            })
-        else:
-            results.append({"keyword": kw, "score": 60, "related": []})
-    return results
-
-
-async def _only_off_topic_related_tag_vidiq_fn(keywords: list[str]) -> list[dict]:
-    results = []
-    for i, kw in enumerate(keywords):
-        if i == 0:
-            results.append({
-                "keyword": kw,
-                "score": 10,
-                "related": [{"keyword": "best camera settings", "score": 85}],
-            })
-        else:
-            results.append({"keyword": kw, "score": 60, "related": []})
-    return results
-
-
-def test_seo_vidiq_ignores_off_language_related_replacements(tmp_path, channel_path):
-    from video_agent.orchestrator.stages import auto_seo_vidiq_stage
-
-    job_dir = tmp_path / "job-research"
-    _seed_at_stage(job_dir, "seo_vidiq", {"seo.json": _SEO_PAYLOAD})
-
-    output = asyncio.run(
-        auto_seo_vidiq_stage(job_dir, channel_path, _off_topic_related_tag_vidiq_fn)
-    )
-
-    report = json.loads(output.read_text(encoding="utf-8"))
-    assert report["swaps"][0]["original"] == "dormir mejor"
-    assert report["swaps"][0]["replacement"] == "sueño reparador"
-
-    seo = json.loads((job_dir / "seo.json").read_text(encoding="utf-8"))
-    assert "sueño reparador" in seo["tags"]
-    assert "best camera settings" not in seo["tags"]
-
-
-def test_seo_vidiq_keeps_original_tag_when_related_replacements_are_invalid(
-    tmp_path, channel_path
-):
-    from video_agent.orchestrator.stages import auto_seo_vidiq_stage
-
-    job_dir = tmp_path / "job-research"
-    _seed_at_stage(job_dir, "seo_vidiq", {"seo.json": _SEO_PAYLOAD})
-
-    output = asyncio.run(
-        auto_seo_vidiq_stage(job_dir, channel_path, _only_off_topic_related_tag_vidiq_fn)
-    )
-
-    report = json.loads(output.read_text(encoding="utf-8"))
-    assert report["swaps"] == []
-    assert report["rejected_replacements"][0]["candidate"] == "best camera settings"
-
-    seo = json.loads((job_dir / "seo.json").read_text(encoding="utf-8"))
-    assert seo["tags"] == _SEO_PAYLOAD["tags"]
-
-
-def test_seo_vidiq_soft_fails_on_vidiq_error(tmp_path, channel_path):
-    from video_agent.orchestrator.stages import auto_seo_vidiq_stage
-
-    job_dir = tmp_path / "job-research"
-    _seed_at_stage(job_dir, "seo_vidiq", {"seo.json": _SEO_PAYLOAD})
-
-    output = asyncio.run(auto_seo_vidiq_stage(job_dir, channel_path, _fail_vidiq_fn))
-
-    report = json.loads(output.read_text(encoding="utf-8"))
-    assert report["vidiq_error"] is not None
-    assert report["swaps"] == []
-    # seo.json unchanged
-    seo = json.loads((job_dir / "seo.json").read_text(encoding="utf-8"))
-    assert seo["tags"] == _SEO_PAYLOAD["tags"]
-    # stage still completes
-    state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
-    assert state["current_stage"] == "thumbnail_image"
-
-
-# ---------------------------------------------------------------------------
-# HTTP route tests: seo_vidiq/auto + run-batch
-# ---------------------------------------------------------------------------
-
-
-def test_http_auto_seo_vidiq_success(
-    http_client: TestClient,
-    tmp_path: Path,
-):
-    """POST /stages/seo_vidiq/auto — scores tags, advances stage."""
-    job_dir = tmp_path / "job-auto"
-    _create_job(http_client)
-    _set_current_stage(job_dir, "seo_vidiq")
-    (job_dir / "seo.json").write_text(
-        json.dumps(_SEO_PAYLOAD, ensure_ascii=False), encoding="utf-8"
-    )
-    # FakeBrowserClient.run_vidiq_scores returns score=55 for all (above threshold)
-    app.dependency_overrides[get_browser_client] = lambda: FakeBrowserClient()
-    try:
-        r = http_client.post("/jobs/job-auto/stages/seo_vidiq/auto")
-    finally:
-        app.dependency_overrides.pop(get_browser_client, None)
-
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert "seo_vidiq_report.json" in body["output"]
-    assert body["state"]["current_stage"] != "seo_vidiq"
-
-
-def test_http_auto_seo_vidiq_wrong_stage_returns_409(
-    http_client: TestClient,
-    tmp_path: Path,
-):
-    _create_job(http_client)
-    # Job starts at idea_research — running seo_vidiq is wrong
-    app.dependency_overrides[get_browser_client] = lambda: FakeBrowserClient()
-    try:
-        r = http_client.post("/jobs/job-auto/stages/seo_vidiq/auto")
-    finally:
-        app.dependency_overrides.pop(get_browser_client, None)
-    assert r.status_code == 409
-
-
-def test_http_auto_seo_vidiq_unknown_job(http_client: TestClient):
-    app.dependency_overrides[get_browser_client] = lambda: FakeBrowserClient()
-    try:
-        r = http_client.post("/jobs/no-such-job/stages/seo_vidiq/auto")
-    finally:
-        app.dependency_overrides.pop(get_browser_client, None)
-    assert r.status_code == 404
-
-
 # ---------------------------------------------------------------------------
 # run-batch endpoint tests
 # ---------------------------------------------------------------------------

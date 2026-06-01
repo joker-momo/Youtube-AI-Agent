@@ -1,13 +1,13 @@
-# Hướng dẫn Logic Chấm điểm Từ khóa (vidIQ Keyword Scoring Logic)
+# Hướng dẫn Logic Chấm điểm Từ khóa (Keyword Scoring Logic)
 
-Tài liệu này mô tả chi tiết quy trình tự động hóa tìm kiếm và chấm điểm từ khóa cơ hội cao (high-opportunity keywords) sử dụng Playwright, extension **vidIQ Search Companion** trên YouTube và ChatGPT để lên ý tưởng video.
+Tài liệu này mô tả chi tiết quy trình tự động hóa tìm kiếm và chấm điểm từ khóa cơ hội cao (high-opportunity keywords) sử dụng Playwright, một **extension chấm điểm từ khóa** trên YouTube và ChatGPT để lên ý tưởng video.
 
 ---
 
 ## 1. Tổng quan kiến trúc (Overview)
-Thay vì sử dụng API trả phí của vidIQ, hệ thống sử dụng một trình duyệt giả lập (Playwright) mở trang kết quả tìm kiếm YouTube (`https://www.youtube.com/results?search_query={keyword}`) có cài đặt sẵn **Extension vidIQ Chrome**. 
+Thay vì sử dụng API chấm điểm từ khóa trả phí, hệ thống sử dụng một trình duyệt giả lập (Playwright) mở trang kết quả tìm kiếm YouTube (`https://www.youtube.com/results?search_query={keyword}`) có cài đặt sẵn **extension chấm điểm từ khóa cho Chrome**.
 
-Hệ thống sẽ cào dữ liệu từ bảng điều khiển (overlay panel) do extension vidIQ tiêm (inject) vào thanh bên phải của trang tìm kiếm YouTube.
+Hệ thống sẽ cào dữ liệu từ bảng điều khiển (overlay panel) do extension tiêm (inject) vào thanh bên phải của trang tìm kiếm YouTube.
 
 ---
 
@@ -16,7 +16,7 @@ Mỗi từ khóa được quét sẽ trả về cấu trúc dữ liệu sau:
 * **`score` (Overall Score / Điểm tổng quan):** Thang điểm từ 0 đến 100, đại diện cho mức độ cơ hội của từ khóa. Điểm càng cao nghĩa là từ khóa càng tiềm năng.
 * **`volume` (Search Volume / Lượng tìm kiếm):** Mức độ tìm kiếm của người dùng (ví dụ: High, Medium, Low).
 * **`competition` (Competition / Độ cạnh tranh):** Mức độ cạnh tranh của các kênh khác (ví dụ: High, Low, Very Low).
-* **`related` (Related Keywords / Từ khóa liên quan):** Danh sách các từ khóa gợi ý liên quan đi kèm điểm số tương ứng do vidIQ gợi ý.
+* **`related` (Related Keywords / Từ khóa liên quan):** Danh sách các từ khóa gợi ý liên quan đi kèm điểm số tương ứng do extension gợi ý.
 
 ---
 
@@ -32,10 +32,10 @@ Quy trình chấm điểm và chọn ra từ khóa tối ưu nhất trải qua 2
 
 ### Bước 1: Giai đoạn 1 - Chấm điểm Seeds gốc (Phase 1: Score Seeds)
 * Hệ thống nhận vào danh sách các từ khóa hạt giống (`seeds`) được nhập thủ công hoặc lấy tự động từ các chủ đề thịnh hành trên Google Trends phù hợp với ngách của kênh (`niche`).
-* Chạy trình duyệt để chấm điểm từng từ khóa hạt giống này qua vidIQ.
+* Chạy trình duyệt để chấm điểm từng từ khóa hạt giống này qua extension.
 
 ### Bước 2: Trích xuất từ khóa liên quan (Related Keyword Extraction)
-* Từ kết quả chấm điểm của các `seeds` ở Bước 1, hệ thống thu thập các từ khóa liên quan (`related keywords`) trong bảng điều khiển của vidIQ.
+* Từ kết quả chấm điểm của các `seeds` ở Bước 1, hệ thống thu thập các từ khóa liên quan (`related keywords`) trong bảng điều khiển của extension.
 * Loại bỏ các từ khóa trùng lặp và các từ khóa trùng với `seeds` gốc để tạo ra một "hồ chứa từ khóa liên quan" (`related_pool`).
 
 ### Bước 3: Giai đoạn 2 - Chấm điểm từ khóa liên quan (Phase 2: Score Related)
@@ -53,8 +53,8 @@ Quy trình chấm điểm và chọn ra từ khóa tối ưu nhất trải qua 2
 ---
 
 ## 4. Xử lý các trường hợp đặc biệt (Edge Cases)
-* **Lỗi "Not enough search data":** Đối với những từ khóa quá ngách hoặc lượng tìm kiếm quá thấp, vidIQ không trả về điểm số. Hệ thống sẽ ghi nhận `score = None` và đánh dấu `note = "not_enough_search_data"`. Các từ khóa này sẽ được xử lý như các từ khóa có tín hiệu thấp để tránh gây gián đoạn luồng chạy của hệ thống.
-* **Không bật được vidIQ:** Nếu extension không hoạt động hoặc không đăng nhập, hệ thống sẽ báo lỗi `BrowserDriverError` cho từ khóa đó và chuyển sang từ khóa tiếp theo thay vì dừng toàn bộ tiến trình.
+* **Lỗi "Not enough search data":** Đối với những từ khóa quá ngách hoặc lượng tìm kiếm quá thấp, extension không trả về điểm số. Hệ thống sẽ ghi nhận `score = None` và đánh dấu `note = "not_enough_search_data"`. Các từ khóa này sẽ được xử lý như các từ khóa có tín hiệu thấp để tránh gây gián đoạn luồng chạy của hệ thống.
+* **Không bật được extension:** Nếu extension không hoạt động hoặc không đăng nhập, hệ thống sẽ báo lỗi `BrowserDriverError` cho từ khóa đó và chuyển sang từ khóa tiếp theo thay vì dừng toàn bộ tiến trình.
 
 ---
 

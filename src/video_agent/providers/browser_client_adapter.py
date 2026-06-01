@@ -14,14 +14,6 @@ class BrowserClientLLMProvider:
         return await self.client.run_session(site, messages)
 
 
-class BrowserClientKeywordScorer:
-    def __init__(self, client: BrowserClient) -> None:
-        self.client = client
-
-    async def score_keywords(self, keywords: list[str]) -> list[dict[str, Any]]:
-        return await self.client.run_vidiq_scores(keywords)
-
-
 class BrowserClientImageProvider:
     def __init__(self, client: BrowserClient) -> None:
         self.client = client
@@ -39,4 +31,3 @@ class BrowserClientImageProvider:
             project_name=project_name,
             out_path=out_path,
         )
-

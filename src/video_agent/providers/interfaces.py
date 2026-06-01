@@ -9,11 +9,6 @@ class LLMProvider(Protocol):
         ...
 
 
-class KeywordScorer(Protocol):
-    async def score_keywords(self, keywords: list[str]) -> list[dict[str, Any]]:
-        ...
-
-
 class ImageProvider(Protocol):
     async def generate_image(
         self,
@@ -32,4 +27,3 @@ class TTSProvider(Protocol):
 class Renderer(Protocol):
     def render(self, job_dir: Path, channel_path: Path, **kwargs: Any) -> Path | None:
         ...
-

@@ -18,7 +18,7 @@ The MVP must produce real local artifacts that can be manually uploaded to YouTu
 - `seo.json`
 - `report.md`
 
-The MVP intentionally excludes Hermes Agent, YouTube API upload, OAuth, Telegram approval, scheduled publishing, trend research, vidIQ, Google Trends, and YouTube scraping.
+The MVP intentionally excludes Hermes Agent, YouTube API upload, OAuth, Telegram approval, scheduled publishing, trend research, keyword scoring, Google Trends, and YouTube scraping.
 
 ## Architecture Decision
 
@@ -298,7 +298,7 @@ The MVP does not include:
 - Telegram approval
 - schedule publish
 - trend research
-- vidIQ integration
+- keyword scoring integration
 - Google Trends integration
 - YouTube scraping
 - real LLM/TTS/image/stock APIs

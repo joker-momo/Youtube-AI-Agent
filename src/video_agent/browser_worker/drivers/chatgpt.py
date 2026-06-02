@@ -546,6 +546,26 @@ class ChatGPTDriver:
 
         await human_pause(self.page, min_ms=1200, max_ms=2200)
 
+        # Check for HTTP ERROR 431 and click Reload (up to 2 attempts)
+        for reload_attempt in range(2):
+            try:
+                content = await self.page.content()
+                if "HTTP ERROR 431" in content or "431" in content:
+                    reload_btn = self.page.locator("button#reload-button, button:has-text('Reload')").first
+                    if await reload_btn.is_visible(timeout=2000):
+                        print(
+                            f"[chatgpt] HTTP 431 detected (attempt {reload_attempt+1}). Clicking Reload...",
+                            flush=True,
+                        )
+                        await reload_btn.click()
+                        await self.page.wait_for_timeout(3000)
+                    else:
+                        break
+                else:
+                    break
+            except Exception:
+                break
+
         if _is_login_url(self.page.url):
             shot = await save_trace_screenshot(self.page, prefix="chatgpt-login")
             raise LoginRequiredError(

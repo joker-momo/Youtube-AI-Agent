@@ -211,7 +211,7 @@ fi
 if [[ "$RUN_MODE" == "stop" ]]; then
   echo -e "${CYAN}Stopping all services...${NC}"
   if docker info &>/dev/null; then
-    docker compose ${COMPOSE_ARGS} down
+    docker compose ${COMPOSE_ARGS} --profile "*" down --remove-orphans
   else
     echo -e "${YELLOW}Docker is not running; skipping container shutdown.${NC}"
   fi

@@ -3818,19 +3818,24 @@ function renderShortStep(jobId, shortId, s, idx) {
   if (s.name === 'script') {
     inputs = [{path: `short_ideas.json`, name: 'short_ideas.json'}];
     outputs = [{path: `${shortPrefix}short_script.json`, name: 'short_script.json'}];
+  } else if (s.name === 'qa_script') {
+    inputs = [{path: `${shortPrefix}short_script.json`, name: 'short_script.json'}];
+    outputs = [{path: `${shortPrefix}short_script_qa.json`, name: 'short_script_qa.json'}];
   } else if (s.name === 'scenes') {
     inputs = [{path: `${shortPrefix}short_script.json`, name: 'short_script.json'}];
     outputs = [{path: `${shortPrefix}short_scenes.json`, name: 'short_scenes.json'}];
+  } else if (s.name === 'qa_scenes') {
+    inputs = [{path: `${shortPrefix}short_scenes.json`, name: 'short_scenes.json'}];
+    outputs = [{path: `${shortPrefix}short_scenes_qa.json`, name: 'short_scenes_qa.json'}];
   } else if (s.name === 'seo') {
     inputs = [{path: `${shortPrefix}short_script.json`, name: 'short_script.json'}];
     outputs = [
       {path: `${shortPrefix}short_seo.json`, name: 'short_seo.json'},
       {path: `${shortPrefix}short_source_map.json`, name: 'short_source_map.json'}
     ];
-  } else if (s.name === 'qa') {
-    inputs = [{path: `${shortPrefix}short_scenes.json`, name: 'short_scenes.json'}];
-    outputs = [{path: `${shortPrefix}short_qa.json`, name: 'short_qa.json'}];
-  } else if (s.name === 'audio') {
+  }
+ else if (s.name === 'audio') {
+
     inputs = [{path: `${shortPrefix}short_scenes.json`, name: 'short_scenes.json'}];
     outputs = [{path: `${shortPrefix}audio/short_mix.m4a`, name: 'short_mix.m4a'}];
   } else if (s.name === 'render') {
@@ -3893,10 +3898,12 @@ function renderShortStepsTimeline(jobId, draft) {
     
     let nameVal = '';
     if (s.label === 'Script') nameVal = 'script';
+    else if (s.label === 'QA Script') nameVal = 'qa_script';
     else if (s.label === 'Scenes') nameVal = 'scenes';
+    else if (s.label === 'QA Scenes') nameVal = 'qa_scenes';
     else if (s.label === 'SEO') nameVal = 'seo';
-    else if (s.label === 'QA') nameVal = 'qa';
     else if (s.label === 'Render') nameVal = 'render';
+
     
     return {
       name: nameVal,
@@ -3999,11 +4006,13 @@ function inferRenderStages(draft) {
   const hasVideo = !!draft.video_path;
   const stages = [
     { label: 'Script', cls: 'done' },
+    { label: 'QA Script', cls: qa ? 'done' : '' },
     { label: 'Scenes', cls: 'done' },
+    { label: 'QA Scenes', cls: qa ? 'done' : '' },
     { label: 'SEO', cls: 'done' },
-    { label: 'QA', cls: qa ? 'done' : '' },
     { label: 'Render', cls: hasVideo ? 'done' : '' },
   ];
+
   if (st === 'failed') {
     for (let i = stages.length - 1; i >= 0; i--) { if (!stages[i].cls) { stages[i].cls = 'fail'; break; } }
   }
@@ -4112,11 +4121,12 @@ async function spResumeShort(jobId, shortId, currentStatus, btn) {
       // Check if preceding generation stages are completed
       const draft = (window.SHORTS_DRAFTS_CACHE || []).find(d => d.short_id === shortId);
       const stages = draft ? (draft.stages || []) : [];
-      const genStages = ['script', 'scenes', 'seo', 'qa'];
+      const genStages = ['script', 'qa_script', 'scenes', 'qa_scenes', 'seo'];
       const needsRegen = genStages.some(name => {
         const stage = stages.find(s => s.name === name);
         return !stage || stage.status !== 'completed';
       });
+
       
       if (needsRegen) {
         url = '/jobs/' + encodeURIComponent(jobId) + '/shorts/' + encodeURIComponent(shortId) + '/regenerate';

@@ -117,6 +117,7 @@ def build_short_scenes(
     channel_config: dict,
     llm_fn: Callable[..., str],
     *,
+    feedback: str = "",
     attempt: int = 1,
 ) -> dict[str, Any]:
     """Spec v6 §2.4: ChatGPT writes scenes AND picks each scene's layout.
@@ -124,7 +125,7 @@ def build_short_scenes(
     The deterministic ``normalize_short_scenes`` only fills missing fields and
     maps any legacy long-form layout names (backward compat); it must NOT
     overwrite layouts the LLM emitted."""
-    prompt = prompts.short_scene_prompt_v6(channel_config, short_plan, short_script)
+    prompt = prompts.short_scene_prompt_v6(channel_config, short_plan, short_script, feedback=feedback)
     log_llm_call(LLMCallLog(
         task="short_scene_builder", provider=PROVIDER,
         short_id=short_plan.get("short_id", "-"), attempt=attempt,

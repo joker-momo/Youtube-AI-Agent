@@ -327,15 +327,17 @@ def _run_short_render_job(job: dict, *, job_dir: Path, channel_path: Path) -> No
     # Initialize default stages if missing (backward compatibility)
     if "stages" not in status:
         script_ok = (short_dir / paths.SHORT_SCRIPT_FILE).exists()
+        qa_script_ok = (short_dir / paths.SHORT_SCRIPT_QA_FILE).exists()
         scenes_ok = (short_dir / paths.SHORT_SCENES_FILE).exists()
+        qa_scenes_ok = (short_dir / paths.SHORT_SCENES_QA_FILE).exists()
         seo_ok = (short_dir / paths.SHORT_SEO_FILE).exists()
-        qa_ok = (short_dir / paths.SHORT_QA_FILE).exists()
 
         status["stages"] = [
             {"name": "script", "label": "Short Script", "status": "completed" if script_ok else "failed", "started_at": None, "completed_at": None, "actual_seconds": None},
+            {"name": "qa_script", "label": "QA Script", "status": "completed" if qa_script_ok else "failed", "started_at": None, "completed_at": None, "actual_seconds": None},
             {"name": "scenes", "label": "Short Scenes", "status": "completed" if scenes_ok else "failed", "started_at": None, "completed_at": None, "actual_seconds": None},
+            {"name": "qa_scenes", "label": "QA Scenes", "status": "completed" if qa_scenes_ok else "failed", "started_at": None, "completed_at": None, "actual_seconds": None},
             {"name": "seo", "label": "Short SEO", "status": "completed" if seo_ok else "failed", "started_at": None, "completed_at": None, "actual_seconds": None},
-            {"name": "qa", "label": "Quality Assurance", "status": "completed" if qa_ok else "failed", "started_at": None, "completed_at": None, "actual_seconds": None},
             {"name": "audio", "label": "Audio TTS & Mix", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
             {"name": "render", "label": "Video & Cover Render", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         ]
@@ -381,15 +383,19 @@ def _run_short_render_job(job: dict, *, job_dir: Path, channel_path: Path) -> No
         if s["name"] == "script" and not (short_dir / paths.SHORT_SCRIPT_FILE).exists():
             s["status"] = "failed"
             missing_files.append("Short Script")
+        elif s["name"] == "qa_script" and not (short_dir / paths.SHORT_SCRIPT_QA_FILE).exists():
+            s["status"] = "failed"
+            missing_files.append("QA Script")
         elif s["name"] == "scenes" and not (short_dir / paths.SHORT_SCENES_FILE).exists():
             s["status"] = "failed"
             missing_files.append("Short Scenes")
+        elif s["name"] == "qa_scenes" and not (short_dir / paths.SHORT_SCENES_QA_FILE).exists():
+            s["status"] = "failed"
+            missing_files.append("QA Scenes")
         elif s["name"] == "seo" and not (short_dir / paths.SHORT_SEO_FILE).exists():
             s["status"] = "failed"
             missing_files.append("Short SEO")
-        elif s["name"] == "qa" and not (short_dir / paths.SHORT_QA_FILE).exists():
-            s["status"] = "failed"
-            missing_files.append("Quality Assurance")
+
             
     if missing_files:
         status["status"] = "failed"

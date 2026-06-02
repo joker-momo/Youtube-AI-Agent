@@ -116,9 +116,10 @@ def build_short(
 
     stages = [
         {"name": "script", "label": "Short Script", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
+        {"name": "qa_script", "label": "QA Script", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "scenes", "label": "Short Scenes", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
+        {"name": "qa_scenes", "label": "QA Scenes", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "seo", "label": "Short SEO", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
-        {"name": "qa", "label": "Quality Assurance", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "audio", "label": "Audio TTS & Mix", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "render", "label": "Video & Cover Render", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
     ]
@@ -169,16 +170,17 @@ def build_short(
                 }
             )
 
-    qa_result: dict[str, Any] = {"verdict": "FAIL", "issues": ["not_generated"]}
+    script_qa_result: dict[str, Any] = {"verdict": "FAIL", "issues": ["not_generated"]}
     short_script: dict[str, Any] = {}
-    short_scenes: dict[str, Any] = {}
-    feedback = ""
-    attempts = 0
+    script_feedback = ""
+    script_attempts = 0
 
-    for attempt in range(max_regen + 1):  # initial + N regenerations
+    plan_for_prompt = {**short_plan, "source_long_job_id": long_job_dir.name}
+
+    # --- Loop 1: Script + QA Script ---
+    for attempt in range(max_regen + 1):
         check_stop()
-        attempts = attempt + 1
-        plan_for_prompt = {**short_plan, "source_long_job_id": long_job_dir.name}
+        script_attempts = attempt + 1
         
         # --- Stage 1: Script ---
         update_stage("script", "in_progress")
@@ -187,7 +189,7 @@ def build_short(
             short_script = short_script_builder.build_short_script(
                 long_job_dir, plan_for_prompt, channel_config, llm_fn,
                 source_artifacts=source_artifacts,
-                feedback=feedback, attempt=attempts,
+                feedback=script_feedback, attempt=script_attempts,
             )
             update_stage("script", "completed")
         except Exception as exc:
@@ -200,13 +202,69 @@ def build_short(
         status["hook"] = str(short_script.get("hook") or "")
         write_short_status(long_job_dir, short_id, status)
 
-        # --- Stage 2: Scenes ---
+        # Build Source Map early so Script QA can read it
+        try:
+            sm = source_map.build_source_map(long_job_dir, short_plan, short_script, channel_config, long_video_url)
+            atomic_write_json(sd / paths.SHORT_SOURCE_MAP_FILE, sm)
+        except Exception:
+            pass
+
+        # --- Stage 2: QA Script ---
+        update_stage("qa_script", "in_progress")
+        try:
+            check_stop()
+            script_qa_result = qa.run_short_script_qa(
+                long_job_dir, short_id, channel_config,
+                music_track=music_track, gemini_fn=gemini_fn, attempt=script_attempts,
+            )
+            atomic_write_json(sd / paths.SHORT_SCRIPT_QA_FILE, script_qa_result)
+            verdict = script_qa_result.get("verdict", "FAIL")
+            update_stage("qa_script", "completed" if verdict == "PASS" else "failed", qa_verdict=verdict)
+        except Exception as exc:
+            update_stage("qa_script", "failed")
+            status["status"] = "failed"
+            write_short_status(long_job_dir, short_id, status)
+            raise exc
+
+        if script_qa_result["verdict"] == "PASS":
+            break
+        script_feedback = "; ".join(script_qa_result.get("required_changes") or script_qa_result.get("issues") or [])
+
+    if script_qa_result["verdict"] != "PASS":
+        update_stage("scenes", "skipped")
+        update_stage("qa_scenes", "skipped")
+        update_stage("seo", "skipped")
+        update_stage("audio", "skipped")
+        update_stage("render", "skipped")
+        status.update({
+            "status": "needs_review",
+            "rendered": False,
+            "uploaded": False,
+            "youtube_url": "",
+            "requires_user_review": True,
+            "qa_verdict": "FAIL",
+            "regeneration_attempts": script_attempts - 1,
+        })
+        write_short_status(long_job_dir, short_id, status)
+        return status
+
+    # --- Loop 2: Scenes + QA Scenes ---
+    scenes_qa_result: dict[str, Any] = {"verdict": "FAIL", "issues": ["not_generated"]}
+    short_scenes: dict[str, Any] = {}
+    scenes_feedback = ""
+    scenes_attempts = 0
+
+    for attempt in range(max_regen + 1):
+        check_stop()
+        scenes_attempts = attempt + 1
+
+        # --- Stage 3: Scenes ---
         update_stage("scenes", "in_progress")
         try:
             check_stop()
             short_scenes = short_scene_builder.build_short_scenes(
                 long_job_dir, plan_for_prompt, short_script, channel_config, llm_fn,
-                attempt=attempts,
+                feedback=scenes_feedback, attempt=scenes_attempts,
             )
             update_stage("scenes", "completed")
         except Exception as exc:
@@ -215,44 +273,63 @@ def build_short(
             write_short_status(long_job_dir, short_id, status)
             raise exc
 
-        # --- Stage 3: SEO & Source Map ---
-        update_stage("seo", "in_progress")
+        # --- Stage 4: QA Scenes ---
+        update_stage("qa_scenes", "in_progress")
         try:
             check_stop()
-            sm = source_map.build_source_map(long_job_dir, short_plan, short_script, channel_config, long_video_url)
-            atomic_write_json(sd / paths.SHORT_SOURCE_MAP_FILE, sm)
-
-            check_stop()
-            short_seo_builder.build_short_seo(
-                long_job_dir, short_id, plan_for_prompt, short_script, channel_config, llm_fn, long_video_url
-            )
-            update_stage("seo", "completed")
-        except Exception as exc:
-            update_stage("seo", "failed")
-            status["status"] = "failed"
-            write_short_status(long_job_dir, short_id, status)
-            raise exc
-
-        # --- Stage 4: QA ---
-        update_stage("qa", "in_progress")
-        try:
-            check_stop()
-            qa_result = qa.run_short_qa(
+            scenes_qa_result = qa.run_short_scenes_qa(
                 long_job_dir, short_id, channel_config,
-                music_track=music_track, gemini_fn=gemini_fn, attempt=attempts,
+                gemini_fn=gemini_fn, attempt=scenes_attempts,
             )
-            atomic_write_json(sd / paths.SHORT_QA_FILE, qa_result)
-            verdict = qa_result.get("verdict", "FAIL")
-            update_stage("qa", "completed" if verdict == "PASS" else "failed", qa_verdict=verdict)
+            atomic_write_json(sd / paths.SHORT_SCENES_QA_FILE, scenes_qa_result)
+            verdict = scenes_qa_result.get("verdict", "FAIL")
+            update_stage("qa_scenes", "completed" if verdict == "PASS" else "failed", qa_verdict=verdict)
         except Exception as exc:
-            update_stage("qa", "failed")
+            update_stage("qa_scenes", "failed")
             status["status"] = "failed"
             write_short_status(long_job_dir, short_id, status)
             raise exc
 
-        if qa_result["verdict"] == "PASS":
+        if scenes_qa_result["verdict"] == "PASS":
             break
-        feedback = "; ".join(qa_result.get("required_changes") or qa_result.get("issues") or [])
+        scenes_feedback = "; ".join(scenes_qa_result.get("required_changes") or scenes_qa_result.get("issues") or [])
+
+    if scenes_qa_result["verdict"] != "PASS":
+        update_stage("seo", "skipped")
+        update_stage("audio", "skipped")
+        update_stage("render", "skipped")
+        duration_sec = float(
+            short_scenes.get("total_duration_sec")
+            or sum(float(s.get("duration_sec") or 0) for s in (short_scenes.get("scenes") or []))
+            or short_script.get("target_duration_sec")
+            or 0
+        )
+        status.update({
+            "status": "needs_review",
+            "rendered": False,
+            "uploaded": False,
+            "youtube_url": "",
+            "requires_user_review": True,
+            "qa_verdict": "FAIL",
+            "duration_sec": round(duration_sec, 1),
+            "regeneration_attempts": (script_attempts - 1) + (scenes_attempts - 1),
+        })
+        write_short_status(long_job_dir, short_id, status)
+        return status
+
+    # --- Stage 5: SEO ---
+    update_stage("seo", "in_progress")
+    try:
+        check_stop()
+        short_seo_builder.build_short_seo(
+            long_job_dir, short_id, plan_for_prompt, short_script, channel_config, llm_fn, long_video_url
+        )
+        update_stage("seo", "completed")
+    except Exception as exc:
+        update_stage("seo", "failed")
+        status["status"] = "failed"
+        write_short_status(long_job_dir, short_id, status)
+        raise exc
 
     hook = str(short_script.get("hook") or "")
     cover_text = _cover_text(hook, cover_words)
@@ -268,23 +345,10 @@ def build_short(
         "hook": hook,
         "cover_text": cover_text,
         "duration_sec": round(duration_sec, 1),
-        "qa_verdict": qa_result["verdict"],
-        "regeneration_attempts": attempts - 1,
+        "qa_verdict": "PASS",
+        "regeneration_attempts": (script_attempts - 1) + (scenes_attempts - 1),
     })
     write_short_status(long_job_dir, short_id, status)
-
-    if qa_result["verdict"] != "PASS":
-        update_stage("audio", "skipped")
-        update_stage("render", "skipped")
-        status.update({
-            "status": "needs_review",
-            "rendered": False,
-            "uploaded": False,
-            "youtube_url": "",
-            "requires_user_review": True,
-        })
-        write_short_status(long_job_dir, short_id, status)
-        return status
 
     if require_render_confirmation:
         _write_render_props(sd, short_scenes, channel_config, music_track)
@@ -302,6 +366,7 @@ def build_short(
         })
         write_short_status(long_job_dir, short_id, status)
         return status
+
 
     # QA PASS & No confirmation required → produce audio, mix, render props, video, cover.
     # --- Stage 5: Audio ---

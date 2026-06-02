@@ -182,3 +182,211 @@ def run_short_qa(
     out = dict(gemini)
     out["warnings"] = merged_warnings
     return out
+
+
+def _run_rule_script_qa(
+    long_job_dir: Path,
+    short_id: str,
+    channel_config: dict,
+    *,
+    music_track: str | None,
+) -> dict[str, Any]:
+    sd = paths.short_dir(long_job_dir, short_id)
+    script = _load(sd / paths.SHORT_SCRIPT_FILE)
+    source_map = _load(sd / paths.SHORT_SOURCE_MAP_FILE)
+
+    cta_max_words = int(((channel_config.get("shorts") or {}).get("funnel") or {}).get("cta_max_words", 8))
+
+    narration = str(script.get("narration") or "")
+    low = narration.lower()
+    hook = str(script.get("hook") or "")
+
+    issues: list[str] = []
+    warnings: list[str] = []
+
+    if any(g in low for g in _GREETINGS) or any(g in hook.lower() for g in _GREETINGS):
+        issues.append("greeting_or_generic_intro")
+    if sum(1 for d in _DISCLAIMER if d in low) >= 2 or "no sustituye" in low:
+        issues.append("long_disclaimer")
+    if any(o in low for o in _OVERCLAIM):
+        issues.append("medical_overclaim")
+    if not narration.strip():
+        issues.append("empty_narration")
+    if not source_map or not (source_map.get("used_source_scenes")):
+        issues.append("missing_source_map")
+
+    if _word_count(script.get("cta", "")) > cta_max_words:
+        warnings.append("cta_too_long")
+    if not music_track:
+        issues.append("music_not_selected")
+
+    verdict = "PASS" if not issues else "FAIL"
+    return {
+        "verdict": verdict,
+        "issues": issues,
+        "required_changes": issues,
+        "warnings": warnings,
+        "scores": {
+            "hook": 90 if "greeting_or_generic_intro" not in issues else 40,
+            "payoff": 85 if "empty_narration" not in issues else 30,
+            "source_fidelity": 90 if "missing_source_map" not in issues else 30,
+            "safety": 95 if not ({"long_disclaimer", "medical_overclaim"} & set(issues)) else 40,
+        },
+        "provider": "rule_based",
+    }
+
+
+def _run_gemini_script_qa(
+    long_job_dir: Path,
+    short_id: str,
+    channel_config: dict,
+    *,
+    gemini_fn: Callable[[str], str],
+    attempt: int,
+) -> dict[str, Any]:
+    sd = paths.short_dir(long_job_dir, short_id)
+    script = _load(sd / paths.SHORT_SCRIPT_FILE)
+    source_map = _load(sd / paths.SHORT_SOURCE_MAP_FILE)
+    prompt = prompts.gemini_script_qa_prompt(channel_config, script, source_map)
+    log_llm_call(LLMCallLog(
+        task="short_script_qa", provider=LLM_PROVIDER, short_id=short_id,
+        attempt=attempt,
+        input_artifacts=["short_script.json", "short_source_map.json"],
+        output_artifact="short_script_qa.json",
+    ))
+    raw = gemini_fn(prompt)
+    parsed = _parse_gemini(raw) or {}
+    verdict = str(parsed.get("verdict", "")).upper() or "FAIL"
+    if verdict not in ("PASS", "FAIL"):
+        verdict = "FAIL"
+    return {
+        "verdict": verdict,
+        "issues": list(parsed.get("issues") or []),
+        "required_changes": list(parsed.get("required_changes") or []),
+        "warnings": list(parsed.get("warnings") or []),
+        "scores": dict(parsed.get("scores") or {}),
+        "provider": LLM_PROVIDER,
+    }
+
+
+def run_short_script_qa(
+    long_job_dir: Path,
+    short_id: str,
+    channel_config: dict,
+    *,
+    music_track: str | None = None,
+    gemini_fn: Callable[[str], str] | None = None,
+    attempt: int = 1,
+) -> dict[str, Any]:
+    rule = _run_rule_script_qa(long_job_dir, short_id, channel_config, music_track=music_track)
+    if rule["verdict"] == "FAIL":
+        return rule
+    if gemini_fn is None:
+        return rule
+    gemini = _run_gemini_script_qa(long_job_dir, short_id, channel_config,
+                                   gemini_fn=gemini_fn, attempt=attempt)
+    merged_warnings = sorted(set(gemini["warnings"] + rule["warnings"]))
+    out = dict(gemini)
+    out["warnings"] = merged_warnings
+    return out
+
+
+def _run_rule_scenes_qa(
+    long_job_dir: Path,
+    short_id: str,
+    channel_config: dict,
+) -> dict[str, Any]:
+    sd = paths.short_dir(long_job_dir, short_id)
+    scenes_doc = _load(sd / paths.SHORT_SCENES_FILE)
+    scenes = scenes_doc.get("scenes") or []
+
+    dcfg = (channel_config.get("shorts") or {}).get("duration") or {}
+    min_sec = float(dcfg.get("min_sec", 20))
+    max_sec = float(dcfg.get("target_max_sec", 45))
+
+    issues: list[str] = []
+    warnings: list[str] = []
+
+    total = scenes_doc.get("total_duration_sec") or sum(
+        float(s.get("duration_sec") or 0) for s in scenes
+    )
+    if total and not (min_sec <= float(total) <= max_sec):
+        issues.append(f"duration_out_of_range_{round(float(total),1)}s")
+
+    cta_scene_dur = 0.0
+    for s in scenes:
+        ost_words = _word_count(s.get("on_screen_text", ""))
+        if ost_words and not (2 <= ost_words <= 5):
+            warnings.append(f"on_screen_text_words_{s.get('id')}={ost_words}")
+        if str(s.get("layout")) == "short_cta":
+            cta_scene_dur += float(s.get("duration_sec") or 0)
+    if total and cta_scene_dur > 0.2 * float(total):
+        issues.append("cta_dominates")
+
+    verdict = "PASS" if not issues else "FAIL"
+    return {
+        "verdict": verdict,
+        "issues": issues,
+        "required_changes": issues,
+        "warnings": warnings,
+        "scores": {
+            "funnel": 80 if "cta_dominates" not in issues else 40,
+            "mobile_readability": 90,
+        },
+        "provider": "rule_based",
+    }
+
+
+def _run_gemini_scenes_qa(
+    long_job_dir: Path,
+    short_id: str,
+    channel_config: dict,
+    *,
+    gemini_fn: Callable[[str], str],
+    attempt: int,
+) -> dict[str, Any]:
+    sd = paths.short_dir(long_job_dir, short_id)
+    script = _load(sd / paths.SHORT_SCRIPT_FILE)
+    scenes_doc = _load(sd / paths.SHORT_SCENES_FILE)
+    prompt = prompts.gemini_scenes_qa_prompt(channel_config, script, scenes_doc)
+    log_llm_call(LLMCallLog(
+        task="short_scenes_qa", provider=LLM_PROVIDER, short_id=short_id,
+        attempt=attempt,
+        input_artifacts=["short_script.json", "short_scenes.json"],
+        output_artifact="short_scenes_qa.json",
+    ))
+    raw = gemini_fn(prompt)
+    parsed = _parse_gemini(raw) or {}
+    verdict = str(parsed.get("verdict", "")).upper() or "FAIL"
+    if verdict not in ("PASS", "FAIL"):
+        verdict = "FAIL"
+    return {
+        "verdict": verdict,
+        "issues": list(parsed.get("issues") or []),
+        "required_changes": list(parsed.get("required_changes") or []),
+        "warnings": list(parsed.get("warnings") or []),
+        "scores": dict(parsed.get("scores") or {}),
+        "provider": LLM_PROVIDER,
+    }
+
+
+def run_short_scenes_qa(
+    long_job_dir: Path,
+    short_id: str,
+    channel_config: dict,
+    *,
+    gemini_fn: Callable[[str], str] | None = None,
+    attempt: int = 1,
+) -> dict[str, Any]:
+    rule = _run_rule_scenes_qa(long_job_dir, short_id, channel_config)
+    if rule["verdict"] == "FAIL":
+        return rule
+    if gemini_fn is None:
+        return rule
+    gemini = _run_gemini_scenes_qa(long_job_dir, short_id, channel_config,
+                                   gemini_fn=gemini_fn, attempt=attempt)
+    merged_warnings = sorted(set(gemini["warnings"] + rule["warnings"]))
+    out = dict(gemini)
+    out["warnings"] = merged_warnings
+    return out
+

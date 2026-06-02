@@ -225,7 +225,7 @@ def planner_prompt(channel_config: dict, candidates: list[dict],
 
 
 def short_scene_prompt_v6(channel_config: dict, short_plan: dict,
-                          short_script: dict) -> str:
+                          short_script: dict, feedback: str = "") -> str:
     """Spec v6 §2.4 / §9.3 — ChatGPT chooses each scene's layout."""
     schema = {
         "channel_id": (channel_config.get("channel") or {}).get("id", ""),
@@ -262,12 +262,15 @@ def short_scene_prompt_v6(channel_config: dict, short_plan: dict,
         "- ChatGPT decides each scene's layout — sequence examples are "
         "recommendations, not deterministic code output.\n"
     )
-    return (
+    prompt = (
         "Turn this Short script into vertical (9:16) scenes.\n\n"
         f"SCRIPT:\n{json.dumps(short_script, ensure_ascii=False)[:2000]}\n\n"
         f"{_OUTPUT_RULES}\n{rules}\n"
         f"Return JSON exactly:\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n"
     )
+    if feedback:
+        prompt += f"\nFIX THESE QA ISSUES FROM THE PREVIOUS ATTEMPT:\n{feedback}\n"
+    return prompt
 
 
 def gemini_qa_prompt(channel_config: dict, short_script: dict,
@@ -308,3 +311,73 @@ def gemini_qa_prompt(channel_config: dict, short_script: dict,
         f"{body}{_OUTPUT_RULES}\n{rules}\n"
         f"Return JSON exactly:\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n"
     )
+
+
+def gemini_script_qa_prompt(channel_config: dict, short_script: dict, short_source_map: dict | None = None) -> str:
+    """Gemini QA validates script quality, language, and safety."""
+    schema = {
+        "verdict": "PASS",
+        "issues": [],
+        "required_changes": [],
+        "warnings": [],
+        "scores": {
+            "hook": 90, "payoff": 85, "funnel": 80,
+            "source_fidelity": 90, "safety": 95,
+        },
+    }
+    rules = (
+        "GEMINI SCRIPT QA RULES:\n"
+        "- first 2s = pain/curiosity/number/mistake; no greeting.\n"
+        "- one main idea; payoff before CTA; CTA short; CTA <= 8 words.\n"
+        "- no medical overclaim, no miracle promise, no long disclaimer.\n"
+        "- source fidelity OK (references to original topics match and make sense).\n"
+        "- Spanish for Spain, es-ES.\n"
+        "- PASS only if script is ready to generate scenes. FAIL with specific required_changes "
+        "when script regeneration is needed.\n"
+    )
+    body = f"SCRIPT:\n{json.dumps(short_script, ensure_ascii=False)[:1500]}\n\n"
+    if short_source_map:
+        body += f"SOURCE MAP:\n{json.dumps(short_source_map, ensure_ascii=False)[:600]}\n\n"
+    return (
+        "You are the Shorts Script QA reviewer for a Spain-first wellness channel (45+).\n\n"
+        f"{body}{_OUTPUT_RULES}\n{rules}\n"
+        f"Return JSON exactly:\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n"
+    )
+
+
+def gemini_scenes_qa_prompt(channel_config: dict, short_script: dict, short_scenes: dict) -> str:
+    """Gemini QA validates vertical scene layout, mobile readability, and visuals."""
+    schema = {
+        "verdict": "PASS",
+        "issues": [],
+        "required_changes": [],
+        "warnings": [],
+        "scores": {
+            "funnel": 80,
+            "mobile_readability": 90,
+            "layout": 90,
+        },
+    }
+    rules = (
+        "GEMINI SCENES QA RULES:\n"
+        "- duration 20-45s.\n"
+        "- 5-12 short scenes total.\n"
+        "- first scene layout must be short_hook.\n"
+        "- last scene should be short_cta if a CTA is present in the script.\n"
+        "- on_screen_text 2-5 words; captions <= 2 lines.\n"
+        "- visuals match the script topics and are vertical-friendly.\n"
+        "- layout choices correct; only short_* layouts used.\n"
+        "- primary text not too low.\n"
+        "- PASS only if scenes are ready to render. FAIL with specific required_changes "
+        "when scenes regeneration is needed.\n"
+    )
+    body = (
+        f"SCRIPT:\n{json.dumps(short_script, ensure_ascii=False)[:1500]}\n\n"
+        f"SCENES:\n{json.dumps(short_scenes, ensure_ascii=False)[:1500]}\n\n"
+    )
+    return (
+        "You are the Shorts Scenes QA reviewer for a Spain-first wellness channel (45+).\n\n"
+        f"{body}{_OUTPUT_RULES}\n{rules}\n"
+        f"Return JSON exactly:\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n"
+    )
+

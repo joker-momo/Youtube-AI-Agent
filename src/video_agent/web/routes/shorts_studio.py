@@ -310,6 +310,8 @@ def get_short_detail(job_id: str, short_id: str, jobs_root: Path = Depends(get_j
         raise HTTPException(status_code=404, detail=f"Unknown short: {short_id}")
     status_doc = _read_json(shorts_paths.short_status_path(job_dir, short_id))
     qa_doc = _read_json(short_dir_path / shorts_paths.SHORT_QA_FILE)
+    qa_script_doc = _read_json(short_dir_path / shorts_paths.SHORT_SCRIPT_QA_FILE)
+    qa_scenes_doc = _read_json(short_dir_path / shorts_paths.SHORT_SCENES_QA_FILE)
     script_doc = _read_json(short_dir_path / shorts_paths.SHORT_SCRIPT_FILE)
     scenes_doc = _read_json(short_dir_path / shorts_paths.SHORT_SCENES_FILE)
     seo_doc = _read_json(short_dir_path / shorts_paths.SHORT_SEO_FILE)
@@ -321,6 +323,9 @@ def get_short_detail(job_id: str, short_id: str, jobs_root: Path = Depends(get_j
         "job_id": job_id,
         "status": status_doc,
         "qa": qa_doc,
+        "qa_script": qa_script_doc,
+        "qa_scenes": qa_scenes_doc,
+
         "script_summary": {
             "title": script_doc.get("title", ""),
             "hook": script_doc.get("hook", ""),

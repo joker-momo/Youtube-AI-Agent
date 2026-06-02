@@ -910,6 +910,57 @@
     .step-head { grid-template-columns: 28px minmax(0, 1fr); }
     .step-meta { grid-column: 2; }
   }
+  /* ---- Shorts Studio Page ---- */
+  .shorts-page-wrap { display:none; }
+  .shorts-page-wrap.active { display:block; }
+  .shorts-layout { display:grid; grid-template-columns:320px minmax(0,1fr); gap:12px; align-items:start; }
+  .shorts-jobs-panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); min-height:560px; overflow:hidden; }
+  .shorts-jobs-list { padding:12px; display:grid; gap:8px; max-height:660px; overflow:auto; }
+  .shorts-job-card { border:1px solid var(--line); border-radius:8px; background:#fff; padding:12px 14px; cursor:pointer; transition:border-color 150ms,background 150ms; }
+  .shorts-job-card:hover { border-color:#c9cdd3; }
+  .shorts-job-card.active { border-color:var(--red); background:#fffbfb; box-shadow:inset 3px 0 0 var(--red); }
+  .shorts-job-card .sj-title { font-size:13px; font-weight:750; line-height:1.3; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+  .shorts-job-card .sj-meta { margin-top:6px; display:flex; gap:6px; align-items:center; flex-wrap:wrap; font-size:11px; color:var(--muted); }
+  .shorts-job-card .sj-bar { height:4px; background:#edf0f3; border-radius:999px; overflow:hidden; margin-top:8px; }
+  .shorts-job-card .sj-bar div { height:100%; border-radius:inherit; background:var(--blue); transition:width 200ms; }
+  .shorts-detail-panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); min-height:560px; padding:24px; }
+  .shorts-tabs { display:flex; gap:8px; border-bottom:1px solid var(--line); padding-bottom:8px; margin-bottom:16px; }
+  .shorts-tab-btn { border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--muted); font-size:12px; font-weight:700; height:30px; padding:0 14px; cursor:pointer; }
+  .shorts-tab-btn.active { border-color:#b9d7f7; color:var(--blue); background:var(--blue-soft); }
+  .shorts-tab-content { display:none; }
+  .shorts-tab-content.active { display:block; }
+  .shorts-header { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:16px; }
+  .shorts-header-info h3 { margin:0; font-size:18px; font-weight:780; }
+  .shorts-header-info p { margin:5px 0 0; font-size:12px; color:var(--muted); }
+  .shorts-actions { display:flex; gap:8px; flex-wrap:wrap; flex-shrink:0; }
+  .render-card { border:1px solid var(--line); border-radius:8px; background:#fff; margin-bottom:12px; overflow:hidden; }
+  .render-card-head { display:grid; grid-template-columns:28px minmax(0,1fr) auto; gap:12px; align-items:center; padding:12px 14px; cursor:pointer; }
+  .render-card-head:hover { background:#fafafa; }
+  .render-card .rc-num { width:28px; height:28px; border-radius:999px; display:grid; place-items:center; background:#f1f2f4; color:var(--muted); font-size:12px; font-weight:750; }
+  .render-card.rendered .rc-num { background:var(--green); color:#fff; }
+  .render-card.failed .rc-num { background:var(--red); color:#fff; }
+  .render-card.in_progress .rc-num { background:var(--blue); color:#fff; }
+  .render-card .rc-label .name { font-size:13px; font-weight:700; }
+  .render-card .rc-label .code { font-size:11px; color:var(--muted-2); margin-top:2px; }
+  .render-card-body { display:none; padding:0 14px 14px 54px; }
+  .render-card.open .render-card-body { display:block; }
+  .render-stages { display:flex; gap:4px; margin:8px 0; }
+  .render-stage { flex:1; height:6px; border-radius:3px; background:#e5e7eb; position:relative; }
+  .render-stage.done { background:var(--green); }
+  .render-stage.active { background:var(--blue); animation:stagePulse 1.2s ease-in-out infinite; }
+  .render-stage.fail { background:var(--red); }
+  .render-stage-labels { display:flex; gap:4px; margin-bottom:8px; }
+  .render-stage-label { flex:1; font-size:10px; text-align:center; color:var(--muted); }
+  .render-stage-label.done { color:var(--green); font-weight:700; }
+  .render-stage-label.active { color:var(--blue); font-weight:700; }
+  .render-stage-label.fail { color:var(--red); font-weight:700; }
+  .render-output { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px; }
+  .render-output video { width:100%; border-radius:6px; border:1px solid var(--line); }
+  .render-output img { width:100%; border-radius:6px; border:1px solid var(--line); }
+  .render-meta-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px; font-size:12px; }
+  .render-meta-grid .rm-label { color:var(--muted); font-weight:650; }
+  .render-meta-grid .rm-value { color:#1a1a1a; }
+  /* ---- end Shorts Studio Page ---- */
 </style>
 </head>
 <body>
@@ -919,7 +970,7 @@
     <nav class="rail-nav" aria-label="Dashboard sections">
       <button type="button" class="rail-pill active" id="rail-jobs" onclick="switchPage('jobs')">Jobs</button>
       <button type="button" class="rail-pill" id="rail-config" onclick="switchPage('config')">Config</button>
-      <div class="rail-pill">AI</div>
+      <button type="button" class="rail-pill" id="rail-shorts" onclick="switchPage('shorts')">Shorts</button>
       <div class="rail-pill">Files</div>
       <button type="button" class="rail-pill" id="rail-logs" onclick="openLogsTabFromRail()">Logs</button>
     </nav>
@@ -1080,30 +1131,7 @@
           <div class="ideas-grid" id="shorts-grid"></div>
         </div>
       </section>
-      <section class="ideas-section" id="shorts-studio-section">
-        <div class="panel-head" onclick="toggleShortsStudioPanel()">
-          <div class="panel-title">🧪 Shorts Studio</div>
-          <span style="font-size:12px;color:var(--muted)" id="shorts-studio-caret">› expand</span>
-        </div>
-        <div class="ideas-body" id="shorts-studio-body" style="display:none">
-          <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
-            Generate grounded Short ideas from the full long-form narration, then select and render them directly.
-          </div>
-          <div class="gen-form">
-            <label>Job</label>
-            <select id="shorts-studio-job" onchange="loadShortsStudioIdeas()">
-              <option value="">Select a long-form job…</option>
-            </select>
-            <div class="gen-actions">
-              <button class="action-btn" onclick="loadShortsStudioState()">↻ Refresh state</button>
-              <button class="action-btn primary" id="shorts-studio-prepare-btn" onclick="generateShortsStudioIdeas()">Generate Short Ideas</button>
-              <button class="action-btn danger" id="shorts-studio-delete-btn" onclick="deleteShortsStudioIdeas()">🗑 Delete Ideas</button>
-            </div>
-          </div>
-          <div id="shorts-studio-status" style="font-size:12px;color:var(--muted);margin-bottom:6px"></div>
-          <div class="ideas-grid" id="shorts-studio-ideas"></div>
-        </div>
-      </section>
+
       <section class="content-grid">
         <div class="panel jobs-panel">
           <div class="panel-head">
@@ -1128,6 +1156,24 @@
           </div>
           <div class="config-row" id="env-meta" style="font-size:12px;color:var(--muted)">Loading...</div>
           <textarea id="env-editor" class="config-textarea" placeholder="KEY=value"></textarea>
+        </div>
+      </div>
+      <!-- Shorts Studio Page -->
+      <div id="shorts-page" class="shorts-page-wrap">
+        <div class="page-head">
+          <div class="page-title"><h2>🎬 Shorts Studio</h2><p>Generate ideas, render & manage YouTube Shorts from long-form videos</p></div>
+        </div>
+        <div class="shorts-layout">
+          <div class="shorts-jobs-panel">
+            <div class="panel-head">
+              <div class="panel-title">Source Videos</div>
+              <div class="panel-count" id="shorts-panel-count">0 jobs</div>
+            </div>
+            <div class="shorts-jobs-list" id="shorts-jobs-list"></div>
+          </div>
+          <div class="shorts-detail-panel" id="shorts-detail-panel">
+            <div class="empty">Select a video on the left to manage its Shorts.</div>
+          </div>
         </div>
       </div>
     </main>
@@ -1701,9 +1747,11 @@ function switchDetailTab(tab) {
 function updateRailNav() {
   const jobs = document.getElementById('rail-jobs');
   const config = document.getElementById('rail-config');
+  const shorts = document.getElementById('rail-shorts');
   const logs = document.getElementById('rail-logs');
   if (jobs) jobs.classList.toggle('active', ACTIVE_PAGE === 'jobs' && ACTIVE_DETAIL_TAB !== 'logs');
   if (config) config.classList.toggle('active', ACTIVE_PAGE === 'config');
+  if (shorts) shorts.classList.toggle('active', ACTIVE_PAGE === 'shorts');
   if (logs) logs.classList.toggle('active', ACTIVE_PAGE === 'jobs' && ACTIVE_DETAIL_TAB === 'logs');
 }
 
@@ -1717,14 +1765,17 @@ function openLogsTabFromRail() {
 }
 
 function switchPage(page) {
-  if (page !== 'jobs' && page !== 'config') return;
+  if (page !== 'jobs' && page !== 'config' && page !== 'shorts') return;
   ACTIVE_PAGE = page;
   const jobsPage = document.getElementById('jobs-page');
   const configPage = document.getElementById('config-page');
+  const shortsPage = document.getElementById('shorts-page');
   if (jobsPage) jobsPage.style.display = (page === 'jobs') ? '' : 'none';
   if (configPage) configPage.classList.toggle('active', page === 'config');
+  if (shortsPage) shortsPage.classList.toggle('active', page === 'shorts');
   updateRailNav();
   if (page === 'config') loadEnvConfig();
+  if (page === 'shorts') loadShortsPage();
 }
 
 async function fetchJobLogs(jobId) {
@@ -3603,174 +3654,292 @@ async function updateShortsSourceUrl() {
 	  refreshShorts();
 	}
 
-// ---- Shorts Studio panel ----
-let SHORTS_STUDIO_PANEL_OPEN = false;
+// ---- Shorts Studio Page ----
+let SHORTS_SELECTED_JOB = null;
+let SHORTS_ACTIVE_TAB = 'ideas';
+let SHORTS_JOBS_CACHE = [];
+let SHORTS_POLL_TIMER = null;
 
-function toggleShortsStudioPanel() {
-  SHORTS_STUDIO_PANEL_OPEN = !SHORTS_STUDIO_PANEL_OPEN;
-  document.getElementById('shorts-studio-body').style.display = SHORTS_STUDIO_PANEL_OPEN ? '' : 'none';
-  document.getElementById('shorts-studio-caret').textContent = SHORTS_STUDIO_PANEL_OPEN ? '‹ collapse' : '› expand';
-  if (SHORTS_STUDIO_PANEL_OPEN) loadShortsStudioState();
-}
-
-async function loadShortsStudioState() {
-  const statusEl = document.getElementById('shorts-studio-status');
-  const selectEl = document.getElementById('shorts-studio-job');
+async function loadShortsPage() {
   try {
     const r = await fetch('/shorts-studio/state');
-    if (!r.ok) {
-      statusEl.textContent = 'Failed to load Shorts Studio state.';
-      return;
-    }
+    if (!r.ok) return;
     const data = await r.json();
-    const jobs = data.jobs || [];
-    selectEl.innerHTML = ['<option value="">Select a long-form job…</option>'].concat(
-      jobs.map(job => {
-        const disabled = job.eligible ? '' : ' disabled';
-        const suffix = job.eligible ? (job.shorts_status ? ' · ' + escapeHtml(job.shorts_status) : '') : ' · missing: ' + escapeHtml((job.missing || []).join(', '));
-        return `<option value="${escapeHtml(job.job_id)}"${disabled}>${escapeHtml(job.title || job.job_id)}${suffix}</option>`;
-      })
-    ).join('');
-    statusEl.textContent = data.can_start
-      ? 'Studio is idle.'
-      : ('Studio busy: ' + (data.active_jobs || []).map(x => x.job_id + ' [' + x.kind + ']').join(', '));
-    if (!selectEl.value) {
-      const firstEligible = jobs.find(job => job.eligible);
-      if (firstEligible) selectEl.value = firstEligible.job_id;
+    SHORTS_JOBS_CACHE = (data.eligible_jobs || data.jobs || []).filter(j => j.eligible);
+    renderShortsJobList(SHORTS_JOBS_CACHE);
+    if (SHORTS_SELECTED_JOB) {
+      const still = SHORTS_JOBS_CACHE.find(j => j.job_id === SHORTS_SELECTED_JOB);
+      if (still) selectShortsJob(SHORTS_SELECTED_JOB);
+      else { SHORTS_SELECTED_JOB = null; document.getElementById('shorts-detail-panel').innerHTML = '<div class="empty">Select a video on the left to manage its Shorts.</div>'; }
     }
-    if (selectEl.value) await loadShortsStudioIdeas();
-  } catch (e) {
-    statusEl.textContent = 'Failed to load Shorts Studio state: ' + e;
-  }
+  } catch (e) { console.error('loadShortsPage', e); }
 }
 
-async function loadShortsStudioIdeas() {
-  const jobId = document.getElementById('shorts-studio-job').value;
-  const grid = document.getElementById('shorts-studio-ideas');
-  if (!jobId) {
-    grid.innerHTML = '<div style="font-size:12px;color:var(--muted)">Select an eligible long-form job.</div>';
-    return;
-  }
-  const r = await fetch('/shorts-studio/jobs/' + encodeURIComponent(jobId) + '/ideas');
-  if (!r.ok) {
-    grid.innerHTML = '<div style="font-size:12px;color:var(--muted)">No synthesis ideas yet. Click "Generate Short Ideas".</div>';
-    return;
-  }
-  const data = await r.json();
-  const ideas = data.ideas || [];
-  if (!ideas.length) {
-    grid.innerHTML = '<div style="font-size:12px;color:var(--muted)">No ideas found. Click "Generate Short Ideas".</div>';
-    return;
-  }
-  grid.innerHTML = ideas.map(idea => `
-    <div class="idea-card">
-      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
-        <div>
-          <div style="font-weight:700">${escapeHtml(idea.title || '')} (${escapeHtml(idea.idea_id || '')})</div>
-          <div style="font-size:12px;color:var(--muted)">
-            Format: ${escapeHtml(idea.format || '')} · 
-            Score: ${escapeHtml(idea.scores?.overall || '-')} · 
-            Safety: ${escapeHtml(idea.scores?.safety || '-')}
-          </div>
-        </div>
-        <button class="action-btn primary" onclick="renderSingleShortIdea('${escapeHtml(jobId)}', '${escapeHtml(idea.idea_id)}', this)">Render Short</button>
+function renderShortsJobList(jobs) {
+  const list = document.getElementById('shorts-jobs-list');
+  document.getElementById('shorts-panel-count').textContent = jobs.length + ' videos';
+  if (!jobs.length) { list.innerHTML = '<div style="font-size:12px;color:var(--muted);text-align:center;padding:20px">No eligible jobs found.</div>'; return; }
+  list.innerHTML = jobs.map(j => {
+    const active = SHORTS_SELECTED_JOB === j.job_id ? ' active' : '';
+    const statusColor = j.shorts_status === 'ideas_ready' ? 'var(--green)' : j.shorts_status === 'ideas_generating' || j.shorts_status === 'rendering_selected' ? 'var(--blue)' : j.shorts_status === 'failed' ? 'var(--red)' : '#b8bcc2';
+    const pct = j.idea_count > 0 ? Math.min(100, Math.round((j.rendered_short_count / j.idea_count) * 100)) : 0;
+    return `<div class="shorts-job-card${active}" onclick="selectShortsJob('${escapeHtml(j.job_id)}')">
+      <div class="sj-title">${escapeHtml(j.title || j.job_id)}</div>
+      <div class="sj-meta">
+        <span style="width:7px;height:7px;border-radius:99px;background:${statusColor};display:inline-block"></span>
+        <span>${escapeHtml(j.shorts_status || 'none')}</span>
+        <span>·</span>
+        <span>${j.idea_count} ideas</span>
+        <span>·</span>
+        <span>${j.rendered_short_count} rendered</span>
       </div>
-      <div style="font-size:12px;margin-top:8px"><strong>Hook:</strong> ${escapeHtml(idea.hook_text || '')}</div>
-      <div style="font-size:12px;margin-top:4px"><strong>Pain:</strong> ${escapeHtml(idea.viewer_pain || '')}</div>
-      <div style="font-size:11px;color:var(--muted);margin-top:6px">
-        Source Scenes: ${escapeHtml((idea.source_scene_ids || []).join(', ') || '-')}
+      <div class="sj-bar"><div style="width:${pct}%"></div></div>
+    </div>`;
+  }).join('');
+}
+
+async function selectShortsJob(jobId) {
+  SHORTS_SELECTED_JOB = jobId;
+  document.querySelectorAll('.shorts-job-card').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.shorts-job-card').forEach(el => {
+    if (el.onclick && el.onclick.toString().includes(jobId)) el.classList.add('active');
+  });
+  renderShortsJobList(SHORTS_JOBS_CACHE);
+  const job = SHORTS_JOBS_CACHE.find(j => j.job_id === jobId);
+  const panel = document.getElementById('shorts-detail-panel');
+  panel.innerHTML = `
+    <div class="shorts-header">
+      <div class="shorts-header-info">
+        <h3>${escapeHtml(job?.title || jobId)}</h3>
+        <p>${escapeHtml(jobId)} · ${escapeHtml(job?.shorts_status || 'none')}</p>
+      </div>
+      <div class="shorts-actions">
+        <button class="action-btn" onclick="refreshShortsDetail()">↻ Refresh</button>
+        <button class="action-btn primary" id="sp-generate-btn" onclick="spGenerateIdeas()">Generate Ideas</button>
+        <button class="action-btn danger" id="sp-delete-btn" onclick="spDeleteIdeas()">🗑 Delete Ideas</button>
       </div>
     </div>
-  `).join('');
+    <div class="shorts-tabs">
+      <button class="shorts-tab-btn${SHORTS_ACTIVE_TAB === 'ideas' ? ' active' : ''}" onclick="switchShortsTab('ideas')">💡 Ideas</button>
+      <button class="shorts-tab-btn${SHORTS_ACTIVE_TAB === 'renders' ? ' active' : ''}" onclick="switchShortsTab('renders')">🎬 Renders</button>
+    </div>
+    <div id="shorts-tab-ideas" class="shorts-tab-content${SHORTS_ACTIVE_TAB === 'ideas' ? ' active' : ''}">
+      <div style="font-size:12px;color:var(--muted)">Loading ideas…</div>
+    </div>
+    <div id="shorts-tab-renders" class="shorts-tab-content${SHORTS_ACTIVE_TAB === 'renders' ? ' active' : ''}">
+      <div style="font-size:12px;color:var(--muted)">Loading renders…</div>
+    </div>
+  `;
+  await Promise.all([loadShortsIdeasTab(jobId), loadShortsRendersTab(jobId)]);
+  startShortsPolling();
 }
 
-async function generateShortsStudioIdeas() {
-  const jobId = document.getElementById('shorts-studio-job').value;
-  if (!jobId) { alert('Select an eligible long-form job first.'); return; }
-  const btn = document.getElementById('shorts-studio-prepare-btn');
-  const originalText = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = 'Enqueuing…';
-  try {
-    const r = await fetch('/shorts-studio/jobs/' + encodeURIComponent(jobId) + '/ideas/generate', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({target_count: 10, force: true}),
-    });
-    if (!r.ok) {
-      const d = await r.json().catch(() => ({}));
-      const text = d.detail?.error || d.detail || r.statusText;
-      showToast('Generate failed: ' + text);
-      return;
-    }
-    showToast('Short ideas generation enqueued successfully');
-    setTimeout(() => { loadShortsStudioState(); }, 1500);
-  } catch (e) {
-    showToast('Network error');
-  } finally {
-    btn.disabled = false;
-    btn.textContent = originalText;
-  }
+function switchShortsTab(tab) {
+  SHORTS_ACTIVE_TAB = tab;
+  document.querySelectorAll('.shorts-tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.shorts-tab-content').forEach(c => c.classList.remove('active'));
+  const btn = [...document.querySelectorAll('.shorts-tab-btn')].find(b => b.textContent.toLowerCase().includes(tab));
+  if (btn) btn.classList.add('active');
+  const content = document.getElementById('shorts-tab-' + tab);
+  if (content) content.classList.add('active');
 }
 
-async function deleteShortsStudioIdeas() {
-  const jobId = document.getElementById('shorts-studio-job').value;
-  if (!jobId) { alert('Select a job first.'); return; }
-  if (!confirm('Delete all ideas for this job? This cannot be undone.')) return;
-  const btn = document.getElementById('shorts-studio-delete-btn');
-  const originalText = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = 'Deleting…';
+async function loadShortsIdeasTab(jobId) {
+  const container = document.getElementById('shorts-tab-ideas');
+  if (!container) return;
   try {
-    const r = await fetch('/shorts-studio/jobs/' + encodeURIComponent(jobId) + '/ideas', {
-      method: 'DELETE',
-    });
+    const r = await fetch('/shorts-studio/jobs/' + encodeURIComponent(jobId) + '/ideas');
     if (!r.ok) {
-      const d = await r.json().catch(() => ({}));
-      const text = d.detail?.error || d.detail || r.statusText;
-      showToast('Delete failed: ' + text);
+      container.innerHTML = '<div class="ideas-empty">No ideas yet. Click "Generate Ideas" to start.</div>';
       return;
     }
     const data = await r.json();
-    showToast('Deleted: ' + (data.deleted_files || []).join(', '));
-    document.getElementById('shorts-studio-ideas').innerHTML = '';
-    await loadShortsStudioState();
+    const ideas = data.ideas || [];
+    if (!ideas.length) {
+      container.innerHTML = '<div class="ideas-empty">No ideas found. Click "Generate Ideas".</div>';
+      return;
+    }
+    container.innerHTML = `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">${ideas.length} ideas generated</div>
+    <div class="ideas-grid">${ideas.map(idea => `
+      <div class="idea-card">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
+          <div>
+            <div class="idea-card-title">${escapeHtml(idea.title || '')} <span style="font-weight:400;color:var(--muted);font-size:12px">(${escapeHtml(idea.idea_id || '')})</span></div>
+            <div style="font-size:12px;color:var(--muted);margin-top:2px">
+              <span class="idea-bucket-badge">${escapeHtml(idea.format || '')}</span>
+              <span class="idea-score-badge ${(idea.scores?.overall||0) >= 80 ? 'high' : (idea.scores?.overall||0) >= 60 ? 'mid' : 'low'}">Score: ${idea.scores?.overall || '-'}</span>
+              <span class="idea-comp-badge">Safety: ${idea.scores?.safety || '-'}</span>
+            </div>
+          </div>
+          <button class="action-btn primary" style="flex-shrink:0" onclick="spRenderIdea('${escapeHtml(idea.idea_id)}', this)">Render Short</button>
+        </div>
+        <div style="font-size:12px;margin-top:8px"><strong>Hook:</strong> ${escapeHtml(idea.hook_text || '')}</div>
+        <div style="font-size:12px;margin-top:4px"><strong>Pain:</strong> ${escapeHtml(idea.viewer_pain || '')}</div>
+        <div style="font-size:12px;margin-top:4px"><strong>Payoff:</strong> ${escapeHtml(idea.practical_payoff || '')}</div>
+        ${idea.key_points && idea.key_points.length ? `<ul class="idea-card-points">${idea.key_points.map(kp => `<li>${escapeHtml(kp.point || '')} <span style="color:var(--muted);font-size:10px">[${(kp.source_scene_ids||[]).join(', ')}]</span></li>`).join('')}</ul>` : ''}
+        <div style="font-size:11px;color:var(--muted);margin-top:6px">
+          Source: ${escapeHtml((idea.source_scene_ids || []).join(', ') || '-')} · Risk: ${escapeHtml(idea.risk_level || '-')}
+        </div>
+      </div>
+    `).join('')}</div>`;
   } catch (e) {
-    showToast('Network error');
-  } finally {
-    btn.disabled = false;
-    btn.textContent = originalText;
+    container.innerHTML = '<div class="ideas-empty">Error loading ideas.</div>';
   }
 }
 
-async function renderSingleShortIdea(jobId, ideaId, btn) {
-  if (!jobId || !ideaId) return;
-  const originalText = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = '⏳ Enqueuing…';
+async function loadShortsRendersTab(jobId) {
+  const container = document.getElementById('shorts-tab-renders');
+  if (!container) return;
   try {
-    const r = await fetch('/shorts-studio/jobs/' + encodeURIComponent(jobId) + '/ideas/render', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({idea_ids: [ideaId], force: false}),
-    });
+    const r = await fetch('/shorts-studio/jobs/' + encodeURIComponent(jobId) + '/drafts');
     if (!r.ok) {
-      const d = await r.json().catch(() => ({}));
-      const text = d.detail?.error || d.detail || r.statusText;
-      showToast('Render failed: ' + text);
-      btn.disabled = false;
-      btn.textContent = originalText;
+      container.innerHTML = '<div class="ideas-empty">No rendered shorts yet.</div>';
       return;
     }
-    showToast('Short render enqueued successfully');
-    btn.textContent = '✓ Enqueued';
-    setTimeout(() => { loadShortsStudioState(); }, 1500);
+    const data = await r.json();
+    const drafts = data.drafts || [];
+    if (!drafts.length) {
+      container.innerHTML = '<div class="ideas-empty">No rendered shorts yet. Select an idea and click "Render Short".</div>';
+      return;
+    }
+    container.innerHTML = `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">${drafts.length} short(s)</div>` +
+      drafts.map((d, idx) => {
+        const st = d.status || 'pending';
+        const stClass = st === 'rendered' ? 'rendered' : st === 'failed' ? 'failed' : st.includes('progress') ? 'in_progress' : '';
+        const stages = inferRenderStages(d);
+        return `<div class="render-card ${stClass}" id="rc-${escapeHtml(d.short_id)}">
+          <div class="render-card-head" onclick="toggleRenderCard('${escapeHtml(d.short_id)}')">
+            <div class="rc-num">${idx + 1}</div>
+            <div class="rc-label">
+              <div class="name">${escapeHtml(d.short_id)} ${d.idea_id ? '— ' + escapeHtml(d.idea_id) : ''}</div>
+              <div class="code">${escapeHtml(d.format || '')} · ${escapeHtml(d.qa_verdict || '-')}</div>
+            </div>
+            <span class="pill ${stClass}">${escapeHtml(st)}</span>
+          </div>
+          <div class="render-card-body">
+            <div class="render-stage-labels">
+              ${stages.map(s => `<div class="render-stage-label ${s.cls}">${s.label}</div>`).join('')}
+            </div>
+            <div class="render-stages">
+              ${stages.map(s => `<div class="render-stage ${s.cls}" title="${s.label}"></div>`).join('')}
+            </div>
+            ${d.status === 'rendered' ? `
+              <div class="render-output">
+                ${d.video_path ? `<video src="${escapeHtml(d.video_path)}" controls preload="metadata"></video>` : '<div style="font-size:12px;color:var(--muted)">No video</div>'}
+                ${d.cover_path ? `<img src="${escapeHtml(d.cover_path)}" alt="Cover">` : ''}
+              </div>
+            ` : ''}
+            <div class="render-meta-grid">
+              <div><span class="rm-label">Status:</span> <span class="rm-value">${escapeHtml(st)}</span></div>
+              <div><span class="rm-label">QA:</span> <span class="rm-value">${escapeHtml(d.qa_verdict || '-')}</span></div>
+              <div><span class="rm-label">Scenes:</span> <span class="rm-value">${(d.source_scene_ids || []).length}</span></div>
+              <div><span class="rm-label">Format:</span> <span class="rm-value">${escapeHtml(d.format || '-')}</span></div>
+            </div>
+          </div>
+        </div>`;
+      }).join('');
   } catch (e) {
-    showToast('Network error');
-    btn.disabled = false;
-    btn.textContent = originalText;
+    container.innerHTML = '<div class="ideas-empty">Error loading renders.</div>';
   }
 }
+
+function inferRenderStages(draft) {
+  const st = draft.status || '';
+  const qa = draft.qa_verdict || '';
+  const hasVideo = !!draft.video_path;
+  const stages = [
+    { label: 'Script', cls: 'done' },
+    { label: 'Scenes', cls: 'done' },
+    { label: 'SEO', cls: 'done' },
+    { label: 'QA', cls: qa ? 'done' : '' },
+    { label: 'Render', cls: hasVideo ? 'done' : '' },
+  ];
+  if (st === 'failed') {
+    for (let i = stages.length - 1; i >= 0; i--) { if (!stages[i].cls) { stages[i].cls = 'fail'; break; } }
+  }
+  if (st === 'rendering' || st === 'in_progress') {
+    for (let i = 0; i < stages.length; i++) { if (!stages[i].cls) { stages[i].cls = 'active'; break; } }
+  }
+  if (st === 'rendered' || hasVideo) {
+    stages.forEach(s => { if (!s.cls) s.cls = 'done'; });
+  }
+  return stages;
+}
+
+function toggleRenderCard(shortId) {
+  const el = document.getElementById('rc-' + shortId);
+  if (el) el.classList.toggle('open');
+}
+
+async function spGenerateIdeas() {
+  if (!SHORTS_SELECTED_JOB) return;
+  const btn = document.getElementById('sp-generate-btn');
+  const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Enqueuing…';
+  try {
+    const r = await fetch('/shorts-studio/jobs/' + encodeURIComponent(SHORTS_SELECTED_JOB) + '/ideas/generate', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({target_count: 10, force: true}),
+    });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); showToast('Failed: ' + (d.detail?.error || d.detail || r.statusText)); return; }
+    showToast('Ideas generation enqueued');
+    setTimeout(() => refreshShortsDetail(), 2000);
+  } catch (e) { showToast('Network error'); }
+  finally { btn.disabled = false; btn.textContent = orig; }
+}
+
+async function spDeleteIdeas() {
+  if (!SHORTS_SELECTED_JOB) return;
+  if (!confirm('Delete all ideas for this job? This cannot be undone.')) return;
+  const btn = document.getElementById('sp-delete-btn');
+  const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Deleting…';
+  try {
+    const r = await fetch('/shorts-studio/jobs/' + encodeURIComponent(SHORTS_SELECTED_JOB) + '/ideas', { method: 'DELETE' });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); showToast('Failed: ' + (d.detail?.error || d.detail || r.statusText)); return; }
+    const data = await r.json();
+    showToast('Deleted: ' + (data.deleted_files || []).join(', '));
+    await refreshShortsDetail();
+  } catch (e) { showToast('Network error'); }
+  finally { btn.disabled = false; btn.textContent = orig; }
+}
+
+async function spRenderIdea(ideaId, btn) {
+  if (!SHORTS_SELECTED_JOB || !ideaId) return;
+  const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = '⏳ Enqueuing…';
+  try {
+    const r = await fetch('/shorts-studio/jobs/' + encodeURIComponent(SHORTS_SELECTED_JOB) + '/ideas/render', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({idea_ids: [ideaId], force: false}),
+    });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); showToast('Render failed: ' + (d.detail?.error || d.detail || r.statusText)); btn.disabled = false; btn.textContent = orig; return; }
+    showToast('Render enqueued');
+    btn.textContent = '✓ Enqueued';
+    SHORTS_ACTIVE_TAB = 'renders';
+    setTimeout(() => refreshShortsDetail(), 2000);
+  } catch (e) { showToast('Network error'); btn.disabled = false; btn.textContent = orig; }
+}
+
+async function refreshShortsDetail() {
+  await loadShortsPage();
+  if (SHORTS_SELECTED_JOB) await selectShortsJob(SHORTS_SELECTED_JOB);
+}
+
+function startShortsPolling() {
+  if (SHORTS_POLL_TIMER) clearInterval(SHORTS_POLL_TIMER);
+  SHORTS_POLL_TIMER = setInterval(async () => {
+    if (ACTIVE_PAGE !== 'shorts' || !SHORTS_SELECTED_JOB) { clearInterval(SHORTS_POLL_TIMER); return; }
+    const job = SHORTS_JOBS_CACHE.find(j => j.job_id === SHORTS_SELECTED_JOB);
+    if (job && (job.shorts_status === 'ideas_generating' || job.shorts_status === 'rendering_selected')) {
+      await loadShortsPage();
+      if (SHORTS_SELECTED_JOB) {
+        await Promise.all([loadShortsIdeasTab(SHORTS_SELECTED_JOB), loadShortsRendersTab(SHORTS_SELECTED_JOB)]);
+      }
+    }
+  }, 5000);
+}
+
 
 // ---- Channel Videos panel ----
 let CHANNEL_VIDEOS_PANEL_OPEN = false;

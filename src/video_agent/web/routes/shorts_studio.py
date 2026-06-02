@@ -298,6 +298,45 @@ def delete_shorts_studio_ideas(job_id: str, jobs_root: Path = Depends(get_jobs_r
     return {"status": "deleted", "job_id": job_id, "deleted_files": deleted}
 
 
+@router.get("/shorts-studio/jobs/{job_id}/shorts/{short_id}/detail")
+def get_short_detail(job_id: str, short_id: str, jobs_root: Path = Depends(get_jobs_root)) -> dict[str, Any]:
+    job_dir = _safe_job_dir(jobs_root, job_id)
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    short_dir_path = shorts_paths.short_dir(job_dir, short_id)
+    if not short_dir_path.exists():
+        raise HTTPException(status_code=404, detail=f"Unknown short: {short_id}")
+    status_doc = _read_json(shorts_paths.short_status_path(job_dir, short_id))
+    qa_doc = _read_json(short_dir_path / shorts_paths.SHORT_QA_FILE)
+    script_doc = _read_json(short_dir_path / shorts_paths.SHORT_SCRIPT_FILE)
+    scenes_doc = _read_json(short_dir_path / shorts_paths.SHORT_SCENES_FILE)
+    seo_doc = _read_json(short_dir_path / shorts_paths.SHORT_SEO_FILE)
+    idea_doc = _read_json(short_dir_path / shorts_paths.SHORT_IDEA_FILE)
+    video_exists = (short_dir_path / shorts_paths.SHORT_VIDEO_FILE).exists()
+    cover_exists = (short_dir_path / shorts_paths.SHORT_COVER_FILE).exists()
+    return {
+        "short_id": short_id,
+        "job_id": job_id,
+        "status": status_doc,
+        "qa": qa_doc,
+        "script_summary": {
+            "title": script_doc.get("title", ""),
+            "hook": script_doc.get("hook", ""),
+            "scene_count": len(script_doc.get("scenes") or []),
+        },
+        "scenes_count": len(scenes_doc.get("scenes") or []),
+        "seo": {
+            "title": seo_doc.get("title", ""),
+            "description": seo_doc.get("description", "")[:200],
+        },
+        "idea": idea_doc,
+        "video_exists": video_exists,
+        "cover_exists": cover_exists,
+        "video_path": f"/jobs/{job_id}/shorts/{short_id}/{shorts_paths.SHORT_VIDEO_FILE}" if video_exists else None,
+        "cover_path": f"/jobs/{job_id}/shorts/{short_id}/{shorts_paths.SHORT_COVER_FILE}" if cover_exists else None,
+    }
+
+
 @router.post("/shorts-studio/jobs/{job_id}/ideas/generate", status_code=202)
 def post_shorts_studio_generate_ideas(
     job_id: str,

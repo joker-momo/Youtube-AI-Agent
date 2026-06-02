@@ -17,7 +17,7 @@ IMPORTANT:
 - Do not propose raw excerpts or contiguous scene clips.
 - Each idea should combine multiple source scenes when possible.
 - Prefer 3–5 source scenes for checklist, mistake_list, warning_signs, and top_tips.
-- Do not create a one-scene idea unless the source video has only one strong narrated scene.
+- Do not create a one-scene idea unless SOURCE LONG VIDEO contains fewer than 2 usable narrated scenes.
 - Every idea must be grounded in source_scene_ids.
 - Use only scene IDs that appear in SOURCE LONG VIDEO.
 - Do not invent, rename, or modify scene IDs.
@@ -26,11 +26,13 @@ IMPORTANT:
 - Use Spanish for Spain, natural for adults 45+.
 - Do not call the audience ancianos, tercera edad, abuelos, elderly, seniors, or adultos mayores.
 - Ideas must be meaningfully different from each other.
-- Avoid repeating the same title angle, hook, or source_scene_ids set.
+- Avoid ideas that use the same or nearly identical source_scene_ids set.
 - Return exactly one raw JSON object.
 - No markdown.
 - No commentary.
 - Produce 8–12 ideas when possible.
+- If the source does not support 8 strong, distinct, source-backed ideas, return fewer ideas and explain why in warnings.
+- Never invent extra ideas just to reach 8.
 
 Allowed formats:
 checklist, mistake_list, warning_signs, myth_truth, problem_solution, top_tips, recap, pain_to_tip
@@ -41,7 +43,9 @@ Field rules:
 - hook_text must be 2–6 words, uppercase Spanish, suitable for thumbnail/on-screen hook.
 - narration_seed must be 80–180 words and summarize only the selected source scenes for that idea.
 - key_points must each include source_scene_ids.
+- Every key_points[*].source_scene_ids must be a subset of the idea's source_scene_ids.
 - scores must be integers from 0 to 100.
+- Scores are first-pass estimates. Be consistent, but the system will validate and recompute overall.
 
 Required output shape:
 {{

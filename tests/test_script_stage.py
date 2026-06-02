@@ -657,7 +657,7 @@ def test_post_promote_script_via_http(client: TestClient, tmp_path: Path, idea_p
 
     assert response.status_code == 200
     body = response.json()
-    assert body["output"] == "script.json"
+    assert body["output"] == "json/script.json"
     script_promote = next(s for s in body["state"]["stages"] if s["name"] == "script_promote")
     assert script_promote["status"] == "completed"
     assert body["state"]["current_stage"] == "script_qa"
@@ -714,7 +714,7 @@ def test_post_promote_scenes_via_http(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["output"] == "scenes.json"
+    assert body["output"] == "json/scenes.json"
     scenes_promote = next(s for s in body["state"]["stages"] if s["name"] == "scenes_promote")
     assert scenes_promote["status"] == "completed"
     assert body["state"]["current_stage"] == "scenes_qa"
@@ -813,7 +813,7 @@ def test_post_promote_seo_via_http(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["output"] == "seo.json"
+    assert body["output"] == "json/seo.json"
     seo_promote = next(s for s in body["state"]["stages"] if s["name"] == "seo_promote")
     assert seo_promote["status"] == "completed"
     assert body["state"]["current_stage"] == "seo_qa"

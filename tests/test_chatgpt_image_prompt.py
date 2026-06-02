@@ -41,12 +41,13 @@ def test_generate_image_selects_create_image_mode_before_typing(monkeypatch, tmp
 
     async def focus_composer():
         events.append("focus")
+        return object()
 
     async def select_mode():
         events.append("select-mode")
 
-    async def fake_type(page, text):
-        events.append("type")
+    async def fake_fill(composer, text):
+        events.append("fill")
 
     async def fake_pause(*args, **kwargs):
         events.append("pause")
@@ -68,7 +69,7 @@ def test_generate_image_selects_create_image_mode_before_typing(monkeypatch, tmp
     monkeypatch.setattr(driver, "_create_project", create_project)
     monkeypatch.setattr(driver, "_focus_composer", focus_composer)
     monkeypatch.setattr(driver, "_select_create_image_mode_and_aspect_ratio", select_mode, raising=False)
-    monkeypatch.setattr(chatgpt_image, "human_type", fake_type)
+    monkeypatch.setattr(driver, "_fill_composer_robust", fake_fill)
     monkeypatch.setattr(chatgpt_image, "human_pause", fake_pause)
     monkeypatch.setattr(driver, "_click_send", click_send)
     monkeypatch.setattr(driver, "_wait_for_image", wait_for_image)
@@ -77,7 +78,7 @@ def test_generate_image_selects_create_image_mode_before_typing(monkeypatch, tmp
 
     asyncio.run(driver.generate_image("make a thumbnail", project_name="p", out_path=out_path))
 
-    assert events[:4] == ["project:p", "focus", "select-mode", "type"]
+    assert events[:4] == ["project:p", "select-mode", "focus", "fill"]
     assert "send" in events
 
 
@@ -91,12 +92,13 @@ def test_generate_images_selects_create_image_mode_for_each_prompt(monkeypatch, 
 
     async def focus_composer():
         events.append("focus")
+        return object()
 
     async def select_mode():
         events.append("select-mode")
 
-    async def fake_type(page, text):
-        events.append("type")
+    async def fake_fill(composer, text):
+        events.append("fill")
 
     async def fake_pause(*args, **kwargs):
         events.append("pause")
@@ -118,7 +120,7 @@ def test_generate_images_selects_create_image_mode_for_each_prompt(monkeypatch, 
     monkeypatch.setattr(driver, "_create_project", create_project)
     monkeypatch.setattr(driver, "_focus_composer", focus_composer)
     monkeypatch.setattr(driver, "_select_create_image_mode_and_aspect_ratio", select_mode, raising=False)
-    monkeypatch.setattr(chatgpt_image, "human_type", fake_type)
+    monkeypatch.setattr(driver, "_fill_composer_robust", fake_fill)
     monkeypatch.setattr(chatgpt_image, "human_pause", fake_pause)
     monkeypatch.setattr(driver, "_click_send", click_send)
     monkeypatch.setattr(driver, "_wait_for_image", wait_for_image)
@@ -133,4 +135,27 @@ def test_generate_images_selects_create_image_mode_for_each_prompt(monkeypatch, 
     )
 
     assert events.count("select-mode") == 2
-    assert events.index("select-mode") < events.index("type")
+    assert events.index("select-mode") < events.index("focus") < events.index("fill")
+
+
+def test_build_image_gen_prompt_contradictions():
+    # 1. Text overlays / Typography indicators should strip "no text overlays"
+    p1 = "a dark bedroom with typography overlay"
+    f1 = build_image_gen_prompt(p1)
+    assert "no text overlays" not in f1
+    assert "no watermark" in f1
+    
+    # 2. Watermark indicators should strip "no watermark"
+    p2 = "a product photo with a subtle logo"
+    f2 = build_image_gen_prompt(p2)
+    assert "no watermark" not in f2
+    assert "no text overlays" in f2
+    
+    # 3. Border indicators should strip "no borders" and "no padding"
+    p3 = "a styled frame around a picture"
+    f3 = build_image_gen_prompt(p3)
+    assert "no borders" not in f3
+    assert "no padding" not in f3
+    assert "no text overlays" in f3
+    assert "no watermark" in f3
+

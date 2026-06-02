@@ -542,7 +542,8 @@ def test_save_ideas_filename_contains_slug(tmp_path: Path):
 import asyncio
 
 
-def test_generate_ideas_returns_list(channel_path: Path):
+def test_generate_ideas_returns_list(channel_path: Path, monkeypatch):
+    monkeypatch.setattr(idea_generator, "_fetch_google_trends", lambda geo, lang: [])
     async def fake_chatgpt(msgs):
         return _make_raw(SAMPLE_IDEAS)
 
@@ -551,7 +552,8 @@ def test_generate_ideas_returns_list(channel_path: Path):
     assert ideas[0]["topic"] == SAMPLE_IDEAS[0]["topic"]
 
 
-def test_generate_ideas_raises_on_empty_response(channel_path: Path):
+def test_generate_ideas_raises_on_empty_response(channel_path: Path, monkeypatch):
+    monkeypatch.setattr(idea_generator, "_fetch_google_trends", lambda geo, lang: [])
     async def fake_chatgpt(msgs):
         return "no json here"
 

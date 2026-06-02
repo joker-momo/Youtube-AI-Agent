@@ -13,6 +13,10 @@ from video_agent.contracts import (
     ARTIFACT_VISUAL_CONTACT_SHEET,
     ARTIFACT_VISUAL_REVIEW,
     ARTIFACT_VIDEO,
+    ARTIFACT_SCRIPT,
+    ARTIFACT_SCENES,
+    ARTIFACT_SEO,
+    ARTIFACT_THUMBNAIL,
     EVENT_LOG,
     repo_root,
 )
@@ -32,6 +36,17 @@ from video_agent.runtime.providers import AUDIO_SUBPROCESS_ENV, SubprocessAudioT
 from video_agent.storage.atomic import atomic_write_text
 
 _AUDIO_SUBPROCESS_ENV = AUDIO_SUBPROCESS_ENV
+
+
+def _resolve_json_file(job_dir: Path, filename: str) -> Path:
+    """Resolve a JSON file with fallback: root → json/ subdirectory."""
+    root_path = job_dir / filename
+    if root_path.exists():
+        return root_path
+    json_path = job_dir / "json" / filename
+    if json_path.exists():
+        return json_path
+    return root_path  # default to root for error messages
 
 
 @dataclass
@@ -346,7 +361,7 @@ def _write_report(
         suffix = f" ({issue_count} issue)" if issue_count == 1 else f" ({issue_count} issues)" if issue_count else ""
         visual_lines.append(f"- {scene['scene_id']}: {source} {provider}/{asset_id}{suffix}")
 
-    seo_path = job_dir / "seo.json"
+    seo_path = _resolve_json_file(job_dir, "seo.json")
     pinned_comment_lines = []
     if seo_path.exists():
         try:
@@ -409,6 +424,8 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
     validate_json(idea, root / "schemas/manual-idea.schema.json")
 
     job_dir = create_job_dir(options.jobs_dir, channel_config["channel"]["id"], idea["topic"])
+    (job_dir / "json").mkdir(parents=True, exist_ok=True)
+    (job_dir / "outputs").mkdir(parents=True, exist_ok=True)
     job_id = job_dir.name
     logger = EventLogger(job_dir / EVENT_LOG)
     provider = MockProvider()
@@ -470,8 +487,8 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
         job_id=job_id,
         job_dir=job_dir,
         video_path=video_path if video_path and video_path.exists() else None,
-        thumbnail_path=job_dir / "thumbnail.jpg",
-        seo_path=job_dir / "seo.json",
+        thumbnail_path=job_dir / ARTIFACT_THUMBNAIL,
+        seo_path=job_dir / ARTIFACT_SEO,
         report_path=report_path,
     )
 
@@ -505,7 +522,7 @@ def _sync_scene_durations_from_audio(job_dir: Path, scene_doc: dict) -> None:
     TAIL_PAD_SEC = 0.35  # breathing room after last spoken word
 
     # ── Strategy A: derive from whisper offsets ──────────────────────────────────
-    whisper_path = job_dir / "whisper_timestamps.json"
+    whisper_path = _resolve_json_file(job_dir, "whisper_timestamps.json")
     if whisper_path.exists():
         try:
             from video_agent.utils.json_io import read_json as _rj
@@ -618,9 +635,9 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
     logger = EventLogger(job_dir / EVENT_LOG)
     style = _load_style(channel_config)
 
-    script = read_json(job_dir / "script.json")
-    scene_doc = read_json(job_dir / "scenes.json")
-    seo = read_json(job_dir / "seo.json")
+    script = read_json(_resolve_json_file(job_dir, "script.json"))
+    scene_doc = read_json(_resolve_json_file(job_dir, "scenes.json"))
+    seo = read_json(_resolve_json_file(job_dir, "seo.json"))
     validate_json(script, root / "schemas/script.schema.json")
     validate_json(scene_doc, root / "schemas/scenes.schema.json")
     validate_json(seo, root / "schemas/seo.schema.json")
@@ -630,7 +647,7 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
     logger.log("OPERATOR_RENDER_STARTED", {"job_id": job_id, "channel_id": channel_config["channel"]["id"]})
 
     # Merge Whisper word timestamps into scene_doc if available
-    whisper_path = job_dir / "whisper_timestamps.json"
+    whisper_path = _resolve_json_file(job_dir, "whisper_timestamps.json")
     if whisper_path.exists():
         whisper_data = read_json(whisper_path)
         whisper_by_id = {s["scene_id"]: s for s in whisper_data.get("scenes") or []}
@@ -651,7 +668,7 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
 
     if _should_prepare_audio_in_subprocess(job_dir, channel_config):
         _run_prepare_assets_audio_subprocess(job_dir, options.channel_path)
-        scene_doc = read_json(job_dir / "scenes.json")
+        scene_doc = read_json(_resolve_json_file(job_dir, "scenes.json"))
 
     assets = prepare_assets(
         job_dir,

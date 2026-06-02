@@ -8,84 +8,84 @@ from pathlib import Path
 # of" each step without per-stage hardcoding in JS.
 STAGE_ARTIFACTS = {
     "idea_research": {
-        "input": ["idea.json"],
-        "output": ["research.json"],
+        "input": ["json/idea.json"],
+        "output": ["json/research.json"],
     },
     "script": {
-        "input": ["idea.json"],
+        "input": ["json/idea.json"],
         "output": ["operator/chatgpt/script_prompt.md"],
     },
     "script_promote": {
         "input": ["operator/chatgpt/script.raw.txt"],
-        "output": ["script.json"],
+        "output": ["json/script.json"],
     },
     "script_qa": {
-        "input": ["script.json"],
+        "input": ["json/script.json"],
         "output": ["operator/gemini/script_qa.json"],
     },
     "scenes": {
-        "input": ["script.json"],
+        "input": ["json/script.json"],
         "output": ["operator/chatgpt/scenes_prompt.md"],
     },
     "scenes_promote": {
         "input": ["operator/chatgpt/scenes.raw.txt"],
-        "output": ["scenes.json"],
+        "output": ["json/scenes.json"],
     },
     "scenes_qa": {
-        "input": ["scenes.json"],
+        "input": ["json/scenes.json"],
         "output": ["operator/gemini/scenes_qa.json"],
     },
     "seo": {
-        "input": ["scenes.json"],
+        "input": ["json/scenes.json"],
         "output": ["operator/chatgpt/seo_prompt.md"],
     },
     "seo_promote": {
         "input": ["operator/chatgpt/seo.raw.txt"],
-        "output": ["seo.json"],
+        "output": ["json/seo.json"],
     },
     "seo_qa": {
-        "input": ["seo.json"],
+        "input": ["json/seo.json"],
         "output": ["operator/gemini/seo_qa.json"],
     },
     "thumbnail_image": {
-        "input": ["seo.json"],
+        "input": ["json/seo.json"],
         "output": [
             "assets/thumbnail_bg.png",
-            "seo.json",
-            "thumbnail.jpg",
-            "thumbnail_1.jpg",
-            "thumbnail_2.jpg",
-            "thumbnail_3.jpg",
+            "json/seo.json",
+            "outputs/thumbnail.jpg",
+            "outputs/thumbnail_1.jpg",
+            "outputs/thumbnail_2.jpg",
+            "outputs/thumbnail_3.jpg",
         ],
     },
     "assets_chatgpt": {
-        "input": ["scenes.json"],
-        "output": ["scenes.json"],
+        "input": ["json/scenes.json"],
+        "output": ["json/scenes.json"],
     },
     "whisper_timestamps": {
         "input": ["assets/narration.wav"],
-        "output": ["whisper_timestamps.json"],
+        "output": ["json/whisper_timestamps.json"],
     },
     "render": {
-        "input": ["script.json", "scenes.json", "seo.json"],
+        "input": ["json/script.json", "json/scenes.json", "json/seo.json"],
         "output": [
-            "render_props.json",
-            "video.mp4",
-            "thumbnail.jpg",
-            "thumbnail_1.jpg",
-            "thumbnail_2.jpg",
-            "thumbnail_3.jpg",
-            "visual_review.json",
-            "report.md",
+            "json/render_props.json",
+            "outputs/video.mp4",
+            "outputs/thumbnail.jpg",
+            "outputs/thumbnail_1.jpg",
+            "outputs/thumbnail_2.jpg",
+            "outputs/thumbnail_3.jpg",
+            "json/visual_review.json",
+            "outputs/report.md",
         ],
     },
     "review": {
-        "input": ["video.mp4"],
-        "output": ["operator_review.html"],
+        "input": ["outputs/video.mp4"],
+        "output": ["outputs/operator_review.html"],
     },
     "persona_eval": {
-        "input": ["video.mp4", "script.json", "scenes.json", "seo.json"],
-        "output": ["persona_eval.json"],
+        "input": ["outputs/video.mp4", "json/script.json", "json/scenes.json", "json/seo.json"],
+        "output": ["json/persona_eval.json"],
     },
 }
 

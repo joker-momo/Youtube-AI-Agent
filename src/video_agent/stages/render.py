@@ -418,10 +418,14 @@ def render_with_remotion(
     stop_request_path: Path | None = None,
     notify_telegram: bool = True,
 ) -> None:
+    job_dir = render_props_path.parent
+    if not (job_dir / "job.json").exists() and (job_dir.parent / "job.json").exists():
+        job_dir = job_dir.parent
+
     commands = build_remotion_commands(render_props_path, video_path, thumbnail_path)
-    progress_path = render_props_path.parent / "render_progress.json"
-    render_pid_path = render_props_path.parent / ".render.pid"
-    thumb_pid_path = render_props_path.parent / ".thumbnail.pid"
+    progress_path = job_dir / "json" / "render_progress.json"
+    render_pid_path = job_dir / "json" / ".render.pid"
+    thumb_pid_path = job_dir / "json" / ".thumbnail.pid"
     _run_with_progress(
         commands.video,
         progress_path,
@@ -453,7 +457,7 @@ def render_with_remotion(
     # (new full-composite flow via auto_thumbnail_image_stage).
     # Fall back to remotion still for legacy jobs or if file is missing.
     # ------------------------------------------------------------------
-    thumb_dir = render_props_path.parent
+    thumb_dir = job_dir / "outputs"
     chatgpt_thumb = thumb_dir / "thumbnail_1.jpg"
 
     if chatgpt_thumb.exists():
@@ -484,6 +488,6 @@ def render_with_remotion(
                 "All thumbnail variants failed: " + "; ".join(thumb_errors)
             )
 
-    _mark_render_stage_completed(render_props_path.parent)
+    _mark_render_stage_completed(job_dir)
     if notify_telegram:
-        _notify_render_done(render_props_path.parent)
+        _notify_render_done(job_dir)

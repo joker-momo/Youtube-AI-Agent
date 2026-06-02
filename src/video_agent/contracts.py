@@ -2,17 +2,24 @@ from __future__ import annotations
 
 from pathlib import Path
 
-ARTIFACT_SCRIPT = "script.json"
-ARTIFACT_SCENES = "scenes.json"
-ARTIFACT_ASSETS = "assets_manifest.json"
-ARTIFACT_VISUAL_REVIEW = "visual_review.json"
-ARTIFACT_VISUAL_CONTACT_SHEET = "visual_contact_sheet.jpg"
-ARTIFACT_RENDER_PROPS = "render_props.json"
-ARTIFACT_SEO = "seo.json"
-ARTIFACT_REPORT = "report.md"
-ARTIFACT_VIDEO = "video.mp4"
-ARTIFACT_THUMBNAIL = "thumbnail.jpg"
+ARTIFACT_SCRIPT = "json/script.json"
+ARTIFACT_SCENES = "json/scenes.json"
+ARTIFACT_ASSETS = "json/assets_manifest.json"
+ARTIFACT_VISUAL_REVIEW = "json/visual_review.json"
+ARTIFACT_VISUAL_CONTACT_SHEET = "outputs/visual_contact_sheet.jpg"
+ARTIFACT_RENDER_PROPS = "json/render_props.json"
+ARTIFACT_SEO = "json/seo.json"
+ARTIFACT_REPORT = "outputs/report.md"
+ARTIFACT_VIDEO = "outputs/video.mp4"
+ARTIFACT_THUMBNAIL = "outputs/thumbnail.jpg"
 EVENT_LOG = "events.jsonl"
+
+# Added for Option 2 structure
+ARTIFACT_IDEA = "json/idea.json"
+ARTIFACT_APPROVALS = "json/approvals.json"
+ARTIFACT_REVIEW = "json/review.json"
+ARTIFACT_AUDIO_QA = "json/audio_qa.json"
+ARTIFACT_PERSONA_EVAL = "json/persona_eval.json"
 
 
 def repo_root() -> Path:

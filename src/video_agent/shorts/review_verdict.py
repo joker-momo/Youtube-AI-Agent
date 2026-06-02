@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from video_agent.contracts import ARTIFACT_VIDEO, ARTIFACT_VISUAL_REVIEW, ARTIFACT_REVIEW
 
 ALLOWED_VERDICTS = ("PASS", "FAIL", "WARN", "UNKNOWN")
 
-_CANDIDATE_FILES = ("review.json", "operator/review.json", "review_result.json")
+_CANDIDATE_FILES = ("json/review.json", "review.json", "operator/review.json", "review_result.json")
 
 
 def read_review_verdict(job_dir: Path) -> str:
@@ -40,10 +41,10 @@ def compute_review_verdict(job_dir: Path) -> str:
     Conservative MVP rule: PASS when the long video rendered and the operator
     review was produced without a visual_review FAIL; otherwise UNKNOWN/FAIL.
     """
-    video_ok = (job_dir / "video.mp4").exists()
-    review_html_ok = (job_dir / "operator_review.html").exists()
+    video_ok = (job_dir / ARTIFACT_VIDEO).exists()
+    review_html_ok = (job_dir / "outputs/operator_review.html").exists() or (job_dir / "operator_review.html").exists()
 
-    visual = job_dir / "visual_review.json"
+    visual = job_dir / ARTIFACT_VISUAL_REVIEW
     if visual.exists():
         try:
             vdata = json.loads(visual.read_text(encoding="utf-8"))
@@ -67,6 +68,6 @@ def write_review_verdict(job_dir: Path, verdict: str | None = None) -> Path:
     v = (verdict or compute_review_verdict(job_dir)).upper()
     if v not in ALLOWED_VERDICTS:
         v = "UNKNOWN"
-    path = job_dir / "review.json"
+    path = job_dir / ARTIFACT_REVIEW
     atomic_write_json(path, {"verdict": v})
     return path

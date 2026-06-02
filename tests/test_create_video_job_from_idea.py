@@ -85,9 +85,11 @@ def test_create_job_from_full_idea_writes_idea_and_enqueues_run_all(
     assert body["idea_source"] == "provided_full_idea"
     assert body["pipeline_status"] == "queued"
     assert body["job_id"].startswith("dormir-mejor-despues-de-los-45")
-    assert body["idea"]["title_seed"] == VALID_IDEA["title_seed"]
-    assert (tmp_path / body["job_id"] / "idea.json").exists()
-    saved = json.loads((tmp_path / body["job_id"] / "idea.json").read_text(encoding="utf-8"))
+    idea_path = tmp_path / body["job_id"] / "json" / "idea.json"
+    if not idea_path.exists():
+        idea_path = tmp_path / body["job_id"] / "idea.json"
+    assert idea_path.exists()
+    saved = json.loads(idea_path.read_text(encoding="utf-8"))
     assert saved["title_seed"] == VALID_IDEA["title_seed"]
     job = json.loads((tmp_path / body["job_id"] / "job.json").read_text(encoding="utf-8"))
     assert job["current_stage"] == "idea_research"

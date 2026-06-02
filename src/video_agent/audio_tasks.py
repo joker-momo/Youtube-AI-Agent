@@ -34,13 +34,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         _run_whisper_timestamps_stage_inline(args.job_dir)
         return 0
     if args.command == "prepare-assets":
+        from video_agent.contracts import ARTIFACT_SCENES
         from video_agent.pipeline import _load_style, _write_visual_review
         from video_agent.stages.assets import prepare_assets
         from video_agent.utils.json_io import read_json, read_yaml
 
         channel_config = read_yaml(args.channel_path)
         style = _load_style(channel_config)
-        scene_doc = read_json(args.job_dir / "scenes.json")
+        scene_doc = read_json(args.job_dir / ARTIFACT_SCENES)
         assets = prepare_assets(
             args.job_dir,
             style,

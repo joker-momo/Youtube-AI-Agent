@@ -34,8 +34,37 @@ IMAGE_GEN_INSTRUCTION = (
 
 
 def build_image_gen_prompt(prompt: str) -> str:
-    """Prepend the 1920x1080 image-gen instruction to a user prompt."""
-    return IMAGE_GEN_INSTRUCTION + "\n\n" + prompt.strip()
+    """Prepend the 1920x1080 image-gen instruction to a user prompt, with automated contradiction checks."""
+    instruction = IMAGE_GEN_INSTRUCTION
+    
+    prompt_lower = prompt.lower()
+    
+    # 1. Text overlays / Typography check
+    text_indicators = ["text", "overlay", "word", "font", "typography", "title", "label", "writing", "letter", "quote"]
+    if any(ind in prompt_lower for ind in text_indicators):
+        instruction = instruction.replace(", no text overlays", "")
+        
+    # 2. Watermark / Brand check
+    watermark_indicators = ["watermark", "logo", "brand", "signature"]
+    if any(ind in prompt_lower for ind in watermark_indicators):
+        instruction = instruction.replace(", no watermark", "")
+        
+    # 3. Border / Frame / Padding check
+    border_indicators = ["border", "padding", "frame", "margin"]
+    if any(ind in prompt_lower for ind in border_indicators):
+        instruction = instruction.replace("no borders, ", "").replace("no padding, ", "")
+        
+    full_prompt = instruction + "\n\n" + prompt.strip()
+    
+    # Print the full prompt for transparency and debugging
+    print(f"\n==================================================")
+    print(f"[ChatGPTImageDriver] FINAL FULL IMAGE GENERATION PROMPT:")
+    print(f"--------------------------------------------------")
+    print(full_prompt)
+    print(f"==================================================\n")
+    
+    return full_prompt
+
 
 
 PROJECTS_HEADER_SELECTOR = "button:has-text('Projects')"
@@ -228,7 +257,7 @@ class ChatGPTImageDriver:
                 screenshot_path=shot,
             ) from exc
 
-    async def _focus_composer(self) -> None:
+    async def _focus_composer(self) -> "Locator":
         composer = None
         for sel in COMPOSER_SELECTORS:
             loc = self.page.locator(sel).first
@@ -252,6 +281,50 @@ class ChatGPTImageDriver:
                 "() => document.querySelector(\"textarea[name='prompt-textarea']\")?.focus()"
             )
         await human_pause(self.page, min_ms=200, max_ms=500)
+        return composer
+
+    async def _fill_composer_robust(self, composer, text: str) -> None:
+        """Robustly fill the ChatGPT composer (contenteditable or textarea) with React updates."""
+        if not hasattr(self.page, "evaluate"):
+            return
+            
+        try:
+            if composer is not None:
+                await composer.fill(text)
+                await human_pause(self.page, min_ms=300, max_ms=700)
+        except Exception:
+            pass
+            
+        # Ensure React state is fully sync'd by evaluating in-page JS.
+        # This handles both contenteditable divs (standard) and textarea fallbacks.
+        await self.page.evaluate(
+            """({val, selectors}) => {
+                let el = null;
+                for (const sel of selectors) {
+                    el = document.querySelector(sel);
+                    if (el) break;
+                }
+                if (!el) {
+                    // Fallback to active element if selectors fail
+                    el = document.activeElement;
+                }
+                if (el) {
+                    if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+                        el.value = val;
+                    } else {
+                        // For contenteditable, we must set textContent and trigger events
+                        el.innerHTML = '';
+                        const p = document.createElement('p');
+                        p.textContent = val;
+                        el.appendChild(p);
+                    }
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            }""",
+            {"val": text, "selectors": COMPOSER_SELECTORS}
+        )
+        await human_pause(self.page, min_ms=400, max_ms=800)
 
     async def _click_first_visible(self, selectors: tuple[str, ...], *, timeout_ms: int = 1_500) -> bool:
         for sel in selectors:
@@ -420,10 +493,10 @@ class ChatGPTImageDriver:
 
         try:
             await self._create_project(project_name)
-            await self._focus_composer()
             await self._select_create_image_mode_and_aspect_ratio()
+            composer = await self._focus_composer()
             full_prompt = build_image_gen_prompt(prompt)
-            await human_type(self.page, full_prompt)
+            await self._fill_composer_robust(composer, full_prompt)
             await human_pause(self.page, min_ms=500, max_ms=1200)
             await self._click_send()
 
@@ -477,10 +550,10 @@ class ChatGPTImageDriver:
                 if not prompt.strip():
                     raise BrowserDriverError(f"Empty prompt at index {i}")
 
-                await self._focus_composer()
                 await self._select_create_image_mode_and_aspect_ratio()
+                composer = await self._focus_composer()
                 full_prompt = build_image_gen_prompt(prompt)
-                await human_type(self.page, full_prompt)
+                await self._fill_composer_robust(composer, full_prompt)
                 await human_pause(self.page, min_ms=500, max_ms=1200)
                 await self._click_send()
 

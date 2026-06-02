@@ -52,17 +52,34 @@ def recent_job_snapshots(jobs_root: Path, limit: int = 3) -> list[dict[str, Any]
     dirs = [p for p in jobs_root.iterdir() if p.is_dir()]
     dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     snapshots: list[dict[str, Any]] = []
+
+    file_mappings = {
+        "script.json": ["json/script.json", "script.json"],
+        "scenes.json": ["json/scenes.json", "scenes.json"],
+        "seo.json": ["json/seo.json", "seo.json"],
+        "render_props.json": ["json/render_props.json", "render_props.json"],
+        "video.mp4": ["outputs/video.mp4", "video.mp4"],
+        "thumbnail.jpg": ["outputs/thumbnail.jpg", "thumbnail.jpg"],
+    }
+
     for job_dir in dirs[:limit]:
         files = {}
-        for name in ["script.json", "scenes.json", "seo.json", "render_props.json", "video.mp4", "thumbnail.jpg"]:
-            p = job_dir / name
-            if p.exists():
-                files[name] = {"size": p.stat().st_size, "mtime": datetime.fromtimestamp(p.stat().st_mtime, timezone.utc).isoformat()}
+        for name, candidates in file_mappings.items():
+            for c in candidates:
+                p = job_dir / c
+                if p.exists():
+                    files[name] = {"size": p.stat().st_size, "mtime": datetime.fromtimestamp(p.stat().st_mtime, timezone.utc).isoformat()}
+                    break
+        
+        progress_path = job_dir / "json" / "render_progress.json"
+        if not progress_path.exists():
+            progress_path = job_dir / "render_progress.json"
+
         snapshots.append(
             {
                 "job_dir": str(job_dir),
                 "event_log_tail": _tail_jsonl(job_dir / "events.jsonl", limit=15),
-                "render_progress": _read_json(job_dir / "render_progress.json"),
+                "render_progress": _read_json(progress_path),
                 "files": files,
             }
         )

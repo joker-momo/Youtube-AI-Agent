@@ -276,7 +276,15 @@ def _json_file_directive(filename: str) -> str:
 
 
 def _read_optional_json(path: Path) -> dict[str, Any] | None:
-    return read_json(path) if path.exists() else None
+    if path.exists():
+        return read_json(path)
+    if path.name.endswith(".json"):
+        job_dir = path.parent
+        if (job_dir / "job.json").exists() or job_dir.name.startswith("job-"):
+            fallback_path = job_dir / "json" / path.name
+            if fallback_path.exists():
+                return read_json(fallback_path)
+    return None
 
 
 def _relative_href(path: Path, base_dir: Path) -> str:
@@ -1508,7 +1516,10 @@ def promote_operator_artifact(
     validation = validate_operator_artifact(artifact, parsed, job_dir.name, channel_config)
     if not validation.is_valid:
         raise ValueError(f"{artifact} validation failed:\n{validation.format_report()}")
-    output_path = job_dir / f"{artifact}.json"
+    if (job_dir / "json").exists():
+        output_path = job_dir / "json" / f"{artifact}.json"
+    else:
+        output_path = job_dir / f"{artifact}.json"
     write_json(output_path, parsed)
     return PromoteResult(artifact=artifact, raw_path=raw_path, output_path=output_path)
 
@@ -1735,8 +1746,32 @@ def build_operator_next(channel_path: Path, idea_path: Path, job_dir: Path) -> O
     )
 
 
+def _resolve_operator_path(job_dir: Path, filename: str) -> Path:
+    """Resolve a file path with fallback to root or json/outputs based on layout."""
+    if filename.endswith(".json") or filename.endswith(".jsonl"):
+        new_path = job_dir / "json" / filename
+    elif filename == "operator_review.html" or filename == "report.md" or filename.endswith(".mp4") or filename.endswith(".jpg"):
+        new_path = job_dir / "outputs" / filename
+    else:
+        new_path = job_dir / filename
+    
+    if new_path.exists():
+        return new_path
+    
+    legacy_path = job_dir / filename
+    if legacy_path.exists():
+        return legacy_path
+        
+    return new_path
+
+
 def write_operator_review(job_dir: Path, output_path: Path | None = None) -> Path:
-    output_path = output_path or job_dir / "operator_review.html"
+    if output_path is None:
+        if (job_dir / "outputs").exists():
+            output_path = job_dir / "outputs" / "operator_review.html"
+        else:
+            output_path = job_dir / "operator_review.html"
+
     script = _read_optional_json(job_dir / "script.json") or {}
     scenes = _read_optional_json(job_dir / "scenes.json") or {}
     seo = _read_optional_json(job_dir / "seo.json") or {}
@@ -1762,7 +1797,7 @@ def write_operator_review(job_dir: Path, output_path: Path | None = None) -> Pat
 
     artifact_rows = []
     for filename in ["script.json", "scenes.json", "seo.json", "render_props.json", "visual_review.json", "report.md"]:
-        path = job_dir / filename
+        path = _resolve_operator_path(job_dir, filename)
         artifact_rows.append(
             "<tr>"
             f"<td>{escape(filename)}</td>"
@@ -1771,10 +1806,14 @@ def write_operator_review(job_dir: Path, output_path: Path | None = None) -> Pat
             "</tr>"
         )
 
-    video_href = _relative_href(job_dir / "video.mp4", job_dir)
-    thumbnail_href = _relative_href(job_dir / "thumbnail.jpg", job_dir)
+    video_path = _resolve_operator_path(job_dir, "video.mp4")
+    thumbnail_path = _resolve_operator_path(job_dir, "thumbnail.jpg")
     contact_sheet = visual_review.get("contact_sheet", "visual_contact_sheet.jpg")
-    contact_href = _relative_href(job_dir / str(contact_sheet), job_dir)
+    contact_sheet_path = _resolve_operator_path(job_dir, contact_sheet)
+
+    video_href = _relative_href(video_path, job_dir)
+    thumbnail_href = _relative_href(thumbnail_path, job_dir)
+    contact_href = _relative_href(contact_sheet_path, job_dir)
     visual_status = str((visual_review.get("qa") or {}).get("status", "MISSING")) if visual_review else "MISSING"
     provider_summary = visual_review.get("summary", {}).get("by_provider", {}) if visual_review else {}
     provider_text = ", ".join(f"{count} {provider}" for provider, count in sorted(provider_summary.items())) or "n/a"

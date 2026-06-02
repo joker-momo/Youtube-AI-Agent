@@ -26,7 +26,7 @@ from video_agent.utils.json_io import read_json, read_yaml
 from video_agent.utils.paths import slugify
 from video_agent.utils.validation import validate_json
 
-IDEA_FILE = "idea.json"
+IDEA_FILE = "json/idea.json"
 _SAFE_JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _ALLOWED_IDEA_POLICIES = {"block", "warn_only"}
 _BANNED_HEALTH_CLAIMS = ("cura", "curar", "garantiza", "elimina", "milagro")
@@ -169,6 +169,20 @@ def _unique_job_id(jobs_root: Path, title_seed: str, explicit: str | None) -> st
     return candidate
 
 
+def _resolve_job_file(job_dir: Path, filename: str) -> Path:
+    """Resolve a json/output file with fallback to root for legacy layout."""
+    if filename.endswith(".json") or filename.endswith(".jsonl"):
+        new_path = job_dir / "json" / filename
+    elif filename == "report.md" or filename.endswith(".mp4") or filename.endswith(".jpg"):
+        new_path = job_dir / "outputs" / filename
+    else:
+        new_path = job_dir / filename
+        
+    if new_path.exists():
+        return new_path
+    return job_dir / filename
+
+
 def collect_existing_video_ideas(
     *,
     channel_id: str,
@@ -201,14 +215,16 @@ def collect_existing_video_ideas(
                 continue
             idea: dict[str, Any] = {}
             try:
-                if (job_dir / IDEA_FILE).exists():
-                    idea = read_json(job_dir / IDEA_FILE)
+                idea_path = _resolve_job_file(job_dir, "idea.json")
+                if idea_path.exists():
+                    idea = read_json(idea_path)
             except Exception:
                 idea = {}
             seo_title = ""
             try:
-                if (job_dir / "seo.json").exists():
-                    seo = read_json(job_dir / "seo.json")
+                seo_path = _resolve_job_file(job_dir, "seo.json")
+                if seo_path.exists():
+                    seo = read_json(seo_path)
                     seo_title = str(seo.get("title") or "").strip()
             except Exception:
                 seo_title = ""

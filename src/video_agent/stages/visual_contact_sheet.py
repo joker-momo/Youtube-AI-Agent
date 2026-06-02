@@ -58,5 +58,6 @@ def create_visual_contact_sheet(job_dir: Path, visual_review: dict) -> Path:
             draw.text((x, y + thumb_size[1] + 10 + line_index * 24), line[:42], fill="#222222")
 
     output_path = job_dir / ARTIFACT_VISUAL_CONTACT_SHEET
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     sheet.save(output_path, quality=90)
     return output_path

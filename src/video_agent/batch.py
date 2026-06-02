@@ -32,22 +32,45 @@ def _format_score_range(selection_scores: dict | None) -> str:
     return f"{selection_scores['min']}-{selection_scores['max']} (avg {selection_scores['avg']})"
 
 
+def _resolve_artifact(job_dir: Path, new_rel: str, legacy_rel: str | None = None) -> Path:
+    """Resolve a job artifact with fallback for legacy (root) layout."""
+    new_path = job_dir / new_rel
+    if new_path.exists():
+        return new_path
+    if legacy_rel is None:
+        legacy_rel = Path(new_rel).name
+    legacy_path = job_dir / legacy_rel
+    if legacy_path.exists():
+        return legacy_path
+    return new_path
+
+
 def build_audit_row(job_dir: Path) -> AuditRow:
-    visual_review = read_json(job_dir / ARTIFACT_VISUAL_REVIEW)
-    render_props = read_json(job_dir / "render_props.json")
+    visual_review_path = _resolve_artifact(job_dir, ARTIFACT_VISUAL_REVIEW)
+    visual_review = read_json(visual_review_path)
+    
+    render_props_path = _resolve_artifact(job_dir, "json/render_props.json")
+    render_props = read_json(render_props_path)
+    
     summary = visual_review["summary"]
-    video_path = job_dir / "video.mp4"
+    
+    video_path = _resolve_artifact(job_dir, "outputs/video.mp4")
     video_status = f"{video_path.stat().st_size / 1024 / 1024:.1f} MB" if video_path.exists() else "skipped"
+    
     source_mix = _format_count_mix(summary["by_source"])
     provider_mix = _format_count_mix(summary["by_provider"])
     searched_provider_mix = _format_count_mix(summary.get("searched_providers", {}))
+    
+    cs_rel = visual_review.get("contact_sheet", "visual_contact_sheet.jpg")
+    contact_sheet_path = _resolve_artifact(job_dir, f"outputs/{Path(cs_rel).name}", Path(cs_rel).name)
+    
     return AuditRow(
         job_dir=job_dir,
         topic=render_props.get("seo", {}).get("title") or render_props.get("channel", {}).get("name", "-"),
         video_status=video_status,
         visual_status=visual_review["qa"]["status"],
         score_range=_format_score_range(summary.get("selection_scores")),
-        contact_sheet=str(job_dir / visual_review.get("contact_sheet", "visual_contact_sheet.jpg")),
+        contact_sheet=str(contact_sheet_path),
         source_mix=source_mix,
         provider_mix=provider_mix,
         searched_provider_mix=searched_provider_mix,

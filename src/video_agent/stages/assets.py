@@ -11,7 +11,7 @@ from typing import Any
 from PIL import Image, ImageDraw
 
 from video_agent.assets.service import StockAssetService
-from video_agent.contracts import ARTIFACT_ASSETS, repo_root
+from video_agent.contracts import ARTIFACT_ASSETS, repo_root, ARTIFACT_AUDIO_QA, ARTIFACT_SCENES
 from video_agent.tts import build_tts_client, synthesize_scene_track
 from video_agent.qa.tts_report import audio_qa_report, build_tts_report
 from video_agent.storage.public_jobs import prepare_public_job_dir
@@ -406,14 +406,14 @@ def prepare_assets(
                     codec="aac",
                     sample_rate=out_sr,
                 )
-                write_json(job_dir / "audio_qa.json", qa_report)
+                write_json(job_dir / ARTIFACT_AUDIO_QA, qa_report)
             except Exception:
                 pass
         else:
             audio_metadata = {**audio_metadata, "mix": {"bgm_enabled": False, "error": "ffmpeg_mix_failed"}}
 
     # Write the dynamically updated scene durations back to scenes.json
-    write_json(job_dir / "scenes.json", scene_doc)
+    write_json(job_dir / ARTIFACT_SCENES, scene_doc)
 
     manifest = {
         "audio": {"narration": public_narration_ref, "music": public_music_ref, **audio_metadata},

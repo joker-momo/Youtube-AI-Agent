@@ -8,7 +8,19 @@ import re
 from pathlib import Path
 from typing import Awaitable, Callable, Sequence
 
-from video_agent.contracts import EVENT_LOG, repo_root
+from video_agent.contracts import (
+    EVENT_LOG,
+    repo_root,
+    ARTIFACT_SEO,
+    ARTIFACT_SCRIPT,
+    ARTIFACT_SCENES,
+    ARTIFACT_VISUAL_REVIEW,
+    ARTIFACT_THUMBNAIL,
+    ARTIFACT_VIDEO,
+    ARTIFACT_REPORT,
+    ARTIFACT_VISUAL_CONTACT_SHEET,
+    ARTIFACT_PERSONA_EVAL,
+)
 from video_agent.operator import (
     _chatgpt_scenes_batch_prompt,
     _chatgpt_scenes_plan_prompt,
@@ -45,7 +57,8 @@ from video_agent.runtime.providers import AUDIO_SUBPROCESS_ENV, SubprocessAudioT
 from video_agent.storage.atomic import atomic_write_text
 from video_agent.storage.public_jobs import prepare_public_job_dir
 
-IDEA_FILE = "idea.json"
+IDEA_FILE = "json/idea.json"
+_IDEA_FILE_LEGACY = "idea.json"
 SCRIPT_PROMPT_PATH = Path("operator/chatgpt/script_prompt.md")
 SCRIPT_RAW_PATH = Path("operator/chatgpt/script.raw.txt")
 SCENES_PROMPT_PATH = Path("operator/chatgpt/scenes_prompt.md")
@@ -65,6 +78,29 @@ class StageInputMissingError(Exception):
 
 
 _AUDIO_SUBPROCESS_ENV = AUDIO_SUBPROCESS_ENV
+
+
+def _resolve_idea_path(job_dir: Path) -> Path:
+    """Resolve idea.json with fallback for legacy (root) layout."""
+    return _resolve_artifact(job_dir, IDEA_FILE, _IDEA_FILE_LEGACY)
+
+
+def _resolve_artifact(job_dir: Path, new_rel: str, legacy_rel: str | None = None) -> Path:
+    """Resolve a job artifact with fallback for legacy (root) layout.
+
+    Checks the new subdirectory path first (e.g. ``json/script.json``).
+    If not found, falls back to the legacy root-level path (``script.json``).
+    """
+    new_path = job_dir / new_rel
+    if new_path.exists():
+        return new_path
+    if legacy_rel is None:
+        # Derive legacy name from basename of new path
+        legacy_rel = Path(new_rel).name
+    legacy_path = job_dir / legacy_rel
+    if legacy_path.exists():
+        return legacy_path
+    return new_path  # Return new-style path for error messages
 
 
 def _run_blocking_with_timeout(
@@ -158,7 +194,7 @@ def run_script_stage(job_dir: Path, channel_path: Path) -> Path:
     marks the ``script`` stage completed, and emits a ``STAGE_COMPLETED``
     event so consumers of ``events.jsonl`` see the same shape as v2.
     """
-    idea_path = job_dir / IDEA_FILE
+    idea_path = _resolve_idea_path(job_dir)
     if not idea_path.exists():
         raise StageInputMissingError(f"Missing {idea_path}")
     if not channel_path.exists():
@@ -213,7 +249,7 @@ def promote_script_stage(job_dir: Path, channel_path: Path, raw_response: str) -
 
 
 def run_scenes_stage(job_dir: Path, channel_path: Path) -> Path:
-    script_path = job_dir / "script.json"
+    script_path = _resolve_artifact(job_dir, ARTIFACT_SCRIPT)
     if not script_path.exists():
         raise StageInputMissingError(f"Missing {script_path}")
     if not channel_path.exists():
@@ -268,8 +304,8 @@ def promote_scenes_stage(job_dir: Path, channel_path: Path, raw_response: str) -
 
 
 def run_seo_stage(job_dir: Path, channel_path: Path) -> Path:
-    script_path = job_dir / "script.json"
-    scenes_path = job_dir / "scenes.json"
+    script_path = _resolve_artifact(job_dir, ARTIFACT_SCRIPT)
+    scenes_path = _resolve_artifact(job_dir, ARTIFACT_SCENES)
     if not script_path.exists():
         raise StageInputMissingError(f"Missing {script_path}")
     if not scenes_path.exists():
@@ -602,7 +638,7 @@ def _run_whisper_timestamps_stage_inline(job_dir: Path) -> Path:
     )
 
     output = {"scenes": scene_data}
-    output_path = job_dir / "whisper_timestamps.json"
+    output_path = job_dir / "json/whisper_timestamps.json"
     from video_agent.utils.json_io import write_json
     write_json(output_path, output)
     logger.log(
@@ -620,9 +656,9 @@ def _run_whisper_timestamps_stage_inline(job_dir: Path) -> Path:
             _compute_chapter_timestamps,
             _rewrite_description_chapters,
         )
-        seo_path = job_dir / "seo.json"
-        scenes_path = job_dir / "scenes.json"
-        script_path = job_dir / "script.json"
+        seo_path = _resolve_artifact(job_dir, ARTIFACT_SEO)
+        scenes_path = _resolve_artifact(job_dir, ARTIFACT_SCENES)
+        script_path = _resolve_artifact(job_dir, ARTIFACT_SCRIPT)
         if seo_path.exists() and scenes_path.exists():
             seo_obj = json.loads(seo_path.read_text(encoding="utf-8"))
             scene_doc = json.loads(scenes_path.read_text(encoding="utf-8"))
@@ -713,12 +749,12 @@ def run_persona_eval_stage(job_dir: Path, channel_path: Path) -> Path:
     if not channel_path.exists():
         raise StageInputMissingError(f"Missing channel config {channel_path}")
 
-    script = read_json(job_dir / "script.json")
-    scenes = read_json(job_dir / "scenes.json")
-    seo = read_json(job_dir / "seo.json")
-    visual_review = read_json(job_dir / "visual_review.json")
-    whisper_ok = (job_dir / "whisper_timestamps.json").exists()
-    video_ok = (job_dir / "video.mp4").exists()
+    script = read_json(_resolve_artifact(job_dir, ARTIFACT_SCRIPT))
+    scenes = read_json(_resolve_artifact(job_dir, ARTIFACT_SCENES))
+    seo = read_json(_resolve_artifact(job_dir, ARTIFACT_SEO))
+    visual_review = read_json(_resolve_artifact(job_dir, ARTIFACT_VISUAL_REVIEW))
+    whisper_ok = _resolve_artifact(job_dir, "json/whisper_timestamps.json").exists()
+    video_ok = _resolve_artifact(job_dir, ARTIFACT_VIDEO).exists()
 
     cfg = read_yaml(channel_path)
     personas_cfg = cfg.get("personas") or []
@@ -811,7 +847,7 @@ def run_persona_eval_stage(job_dir: Path, channel_path: Path) -> Path:
             "policy_risk_hits": bad_hits,
         },
     }
-    output_path = job_dir / "persona_eval.json"
+    output_path = job_dir / ARTIFACT_PERSONA_EVAL
     _write_json(output_path, payload)
     _complete_stage(job_dir, "persona_eval", output_path)
     return output_path
@@ -822,9 +858,9 @@ def run_persona_eval_stage(job_dir: Path, channel_path: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 _QA_ARTIFACT_FILE = {
-    "script": "script.json",
-    "scenes": "scenes.json",
-    "seo": "seo.json",
+    "script": ARTIFACT_SCRIPT,
+    "scenes": ARTIFACT_SCENES,
+    "seo": ARTIFACT_SEO,
 }
 _QA_RAW_PATH = {
     "script": SCRIPT_QA_RAW_PATH,
@@ -932,7 +968,7 @@ def _enforce_seo_language_qa(
     channel_path: Path | None = None,
 ) -> None:
     """Force SEO rework if Gemini misses the configured language contract."""
-    seo_path = job_dir / "seo.json"
+    seo_path = _resolve_artifact(job_dir, ARTIFACT_SEO)
     if not seo_path.exists():
         return
     try:
@@ -1620,7 +1656,7 @@ async def _auto_qa(
         raise StageInputMissingError(
             f"Cannot auto-run {stage_name} from current_stage={state.current_stage!r}"
         )
-    artifact_path = job_dir / _QA_ARTIFACT_FILE[artifact]
+    artifact_path = _resolve_artifact(job_dir, _QA_ARTIFACT_FILE[artifact])
     if not artifact_path.exists():
         raise StageInputMissingError(f"Missing {artifact_path}")
 
@@ -1854,7 +1890,7 @@ async def auto_idea_research_stage(
         raise StageInputMissingError(
             f"Cannot run {stage_name} from current_stage={state.current_stage!r}"
         )
-    idea_path = job_dir / IDEA_FILE
+    idea_path = _resolve_idea_path(job_dir)
     if not idea_path.exists():
         raise StageInputMissingError(f"Missing {idea_path}")
 
@@ -2143,7 +2179,7 @@ async def auto_thumbnail_image_stage(
             f"Cannot run {stage_name} from current_stage={state.current_stage!r}"
         )
 
-    seo_path = job_dir / "seo.json"
+    seo_path = _resolve_artifact(job_dir, ARTIFACT_SEO)
     if not seo_path.exists():
         raise StageInputMissingError(f"Missing {seo_path}")
     seo = json.loads(seo_path.read_text(encoding="utf-8"))
@@ -2172,6 +2208,8 @@ async def auto_thumbnail_image_stage(
 
     assets_dir = job_dir / "assets"
     assets_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "json").mkdir(parents=True, exist_ok=True)
+    (job_dir / "outputs").mkdir(parents=True, exist_ok=True)
 
     logger = EventLogger(job_dir / EVENT_LOG)
     generated: list[Path] = []   # successfully created .jpg files
@@ -2188,7 +2226,7 @@ async def auto_thumbnail_image_stage(
             prompt = _build_thumbnail_prompt(title, thumb_text, accent_color, channel_description)
             prompts.append(prompt)
             png_paths.append((assets_dir / f"thumbnail_{i}.png").resolve())
-            jpg_paths.append((job_dir / f"thumbnail_{i}.jpg").resolve())
+            jpg_paths.append((job_dir / "outputs" / f"thumbnail_{i}.jpg").resolve())
 
         try:
             await image_fn.generate_images(
@@ -2227,7 +2265,7 @@ async def auto_thumbnail_image_stage(
             prompt = _build_thumbnail_prompt(title, thumb_text, accent_color, channel_description)
             project_name = f"{state.job_id[:30]}-thumb{i}"[:45]
             png_path = (assets_dir / f"thumbnail_{i}.png").resolve()
-            jpg_path = (job_dir / f"thumbnail_{i}.jpg").resolve()
+            jpg_path = (job_dir / "outputs" / f"thumbnail_{i}.jpg").resolve()
 
             try:
                 response = await image_fn(
@@ -2272,18 +2310,20 @@ async def auto_thumbnail_image_stage(
     # Uses generated[0] (not hardcoded thumbnail_1.jpg) so that if variant 1
     # failed but variant 2+ succeeded, thumbnail.jpg is still populated.
     primary = generated[0]
-    _shutil.copy2(primary, job_dir / "thumbnail.jpg")
+    _shutil.copy2(primary, job_dir / ARTIFACT_THUMBNAIL)
 
     # Copy all generated thumbnails to remotion/public/ so Remotion Studio
     # and the Thumbnail.tsx preview component can load them via staticFile().
     public_job_dir = prepare_public_job_dir(repo_root(), job_dir.name)
+    public_outputs_dir = public_job_dir / "outputs"
+    public_outputs_dir.mkdir(exist_ok=True)
     for jpg in generated:
-        _shutil.copy2(jpg, public_job_dir / jpg.name)
-    _shutil.copy2(primary, public_job_dir / "thumbnail.jpg")
+        _shutil.copy2(jpg, public_outputs_dir / jpg.name)
+    _shutil.copy2(primary, public_outputs_dir / "thumbnail.jpg")
 
     # seo.thumbnail_path: use public-relative path of the primary thumbnail.
     # staticFile()-compatible so Remotion Studio can load it in Thumbnail.tsx.
-    public_ref = f"jobs/{job_dir.name}/{primary.name}"
+    public_ref = f"jobs/{job_dir.name}/outputs/{primary.name}"
     seo["thumbnail_path"] = public_ref
     _write_json(seo_path, seo)
 

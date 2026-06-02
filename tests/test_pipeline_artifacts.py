@@ -29,21 +29,21 @@ def test_pipeline_writes_structured_artifacts_without_render(tmp_path, monkeypat
         )
     )
     assert result.video_path is None
-    assert (result.job_dir / "script.json").exists()
-    assert (result.job_dir / "scenes.json").exists()
-    assert (result.job_dir / "assets_manifest.json").exists()
-    assert (result.job_dir / "visual_review.json").exists()
-    assert (result.job_dir / "visual_contact_sheet.jpg").exists()
-    assert (result.job_dir / "render_props.json").exists()
-    assert (result.job_dir / "seo.json").exists()
-    assert (result.job_dir / "thumbnail.jpg").exists()
-    assert (result.job_dir / "report.md").exists()
-    render_props = read_json(result.job_dir / "render_props.json")
+    assert (result.job_dir / "json" / "script.json").exists()
+    assert (result.job_dir / "json" / "scenes.json").exists()
+    assert (result.job_dir / "json" / "assets_manifest.json").exists()
+    assert (result.job_dir / "json" / "visual_review.json").exists()
+    assert (result.job_dir / "outputs" / "visual_contact_sheet.jpg").exists()
+    assert (result.job_dir / "json" / "render_props.json").exists()
+    assert (result.job_dir / "json" / "seo.json").exists()
+    assert (result.job_dir / "outputs" / "thumbnail.jpg").exists()
+    assert (result.job_dir / "outputs" / "report.md").exists()
+    render_props = read_json(result.job_dir / "json" / "render_props.json")
     assert render_props["channel"]["id"] == "vida-plena-45"
     assert len(render_props["scenes"]) == 5
-    visual_review = read_json(result.job_dir / "visual_review.json")
+    visual_review = read_json(result.job_dir / "json" / "visual_review.json")
     assert visual_review["job_id"] == result.job_id
-    assert visual_review["contact_sheet"] == "visual_contact_sheet.jpg"
+    assert visual_review["contact_sheet"] == "outputs/visual_contact_sheet.jpg"
     assert len(visual_review["scenes"]) == 5
     assert visual_review["summary"]["total_scenes"] == 5
     assert visual_review["qa"]["status"] == "WARN"
@@ -54,10 +54,10 @@ def test_pipeline_writes_structured_artifacts_without_render(tmp_path, monkeypat
         for scene in visual_review["scenes"]
         for issue in scene["qa"]["issues"]
     )
-    report = (result.job_dir / "report.md").read_text(encoding="utf-8")
+    report = (result.job_dir / "outputs" / "report.md").read_text(encoding="utf-8")
     assert "Visual Review" in report
     assert "Visual QA: WARN" in report
-    assert "Visual contact sheet: visual_contact_sheet.jpg" in report
+    assert "Visual contact sheet: outputs/visual_contact_sheet.jpg" in report
 
 
 def test_operator_render_writes_review_page_without_render(tmp_path, monkeypatch):
@@ -137,7 +137,9 @@ def test_operator_render_writes_review_page_without_render(tmp_path, monkeypatch
 
     result = render_operator_job(OperatorRenderOptions(channel_path=channel_path, job_dir=job_dir, render=False))
 
-    review_path = result.job_dir / "operator_review.html"
+    review_path = result.job_dir / "outputs" / "operator_review.html"
+    if not review_path.exists():
+        review_path = result.job_dir / "operator_review.html"
     assert review_path.exists()
     review = review_path.read_text(encoding="utf-8")
     assert "Dormir mejor despues de los 45" in review

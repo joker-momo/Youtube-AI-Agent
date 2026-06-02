@@ -272,7 +272,9 @@ def list_jobs(jobs_root: Path = Depends(get_jobs_root)) -> dict:
 def _job_idea_title(job_dir: Path) -> str:
     idea_path = job_dir / IDEA_FILE
     if not idea_path.exists():
-        return ""
+        idea_path = job_dir / "idea.json"
+        if not idea_path.exists():
+            return ""
     try:
         idea = json.loads(idea_path.read_text(encoding="utf-8"))
     except Exception:
@@ -310,7 +312,9 @@ def job_timeline(
     # Render ETA scales with target_duration_sec when known.
     render_eta = STAGE_ETA_SECONDS["render"]
     try:
-        scenes_path = job_dir / "scenes.json"
+        scenes_path = job_dir / "json" / "scenes.json"
+        if not scenes_path.exists():
+            scenes_path = job_dir / "scenes.json"
         if scenes_path.exists():
             sc = json.loads(scenes_path.read_text(encoding="utf-8"))
             total = int(sc.get("total_duration_sec") or 0)
@@ -318,6 +322,8 @@ def job_timeline(
                 render_eta = total * 1.2  # ~1.2x realtime on typical machine
         else:
             idea_path = job_dir / IDEA_FILE
+            if not idea_path.exists():
+                idea_path = job_dir / "idea.json"
             if idea_path.exists():
                 idea = json.loads(idea_path.read_text(encoding="utf-8"))
                 total = int(idea.get("target_duration_sec") or 0)
@@ -516,8 +522,8 @@ def _shorts_timeline_stage(job_dir: Path) -> dict | None:
         "completed_at": None,
         "error": None,
         "inputs": [
-            {"path": "video.mp4", "exists": (job_dir / "video.mp4").exists(), "size": ((job_dir / "video.mp4").stat().st_size if (job_dir / "video.mp4").exists() else 0)},
-            {"path": "review.json", "exists": (job_dir / "review.json").exists(), "size": ((job_dir / "review.json").stat().st_size if (job_dir / "review.json").exists() else 0)},
+            {"path": "outputs/video.mp4", "exists": (job_dir / "outputs/video.mp4").exists() or (job_dir / "video.mp4").exists(), "size": ((job_dir / "outputs/video.mp4").stat().st_size if (job_dir / "outputs/video.mp4").exists() else ((job_dir / "video.mp4").stat().st_size if (job_dir / "video.mp4").exists() else 0))},
+            {"path": "json/review.json", "exists": (job_dir / "json/review.json").exists() or (job_dir / "review.json").exists(), "size": ((job_dir / "json/review.json").stat().st_size if (job_dir / "json/review.json").exists() else ((job_dir / "review.json").stat().st_size if (job_dir / "review.json").exists() else 0))},
         ],
         "outputs": outputs,
         "actual_seconds": None,
@@ -546,6 +552,19 @@ def job_artifact(
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     target = resolve_inside(job_dir, path)
+    if target is None or not target.exists() or not target.is_file():
+        # Fallback check for backward compatibility:
+        # If the requested path is a top-level filename, try json/ or outputs/
+        if "/" not in path and "\\" not in path:
+            if path.endswith(".json") or path.endswith(".jsonl"):
+                fallback = resolve_inside(job_dir, f"json/{path}")
+                if fallback and fallback.exists() and fallback.is_file():
+                    target = fallback
+            else:
+                fallback = resolve_inside(job_dir, f"outputs/{path}")
+                if fallback and fallback.exists() and fallback.is_file():
+                    target = fallback
+
     if target is None or not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail=f"Artifact not found: {path}")
     # FastAPI guesses media type from the path; this is enough for our
@@ -585,7 +604,9 @@ def job_logs(
     events = _tail_jsonl(job_dir / EVENT_LOG, limit=tail)
     render_progress = None
     try:
-        rp = job_dir / "render_progress.json"
+        rp = job_dir / "json" / "render_progress.json"
+        if not rp.exists():
+            rp = job_dir / "render_progress.json"
         if rp.exists():
             render_progress = json.loads(rp.read_text(encoding="utf-8"))
     except Exception:
@@ -955,7 +976,9 @@ def get_render_progress(
 ) -> dict:
     """Return current Remotion render progress. Polling-friendly — always 200."""
     job_dir = _safe_job_dir(jobs_root, job_id)
-    progress_path = job_dir / "render_progress.json"
+    progress_path = job_dir / "json" / "render_progress.json"
+    if not progress_path.exists():
+        progress_path = job_dir / "render_progress.json"
     if not progress_path.exists():
         return {"percent": 0, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""}
     try:

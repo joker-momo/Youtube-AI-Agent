@@ -790,7 +790,7 @@ def test_http_auto_script(
 
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["output"] == "script.json"
+    assert body["output"] == "json/script.json"
     assert body["state"]["current_stage"] == "script_qa"
     assert len(fake.calls) == 1
 

@@ -100,7 +100,10 @@ def _resolve_artifact(job_dir: Path, new_rel: str, legacy_rel: str | None = None
     legacy_path = job_dir / legacy_rel
     if legacy_path.exists():
         return legacy_path
-    return new_path  # Return new-style path for error messages
+    # Neither exists. Fall back to new path only if json/ exists, else legacy.
+    if (job_dir / "json").exists():
+        return new_path
+    return legacy_path
 
 
 def _run_blocking_with_timeout(
@@ -446,7 +449,7 @@ def _run_whisper_timestamps_stage_inline(job_dir: Path) -> Path:
 
         channel_config = read_yaml(channel_config_path)
         style = read_json(repo_root() / channel_config["style_dna"]["path"])
-        scenes_path = job_dir / "scenes.json"
+        scenes_path = _resolve_artifact(job_dir, ARTIFACT_SCENES)
         if not scenes_path.exists():
             raise StageInputMissingError(f"Missing {scenes_path}")
         scene_doc = read_json(scenes_path)
@@ -478,7 +481,7 @@ def _run_whisper_timestamps_stage_inline(job_dir: Path) -> Path:
     if not narration_path.exists():
         raise StageInputMissingError(f"Missing narration audio: {narration_path}")
 
-    scenes_path = job_dir / "scenes.json"
+    scenes_path = _resolve_artifact(job_dir, ARTIFACT_SCENES)
     if not scenes_path.exists():
         raise StageInputMissingError(f"Missing {scenes_path}")
 
@@ -1042,7 +1045,7 @@ def _enforce_scenes_visual_prompt_english(
     This QA layer flips the verdict to NEEDS_REWORK with a per-scene list of
     offending visual_prompts so ChatGPT regenerates them in English.
     """
-    scenes_path = job_dir / "scenes.json"
+    scenes_path = _resolve_artifact(job_dir, ARTIFACT_SCENES)
     if not scenes_path.exists():
         return
     try:
@@ -1191,12 +1194,43 @@ async def _auto_run_then_promote(
     else:
         pass  # exhausted continuations — let promoter decide
 
-    try:
-        return promoter(job_dir, channel_path, raw_response)
-    except ValueError as exc:
-        raise StageInputMissingError(
-            f"Promotion failed for {promote_stage_name}: {exc}"
-        ) from exc
+    max_promote_retries = 2
+    for attempt in range(max_promote_retries + 1):
+        try:
+            return promoter(job_dir, channel_path, raw_response)
+        except (ValueError, StageInputMissingError) as exc:
+            if attempt >= max_promote_retries:
+                raise StageInputMissingError(
+                    f"Promotion failed for {promote_stage_name} after {attempt + 1} attempts: {exc}"
+                ) from exc
+            
+            import logging
+            logger = logging.getLogger("video_agent.orchestrator.stages")
+            logger.warning(
+                "Promote attempt %d failed for %s, re-sending prompt. Error: %s",
+                attempt + 1,
+                promote_stage_name,
+                exc,
+            )
+            
+            # Re-send the prompt
+            raw_response = await session_fn([task])
+            if not isinstance(raw_response, str) or not raw_response.strip():
+                raise StageInputMissingError(
+                    "browser-worker returned an empty response during retry for "
+                    f"{promote_stage_name}"
+                )
+            
+            # Re-run the continuation loop on the new response
+            for _attempt in range(_max_continuations):
+                if extract_json_objects(raw_response):
+                    break
+                if "{" not in raw_response:
+                    break
+                continuation = await session_fn([_CONTINUE_MSG])
+                if not isinstance(continuation, str) or not continuation.strip():
+                    break
+                raw_response = raw_response + continuation
 
 
 async def auto_script_stage(
@@ -1454,7 +1488,7 @@ async def auto_scenes_stage_sharded(
             f"Cannot auto-run sharded scenes from current_stage={state.current_stage!r}"
         )
     resume_after_scenes = state.current_stage == "scenes_promote"
-    script_path = job_dir / "script.json"
+    script_path = _resolve_artifact(job_dir, ARTIFACT_SCRIPT)
     if not script_path.exists():
         raise StageInputMissingError(f"Missing {script_path}")
     if not channel_path.exists():
@@ -1591,7 +1625,7 @@ async def auto_scenes_stage_sharded(
             session_fn=session_fn,
             scenes_logger=scenes_logger,
         )
-        scenes_path = job_dir / "scenes.json"
+        scenes_path = _resolve_artifact(job_dir, ARTIFACT_SCENES)
         _write_json(scenes_path, merged)
     except Exception as exc:
         raise StageInputMissingError(str(exc)) from exc
@@ -1714,7 +1748,7 @@ async def auto_scenes_qa_stage_sharded(
         raise StageInputMissingError(
             f"Cannot auto-run sharded scenes_qa from current_stage={state.current_stage!r}"
         )
-    scenes_path = job_dir / "scenes.json"
+    scenes_path = _resolve_artifact(job_dir, ARTIFACT_SCENES)
     if not scenes_path.exists():
         raise StageInputMissingError(f"Missing {scenes_path}")
     if not channel_path.exists():
@@ -2025,7 +2059,7 @@ async def generate_scene_asset(
 
     Returns the image_fn payload plus the scene id.
     """
-    scenes_path = job_dir / "scenes.json"
+    scenes_path = _resolve_artifact(job_dir, ARTIFACT_SCENES)
     if not scenes_path.exists():
         raise StageInputMissingError(f"Missing {scenes_path}")
     if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", scene_id or ""):
@@ -2112,7 +2146,7 @@ async def auto_assets_chatgpt_stage(
             f"Cannot run {stage_name} from current_stage={state.current_stage!r}"
         )
 
-    scenes_path = job_dir / "scenes.json"
+    scenes_path = _resolve_artifact(job_dir, ARTIFACT_SCENES)
     if not scenes_path.exists():
         raise StageInputMissingError(f"Missing {scenes_path}")
 

@@ -145,6 +145,7 @@ services:
       BROWSER_TRACE_DIR: /data/trace
       BROWSER_TRACE_RETENTION_DAYS: ${BROWSER_TRACE_RETENTION_DAYS:-3}
       BROWSER_TRACE_MAX_MB: ${BROWSER_TRACE_MAX_MB:-512}
+      BROWSER_HUMAN_STABLE_MS: ${BROWSER_HUMAN_STABLE_MS:-1200}
     volumes:
       - ./browser_trace:/data/trace
       # jobs/ is shared with app so ChatGPT-generated assets can be

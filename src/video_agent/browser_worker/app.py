@@ -60,6 +60,7 @@ from video_agent.browser_worker.drivers import (
     GeminiDriver,
     LoginRequiredError,
     QuotaExceededError,
+    clear_browser_data_keep_login,
     human_pause,
     save_trace_screenshot,
 )
@@ -319,14 +320,36 @@ async def _open_session_locked(site: str) -> str:
                 status_code=429,
                 detail=_driver_error_detail(exc),
             ) from exc
-        except BrowserDriverError as exc:
-            await page.close()
-            await browser.close()
-            await pw_ctx.__aexit__(None, None, None)
-            raise HTTPException(
-                status_code=502,
-                detail=_driver_error_detail(exc),
-            ) from exc
+        except (BrowserDriverError, Exception) as exc:
+            print(f"[browser] Error during driver.open() for {site}: {exc}. Clearing browser data & retrying once...", flush=True)
+            try:
+                await clear_browser_data_keep_login(context)
+                await page.goto(_target_url(site), wait_until="domcontentloaded", timeout=30_000)
+                await driver.open()
+            except Exception as retry_exc:
+                await page.close()
+                await browser.close()
+                await pw_ctx.__aexit__(None, None, None)
+                if isinstance(retry_exc, LoginRequiredError):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=_driver_error_detail(retry_exc, login_required=True),
+                    ) from retry_exc
+                elif isinstance(retry_exc, QuotaExceededError):
+                    raise HTTPException(
+                        status_code=429,
+                        detail=_driver_error_detail(retry_exc),
+                    ) from retry_exc
+                elif isinstance(retry_exc, BrowserDriverError):
+                    raise HTTPException(
+                        status_code=502,
+                        detail=_driver_error_detail(retry_exc),
+                    ) from retry_exc
+                else:
+                    raise HTTPException(
+                        status_code=502,
+                        detail={"error": f"{type(retry_exc).__name__}: {retry_exc}"},
+                    ) from retry_exc
     except HTTPException:
         raise
     except Exception as exc:
@@ -389,20 +412,38 @@ async def _send_in_session(session_id: str, prompt: str, timeout_ms: int) -> str
             status_code=429,
             detail=_driver_error_detail(exc),
         ) from exc
-    except BrowserDriverError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=_driver_error_detail(exc),
-        ) from exc
-    except Exception as exc:
+    except (BrowserDriverError, Exception) as exc:
+        print(f"[browser] Error in _send_in_session for {entry['site']}: {exc}. Clearing browser data & retrying once...", flush=True)
         try:
-            shot = await save_trace_screenshot(page, prefix=f"{entry['site']}-uncaught")
-        except Exception:
-            shot = ""
-        raise HTTPException(
-            status_code=502,
-            detail={"error": f"{type(exc).__name__}: {exc}", "screenshot": shot},
-        ) from exc
+            await clear_browser_data_keep_login(page.context)
+            # Re-open or refresh page if needed, but since it is session, we can just try to navigate back or retry sending
+            # Let's try sending again directly first
+            return await driver.send_message(prompt, response_timeout_ms=timeout_ms)
+        except Exception as retry_exc:
+            if isinstance(retry_exc, LoginRequiredError):
+                raise HTTPException(
+                    status_code=409,
+                    detail=_driver_error_detail(retry_exc, login_required=True),
+                ) from retry_exc
+            elif isinstance(retry_exc, QuotaExceededError):
+                raise HTTPException(
+                    status_code=429,
+                    detail=_driver_error_detail(retry_exc),
+                ) from retry_exc
+            elif isinstance(retry_exc, BrowserDriverError):
+                raise HTTPException(
+                    status_code=502,
+                    detail=_driver_error_detail(retry_exc),
+                ) from retry_exc
+            else:
+                try:
+                    shot = await save_trace_screenshot(page, prefix=f"{entry['site']}-uncaught")
+                except Exception:
+                    shot = ""
+                raise HTTPException(
+                    status_code=502,
+                    detail={"error": f"{type(retry_exc).__name__}: {retry_exc}", "screenshot": shot},
+                ) from retry_exc
 
 
 async def _drive(site: str, prompt: str, timeout_ms: int) -> dict:
@@ -451,30 +492,46 @@ async def _drive(site: str, prompt: str, timeout_ms: int) -> dict:
                     status_code=429,
                     detail=_driver_error_detail(exc),
                 ) from exc
-            except BrowserDriverError as exc:
-                raise HTTPException(
-                    status_code=502,
-                    detail=_driver_error_detail(exc),
-                ) from exc
-            except HTTPException:
-                raise
-            except Exception as exc:
-                # Playwright TimeoutError, navigation failures, etc. We
-                # want a structured response with a screenshot rather
-                # than a bare 500.
+            except (BrowserDriverError, Exception) as exc:
+                if isinstance(exc, HTTPException):
+                    raise
+                print(f"[browser] Error in _drive for {site}: {exc}. Clearing browser data & retrying once...", flush=True)
                 try:
-                    shot = await save_trace_screenshot(
-                        page, prefix=f"{site}-uncaught"
-                    )
-                except Exception:
-                    shot = ""
-                raise HTTPException(
-                    status_code=502,
-                    detail={
-                        "error": f"{type(exc).__name__}: {exc}",
-                        "screenshot": shot,
-                    },
-                ) from exc
+                    await clear_browser_data_keep_login(context)
+                    # Retry page navigation & driving
+                    await page.goto(_target_url(site), wait_until="domcontentloaded", timeout=30_000)
+                    text = await driver.send(prompt, response_timeout_ms=timeout_ms)
+                    return {"site": site, "raw_response": text}
+                except Exception as retry_exc:
+                    if isinstance(retry_exc, LoginRequiredError):
+                        raise HTTPException(
+                            status_code=409,
+                            detail=_driver_error_detail(retry_exc, login_required=True),
+                        ) from retry_exc
+                    elif isinstance(retry_exc, QuotaExceededError):
+                        raise HTTPException(
+                            status_code=429,
+                            detail=_driver_error_detail(retry_exc),
+                        ) from retry_exc
+                    elif isinstance(retry_exc, BrowserDriverError):
+                        raise HTTPException(
+                            status_code=502,
+                            detail=_driver_error_detail(retry_exc),
+                        ) from retry_exc
+                    else:
+                        try:
+                            shot = await save_trace_screenshot(
+                                page, prefix=f"{site}-uncaught"
+                            )
+                        except Exception:
+                            shot = ""
+                        raise HTTPException(
+                            status_code=502,
+                            detail={
+                                "error": f"{type(retry_exc).__name__}: {retry_exc}",
+                                "screenshot": shot,
+                            },
+                        ) from retry_exc
             finally:
                 # Beat before closing the tab — a person glances at the
                 # final state, doesn't slam Ctrl+W the moment the reply
@@ -588,11 +645,38 @@ async def chatgpt_image(payload: ImagePromptRequest) -> dict:
                     status_code=409,
                     detail=_driver_error_detail(exc, login_required=True),
                 ) from exc
-            except BrowserDriverError as exc:
-                raise HTTPException(
-                    status_code=502,
-                    detail=_driver_error_detail(exc),
-                ) from exc
+            except (BrowserDriverError, Exception) as exc:
+                if isinstance(exc, HTTPException):
+                    raise
+                print(f"[browser] Error in chatgpt_image: {exc}. Clearing browser data & retrying once...", flush=True)
+                try:
+                    await clear_browser_data_keep_login(context)
+                    # Retry page navigation & image generation
+                    # The driver needs a clean page navigation
+                    driver = ChatGPTImageDriver(page)
+                    result = await driver.generate_image(
+                        payload.prompt,
+                        project_name=payload.project_name,
+                        out_path=safe_out,
+                        response_timeout_ms=payload.response_timeout_ms,
+                    )
+                    return result
+                except Exception as retry_exc:
+                    if isinstance(retry_exc, LoginRequiredError):
+                        raise HTTPException(
+                            status_code=409,
+                            detail=_driver_error_detail(retry_exc, login_required=True),
+                        ) from retry_exc
+                    elif isinstance(retry_exc, BrowserDriverError):
+                        raise HTTPException(
+                            status_code=502,
+                            detail=_driver_error_detail(retry_exc),
+                        ) from retry_exc
+                    else:
+                        raise HTTPException(
+                            status_code=502,
+                            detail={"error": f"{type(retry_exc).__name__}: {retry_exc}"},
+                        ) from retry_exc
             finally:
                 try:
                     await human_pause(page, min_ms=400, max_ms=900)
@@ -657,11 +741,37 @@ async def chatgpt_image_batch(payload: BatchImagePromptRequest) -> dict:
                     status_code=409,
                     detail=_driver_error_detail(exc, login_required=True),
                 ) from exc
-            except BrowserDriverError as exc:
-                raise HTTPException(
-                    status_code=502,
-                    detail=_driver_error_detail(exc),
-                ) from exc
+            except (BrowserDriverError, Exception) as exc:
+                if isinstance(exc, HTTPException):
+                    raise
+                print(f"[browser] Error in chatgpt_image_batch: {exc}. Clearing browser data & retrying once...", flush=True)
+                try:
+                    await clear_browser_data_keep_login(context)
+                    # Retry page navigation & image generation
+                    driver = ChatGPTImageDriver(page)
+                    results = await driver.generate_images(
+                        payload.prompts,
+                        project_name=payload.project_name,
+                        out_paths=safe_out_paths,
+                        response_timeout_ms=payload.response_timeout_ms,
+                    )
+                    return {"ok": True, "results": results}
+                except Exception as retry_exc:
+                    if isinstance(retry_exc, LoginRequiredError):
+                        raise HTTPException(
+                            status_code=409,
+                            detail=_driver_error_detail(retry_exc, login_required=True),
+                        ) from retry_exc
+                    elif isinstance(retry_exc, BrowserDriverError):
+                        raise HTTPException(
+                            status_code=502,
+                            detail=_driver_error_detail(retry_exc),
+                        ) from retry_exc
+                    else:
+                        raise HTTPException(
+                            status_code=502,
+                            detail={"error": f"{type(retry_exc).__name__}: {retry_exc}"},
+                        ) from retry_exc
             finally:
                 try:
                     await human_pause(page, min_ms=400, max_ms=900)

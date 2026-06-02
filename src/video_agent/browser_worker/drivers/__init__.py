@@ -2,6 +2,7 @@ from video_agent.browser_worker.drivers.base import (
     BrowserDriverError,
     LoginRequiredError,
     QuotaExceededError,
+    clear_browser_data_keep_login,
     save_trace_screenshot,
 )
 from video_agent.browser_worker.drivers.chatgpt import ChatGPTDriver

@@ -311,6 +311,33 @@ def test_auto_script_runs_prompt_and_promote(
     assert "SCRIPT artifact" in fake.calls[0][0]
 
 
+def test_auto_run_then_promote_retries_on_promotion_failure(
+    tmp_path: Path,
+    channel_path: Path,
+    idea_payload: dict,
+    valid_script_payload: dict,
+):
+    job_dir = tmp_path / "job-auto"
+    _seed_script(job_dir, channel_path, idea_payload)
+    
+    # First response fails to parse, second succeeds
+    fake = FakeBrowserClient(
+        queue=[
+            "invalid response that fails promoter",
+            json.dumps(valid_script_payload, ensure_ascii=False)
+        ]
+    )
+
+    output = asyncio.run(
+        auto_script_stage(job_dir, channel_path, lambda msgs: fake.run_session("chatgpt", msgs))
+    )
+
+    assert output == job_dir / "script.json"
+    assert len(fake.calls) == 2  # Verify retry occurred
+    promoted = json.loads(output.read_text(encoding="utf-8"))
+    assert promoted["job_id"] == "job-auto"
+
+
 def test_auto_script_skips_runner_when_already_promote(
     tmp_path: Path,
     channel_path: Path,

@@ -11,6 +11,11 @@ from typing import Any
 from PIL import Image, ImageDraw
 
 from video_agent.assets.service import StockAssetService
+from video_agent.assets.visual_diversity.integration import (
+    finalize_visual_diversity_report,
+    prepare_visual_diversity,
+    record_scene_selection,
+)
 from video_agent.contracts import ARTIFACT_ASSETS, repo_root, ARTIFACT_AUDIO_QA, ARTIFACT_SCENES
 from video_agent.tts import build_tts_client, synthesize_scene_track
 from video_agent.qa.tts_report import audio_qa_report, build_tts_report
@@ -229,6 +234,16 @@ def prepare_assets(
         if visual_config.get("strategy") in {"auto", "stock_photo_api"}
         else None
     )
+
+    diversity_run = prepare_visual_diversity(
+        scene_doc=scene_doc,
+        visual_config=visual_config,
+        channel_id=channel_id,
+        job_id=job_dir.name,
+        repo_root=repo_root(),
+        outputs_root=repo_root() / "outputs",
+    )
+
     scene_assets = []
     for index, scene in enumerate(scene_doc["scenes"]):
         primary_asset = _find_asset_refs_primary(scene, job_dir)
@@ -267,6 +282,7 @@ def prepare_assets(
                 "attribution": stock_asset["attribution"],
                 "asset_selection": stock_asset.get("asset_selection"),
             }
+            record_scene_selection(diversity_run, scene=scene, selected_asset=stock_asset)
         else:
             _write_placeholder_video(
                 image_path,
@@ -278,6 +294,7 @@ def prepare_assets(
             source = "generated_placeholder"
             source_path = None
             extra_manifest = {"stock_errors": stock_service.last_errors} if stock_service else {}
+            record_scene_selection(diversity_run, scene=scene, selected_asset=None, is_placeholder=True)
         public_image_path = public_assets_dir / image_path.name
         shutil.copy2(image_path, public_image_path)
         public_ref = f"jobs/{job_dir.name}/assets/{image_path.name}"
@@ -291,6 +308,14 @@ def prepare_assets(
         }
         scene_asset.update(extra_manifest)
         scene_assets.append(scene_asset)
+
+    finalize_visual_diversity_report(
+        diversity_run,
+        job_id=job_dir.name,
+        channel_id=channel_id,
+        outputs_dir=job_dir,
+    )
+
     tts_config = tts_config or {"provider": "mock-local"}
     music_cfg = (tts_config.get("music") or {}) if isinstance(tts_config, dict) else {}
     tts_provider = tts_config.get("provider", "mock-local")

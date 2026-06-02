@@ -123,6 +123,18 @@ class JobQueue:
             ).fetchone()
             return dict(row) if row else None
 
+    def active_jobs(self) -> list[dict[str, Any]]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT * FROM job_queue
+                WHERE status IN ('pending', 'running')
+                ORDER BY created_at ASC
+                """
+            ).fetchall()
+            return [dict(row) for row in rows]
+
     def mark_running(self, job_id: str) -> None:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(

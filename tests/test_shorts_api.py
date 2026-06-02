@@ -57,6 +57,42 @@ def test_status_summary_none_when_no_manifest(tmp_path: Path):
     assert status.summarize_shorts(job)["state"] == "none"
 
 
+def test_status_summary_maps_ready_for_render_to_drafts_ready(tmp_path: Path):
+    from video_agent.shorts import status
+
+    job = _make_job(tmp_path, with_shorts=False)
+    sdir = job / "shorts"
+    (sdir / "short-01").mkdir(parents=True)
+    (sdir / "shorts_manifest.json").write_text(
+        json.dumps(
+            {
+                "source_long_job_id": "job-1",
+                "status": "drafts_ready",
+                "shorts": [
+                    {
+                        "short_id": "short-01",
+                        "status": "ready_for_render",
+                        "qa_verdict": "PASS",
+                        "requires_render_confirmation": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (sdir / "autopilot_run.json").write_text(
+        json.dumps({"status": "drafts_ready", "mode": "prepare_drafts"}),
+        encoding="utf-8",
+    )
+
+    summary = status.summarize_shorts(job)
+
+    assert summary["state"] == "drafts_ready"
+    assert summary["counts"]["ready_for_render"] == 1
+    assert summary["counts"]["rendered"] == 0
+    assert summary["label"] == "1 ready for render"
+
+
 # --- GET /jobs/{id}/shorts -------------------------------------------------
 
 def test_get_shorts_returns_summary(client: TestClient, tmp_path: Path):
@@ -66,6 +102,41 @@ def test_get_shorts_returns_summary(client: TestClient, tmp_path: Path):
     body = r.json()
     assert body["label"] == "1 rendered · 1 needs review"
     assert len(body["shorts"]) == 2
+
+
+def test_get_shorts_returns_draft_ready_summary(client: TestClient, tmp_path: Path):
+    _make_job(tmp_path, with_shorts=False)
+    sdir = tmp_path / "job-1" / "shorts"
+    (sdir / "short-01").mkdir(parents=True)
+    (sdir / "shorts_manifest.json").write_text(
+        json.dumps(
+            {
+                "source_long_job_id": "job-1",
+                "status": "drafts_ready",
+                "shorts": [
+                    {
+                        "short_id": "short-01",
+                        "status": "ready_for_render",
+                        "qa_verdict": "PASS",
+                        "requires_render_confirmation": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (sdir / "autopilot_run.json").write_text(
+        json.dumps({"status": "drafts_ready", "mode": "prepare_drafts"}),
+        encoding="utf-8",
+    )
+
+    r = client.get("/jobs/job-1/shorts")
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["state"] == "drafts_ready"
+    assert body["counts"]["ready_for_render"] == 1
+    assert body["shorts"][0]["status"] == "ready_for_render"
 
 
 def test_get_shorts_unknown_job_404(client: TestClient, tmp_path: Path):
@@ -154,6 +225,120 @@ def test_autopilot_post_enqueues(client: TestClient, tmp_path: Path, monkeypatch
     assert r.status_code == 202, r.text
     assert r.json()["status"] == "enqueued"
     assert calls == {"force": True, "job": "job-1"}
+
+
+def test_worker_dispatches_shorts_prepare_drafts_command(tmp_path: Path, monkeypatch):
+    from video_agent.orchestrator import worker
+
+    _make_job(tmp_path, with_shorts=False)
+    called = {}
+
+    def fake_prepare(job, *, job_dir, channel_path, client):
+        called["job_id"] = job["job_id"]
+        called["job_dir"] = job_dir.name
+
+    monkeypatch.setattr(worker, "_run_shorts_prepare_drafts_job", fake_prepare)
+    worker._dispatch_queue_job(
+        {"job_id": "job-1", "enforce_approvals": 0, "command": "shorts_prepare_drafts", "payload": "{}"},
+        jobs_root=tmp_path,
+        channel_path=Path("configs/vida-plena-45/channel.yaml"),
+        client=object(),
+    )
+
+    assert called == {"job_id": "job-1", "job_dir": "job-1"}
+
+
+def test_worker_dispatches_shorts_confirm_render_command(tmp_path: Path, monkeypatch):
+    from video_agent.orchestrator import worker
+
+    _make_job(tmp_path, with_shorts=False)
+    called = {}
+
+    def fake_confirm(job, *, job_dir, channel_path):
+        called["job_id"] = job["job_id"]
+        called["job_dir"] = job_dir.name
+
+    monkeypatch.setattr(worker, "_run_shorts_confirm_render_job", fake_confirm)
+    worker._dispatch_queue_job(
+        {"job_id": "job-1", "enforce_approvals": 0, "command": "shorts_confirm_render", "payload": "{\"short_ids\":[\"short-01\"]}"},
+        jobs_root=tmp_path,
+        channel_path=Path("configs/vida-plena-45/channel.yaml"),
+        client=object(),
+    )
+
+    assert called == {"job_id": "job-1", "job_dir": "job-1"}
+
+
+def test_short_render_job_updates_draft_ready_manifest_and_run(tmp_path: Path, monkeypatch):
+    from video_agent.orchestrator import worker
+
+    job = _make_job(tmp_path, with_shorts=False)
+    sdir = job / "shorts" / "short-01"
+    sdir.mkdir(parents=True, exist_ok=True)
+    for name in ("short_script.json", "short_scenes.json", "short_seo.json", "short_qa.json", "short_render_props.json"):
+        (sdir / name).write_text("{}", encoding="utf-8")
+    (job / "shorts" / "shorts_manifest.json").write_text(
+        json.dumps(
+            {
+                "status": "drafts_ready",
+                "shorts": [
+                    {
+                        "short_id": "short-01",
+                        "status": "ready_for_render",
+                        "rendered": False,
+                        "requires_render_confirmation": True,
+                        "qa_verdict": "PASS",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (job / "shorts" / "autopilot_run.json").write_text(
+        json.dumps(
+            {
+                "status": "drafts_ready",
+                "mode": "prepare_drafts",
+                "ready_for_render_count": 1,
+                "rendered_count": 0,
+                "needs_review_count": 0,
+                "failed_count": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (sdir / "short_status.json").write_text(
+        json.dumps({"short_id": "short-01", "status": "ready_for_render", "qa_verdict": "PASS"}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(worker, "render_short_video", lambda short_dir, channel_config: short_dir / "short.mp4", raising=False)
+    monkeypatch.setattr(worker, "render_short_cover", lambda short_dir, channel_config: short_dir / "short_cover.jpg", raising=False)
+
+    def fake_video(short_dir, channel_config):
+        (short_dir / "short.mp4").write_bytes(b"v")
+        return short_dir / "short.mp4"
+
+    def fake_cover(short_dir, channel_config):
+        (short_dir / "short_cover.jpg").write_bytes(b"j")
+        return short_dir / "short_cover.jpg"
+
+    monkeypatch.setattr("video_agent.shorts.renderer.render_short_video", fake_video)
+    monkeypatch.setattr("video_agent.shorts.renderer.render_short_cover", fake_cover)
+
+    worker._run_short_render_job(
+        {"job_id": "job-1", "payload": json.dumps({"short_id": "short-01"})},
+        job_dir=job,
+        channel_path=Path("configs/vida-plena-45/channel.yaml"),
+    )
+
+    status_doc = json.loads((sdir / "short_status.json").read_text(encoding="utf-8"))
+    manifest_doc = json.loads((job / "shorts" / "shorts_manifest.json").read_text(encoding="utf-8"))
+    run_doc = json.loads((job / "shorts" / "autopilot_run.json").read_text(encoding="utf-8"))
+    assert status_doc["status"] == "rendered"
+    assert manifest_doc["shorts"][0]["status"] == "rendered"
+    assert run_doc["rendered_count"] == 1
+    assert run_doc["ready_for_render_count"] == 0
 
 
 # --- trigger gate ----------------------------------------------------------

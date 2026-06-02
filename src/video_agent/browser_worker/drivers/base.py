@@ -157,3 +157,112 @@ def normalise_response_text(text: str) -> str:
     if fence:
         return fence.group("body").strip()
     return stripped
+
+
+# ---------------------------------------------------------------------------
+# Domain sets whose cookies must survive a browser-data clear.
+# ---------------------------------------------------------------------------
+_AUTH_COOKIE_DOMAINS: set[str] = {
+    "chatgpt.com",
+    ".chatgpt.com",
+    "auth.openai.com",
+    ".auth.openai.com",
+    "openai.com",
+    ".openai.com",
+    "auth0.com",
+    ".auth0.com",
+    "accounts.google.com",
+    ".accounts.google.com",
+    "google.com",
+    ".google.com",
+    "gemini.google.com",
+    ".gemini.google.com",
+}
+
+# Cookie names that are known to carry authentication state.
+# If a cookie's domain matches *and* its name is in this set, it is kept.
+# An empty set means "keep ALL cookies from matching domains".
+_AUTH_COOKIE_NAMES: set[str] = set()  # empty → keep every cookie on auth domains
+
+
+def _is_auth_cookie(cookie: dict) -> bool:
+    """Return True if the cookie should be preserved during a data clear."""
+    domain = (cookie.get("domain") or "").lower()
+    if not any(domain == d or domain.endswith(d) for d in _AUTH_COOKIE_DOMAINS):
+        return False
+    if _AUTH_COOKIE_NAMES:
+        return cookie.get("name", "") in _AUTH_COOKIE_NAMES
+    return True
+
+
+async def clear_browser_data_keep_login(context: "BrowserContext") -> dict:
+    """Clear all browser data (cookies, storage, cache) but keep login cookies.
+
+    Steps:
+      1. Snapshot cookies from the browser context.
+      2. Filter → keep only auth-related cookies.
+      3. Clear ALL cookies from the context.
+      4. Clear localStorage / sessionStorage on every open page (best-effort).
+      5. Restore the saved auth cookies.
+
+    Returns a summary dict with counts for logging.
+    """
+    # 1. Snapshot all cookies
+    all_cookies = await context.cookies()
+    total_cookies = len(all_cookies)
+
+    # 2. Filter auth cookies to preserve
+    auth_cookies = [c for c in all_cookies if _is_auth_cookie(c)]
+    kept_count = len(auth_cookies)
+
+    # 3. Clear ALL cookies
+    await context.clear_cookies()
+
+    # 4. Clear localStorage / sessionStorage on every open page
+    pages_cleared = 0
+    for page in context.pages:
+        try:
+            await page.evaluate("""() => {
+                try { localStorage.clear(); } catch(e) {}
+                try { sessionStorage.clear(); } catch(e) {}
+            }""")
+            pages_cleared += 1
+        except Exception:
+            pass  # page may be about:blank or navigating
+
+    # 5. Restore auth cookies
+    if auth_cookies:
+        # Playwright's add_cookies expects a specific format; adapt
+        cookies_to_add = []
+        for c in auth_cookies:
+            entry = {
+                "name": c["name"],
+                "value": c["value"],
+                "domain": c["domain"],
+                "path": c.get("path", "/"),
+            }
+            if c.get("expires", -1) > 0:
+                entry["expires"] = c["expires"]
+            if c.get("httpOnly"):
+                entry["httpOnly"] = True
+            if c.get("secure"):
+                entry["secure"] = True
+            if c.get("sameSite"):
+                entry["sameSite"] = c["sameSite"]
+            cookies_to_add.append(entry)
+        await context.add_cookies(cookies_to_add)
+
+    summary = {
+        "total_cookies_before": total_cookies,
+        "auth_cookies_kept": kept_count,
+        "cookies_cleared": total_cookies - kept_count,
+        "pages_storage_cleared": pages_cleared,
+    }
+    print(
+        f"[browser] Cleared browser data: {summary['cookies_cleared']} cookies removed, "
+        f"{kept_count} auth cookies preserved, "
+        f"{pages_cleared} pages storage cleared.",
+        flush=True,
+    )
+    return summary
+

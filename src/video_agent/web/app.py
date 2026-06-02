@@ -11,6 +11,7 @@ from video_agent.web.routes import (
     jobs,
     run,
     shorts,
+    shorts_studio,
     stages,
     timeline,
     websocket,
@@ -43,6 +44,7 @@ def dashboard() -> str:
 # catch-all GET /jobs/{job_id}/{path:path} artifact route.
 for router_module in (
     shorts,
+    shorts_studio,
     config,
     jobs,
     timeline,

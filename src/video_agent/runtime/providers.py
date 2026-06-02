@@ -57,7 +57,9 @@ class SubprocessAudioTaskProvider:
             ["whisper-timestamps", "--job-dir", str(job_dir)],
             error_prefix="Audio subprocess failed for whisper-timestamps",
         )
-        output = job_dir / "whisper_timestamps.json"
+        output = job_dir / "json/whisper_timestamps.json"
+        if not output.exists():
+            output = job_dir / "whisper_timestamps.json"
         if not output.exists():
             raise RuntimeError(f"Audio subprocess completed without writing {output}")
         return output

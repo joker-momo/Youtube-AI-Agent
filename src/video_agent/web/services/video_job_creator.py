@@ -23,11 +23,10 @@ from video_agent.orchestrator.idea_generator import (
 from video_agent.orchestrator.queue import JobQueue
 from video_agent.storage.atomic import atomic_write_json
 from video_agent.utils.json_io import read_json, read_yaml
-from video_agent.utils.paths import slugify
+from video_agent.utils.paths import allocate_job_dir
 from video_agent.utils.validation import validate_json
 
 IDEA_FILE = "json/idea.json"
-_SAFE_JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _ALLOWED_IDEA_POLICIES = {"block", "warn_only"}
 _BANNED_HEALTH_CLAIMS = ("cura", "curar", "garantiza", "elimina", "milagro")
 
@@ -138,35 +137,6 @@ def resolve_channel_config(channel_id: str) -> tuple[Path, dict]:
         status_code=404,
         detail={"error": "channel_config_missing", "channel_id": channel_id},
     )
-
-
-def _safe_job_id(job_id: str) -> str:
-    if not job_id or not _SAFE_JOB_ID_RE.match(job_id):
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "invalid_job_id", "message": f"Invalid job_id: {job_id!r}"},
-        )
-    return job_id
-
-
-def _base_job_id(title_seed: str, explicit: str | None) -> str:
-    if explicit:
-        return _safe_job_id(explicit)
-    slug = slugify(title_seed)[:80].strip("-")
-    return _safe_job_id(slug or "untitled")
-
-
-def _unique_job_id(jobs_root: Path, title_seed: str, explicit: str | None) -> str:
-    base = _base_job_id(title_seed, explicit)
-    if explicit:
-        return base
-    candidate = base
-    suffix = 2
-    while (jobs_root / candidate).exists():
-        tail = f"-{suffix}"
-        candidate = f"{base[: 128 - len(tail)]}{tail}"
-        suffix += 1
-    return candidate
 
 
 def _resolve_job_file(job_dir: Path, filename: str) -> Path:
@@ -501,14 +471,23 @@ def _create_job_from_validated_idea(
     idea_source: str,
 ) -> dict:
     title = str(idea.get("title_seed") or idea.get("topic") or "idea")
-    final_job_id = _unique_job_id(jobs_root, title, job_id)
-    job_dir = jobs_root / final_job_id
-    created_dir = not job_dir.exists()
-    if job_id and job_dir.exists():
+    try:
+        final_job_id, job_dir = allocate_job_dir(
+            jobs_root,
+            channel_id,
+            title,
+            explicit_job_id=job_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_job_id", "message": str(exc)},
+        ) from exc
+    except FileExistsError as exc:
         raise HTTPException(
             status_code=409,
             detail={"error": "job_exists", "message": "Job already exists. Choose another job_id."},
-        )
+        ) from exc
     try:
         atomic_write_json(job_dir / IDEA_FILE, idea)
         state = create_job(
@@ -520,8 +499,7 @@ def _create_job_from_validated_idea(
     except JobAlreadyExistsError as exc:
         raise HTTPException(status_code=409, detail={"error": "job_exists", "message": str(exc)}) from exc
     except Exception:
-        if created_dir:
-            shutil.rmtree(job_dir, ignore_errors=True)
+        shutil.rmtree(job_dir, ignore_errors=True)
         raise
 
     pipeline_status = "created_not_started"

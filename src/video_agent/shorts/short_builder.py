@@ -76,6 +76,7 @@ def build_short(
     render_fn: Callable[..., Path] = _default_render_fn,
     cover_fn: Callable[..., Path] = _default_cover_fn,
     long_video_url: str = "",
+    require_render_confirmation: bool = False,
 ) -> dict[str, Any]:
     short_id = short_plan["short_id"]
     sd = paths.short_dir(long_job_dir, short_id)
@@ -144,6 +145,7 @@ def build_short(
         "qa_verdict": qa_result["verdict"],
         "regeneration_attempts": attempts - 1,
         "music_track": music_track,
+        "source_scene_ids": short_plan.get("source_scene_ids") or short_plan.get("scene_ids") or [],
         "voice": {
             "provider": (channel_config.get("shorts") or {}).get("tts", {}).get("provider", "kokoro"),
             "voice_id": (channel_config.get("shorts") or {}).get("tts", {}).get("voice_id", "ef_dora"),
@@ -163,6 +165,22 @@ def build_short(
         write_short_status(long_job_dir, short_id, status)
         return status
 
+    if require_render_confirmation:
+        _write_render_props(sd, short_scenes, channel_config, music_track)
+        status = {
+            **base,
+            "status": "ready_for_render",
+            "rendered": False,
+            "uploaded": False,
+            "youtube_url": "",
+            "requires_user_review": False,
+            "requires_render_confirmation": True,
+            "video_path": None,
+            "cover_path": None,
+        }
+        write_short_status(long_job_dir, short_id, status)
+        return status
+
     # QA PASS → produce audio, mix, render props, video, cover.
     narration_wav = tts_fn(sd, short_scenes, channel_config)
     mix_fn(sd, narration_wav, music_track, channel_config, duration_sec)
@@ -177,6 +195,7 @@ def build_short(
         "uploaded": False,
         "youtube_url": "",
         "requires_user_review": False,
+        "requires_render_confirmation": False,
         "video_path": f"shorts/{short_id}/{paths.SHORT_VIDEO_FILE}",
         "cover_path": f"shorts/{short_id}/{paths.SHORT_COVER_FILE}",
     }

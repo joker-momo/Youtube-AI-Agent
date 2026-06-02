@@ -192,6 +192,46 @@ def test_autopilot_continues_when_one_short_needs_review(tmp_path: Path):
     assert result["failed_count"] == 1
 
 
+def test_autopilot_prepare_mode_writes_drafts_ready_run_and_manifest(tmp_path: Path):
+    from video_agent.shorts import autopilot, manifest, paths
+
+    job = _make_long_job(tmp_path)
+
+    def fake_build(long_job_dir, short_plan, channel_config, **kwargs):
+        assert kwargs["require_render_confirmation"] is True
+        return {
+            "short_id": short_plan["short_id"],
+            "status": "ready_for_render",
+            "rendered": False,
+            "qa_verdict": "PASS",
+            "requires_render_confirmation": True,
+            "source_scene_ids": ["scene-09"],
+        }
+
+    def fake_plan(long_job_dir, channel_config, requested_count=None):
+        return {"selected_shorts": [{"short_id": "short-01", "format": "pain_to_tip"}], "warnings": []}
+
+    cfg = {"shorts": {"autopilot": {"continue_if_one_short_fails": True}}}
+    result = autopilot.run_shorts_autopilot(
+        job,
+        cfg,
+        plan_fn=fake_plan,
+        build_short_fn=fake_build,
+        require_render_confirmation=True,
+    )
+
+    assert result["status"] == "drafts_ready"
+    run = manifest.read_autopilot_run(job)
+    assert run["mode"] == "prepare_drafts"
+    assert run["status"] == "drafts_ready"
+    assert run["ready_for_render_count"] == 1
+    saved_manifest = manifest.read_manifest(job)
+    assert saved_manifest["status"] == "drafts_ready"
+    assert saved_manifest["shorts"][0]["status"] == "ready_for_render"
+    assert saved_manifest["shorts"][0]["requires_render_confirmation"] is True
+    assert not (paths.short_dir(job, "short-01") / paths.SHORT_VIDEO_FILE).exists()
+
+
 def test_autopilot_force_archives_existing_then_runs(tmp_path: Path):
     from video_agent.shorts import autopilot, manifest
     job = _make_long_job(tmp_path)

@@ -1,0 +1,420 @@
+schema_version: "5.0"
+channel_id: "vida-plena-45"
+
+source_policy:
+  external_stock_providers:
+    - "pexels"
+  allow_other_external_stock_providers: false
+  provider_aliases:
+    pexels_video: "pexels"
+    pexels: "pexels"
+
+query_policy:
+  pexels_query_language: "en"
+  visual_brief_language: "scene_or_channel_language"
+  max_query_terms: 14
+  max_queries_per_scene: 4
+  max_api_queries_per_scene: 2
+  dedupe_queries: true
+
+determinism:
+  seed_fields:
+    - "channel_id"
+    - "job_id"
+    - "scene_id"
+    - "scene_index"
+    - "topic_hash"
+
+token_policy:
+  preserve_numeric_terms:
+    - "45"
+    - "50"
+    - "55"
+    - "60"
+    - "65"
+    - "70"
+  # Future override for meaningful non-numeric short tokens in other channels.
+  # Vida Plena 45+ does not need extra non-numeric short tokens.
+  preserve_short_terms: []
+  stopwords:
+    en:
+      - "the"
+      - "and"
+      - "with"
+      - "for"
+      - "from"
+      - "after"
+      - "before"
+      - "adult"
+      - "adults"
+    es:
+      - "una"
+      - "uno"
+      - "unos"
+      - "unas"
+      - "para"
+      - "por"
+      - "con"
+      - "sin"
+      - "los"
+      - "las"
+      - "del"
+      - "despues"
+      - "después"
+
+synonyms:
+  tokens:
+    walk: ["walking", "paseo", "caminar", "camina"]
+    walking: ["walk", "paseo", "caminar", "camina"]
+    sleep: ["sleeping", "sueño", "dormir", "duerme"]
+    breakfast: ["desayuno", "oats", "yogurt"]
+    dinner: ["cena"]
+    hands: ["manos"]
+    back: ["espalda"]
+    neck: ["cuello"]
+    legs: ["piernas"]
+    stiff: ["rigido", "rígido", "rigidez"]
+    tired: ["cansado", "cansada", "fatigue"]
+    morning: ["mañana", "amanecer"]
+    evening: ["tarde", "noche"]
+    home: ["casa", "apartment", "kitchen", "bedroom"]
+
+  phrases:
+    middle_aged:
+      - "middle aged"
+      - "middle-aged"
+      - "mature adult"
+      - "midlife"
+      - "woman 50"
+      - "man 55"
+      - "45 plus"
+      - "45+"
+      - "personas de más de 45"
+
+role_keywords:
+  es:
+    hook:
+      - "imagina"
+      - "si te"
+      - "te pasa"
+      - "notas"
+      - "cansado"
+      - "cansada"
+      - "rígido"
+      - "rígida"
+    problem:
+      - "error"
+      - "problema"
+      - "evita"
+      - "sin darte cuenta"
+      - "te cuesta"
+    explanation:
+      - "porque"
+      - "esto ocurre"
+      - "la razón"
+      - "significa"
+      - "cuando"
+    example:
+      - "por ejemplo"
+      - "como"
+      - "un caso"
+      - "en casa"
+    habit_action:
+      - "prueba"
+      - "haz"
+      - "empieza"
+      - "añade"
+      - "camina"
+      - "estira"
+    transition:
+      - "ahora"
+      - "después"
+      - "además"
+      - "siguiente"
+    recap:
+      - "resumen"
+      - "recuerda"
+      - "quédate con"
+      - "en pocas palabras"
+    cta:
+      - "suscríbete"
+      - "comenta"
+      - "mira"
+      - "vídeo completo"
+  en:
+    hook:
+      - "imagine"
+      - "if you"
+      - "you feel"
+      - "tired"
+      - "stiff"
+    problem:
+      - "mistake"
+      - "problem"
+      - "avoid"
+      - "without noticing"
+      - "hard to"
+    explanation:
+      - "because"
+      - "this happens"
+      - "the reason"
+      - "means"
+      - "when"
+    example:
+      - "for example"
+      - "like"
+      - "at home"
+    habit_action:
+      - "try"
+      - "do"
+      - "start"
+      - "add"
+      - "walk"
+      - "stretch"
+    transition:
+      - "now"
+      - "after"
+      - "also"
+      - "next"
+    recap:
+      - "summary"
+      - "remember"
+      - "keep this"
+      - "in short"
+    cta:
+      - "subscribe"
+      - "comment"
+      - "watch"
+      - "full video"
+
+global_visual_style:
+  locale_feel:
+    prefer:
+      - "Spain"
+      - "Mediterranean home"
+      - "European apartment"
+      - "Spanish market"
+      - "quiet city street"
+      - "neighborhood park"
+      - "balcony morning light"
+    avoid:
+      - "US hospital stock"
+      - "generic corporate wellness"
+      - "luxury spa"
+      - "extreme gym"
+      - "clinical fear-based imagery"
+
+  age_representation:
+    prefer:
+      - "45 to 65"
+      - "active middle age"
+      - "natural everyday people"
+    avoid:
+      - "frail elderly stereotype"
+      - "overly polished fitness model"
+      - "doctor diagnosing patient"
+      - "sad isolated senior cliché"
+
+video_length_profiles:
+  short:
+    max_scenes: 24
+    min_distinct_visual_buckets: 3
+    min_distinct_shot_types: 3
+    min_local_graphic_cards: 0
+  long:
+    min_scenes: 25
+    min_distinct_visual_buckets: 6
+    min_distinct_shot_types: 5
+    min_local_graphic_cards: 4
+
+visual_buckets:
+  persona_moment:
+    weight: 1.20
+    long_min_per_video: 3
+    long_max_ratio_per_video: 0.25
+    short_min_per_video: 1
+    keyword_triggers:
+      es: ["cansado", "cansada", "rigidez", "levantarte", "te notas", "energía", "mañana", "rutina"]
+      en: ["tired", "stiff", "wake up", "morning", "energy", "routine"]
+    pexels_queries_en:
+      - "woman 50 morning kitchen coffee calm"
+      - "middle aged woman home morning routine"
+      - "mature adult morning kitchen coffee"
+      - "man 55 at home stretching morning"
+      - "woman 50 sitting on sofa calm lifestyle"
+
+  spain_daily_life:
+    weight: 1.35
+    long_min_per_video: 3
+    long_max_ratio_per_video: 0.25
+    short_min_per_video: 1
+    keyword_triggers:
+      es: ["España", "calle", "mercado", "paseo", "barrio", "compra", "por la tarde"]
+      en: ["Spain", "street", "market", "walk", "neighborhood", "shopping"]
+    pexels_queries_en:
+      - "Spain street morning people walking"
+      - "Mediterranean market people shopping"
+      - "European apartment balcony morning"
+      - "Spanish cafe morning street"
+      - "Madrid park people walking"
+      - "Barcelona street daily life"
+
+  body_signal:
+    weight: 1.10
+    long_min_per_video: 2
+    long_max_ratio_per_video: 0.20
+    short_min_per_video: 1
+    keyword_triggers:
+      es: ["cuello", "espalda", "piernas", "manos", "dolor", "rígido", "rígida", "fuerza", "músculo"]
+      en: ["neck", "back", "legs", "hands", "pain", "stiff", "strength", "muscle"]
+    pexels_queries_en:
+      - "hands close up morning cup"
+      - "person stretching neck at home"
+      - "person stretching back at home"
+      - "feet walking slowly close up"
+      - "middle aged person rubbing hands morning"
+
+  food_practical:
+    weight: 1.10
+    long_min_per_video: 2
+    long_max_ratio_per_video: 0.20
+    short_min_per_video: 0
+    keyword_triggers:
+      es: ["desayuno", "cena", "comer", "proteína", "fibra", "avena", "yogur", "legumbres", "pescado", "verduras"]
+      en: ["breakfast", "dinner", "protein", "fiber", "oats", "yogurt", "legumes", "fish", "vegetables"]
+    pexels_queries_en:
+      - "simple breakfast oats yogurt fruit"
+      - "Mediterranean food preparation home"
+      - "hands preparing vegetables kitchen"
+      - "olive oil vegetables kitchen close up"
+      - "healthy dinner home kitchen"
+
+  sleep_stress:
+    weight: 1.05
+    long_min_per_video: 2
+    long_max_ratio_per_video: 0.18
+    short_min_per_video: 0
+    keyword_triggers:
+      es: ["dormir", "sueño", "noche", "madrugada", "estrés", "mente", "descanso", "pantalla", "móvil"]
+      en: ["sleep", "night", "stress", "mind", "rest", "screen", "phone"]
+    pexels_queries_en:
+      - "bedroom morning light curtains"
+      - "person turning off phone night"
+      - "calm bedroom evening lamp"
+      - "woman relaxing sofa evening"
+      - "tea cup evening home calm"
+
+  gentle_movement:
+    weight: 1.20
+    long_min_per_video: 2
+    long_max_ratio_per_video: 0.22
+    short_min_per_video: 1
+    keyword_triggers:
+      es: ["caminar", "paseo", "movimiento", "estirar", "estiramiento", "suave", "escaleras", "parque"]
+      en: ["walk", "walking", "movement", "stretch", "gentle", "stairs", "park"]
+    pexels_queries_en:
+      - "middle aged woman walking park"
+      - "man walking park morning"
+      - "gentle stretching at home"
+      - "walking shoes close up park"
+      - "person using stairs slowly"
+
+  macro_texture:
+    weight: 0.85
+    long_min_per_video: 1
+    long_max_ratio_per_video: 0.15
+    short_min_per_video: 0
+    keyword_triggers:
+      es: ["detalle", "luz", "taza", "agua", "reloj", "hábitos", "lista"]
+      en: ["detail", "light", "cup", "water", "clock", "habit", "list"]
+    pexels_queries_en:
+      - "sunlight through curtains close up"
+      - "tea steam close up morning"
+      - "hands notebook habit tracker"
+      - "alarm clock morning light"
+      - "water glass close up kitchen"
+
+  local_graphic_card:
+    weight: 1.20
+    long_min_per_video: 0
+    long_target_per_video: 4
+    long_max_ratio_per_video: 0.20
+    short_min_per_video: 0
+    render_locally: true
+    keyword_triggers:
+      es: ["tres", "pasos", "lista", "recuerda", "resumen", "clave", "evita", "prueba"]
+      en: ["three", "steps", "checklist", "remember", "summary", "key", "avoid", "try"]
+    card_types:
+      - "checklist"
+      - "timeline"
+      - "habit_matrix"
+
+shot_types:
+  wide:
+    long_min_ratio: 0.10
+    long_max_ratio: 0.30
+  medium:
+    long_min_ratio: 0.18
+    long_max_ratio: 0.45
+  medium_closeup:
+    long_min_ratio: 0.12
+    long_max_ratio: 0.35
+  closeup:
+    long_min_ratio: 0.10
+    long_max_ratio: 0.30
+  macro:
+    long_min_ratio: 0.05
+    long_max_ratio: 0.18
+  graphic:
+    long_min_ratio: 0.00
+    long_max_ratio: 0.22
+
+negative_patterns:
+  strong_phrases_en:
+    - "hospital bed"
+    - "medical emergency"
+    - "before after weight loss"
+    - "miracle cure"
+    - "diet pills"
+    - "doctor diagnosis"
+  weak_terms_en:
+    - "hospital"
+    - "doctor"
+    - "medicine"
+    - "pill"
+    - "emergency"
+    - "frail"
+    - "sick"
+    - "sad elderly"
+
+role_to_buckets:
+  hook: ["persona_moment", "body_signal", "macro_texture"]
+  problem: ["persona_moment", "body_signal", "sleep_stress"]
+  explanation: ["local_graphic_card", "macro_texture", "spain_daily_life"]
+  example: ["food_practical", "gentle_movement", "sleep_stress"]
+  habit_action: ["gentle_movement", "food_practical", "persona_moment"]
+  transition: ["spain_daily_life", "macro_texture"]
+  recap: ["local_graphic_card", "persona_moment"]
+  cta: ["local_graphic_card", "spain_daily_life"]
+
+default_bucket_sequence:
+  - "persona_moment"
+  - "macro_texture"
+  - "spain_daily_life"
+  - "local_graphic_card"
+  - "gentle_movement"
+  - "body_signal"
+  - "food_practical"
+  - "sleep_stress"
+
+default_shot_sequence:
+  - "medium_closeup"
+  - "macro"
+  - "wide"
+  - "graphic"
+  - "medium"
+  - "closeup"
+  - "wide"
+  - "medium_closeup"
+  - "medium"
+  - "closeup"

@@ -1,0 +1,30 @@
+schema_version: "5.0"
+
+rollout_mode: "report_only"
+
+hard_fail:
+  non_pexels_external_stock_asset: true
+  duplicate_asset_in_same_video_when_alternatives_exist: true
+  more_than_two_consecutive_same_shot_type: true
+  pexels_missing_source_metadata: true
+  graphic_cards_required_but_renderer_missing: true
+
+soft_fail:
+  bucket_ratio_exceeded: true
+  too_many_generic_stock_scenes: true
+  too_few_graphic_cards_when_supported: true
+  too_few_spain_locale_scenes: true
+  repeated_creator_over_threshold: true
+  asset_reused_recently: true
+  pexels_api_rate_limited: true
+  placeholder_ratio_increased: true
+  placeholder_baseline_unavailable: true
+
+thresholds:
+  long_form_min_scenes: 25
+  min_distinct_visual_buckets_per_long_video: 6
+  min_distinct_shot_types_per_long_video: 5
+  min_local_graphic_cards_per_long_video_when_supported: 4
+  min_spain_or_mediterranean_locale_ratio: 0.20
+  max_generic_stock_ratio: 0.35
+  max_same_creator_ratio: 0.25

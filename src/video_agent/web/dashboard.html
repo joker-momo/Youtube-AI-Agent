@@ -1080,6 +1080,30 @@
           <div class="ideas-grid" id="shorts-grid"></div>
         </div>
       </section>
+      <section class="ideas-section" id="shorts-studio-section">
+        <div class="panel-head" onclick="toggleShortsStudioPanel()">
+          <div class="panel-title">🧪 Shorts Studio</div>
+          <span style="font-size:12px;color:var(--muted)" id="shorts-studio-caret">› expand</span>
+        </div>
+        <div class="ideas-body" id="shorts-studio-body" style="display:none">
+          <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
+            Generate draft Shorts first, then confirm render only for PASS drafts you want to keep.
+          </div>
+          <div class="gen-form">
+            <label>Job</label>
+            <select id="shorts-studio-job" onchange="loadShortsStudioDrafts()">
+              <option value="">Select a long-form job…</option>
+            </select>
+            <div class="gen-actions">
+              <button class="action-btn" onclick="loadShortsStudioState()">↻ Refresh state</button>
+              <button class="action-btn primary" id="shorts-studio-prepare-btn" onclick="prepareShortsStudioDrafts()">Generate Short Drafts</button>
+              <button class="action-btn primary" id="shorts-studio-confirm-btn" onclick="confirmShortsStudioRender()">Confirm Render</button>
+            </div>
+          </div>
+          <div id="shorts-studio-status" style="font-size:12px;color:var(--muted);margin-bottom:6px"></div>
+          <div class="ideas-grid" id="shorts-studio-drafts"></div>
+        </div>
+      </section>
       <section class="content-grid">
         <div class="panel jobs-panel">
           <div class="panel-head">
@@ -2800,6 +2824,19 @@ async function renderFinal(t) {
   }
 
   const abSection = `<div class="ab-grid">${variants.slice(0, 3).map((v, i) => variantCard(v, i)).join('')}</div>`;
+  function collectRenderedShorts(t) {
+    const shortsStage = (t.stages || []).find(st => st.name === 'shorts_autopilot');
+    const stageShorts = ((shortsStage && shortsStage.sub_progress && shortsStage.sub_progress.shorts) || []);
+    const summary = t.shorts_summary || t.shorts || {};
+    const summaryShorts = Array.isArray(summary)
+      ? summary
+      : (Array.isArray(summary.shorts) ? summary.shorts : []);
+    const candidates = stageShorts.length ? stageShorts : summaryShorts;
+    return candidates.filter(s => (
+      s &&
+      (s.status === 'rendered' || s.rendered === true || !!s.video_path || !!s.video_url)
+    ));
+  }
 
   mount.innerHTML = `
     <div class="final">
@@ -2847,9 +2884,7 @@ async function renderFinal(t) {
       
       <!-- SHORTS SECTION -->
       ${(() => {
-        const shortsStage = (t.stages || []).find(st => st.name === 'shorts_autopilot');
-        const renderedShorts = ((shortsStage && shortsStage.sub_progress && shortsStage.sub_progress.shorts) || [])
-          .filter(s => s.status === 'rendered');
+        const renderedShorts = collectRenderedShorts(t);
         if (renderedShorts.length === 0) return '';
         return `
         <div style="margin-top: 24px;">
@@ -3556,7 +3591,7 @@ async function rerenderShort(jobId, shortId) {
 	  showToast('Short SEO copied');
 	}
 
-	async function updateShortsSourceUrl() {
+async function updateShortsSourceUrl() {
 	  const jobId = _shortsJob();
 	  if (!jobId) { alert('Select a job first.'); return; }
 	  const long_video_url = prompt('Long video URL:', '') || '';
@@ -3567,6 +3602,121 @@ async function rerenderShort(jobId, shortId) {
 	  });
 	  refreshShorts();
 	}
+
+// ---- Shorts Studio panel ----
+let SHORTS_STUDIO_PANEL_OPEN = false;
+
+function toggleShortsStudioPanel() {
+  SHORTS_STUDIO_PANEL_OPEN = !SHORTS_STUDIO_PANEL_OPEN;
+  document.getElementById('shorts-studio-body').style.display = SHORTS_STUDIO_PANEL_OPEN ? '' : 'none';
+  document.getElementById('shorts-studio-caret').textContent = SHORTS_STUDIO_PANEL_OPEN ? '‹ collapse' : '› expand';
+  if (SHORTS_STUDIO_PANEL_OPEN) loadShortsStudioState();
+}
+
+async function loadShortsStudioState() {
+  const statusEl = document.getElementById('shorts-studio-status');
+  const selectEl = document.getElementById('shorts-studio-job');
+  try {
+    const r = await fetch('/shorts-studio/state');
+    if (!r.ok) {
+      statusEl.textContent = 'Failed to load Shorts Studio state.';
+      return;
+    }
+    const data = await r.json();
+    const jobs = data.jobs || [];
+    selectEl.innerHTML = ['<option value="">Select a long-form job…</option>'].concat(
+      jobs.map(job => {
+        const disabled = job.eligible ? '' : ' disabled';
+        const suffix = job.eligible ? (job.shorts_status ? ' · ' + escapeHtml(job.shorts_status) : '') : ' · missing: ' + escapeHtml((job.missing || []).join(', '));
+        return `<option value="${escapeHtml(job.job_id)}"${disabled}>${escapeHtml(job.title || job.job_id)}${suffix}</option>`;
+      })
+    ).join('');
+    statusEl.textContent = data.can_start
+      ? 'Studio is idle.'
+      : ('Studio busy: ' + (data.active_jobs || []).map(x => x.job_id + ' [' + x.kind + ']').join(', '));
+    if (!selectEl.value) {
+      const firstEligible = jobs.find(job => job.eligible);
+      if (firstEligible) selectEl.value = firstEligible.job_id;
+    }
+    if (selectEl.value) await loadShortsStudioDrafts();
+  } catch (e) {
+    statusEl.textContent = 'Failed to load Shorts Studio state: ' + e;
+  }
+}
+
+async function loadShortsStudioDrafts() {
+  const jobId = document.getElementById('shorts-studio-job').value;
+  const grid = document.getElementById('shorts-studio-drafts');
+  if (!jobId) {
+    grid.innerHTML = '<div style="font-size:12px;color:var(--muted)">Select an eligible long-form job.</div>';
+    return;
+  }
+  const r = await fetch('/shorts-studio/jobs/' + encodeURIComponent(jobId) + '/drafts');
+  if (!r.ok) {
+    grid.innerHTML = '<div style="font-size:12px;color:var(--muted)">No draft data yet.</div>';
+    return;
+  }
+  const data = await r.json();
+  const drafts = data.drafts || [];
+  if (!drafts.length) {
+    grid.innerHTML = '<div style="font-size:12px;color:var(--muted)">No drafts yet. Click "Generate Short Drafts".</div>';
+    return;
+  }
+  grid.innerHTML = drafts.map(draft => `
+    <div class="idea-card">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
+        <div>
+          <div style="font-weight:700">${escapeHtml(draft.short_id || '')}</div>
+          <div style="font-size:12px;color:var(--muted)">Status: ${escapeHtml(draft.status || 'unknown')} · QA: ${escapeHtml(draft.qa_verdict || '-')}</div>
+        </div>
+        <label style="font-size:12px;display:flex;gap:6px;align-items:center">
+          <input type="checkbox" class="shorts-studio-check" value="${escapeHtml(draft.short_id || '')}" ${draft.status === 'ready_for_render' ? '' : 'disabled'}>
+          confirm
+        </label>
+      </div>
+      <div style="font-size:12px;margin-top:8px">${escapeHtml(draft.hook || '')}</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:4px">
+        ${draft.duration_sec ? draft.duration_sec + 's · ' : ''}source: ${escapeHtml((draft.source_scene_ids || []).join(', ') || '-')}
+      </div>
+    </div>
+  `).join('');
+}
+
+async function prepareShortsStudioDrafts() {
+  const jobId = document.getElementById('shorts-studio-job').value;
+  if (!jobId) { alert('Select an eligible long-form job first.'); return; }
+  const r = await fetch('/shorts-studio/jobs/' + encodeURIComponent(jobId) + '/prepare', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({force: false}),
+  });
+  if (!r.ok) {
+    const text = await r.text();
+    showToast('Prepare failed: ' + text);
+    return;
+  }
+  showToast('Short draft generation enqueued');
+  setTimeout(() => { loadShortsStudioState(); }, 1000);
+}
+
+async function confirmShortsStudioRender() {
+  const jobId = document.getElementById('shorts-studio-job').value;
+  if (!jobId) { alert('Select a job first.'); return; }
+  const short_ids = Array.from(document.querySelectorAll('.shorts-studio-check:checked')).map(el => el.value);
+  if (!short_ids.length) { alert('Select at least one PASS draft to render.'); return; }
+  const r = await fetch('/shorts-studio/jobs/' + encodeURIComponent(jobId) + '/confirm-render', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({short_ids}),
+  });
+  if (!r.ok) {
+    const text = await r.text();
+    showToast('Confirm render failed: ' + text);
+    return;
+  }
+  showToast('Short render enqueued');
+  setTimeout(() => { loadShortsStudioState(); }, 1000);
+}
 
 // ---- Channel Videos panel ----
 let CHANNEL_VIDEOS_PANEL_OPEN = false;

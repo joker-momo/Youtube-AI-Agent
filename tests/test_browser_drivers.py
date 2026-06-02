@@ -219,3 +219,59 @@ def test_chatgpt_stable_detector_includes_json_completion_guard():
     assert "expectJson !== false && (/^[\\[{]/.test(trimmed))" in detector
     assert "jsonComplete = shouldCheckJson ? (depth === 0 && !inStr) : true" in detector
     assert "jsonComplete" in detector
+
+
+def test_chatgpt_detects_http_431_and_clicks_reload(monkeypatch):
+    from video_agent.browser_worker.drivers import chatgpt as mod
+
+    async def _noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(mod, "_dismiss_modals", _noop)
+    monkeypatch.setattr(mod, "human_pause", _noop)
+
+    class _FakeLocator:
+        def __init__(self, page) -> None:
+            self.page = page
+
+        @property
+        def first(self):
+            return self
+
+        async def is_visible(self, timeout=0):
+            return True
+
+        async def click(self):
+            self.page.clicked_reload = True
+            self.page.content_val = "ChatGPT Page Content"
+
+    class _FakePage:
+        def __init__(self) -> None:
+            self.url = mod.CHATGPT_URL
+            self.content_val = "HTTP ERROR 431 Request Header Fields Too Large"
+            self.clicked_reload = False
+            self.timeouts: list[int] = []
+
+        async def goto(self, url: str, **kwargs):
+            return None
+
+        async def content(self):
+            return self.content_val
+
+        def locator(self, selector: str):
+            return _FakeLocator(self)
+
+        async def wait_for_timeout(self, ms: int):
+            self.timeouts.append(ms)
+
+    page = _FakePage()
+    driver = mod.ChatGPTDriver(page)
+
+    monkeypatch.setattr(mod, "_is_login_url", lambda url: False)
+
+    asyncio.run(driver.open())
+
+    assert page.clicked_reload is True
+    assert page.content_val == "ChatGPT Page Content"
+    assert 3000 in page.timeouts
+

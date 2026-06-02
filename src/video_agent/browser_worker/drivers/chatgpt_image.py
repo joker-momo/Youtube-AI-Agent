@@ -147,8 +147,53 @@ class ChatGPTImageDriver:
     async def open(self) -> None:
         if self._opened:
             return
-        await self.page.goto(CHATGPT_HOME, wait_until="domcontentloaded", timeout=30_000)
+
+        # Navigate with retries — page.goto() throws on HTTP error responses
+        # (e.g. 431 Request Header Fields Too Large).
+        navigated = False
+        nav_errors: list[str] = []
+        for attempt in range(3):
+            try:
+                await self.page.goto(
+                    CHATGPT_HOME, wait_until="domcontentloaded", timeout=30_000
+                )
+                navigated = True
+                break
+            except Exception as exc:
+                nav_errors.append(f"attempt {attempt + 1}: {exc}")
+                await self.page.wait_for_timeout(800)
+
+        if not navigated:
+            shot = await save_trace_screenshot(self.page, prefix="chatgpt-image-goto-failed")
+            raise BrowserDriverError(
+                "ChatGPT image navigation failed: " + " | ".join(nav_errors[-3:]),
+                screenshot_path=shot,
+            )
+
         await human_pause(self.page, min_ms=1200, max_ms=2200)
+
+        # Check for HTTP ERROR 431 and click Reload (up to 2 attempts)
+        for reload_attempt in range(2):
+            try:
+                content = await self.page.content()
+                if "HTTP ERROR 431" in content or "431" in content:
+                    reload_btn = self.page.locator(
+                        "button#reload-button, button:has-text('Reload')"
+                    ).first
+                    if await reload_btn.is_visible(timeout=2000):
+                        print(
+                            f"[chatgpt-image] HTTP 431 detected (attempt {reload_attempt + 1}). Clicking Reload...",
+                            flush=True,
+                        )
+                        await reload_btn.click()
+                        await self.page.wait_for_timeout(3000)
+                    else:
+                        break
+                else:
+                    break
+            except Exception:
+                break
+
         if _is_login_url(self.page.url):
             shot = await save_trace_screenshot(self.page, prefix="chatgpt-image-login")
             raise LoginRequiredError(

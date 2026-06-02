@@ -83,8 +83,14 @@ def _dispatch_queue_job(
     if command == "shorts_autopilot":
         _run_shorts_autopilot_job(job, job_dir=job_dir, channel_path=channel_path, client=client)
         return
+    if command == "shorts_prepare_drafts":
+        _run_shorts_prepare_drafts_job(job, job_dir=job_dir, channel_path=channel_path, client=client)
+        return
     if command == "shorts_render_one":
         _run_short_render_job(job, job_dir=job_dir, channel_path=channel_path)
+        return
+    if command == "shorts_confirm_render":
+        _run_shorts_confirm_render_job(job, job_dir=job_dir, channel_path=channel_path)
         return
     raise ValueError(f"Unknown queue command: {command}")
 
@@ -168,6 +174,52 @@ def _run_shorts_autopilot_job(job: dict, *, job_dir: Path, channel_path: Path, c
     )
 
 
+def _run_shorts_prepare_drafts_job(job: dict, *, job_dir: Path, channel_path: Path, client: BrowserClient) -> None:
+    import json as _json
+
+    from video_agent.shorts.autopilot import run_shorts_autopilot
+    from video_agent.shorts.short_builder import build_short
+    from video_agent.utils.json_io import read_yaml
+
+    payload: dict = {}
+    raw = job.get("payload")
+    if raw:
+        try:
+            payload = _json.loads(raw) if isinstance(raw, str) else dict(raw)
+        except Exception:
+            payload = {}
+    force = bool(payload.get("force"))
+    channel_config = read_yaml(channel_path)
+
+    def chatgpt_fn(prompt: str) -> str:
+        return asyncio.run(client.chatgpt_send(prompt))
+
+    def gemini_fn(prompt: str) -> str:
+        return asyncio.run(client.gemini_send(prompt))
+
+    def plan_fn(long_job_dir, channel_config, requested_count=None):
+        from video_agent.shorts.planner import plan_shorts_from_long_video
+        return plan_shorts_from_long_video(
+            long_job_dir, channel_config, requested_count, llm_fn=chatgpt_fn,
+        )
+
+    def build_short_fn(long_job_dir, short_plan, cfg, **kwargs):
+        return build_short(
+            long_job_dir, short_plan, cfg,
+            llm_fn=chatgpt_fn, gemini_fn=gemini_fn, **kwargs,
+        )
+
+    run_shorts_autopilot(
+        job_dir,
+        channel_config,
+        force=force,
+        trigger="shorts_studio_prepare",
+        plan_fn=plan_fn,
+        build_short_fn=build_short_fn,
+        require_render_confirmation=True,
+    )
+
+
 def _run_short_render_job(job: dict, *, job_dir: Path, channel_path: Path) -> None:
     """Render one existing Short again without regenerating script/scenes/SEO."""
     import json as _json
@@ -217,10 +269,52 @@ def _run_short_render_job(job: dict, *, job_dir: Path, channel_path: Path) -> No
         for entry in manifest.get("shorts") or []:
             if entry.get("short_id") == short_id:
                 entry["status"] = "rendered"
+                entry["rendered"] = True
+                entry["requires_render_confirmation"] = False
                 entry["video_path"] = f"shorts/{short_id}/{paths.SHORT_VIDEO_FILE}"
                 entry["cover_path"] = f"shorts/{short_id}/{paths.SHORT_COVER_FILE}"
                 break
+        rendered_count = sum(1 for entry in manifest.get("shorts") or [] if entry.get("status") == "rendered")
+        ready_count = sum(1 for entry in manifest.get("shorts") or [] if entry.get("status") == "ready_for_render")
+        review_count = sum(1 for entry in manifest.get("shorts") or [] if entry.get("status") == "needs_review")
+        failed_count = sum(1 for entry in manifest.get("shorts") or [] if entry.get("status") == "failed")
+        if rendered_count and ready_count == 0 and review_count == 0 and failed_count == 0:
+            manifest["status"] = "rendered"
+        elif ready_count:
+            manifest["status"] = "completed_with_warnings" if (review_count or failed_count) else "drafts_ready"
+        elif review_count or failed_count:
+            manifest["status"] = "completed_with_warnings"
+        else:
+            manifest["status"] = "rendered"
         manifest_mod.write_manifest(job_dir, manifest)
+        run_path = paths.autopilot_run_path(job_dir)
+        if run_path.exists():
+            run = _json.loads(run_path.read_text(encoding="utf-8"))
+            run["rendered_count"] = rendered_count
+            run["ready_for_render_count"] = ready_count
+            run["needs_review_count"] = review_count
+            run["failed_count"] = failed_count
+            run["status"] = manifest.get("status") or run.get("status")
+            manifest_mod.write_autopilot_run(job_dir, run)
+
+
+def _run_shorts_confirm_render_job(job: dict, *, job_dir: Path, channel_path: Path) -> None:
+    import json as _json
+
+    payload: dict = {}
+    raw = job.get("payload")
+    if raw:
+        try:
+            payload = _json.loads(raw) if isinstance(raw, str) else dict(raw)
+        except Exception:
+            payload = {}
+    short_ids = list(payload.get("short_ids") or [])
+    for short_id in short_ids:
+        _run_short_render_job(
+            {"job_id": job.get("job_id"), "payload": _json.dumps({"short_id": short_id})},
+            job_dir=job_dir,
+            channel_path=channel_path,
+        )
 
 
 def run_worker_loop(db_path: Path) -> None:

@@ -236,6 +236,33 @@ def test_build_short_regenerates_then_needs_review_after_limit(tmp_path: Path):
     assert not (paths.short_dir(job, "short-02") / "short.mp4").exists()
 
 
+def test_build_short_prepare_mode_stops_before_render(tmp_path: Path):
+    from video_agent.shorts import short_builder, paths
+
+    job = _long_job(tmp_path)
+    calls: list[str] = []
+    plan = {"short_id": "short-03", "format": "pain_to_tip", "scene_ids": ["scene-09"],
+            "source_start_sec": 183.0, "source_end_sec": 199.0, "music_track": "shorts_sleep_stress",
+            "narration_seed": "Marca una hora de cierre."}
+
+    res = short_builder.build_short(
+        job,
+        plan,
+        _cfg(),
+        llm_fn=_llm_fn_factory(),
+        require_render_confirmation=True,
+        **_stub_io(calls),
+    )
+
+    assert res["status"] == "ready_for_render"
+    assert res["rendered"] is False
+    assert res["requires_render_confirmation"] is True
+    assert calls == []
+    sd = paths.short_dir(job, "short-03")
+    assert not (sd / "short.mp4").exists()
+    assert not (sd / "short_cover.jpg").exists()
+
+
 # --- scene normalization (render/TTS compatibility) ------------------------
 
 def test_normalize_short_scenes_renames_scene_id_and_injects_narration():

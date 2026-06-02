@@ -1019,7 +1019,13 @@ def _chatgpt_scenes_prompt(
         "Approved script:",
         _json_block(script),
         "",
-        "⚠️ REMINDER: Output ONLY the raw JSON object. No markdown. No commentary. Start with { and end with }.",
+        "⚠️ CRITICAL OUTPUT RULES:",
+        "• Your response is ONLY a raw JSON object. No markdown, no commentary, no ```json fences.",
+        "• Start your response with the character { and end with the character }.",
+        f"• Expected response size: approximately {int(scenes_min) * 300}-{int(scenes_max) * 350} characters.",
+        "• You MUST complete the entire JSON in this single response. Do NOT truncate.",
+        "• If you run low on space, reduce narration text length per scene rather than dropping scenes.",
+        "• Double-check: every { has a matching } before you finish.",
     ])
     
     return "\n".join(prompt_parts)
@@ -1431,8 +1437,8 @@ def write_operator_prompts(
     stages = ["script", "scenes", "seo"] if stage == "all" else [stage]
     written: list[Path] = []
 
-    script = _read_optional_json(job_dir / "script.json")
-    scenes = _read_optional_json(job_dir / "scenes.json")
+    script = _read_optional_json(_resolve_operator_path(job_dir, "script.json"))
+    scenes = _read_optional_json(_resolve_operator_path(job_dir, "scenes.json"))
 
     for current_stage in stages:
         if current_stage == "script":
@@ -1442,7 +1448,7 @@ def write_operator_prompts(
             ]
         elif current_stage == "scenes":
             if script is None:
-                raise FileNotFoundError(f"{job_dir / 'script.json'} is required before writing scenes prompts.")
+                raise FileNotFoundError(f"{_resolve_operator_path(job_dir, 'script.json')} is required before writing scenes prompts.")
             qa_feedback = get_scenes_qa_feedback(job_dir)
             paths_and_text = [
                 (chatgpt_dir / "scenes_prompt.md", _chatgpt_scenes_prompt(channel_config, script, qa_feedback=qa_feedback)),
@@ -1450,10 +1456,10 @@ def write_operator_prompts(
             ]
         elif current_stage == "seo":
             if script is None:
-                raise FileNotFoundError(f"{job_dir / 'script.json'} is required before writing SEO prompts.")
+                raise FileNotFoundError(f"{_resolve_operator_path(job_dir, 'script.json')} is required before writing SEO prompts.")
             if scenes is None:
-                raise FileNotFoundError(f"{job_dir / 'scenes.json'} is required before writing SEO prompts.")
-            seo = _read_optional_json(job_dir / "seo.json")
+                raise FileNotFoundError(f"{_resolve_operator_path(job_dir, 'scenes.json')} is required before writing SEO prompts.")
+            seo = _read_optional_json(_resolve_operator_path(job_dir, "seo.json"))
             paths_and_text = [
                 (chatgpt_dir / "seo_prompt.md", _chatgpt_seo_prompt(channel_config, script, scenes)),
                 (gemini_dir / "seo_qa_prompt.md", _gemini_qa_prompt("seo", seo, channel_config)),
@@ -1491,14 +1497,14 @@ def promote_operator_artifact(
         elif artifact == "scenes":
             candidate = _normalize_scenes_candidate(
                 candidate,
-                script=_read_optional_json(job_dir / "script.json"),
+                script=_read_optional_json(_resolve_operator_path(job_dir, "script.json")),
             )
         elif artifact == "seo":
             candidate = _normalize_seo_candidate(
                 candidate,
                 channel_config=load_operator_channel_config(channel_path, candidate),
-                scene_doc=_read_optional_json(job_dir / "scenes.json"),
-                script=_read_optional_json(job_dir / "script.json"),
+                scene_doc=_read_optional_json(_resolve_operator_path(job_dir, "scenes.json")),
+                script=_read_optional_json(_resolve_operator_path(job_dir, "script.json")),
             )
         try:
             validate_json(candidate, schema_path)
@@ -1594,7 +1600,7 @@ def assert_operator_qa_passed(job_dir: Path, artifacts: list[str] | tuple[str, .
 def build_operator_status(job_dir: Path) -> dict[str, Any]:
     artifacts: dict[str, dict[str, str]] = {}
     for artifact in OPERATOR_ARTIFACTS:
-        artifact_path = job_dir / f"{artifact}.json"
+        artifact_path = _resolve_operator_path(job_dir, f"{artifact}.json")
         qa_path = _resolve_existing_qa_path(job_dir, artifact)
         qa_status = "missing"
         if qa_path.exists():
@@ -1617,9 +1623,9 @@ def build_operator_status(job_dir: Path) -> dict[str, Any]:
         next_step = "Generate and promote seo.json, then run Gemini QA for seo."
     elif artifacts["seo"]["qa"] != "PASS":
         next_step = "Promote a PASS Gemini QA response for seo."
-    elif not (job_dir / "render_props.json").exists():
+    elif not _resolve_operator_path(job_dir, "render_props.json").exists():
         next_step = "Run operator-render to prepare assets and render props."
-    elif not (job_dir / "operator_review.html").exists():
+    elif not _resolve_operator_path(job_dir, "operator_review.html").exists():
         next_step = "Run operator-review or operator-render to refresh operator_review.html."
     else:
         next_step = "Ready for human review or final render."
@@ -1772,10 +1778,10 @@ def write_operator_review(job_dir: Path, output_path: Path | None = None) -> Pat
         else:
             output_path = job_dir / "operator_review.html"
 
-    script = _read_optional_json(job_dir / "script.json") or {}
-    scenes = _read_optional_json(job_dir / "scenes.json") or {}
-    seo = _read_optional_json(job_dir / "seo.json") or {}
-    visual_review = _read_optional_json(job_dir / "visual_review.json") or {}
+    script = _read_optional_json(_resolve_operator_path(job_dir, "script.json")) or {}
+    scenes = _read_optional_json(_resolve_operator_path(job_dir, "scenes.json")) or {}
+    seo = _read_optional_json(_resolve_operator_path(job_dir, "seo.json")) or {}
+    visual_review = _read_optional_json(_resolve_operator_path(job_dir, "visual_review.json")) or {}
 
     title = str(seo.get("title") or script.get("hook") or job_dir.name)
     scene_items = scenes.get("scenes") if isinstance(scenes.get("scenes"), list) else []

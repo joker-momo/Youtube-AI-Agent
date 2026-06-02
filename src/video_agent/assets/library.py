@@ -100,6 +100,106 @@ class AssetLibrary:
             db.execute("CREATE INDEX IF NOT EXISTS idx_usage_asset ON asset_usage(asset_id)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_usage_channel ON asset_usage(channel_id)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_usage_job ON asset_usage(job_id)")
+            self._migrate_visual_diversity(db)
+
+    @staticmethod
+    def _columns(db: sqlite3.Connection, table: str) -> set[str]:
+        return {row["name"] for row in db.execute(f"PRAGMA table_info({table})")}
+
+    def _migrate_visual_diversity(self, db: sqlite3.Connection) -> None:
+        """Idempotent schema additions for spec v5.4. Safe to call repeatedly."""
+        asset_cols = self._columns(db, "assets")
+        for col, ddl in (
+            ("visual_bucket", "visual_bucket TEXT"),
+            ("shot_type", "shot_type TEXT"),
+            ("mood", "mood TEXT"),
+            ("locale_feel", "locale_feel TEXT"),
+            ("creator_key", "creator_key TEXT"),
+            ("duration_sec", "duration_sec REAL"),
+            ("quality_score", "quality_score REAL"),
+            ("metadata_json", "metadata_json TEXT"),
+        ):
+            if col not in asset_cols:
+                db.execute(f"ALTER TABLE assets ADD COLUMN {ddl}")
+
+        usage_cols = self._columns(db, "asset_usage")
+        for col, ddl in (
+            ("visual_bucket", "visual_bucket TEXT"),
+            ("shot_type", "shot_type TEXT"),
+            ("duration_used_sec", "duration_used_sec REAL"),
+            ("topic", "topic TEXT"),
+        ):
+            if col not in usage_cols:
+                db.execute(f"ALTER TABLE asset_usage ADD COLUMN {ddl}")
+
+        db.execute("CREATE INDEX IF NOT EXISTS idx_assets_creator_key ON assets(creator_key)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_assets_visual_bucket ON assets(visual_bucket)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_assets_shot_type ON assets(shot_type)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_usage_asset_used_at ON asset_usage(asset_id, used_at)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_usage_job_scene ON asset_usage(job_id, scene_id)")
+
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS asset_reservations (
+                reservation_id TEXT PRIMARY KEY,
+                asset_id TEXT NOT NULL,
+                channel_id TEXT NOT NULL,
+                job_id TEXT NOT NULL,
+                scene_id TEXT NOT NULL,
+                reserved_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            )
+            """
+        )
+        db.execute("CREATE INDEX IF NOT EXISTS idx_reservations_asset ON asset_reservations(asset_id)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_reservations_expires ON asset_reservations(expires_at)")
+
+    def list_usage_for_asset(self, asset_id: str) -> list[dict[str, Any]]:
+        """Return usage rows sorted ascending by used_at."""
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT * FROM asset_usage WHERE asset_id = ? ORDER BY used_at ASC",
+                (asset_id,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def update_visual_metadata(
+        self,
+        asset_id: str,
+        *,
+        visual_bucket: str | None = None,
+        shot_type: str | None = None,
+        mood: str | None = None,
+        locale_feel: str | None = None,
+        creator_key: str | None = None,
+        duration_sec: float | None = None,
+        quality_score: float | None = None,
+        metadata_json: str | None = None,
+    ) -> None:
+        """Lazy backfill for spec v5.4 columns. Only writes provided fields."""
+        sets: list[str] = []
+        values: list[Any] = []
+        for col, val in (
+            ("visual_bucket", visual_bucket),
+            ("shot_type", shot_type),
+            ("mood", mood),
+            ("locale_feel", locale_feel),
+            ("creator_key", creator_key),
+            ("duration_sec", duration_sec),
+            ("quality_score", quality_score),
+            ("metadata_json", metadata_json),
+        ):
+            if val is not None:
+                sets.append(f"{col} = ?")
+                values.append(val)
+        if not sets:
+            return
+        values.append(asset_id)
+        with self._connect() as db:
+            db.execute(
+                f"UPDATE assets SET {', '.join(sets)} WHERE asset_id = ?",
+                values,
+            )
 
     def get_by_provider_id(self, provider: str, provider_asset_id: str) -> dict[str, Any] | None:
         with self._connect() as db:
@@ -305,19 +405,42 @@ class AssetLibrary:
         job_id: str,
         scene_id: str,
         scene_intent: str | None = None,
+        *,
+        visual_bucket: str | None = None,
+        shot_type: str | None = None,
+        duration_used_sec: float | None = None,
+        topic: str | None = None,
     ) -> None:
         now = _now_iso()
         with self._connect() as db:
             db.execute(
                 """
-                INSERT INTO asset_usage (asset_id, channel_id, job_id, scene_id, scene_intent, used_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO asset_usage (
+                    asset_id, channel_id, job_id, scene_id, scene_intent, used_at,
+                    visual_bucket, shot_type, duration_used_sec, topic
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (asset_id, channel_id, job_id, scene_id, scene_intent, now),
+                (
+                    asset_id,
+                    channel_id,
+                    job_id,
+                    scene_id,
+                    scene_intent,
+                    now,
+                    visual_bucket,
+                    shot_type,
+                    duration_used_sec,
+                    topic,
+                ),
             )
             db.execute(
                 "UPDATE assets SET use_count = use_count + 1, last_used_at = ? WHERE asset_id = ?",
                 (now, asset_id),
+            )
+            db.execute(
+                "DELETE FROM asset_reservations WHERE asset_id = ? AND job_id = ? AND scene_id = ?",
+                (asset_id, job_id, scene_id),
             )
 
     def list_usage(self, asset_id: str) -> list[dict[str, Any]]:

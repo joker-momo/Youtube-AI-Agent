@@ -36,10 +36,57 @@ def _default_plan_fn(long_job_dir: Path, channel_config: dict, requested_count: 
     return plan_shorts_from_long_video(long_job_dir, channel_config, requested_count)
 
 
-def _default_build_short_fn(long_job_dir: Path, short_plan: dict, channel_config: dict) -> dict:
+def _default_build_short_fn(
+    long_job_dir: Path,
+    short_plan: dict,
+    channel_config: dict,
+    *,
+    require_render_confirmation: bool = False,
+) -> dict:
     from video_agent.shorts.short_builder import build_short
 
-    return build_short(long_job_dir, short_plan, channel_config)
+    return build_short(
+        long_job_dir,
+        short_plan,
+        channel_config,
+        require_render_confirmation=require_render_confirmation,
+    )
+
+
+def aggregate_prepare_status(short_statuses: list[dict]) -> str:
+    if not short_statuses:
+        return "failed"
+    ready = [s for s in short_statuses if s.get("status") == "ready_for_render"]
+    review = [s for s in short_statuses if s.get("status") == "needs_review"]
+    failed = [s for s in short_statuses if s.get("status") == "failed"]
+    if ready and not review and not failed:
+        return "drafts_ready"
+    if ready and (review or failed):
+        return "completed_with_warnings"
+    if review and not ready:
+        return "needs_review"
+    return "failed"
+
+
+def _call_build_short_fn(
+    build_short_fn: Callable[..., dict],
+    long_job_dir: Path,
+    short_plan: dict,
+    channel_config: dict,
+    *,
+    require_render_confirmation: bool,
+) -> dict:
+    try:
+        return build_short_fn(
+            long_job_dir,
+            short_plan,
+            channel_config,
+            require_render_confirmation=require_render_confirmation,
+        ) or {}
+    except TypeError:
+        if require_render_confirmation:
+            raise
+        return build_short_fn(long_job_dir, short_plan, channel_config) or {}
 
 
 def _write_source_snapshot(long_job_dir: Path) -> None:
@@ -61,6 +108,7 @@ def run_shorts_autopilot(
     target_short_id: str | None = None,
     plan_fn: Callable[..., dict] | None = None,
     build_short_fn: Callable[..., dict] | None = None,
+    require_render_confirmation: bool = False,
 ) -> dict:
     plan_fn = plan_fn or _default_plan_fn
     build_short_fn = build_short_fn or _default_build_short_fn
@@ -163,7 +211,9 @@ def run_shorts_autopilot(
         # shorts.
         results: list[dict] = []
         rendered = 0
+        ready_for_render = 0
         failed = 0
+        needs_review = 0
         generated = 0
         continue_on_fail = ap.get("continue_if_one_short_fails", True)
         for sp in selected:
@@ -174,20 +224,36 @@ def run_shorts_autopilot(
                 res = prior
                 rendered += 1
             else:
-                res = build_short_fn(long_job_dir, sp, channel_config) or {}
+                res = _call_build_short_fn(
+                    build_short_fn,
+                    long_job_dir,
+                    sp,
+                    channel_config,
+                    require_render_confirmation=require_render_confirmation,
+                )
                 generated += 1
                 status = res.get("status")
                 if status == "rendered":
                     rendered += 1
+                elif status == "ready_for_render":
+                    ready_for_render += 1
+                elif status == "needs_review":
+                    needs_review += 1
+                    failed += 1
+                    warnings.append(f"{short_id}: {status or 'unknown'}")
                 else:
                     failed += 1
                     warnings.append(f"{short_id}: {status or 'unknown'}")
                 manifest.write_short_status(long_job_dir, short_id, res)
             results.append(_manifest_entry(sp, res))
-            if res.get("status") != "rendered" and not continue_on_fail:
+            if res.get("status") not in ("rendered", "ready_for_render") and not continue_on_fail:
                 break
 
-        overall = "completed" if failed == 0 else "completed_with_warnings"
+        overall = (
+            aggregate_prepare_status(results)
+            if require_render_confirmation
+            else ("completed" if failed == 0 else "completed_with_warnings")
+        )
 
         # 8. Manifest + autopilot run.
         source_title = _source_title(long_job_dir)
@@ -206,6 +272,7 @@ def run_shorts_autopilot(
         run = {
             "source_long_job_id": long_job_dir.name,
             "status": overall,
+            "mode": "prepare_drafts" if require_render_confirmation else "autopilot",
             "trigger": trigger,
             "execution_mode": "sequential",
             "started_at": started_at,
@@ -213,7 +280,9 @@ def run_shorts_autopilot(
             "attempted_count": len(selected),
             "generated_count": generated,
             "qa_passed_count": sum(1 for r in results if r.get("qa_verdict") == "PASS"),
+            "ready_for_render_count": ready_for_render,
             "rendered_count": rendered,
+            "needs_review_count": needs_review,
             "failed_count": failed,
             "warnings": warnings,
             "errors": [],
@@ -222,6 +291,7 @@ def run_shorts_autopilot(
 
         return {
             "status": overall,
+            "ready_for_render_count": ready_for_render,
             "rendered_count": rendered,
             "failed_count": failed,
             "generated_count": generated,
@@ -246,6 +316,10 @@ def _manifest_entry(short_plan: dict, res: dict) -> dict:
         "score": res.get("score"),
         "status": res.get("status"),
         "qa_verdict": res.get("qa_verdict"),
+        "rendered": bool(res.get("rendered")),
+        "requires_render_confirmation": bool(res.get("requires_render_confirmation")),
+        "requires_user_review": bool(res.get("requires_user_review")),
+        "source_scene_ids": res.get("source_scene_ids") or short_plan.get("source_scene_ids") or [],
         "music_track": res.get("music_track"),
         "video_path": res.get("video_path"),
         "cover_path": res.get("cover_path"),

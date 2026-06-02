@@ -196,6 +196,9 @@ budget:
   max_cost_per_video_usd: 0
 shorts:
   enabled: true
+  studio:
+    enabled: true
+    job_list_policy: "all_with_disabled_ineligible"
   autopilot:
     enabled: true
     trigger: "after_review_passed"

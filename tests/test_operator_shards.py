@@ -348,8 +348,9 @@ def test_sharded_prompt_builders_require_json_envelopes():
     assert '"artifact_type": "scenes_plan"' in plan_prompt
     assert '"artifact_type": "scenes_batch"' in batch_prompt
     assert '"artifact_type": "scenes_qa_batch"' in qa_prompt
-    assert "exactly one JSON envelope" in plan_prompt
-    assert "no markdown" in batch_prompt.lower()
+    assert "// FILE: scenes_plan.json" in plan_prompt
+    assert "// FILE: scenes_batch_01.json" in batch_prompt
+    assert "EXACTLY ONE fenced ```json" in batch_prompt
     assert "scene_checks" in qa_prompt
     assert "layout_payload" in batch_prompt
     assert "layout_reason" in batch_prompt

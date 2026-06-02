@@ -209,6 +209,32 @@ def _json_block(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
 
 
+def _json_file_directive(filename: str) -> str:
+    """Output rules that force the model to return one complete, named JSON file.
+
+    Long JSON responses get truncated when streamed inline. We ask the model to
+    deliver exactly one fenced ```json block whose first line names the file
+    (``// FILE: <name>``) so the response is self-identifying and easy to manage,
+    and we forbid splitting/truncation so the JSON is always complete in a single
+    turn. The ``// FILE:`` marker sits before the first ``{`` so JSON extraction
+    (which scans from ``{``) ignores it.
+    """
+    return "\n".join(
+        [
+            "⚠️ OUTPUT RULES — READ CAREFULLY:",
+            "• Return EXACTLY ONE fenced ```json code block and NOTHING else "
+            "(no text before or after the block).",
+            f"• The FIRST line inside the block must be exactly: // FILE: {filename}",
+            "• On the lines after it, output the COMPLETE JSON object.",
+            "• The JSON must be COMPLETE and VALID in this single response.",
+            "• NEVER truncate, NEVER split across multiple messages, NEVER write "
+            "\"continue\" or \"...\".",
+            "• If the content is long, still close every brace and bracket — "
+            "completeness is mandatory.",
+        ]
+    )
+
+
 def _read_optional_json(path: Path) -> dict[str, Any] | None:
     return read_json(path) if path.exists() else None
 
@@ -724,13 +750,7 @@ def _chatgpt_script_prompt(channel_config: dict[str, Any], idea: dict[str, Any])
         [
             "You are exporting a SCRIPT artifact as a JSON file for a YouTube channel pipeline.",
             "",
-            "⚠️ OUTPUT RULES — READ CAREFULLY:",
-            "• Your ENTIRE response must be ONE raw JSON object — nothing else.",
-            "• Do NOT write any text before or after the JSON.",
-            "• Do NOT use markdown code fences (no ```json, no ```).",
-            "• Do NOT add explanations, comments, or apologies.",
-            "• Imagine you are writing directly to a .json file on disk.",
-            "• If your response is long, that is fine — keep going until the JSON is complete and closed with }.",
+            _json_file_directive("script.json"),
             "",
             "Required JSON schema:",
             "- channel_id, job_id, hook, sections, narration, cta, qa",
@@ -972,7 +992,7 @@ def _chatgpt_scenes_plan_prompt(channel_config: dict[str, Any], script: dict[str
     return "\n".join(
         [
             "You are planning sharded SCENES generation for a YouTube channel pipeline.",
-            "Return exactly one JSON envelope. No markdown. No commentary.",
+            _json_file_directive("scenes_plan.json"),
             "",
             "Required envelope shape:",
             "{",
@@ -1005,7 +1025,6 @@ def _chatgpt_scenes_plan_prompt(channel_config: dict[str, Any], script: dict[str
             "- scene ranges must cover the full target_scene_count.",
             "- scene IDs must be sequential: scene-01, scene-02, ...",
             "- final batch must include the final scene.",
-            "- Use exactly one JSON object; no markdown fences.",
             "",
             *_locale_block_lines(channel_config, header="Locale rules:"),
             "- Spanish text fields must use the configured language for the configured locale.",
@@ -1040,7 +1059,7 @@ def _chatgpt_scenes_batch_prompt(
     scene_end = batch.get("scene_end", scene_start)
     parts = [
         "You are exporting one small SCENES batch for a YouTube channel pipeline.",
-        "Return exactly one JSON envelope. No markdown. No commentary.",
+        _json_file_directive(f"scenes_batch_{batch_index:02d}.json"),
         "",
         "Required envelope:",
         "{",
@@ -1077,7 +1096,7 @@ def _chatgpt_scenes_batch_prompt(
         "- Use layout=\"quote\" only for a short emotional or memorable sentence supported by the narration.",
         "- Every non-subtitle layout must include enough layout_payload for rendering.",
         "- Do not invent overlay facts that are not supported by narration/caption/on_screen_text.",
-        "- Do not return markdown or more than one JSON object.",
+        "- Do not return more than one JSON object.",
         "",
         *_locale_block_lines(channel_config, header="Locale rules:"),
         "- Spanish text fields must use the configured language for the configured locale.",
@@ -1119,7 +1138,7 @@ def _claude_scenes_qa_batch_prompt(
     return "\n".join(
         [
             "You are QA reviewer for one SCENES batch of a Spanish-language YouTube health channel.",
-            "Return exactly one JSON envelope. No markdown. No commentary.",
+            _json_file_directive(f"scenes_qa_batch_{batch_index:02d}.json"),
             "",
             "Required envelope:",
             "{",
@@ -1169,12 +1188,7 @@ def _chatgpt_seo_prompt(channel_config: dict[str, Any], script: dict[str, Any], 
         [
             "You are exporting an SEO artifact as a JSON file for a YouTube channel pipeline.",
             "",
-            "⚠️ OUTPUT RULES — READ CAREFULLY:",
-            "• Your ENTIRE response must be ONE raw JSON object — nothing else.",
-            "• Do NOT write any text before or after the JSON.",
-            "• Do NOT use markdown code fences (no ```json, no ```).",
-            "• Do NOT add explanations, comments, or apologies.",
-            "• Imagine you are writing directly to a .json file on disk.",
+            _json_file_directive("seo.json"),
             "",
             "Required JSON schema:",
             "- job_id, title, description, tags, language, ai_disclosure, thumbnail_path, thumbnail_text, suggested_pinned_comments",

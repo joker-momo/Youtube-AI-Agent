@@ -47,7 +47,7 @@ def test_write_operator_prompts_writes_script_prompts(tmp_path):
     paths = {path.name for path in result.paths}
     assert paths == {"script_prompt.md", "script_qa_prompt.md"}
     script_prompt = (tmp_path / "operator-job/operator/chatgpt/script_prompt.md").read_text(encoding="utf-8")
-    assert "Your ENTIRE response must be ONE raw JSON object" in script_prompt
+    assert "// FILE: script.json" in script_prompt
     assert "Video idea:" in script_prompt
 
 

@@ -27,9 +27,8 @@ IMPORTANT:
 - Do not call the audience ancianos, tercera edad, abuelos, elderly, seniors, or adultos mayores.
 - Ideas must be meaningfully different from each other.
 - Avoid ideas that use the same or nearly identical source_scene_ids set.
-- Return exactly one raw JSON object.
-- No markdown.
-- No commentary.
+- Return exactly one JSON object wrapped inside a ```json code block.
+- No commentary or text outside the code block.
 - Produce 8–12 ideas when possible.
 - If the source does not support 8 strong, distinct, source-backed ideas, return fewer ideas and explain why in warnings.
 - Never invent extra ideas just to reach 8.

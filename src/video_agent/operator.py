@@ -58,6 +58,52 @@ class OperatorNextResult:
     commands: list[str]
 
 
+_JSON_CTRL_ESCAPES = {
+    0x08: "\\b",
+    0x09: "\\t",
+    0x0A: "\\n",
+    0x0C: "\\f",
+    0x0D: "\\r",
+}
+
+
+def _escape_control_chars_in_strings(text: str) -> str:
+    """Escape raw control characters that appear INSIDE JSON string literals.
+
+    Models often emit literal newlines/tabs inside string values (invalid JSON),
+    while structural whitespace between tokens must stay untouched. A blanket
+    ``str.replace`` corrupts structural newlines; this walks the text tracking
+    string state and only escapes control chars while inside a string.
+    """
+    out: list[str] = []
+    in_string = False
+    escape = False
+    for char in text:
+        if in_string:
+            if escape:
+                out.append(char)
+                escape = False
+                continue
+            if char == "\\":
+                out.append(char)
+                escape = True
+                continue
+            if char == '"':
+                out.append(char)
+                in_string = False
+                continue
+            code = ord(char)
+            if code < 0x20:
+                out.append(_JSON_CTRL_ESCAPES.get(code, "\\u%04x" % code))
+            else:
+                out.append(char)
+        else:
+            if char == '"':
+                in_string = True
+            out.append(char)
+    return "".join(out)
+
+
 def extract_json_objects(text: str) -> list[dict[str, Any]]:
     """Extract all parseable JSON objects found in ``text``.
 
@@ -103,11 +149,13 @@ def extract_json_objects(text: str) -> list[dict[str, Any]]:
                                 parsed_successfully = True
                                 break
                         except Exception:
-                            # ChatGPT sometimes emits literal newlines inside
-                            # JSON string values (invalid per JSON spec).
-                            # Retry after escaping them.
+                            # ChatGPT sometimes emits literal control characters
+                            # (newlines/tabs) inside JSON string values (invalid
+                            # per JSON spec). Escape only those inside strings —
+                            # a blanket replace would corrupt structural
+                            # whitespace between tokens.
                             try:
-                                repaired = chunk.replace("\r\n", "\\n").replace("\r", "\\n").replace("\n", "\\n")
+                                repaired = _escape_control_chars_in_strings(chunk)
                                 parsed = json.loads(repaired)
                                 if isinstance(parsed, dict):
                                     objects.append(parsed)
@@ -183,7 +231,7 @@ def _repair_truncated_json_object(span: str) -> dict[str, Any] | None:
 
     for attempt in (
         repaired,
-        repaired.replace("\r\n", "\\n").replace("\r", "\\n").replace("\n", "\\n"),
+        _escape_control_chars_in_strings(repaired),
     ):
         try:
             parsed = json.loads(attempt)

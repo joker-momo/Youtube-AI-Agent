@@ -577,3 +577,23 @@ def test_extract_json_objects_leaves_complete_objects_untouched():
     raw_text = '{"a": 1}\n{"b": 2}'
     candidates = extract_json_objects(raw_text)
     assert candidates == [{"a": 1}, {"b": 2}]
+
+
+def test_extract_json_objects_handles_raw_newline_inside_string_value():
+    # Pretty-printed object (structural newlines between fields) whose
+    # description value contains a RAW newline — a common ChatGPT failure.
+    # Must parse as ONE object with all keys, not split into inner objects.
+    from video_agent.operator import extract_json_objects
+    raw_text = (
+        "{\n"
+        '  "job_id": "job-a",\n'
+        '  "title": "Hello",\n'
+        '  "description": "First line\nsecond line\twith tab",\n'
+        '  "variants": [{"title": "x"}, {"title": "y"}]\n'
+        "}"
+    )
+    candidates = extract_json_objects(raw_text)
+    top = [c for c in candidates if "job_id" in c]
+    assert len(top) == 1
+    assert top[0]["job_id"] == "job-a"
+    assert "second line" in top[0]["description"]

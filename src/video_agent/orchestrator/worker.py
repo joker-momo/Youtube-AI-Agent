@@ -294,6 +294,7 @@ def _run_shorts_render_selected_ideas_job(job: dict, *, job_dir: Path, channel_p
 def _run_short_render_job(job: dict, *, job_dir: Path, channel_path: Path) -> None:
     """Render one existing Short again without regenerating script/scenes/SEO."""
     import json as _json
+    import datetime
 
     from video_agent.shorts import manifest as manifest_mod
     from video_agent.shorts import paths
@@ -316,22 +317,73 @@ def _run_short_render_job(job: dict, *, job_dir: Path, channel_path: Path) -> No
         raise FileNotFoundError(f"Unknown short: {short_id}")
 
     channel_config = read_yaml(channel_path)
-    video_path = render_short_video(short_dir, channel_config)
-    cover_path = render_short_cover(short_dir, channel_config)
 
+    # Load status document or initialize
     status_path = paths.short_status_path(job_dir, short_id)
     status = {}
     if status_path.exists():
         status = _json.loads(status_path.read_text(encoding="utf-8"))
-    status.update(
-        {
-            "short_id": short_id,
-            "status": "rendered",
-            "rendered": True,
-            "video_path": f"shorts/{short_id}/{paths.SHORT_VIDEO_FILE}",
-            "cover_path": f"shorts/{short_id}/{paths.SHORT_COVER_FILE}",
-        }
-    )
+
+    # Initialize default stages if missing (backward compatibility)
+    if "stages" not in status:
+        status["stages"] = [
+            {"name": "script", "label": "Short Script", "status": "completed", "started_at": None, "completed_at": None, "actual_seconds": None},
+            {"name": "scenes", "label": "Short Scenes", "status": "completed", "started_at": None, "completed_at": None, "actual_seconds": None},
+            {"name": "seo", "label": "Short SEO", "status": "completed", "started_at": None, "completed_at": None, "actual_seconds": None},
+            {"name": "qa", "label": "Quality Assurance", "status": "completed", "started_at": None, "completed_at": None, "actual_seconds": None},
+            {"name": "audio", "label": "Audio TTS & Mix", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
+            {"name": "render", "label": "Video & Cover Render", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
+        ]
+
+    def update_stage(stage_name: str, new_status: str, **kwargs):
+        now_str = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        for s in status["stages"]:
+            if s["name"] == stage_name:
+                s["status"] = new_status
+                if new_status == "in_progress" and not s.get("started_at"):
+                    s["started_at"] = now_str
+                elif new_status in ("completed", "failed", "skipped"):
+                    if not s.get("started_at"):
+                        s["started_at"] = now_str
+                    s["completed_at"] = now_str
+                    try:
+                        from datetime import datetime as dt
+                        t_start = dt.fromisoformat(s["started_at"].replace("Z", "+00:00"))
+                        t_end = dt.fromisoformat(now_str.replace("Z", "+00:00"))
+                        s["actual_seconds"] = max(0, int((t_end - t_start).total_seconds()))
+                    except Exception:
+                        s["actual_seconds"] = 1
+                for k, v in kwargs.items():
+                    s[k] = v
+                break
+        status["updated_at"] = now_str
+        manifest_mod.write_short_status(job_dir, short_id, status)
+
+    # 1. Audio TTS & Mix
+    update_stage("audio", "in_progress")
+    # Remotion materialize will generate cached audio if not present, so we mark completed
+    update_stage("audio", "completed")
+
+    # 2. Video & Cover Render
+    update_stage("render", "in_progress")
+    try:
+        video_path = render_short_video(short_dir, channel_config)
+        cover_path = render_short_cover(short_dir, channel_config)
+        update_stage("render", "completed")
+        status.update(
+            {
+                "short_id": short_id,
+                "status": "rendered",
+                "rendered": True,
+                "video_path": f"shorts/{short_id}/{paths.SHORT_VIDEO_FILE}",
+                "cover_path": f"shorts/{short_id}/{paths.SHORT_COVER_FILE}",
+            }
+        )
+    except Exception as exc:
+        update_stage("render", "failed")
+        status.update({"status": "failed"})
+        manifest_mod.write_short_status(job_dir, short_id, status)
+        raise exc
     manifest_mod.write_short_status(job_dir, short_id, status)
 
     manifest_path = paths.manifest_path(job_dir)

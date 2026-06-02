@@ -15,17 +15,24 @@ def _parse(raw: str) -> dict:
     return objs[0] if objs else {}
 
 
+def _invoke(llm_fn: Callable[..., str], kind: str, prompt: str) -> str:
+    try:
+        return llm_fn(prompt)
+    except TypeError:
+        return llm_fn(kind, prompt)
+
+
 def build_short_seo(
     long_job_dir: Path,
     short_id: str,
     short_plan: dict,
     short_script: dict,
     channel_config: dict,
-    llm_fn: Callable[[str, str], str],
+    llm_fn: Callable[..., str],
     long_video_url: str = "",
 ) -> dict[str, Any]:
     prompt = prompts.short_seo_prompt(channel_config, short_plan, short_script, long_video_url)
-    parsed = _parse(llm_fn("seo", prompt))
+    parsed = _parse(_invoke(llm_fn, "seo", prompt))
     funnel = (channel_config.get("shorts") or {}).get("funnel") or {}
     pinned_template = funnel.get("pinned_comment_template", "")
     pinned = parsed.get("pinned_comment") or (

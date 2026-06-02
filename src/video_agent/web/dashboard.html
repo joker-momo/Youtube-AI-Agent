@@ -3785,6 +3785,136 @@ async function loadShortsIdeasTab(jobId) {
   }
 }
 
+function renderShortStep(jobId, shortId, s, idx) {
+  const shownStatus = s.status || 'pending';
+  const label = s.label || s.name;
+  const stageTitle = `${idx + 1}. ${label} (${s.name})`;
+  
+  const runningStartedAt = s.started_at || null;
+  const runningStartMs = parseIsoToMs(runningStartedAt);
+  const runningElapsed = runningStartMs === null ? null : Math.max(0, Math.floor((Date.now() - runningStartMs) / 1000));
+  
+  let durHtml = '';
+  if (s.actual_seconds !== null && s.actual_seconds !== undefined) {
+    durHtml = `<span class="step-dur">${fmtSec(s.actual_seconds)}</span>`;
+  } else if (shownStatus === 'in_progress' && runningStartedAt) {
+    durHtml = `<span class="step-dur step-dur-live" data-started-at="${escapeHtml(runningStartedAt)}">${runningElapsed === null ? '' : fmtSec(runningElapsed)}</span>`;
+  } else {
+    durHtml = '<span class="step-dur"></span>';
+  }
+
+  const compactStepGlyph = (
+    shownStatus === 'completed'
+      ? checkIcon()
+      : shownStatus === 'failed'
+        ? xIcon()
+        : '<span class="step-flow-dot" aria-hidden="true"></span>'
+  );
+
+  let inputs = [];
+  let outputs = [];
+  
+  const shortPrefix = `shorts/${shortId}/`;
+  if (s.name === 'script') {
+    inputs = [{path: `short_ideas.json`, name: 'short_ideas.json'}];
+    outputs = [{path: `${shortPrefix}short_script.json`, name: 'short_script.json'}];
+  } else if (s.name === 'scenes') {
+    inputs = [{path: `${shortPrefix}short_script.json`, name: 'short_script.json'}];
+    outputs = [{path: `${shortPrefix}short_scenes.json`, name: 'short_scenes.json'}];
+  } else if (s.name === 'seo') {
+    inputs = [{path: `${shortPrefix}short_script.json`, name: 'short_script.json'}];
+    outputs = [
+      {path: `${shortPrefix}short_seo.json`, name: 'short_seo.json'},
+      {path: `${shortPrefix}short_source_map.json`, name: 'short_source_map.json'}
+    ];
+  } else if (s.name === 'qa') {
+    inputs = [{path: `${shortPrefix}short_scenes.json`, name: 'short_scenes.json'}];
+    outputs = [{path: `${shortPrefix}short_qa.json`, name: 'short_qa.json'}];
+  } else if (s.name === 'audio') {
+    inputs = [{path: `${shortPrefix}short_scenes.json`, name: 'short_scenes.json'}];
+    outputs = [{path: `${shortPrefix}audio/short_mix.m4a`, name: 'short_mix.m4a'}];
+  } else if (s.name === 'render') {
+    inputs = [{path: `${shortPrefix}short_render_props.json`, name: 'short_render_props.json'}];
+    outputs = [
+      {path: `${shortPrefix}short.mp4`, name: 'short.mp4'},
+      {path: `${shortPrefix}short_cover.jpg`, name: 'short_cover.jpg'}
+    ];
+  }
+
+  const renderFileRow = (f) => {
+    const safePath = escapeHtml(f.path);
+    const safeName = escapeHtml(f.name);
+    // Click to preview using previewArtifact (available if completed)
+    const onclick = shownStatus === 'completed' ? `onclick="previewArtifact('${escapeJs(jobId)}','${escapeJs(f.path)}')"` : '';
+    const styleStr = shownStatus === 'completed' ? 'cursor:pointer; font-weight: 500;' : 'opacity: 0.65; cursor: not-allowed;';
+    return `
+      <div class="file-row" ${onclick} style="${styleStr}">
+        <svg class="file-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+        <span class="file-name" title="${safePath}">${safeName}</span>
+      </div>
+    `;
+  };
+
+  const inputsHtml = inputs.map(renderFileRow).join('') || '<div style="color:var(--muted-2);font-size:12px;padding:6px">No input</div>';
+  const outputsHtml = outputs.map(renderFileRow).join('') || '<div style="color:var(--muted-2);font-size:12px;padding:6px">No output yet</div>';
+
+  return `
+    <div class="step ${shownStatus}">
+      <div class="step-head" onclick="this.closest('.step').classList.toggle('open')">
+        <span class="step-num"><span class="step-order">${String(idx + 1).padStart(2, '0')}</span><span class="step-check">${compactStepGlyph}</span></span>
+        <span class="step-label"><span class="name">${escapeHtml(label)}</span><span class="code">${escapeHtml(s.name)}</span></span>
+        <span class="step-meta">
+          <span class="pill ${shownStatus}">${statusText(shownStatus)}</span>${durHtml}<span class="caret">›</span>
+        </span>
+      </div>
+      <div class="step-body">
+        <div class="io-grid">
+          <div class="io-box">
+            <div class="io-title">Input</div>
+            ${inputsHtml}
+          </div>
+          <div class="io-box">
+            <div class="io-title">Output</div>
+            ${outputsHtml}
+          </div>
+        </div>
+        <div class="preview-mount"></div>
+      </div>
+    </div>
+  `;
+}
+
+function renderShortStepsTimeline(jobId, draft) {
+  const activeStages = draft.stages || inferRenderStages(draft).map(s => {
+    let statusVal = 'pending';
+    if (s.cls === 'done') statusVal = 'completed';
+    else if (s.cls === 'active') statusVal = 'in_progress';
+    else if (s.cls === 'fail') statusVal = 'failed';
+    
+    let nameVal = '';
+    if (s.label === 'Script') nameVal = 'script';
+    else if (s.label === 'Scenes') nameVal = 'scenes';
+    else if (s.label === 'SEO') nameVal = 'seo';
+    else if (s.label === 'QA') nameVal = 'qa';
+    else if (s.label === 'Render') nameVal = 'render';
+    
+    return {
+      name: nameVal,
+      label: s.label,
+      status: statusVal,
+      started_at: null,
+      completed_at: null,
+      actual_seconds: null
+    };
+  });
+
+  return `
+    <div class="timeline compact" style="margin-top: 14px;">
+      ${activeStages.map((stage, idx) => renderShortStep(jobId, draft.short_id, stage, idx)).join('')}
+    </div>
+  `;
+}
+
 async function loadShortsRendersTab(jobId) {
   const container = document.getElementById('shorts-tab-renders');
   if (!container) return;
@@ -3800,12 +3930,21 @@ async function loadShortsRendersTab(jobId) {
       container.innerHTML = '<div class="ideas-empty">No rendered shorts yet. Select an idea and click "Render Short".</div>';
       return;
     }
+    
+    // Check if any draft has active rendering to start duration ticker
+    const anyRunning = drafts.some(d => {
+      const activeStages = d.stages || [];
+      return activeStages.some(s => s.status === 'in_progress') || (d.status && d.status.includes('progress')) || d.status === 'rendering';
+    });
+    if (anyRunning) startStageDurationTicker();
+    
     container.innerHTML = `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">${drafts.length} short(s)</div>` +
       drafts.map((d, idx) => {
         const st = d.status || 'pending';
         const stClass = st === 'rendered' ? 'rendered' : st === 'failed' ? 'failed' : st.includes('progress') ? 'in_progress' : '';
         const stages = inferRenderStages(d);
-        return `<div class="render-card ${stClass}" id="rc-${escapeHtml(d.short_id)}">
+        const isOpen = (stClass === 'in_progress' || drafts.length === 1) ? ' open' : '';
+        return `<div class="render-card ${stClass}${isOpen}" id="rc-${escapeHtml(d.short_id)}">
           <div class="render-card-head" onclick="toggleRenderCard('${escapeHtml(d.short_id)}')">
             <div class="rc-num">${idx + 1}</div>
             <div class="rc-label">
@@ -3821,13 +3960,17 @@ async function loadShortsRendersTab(jobId) {
             <div class="render-stages">
               ${stages.map(s => `<div class="render-stage ${s.cls}" title="${s.label}"></div>`).join('')}
             </div>
+            
+            <div style="font-size:12px; font-weight:750; color:var(--muted); margin: 18px 0 8px; text-transform: uppercase; letter-spacing: 0.05em;">Pipeline Stages</div>
+            ${renderShortStepsTimeline(jobId, d)}
+            
             ${d.status === 'rendered' ? `
-              <div class="render-output">
+              <div class="render-output" style="margin-top: 18px;">
                 ${d.video_path ? `<video src="${escapeHtml(d.video_path)}" controls preload="metadata"></video>` : '<div style="font-size:12px;color:var(--muted)">No video</div>'}
                 ${d.cover_path ? `<img src="${escapeHtml(d.cover_path)}" alt="Cover">` : ''}
               </div>
             ` : ''}
-            <div class="render-meta-grid">
+            <div class="render-meta-grid" style="margin-top: 14px; border-top: 1px dashed var(--line); padding-top: 10px;">
               <div><span class="rm-label">Status:</span> <span class="rm-value">${escapeHtml(st)}</span></div>
               <div><span class="rm-label">QA:</span> <span class="rm-value">${escapeHtml(d.qa_verdict || '-')}</span></div>
               <div><span class="rm-label">Scenes:</span> <span class="rm-value">${(d.source_scene_ids || []).length}</span></div>

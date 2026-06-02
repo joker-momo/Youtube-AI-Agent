@@ -21,7 +21,7 @@ from video_agent.browser_worker.drivers.humanize import (
 if TYPE_CHECKING:
     from playwright.async_api import Page
 
-CLAUDE_URL = "https://claude.ai/new"
+CLAUDE_URL = "https://claude.ai/new?incognito="
 
 # Claude rollout/locale can vary. We try explicit incognito/temporary
 # toggles first, then fall back to a fresh "new chat" so sessions still
@@ -110,11 +110,34 @@ async def _try_click(page: "Page", selectors: tuple[str, ...], timeout_ms: int =
     return False
 
 
+def _is_temporary_chat_url(url: str) -> bool:
+    """Claude's temporary/incognito chat carries an ``incognito`` query param."""
+    return "incognito" in (url or "").lower()
+
+
 async def _enter_temporary_chat(page: "Page") -> bool:
+    # The ?incognito= URL lands directly in a temporary chat — trust the URL
+    # first so a flaky toggle click cannot silently leave us in a normal chat.
+    if _is_temporary_chat_url(page.url):
+        return True
     if await _try_click(page, TEMP_CHAT_TOGGLE_SELECTORS):
         await human_pause(page, min_ms=600, max_ms=1300)
         return True
     return False
+
+
+async def _ensure_temporary_chat(page: "Page") -> bool:
+    """Guarantee the page is on a temporary chat before typing.
+
+    Claude sometimes drops back to a normal chat (a send navigates to a
+    persistent conversation URL). Re-navigate to the incognito URL if the
+    current URL is no longer a temporary chat, then confirm.
+    """
+    if _is_temporary_chat_url(page.url):
+        return True
+    await page.goto(CLAUDE_URL, wait_until="domcontentloaded", timeout=30_000)
+    await human_pause(page, min_ms=800, max_ms=1600)
+    return await _enter_temporary_chat(page)
 
 
 async def _raise_claude_layout_warning(
@@ -213,6 +236,14 @@ class ClaudeDriver:
             await self.open()
         if not prompt.strip():
             raise BrowserDriverError("Empty prompt")
+        # Verify we are still in a temporary chat right before typing — a prior
+        # send can navigate to a persistent conversation URL.
+        if not await _ensure_temporary_chat(self.page):
+            await _raise_claude_layout_warning(
+                self.page,
+                prefix="claude-not-temporary-presend",
+                message="Claude is not on a temporary chat before send.",
+            )
         await _raise_if_claude_quota_exhausted(self.page)
 
         # Scrape only Claude assistant turns. Do not fall back to scanning the

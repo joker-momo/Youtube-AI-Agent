@@ -64,6 +64,25 @@ def _is_login_url(url: str) -> bool:
     )
 
 
+def _is_temporary_chat_url(url: str) -> bool:
+    return "temporary-chat=true" in (url or "")
+
+
+async def _ensure_temporary_chat(page: "Page") -> bool:
+    """Guarantee the page is on a temporary chat before typing.
+
+    A prior send navigates to a persistent conversation URL
+    (``chatgpt.com/c/<id>``). Re-navigate to the temporary-chat URL when the
+    current URL is no longer temporary, then confirm.
+    """
+    if _is_temporary_chat_url(page.url):
+        return True
+    await page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=30_000)
+    await human_pause(page, min_ms=800, max_ms=1600)
+    await _dismiss_modals(page)
+    return _is_temporary_chat_url(page.url)
+
+
 def _stable_response_detector_js() -> str:
     """Page-side stable-response predicate shared by ChatGPT and Claude."""
     return """
@@ -518,6 +537,20 @@ class ChatGPTDriver:
             await self.open()
         if not prompt.strip():
             raise BrowserDriverError("Empty prompt")
+
+        # Verify we are still in a temporary chat right before typing — a prior
+        # send can navigate to a persistent conversation URL.
+        if not await _ensure_temporary_chat(self.page):
+            try:
+                body = await self.page.locator("body").inner_text(timeout=1_000)
+            except Exception:
+                body = ""
+            if "temporary chat" not in body.lower():
+                await _raise_chatgpt_layout_warning(
+                    self.page,
+                    prefix="chatgpt-not-temporary-presend",
+                    message="ChatGPT is not on a temporary chat before send.",
+                )
 
         # Capture the LAST assistant text before sending so we can wait
         # for a different, non-empty text to appear afterwards. This is

@@ -200,10 +200,12 @@ def test_claude_open_fails_when_temporary_chat_control_missing(monkeypatch):
             return False
 
     class _FakePage:
-        url = mod.CLAUDE_URL
+        # Simulate Claude bouncing back to a normal (non-incognito) chat and no
+        # temporary-chat toggle being present.
+        url = "https://claude.ai/new"
 
         async def goto(self, url: str, **kwargs):
-            self.url = url
+            self.url = "https://claude.ai/new"
             return None
 
         def locator(self, selector: str):

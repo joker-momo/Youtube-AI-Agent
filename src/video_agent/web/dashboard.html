@@ -2846,23 +2846,29 @@ async function renderFinal(t) {
       
       
       <!-- SHORTS SECTION -->
-      ${stageHas('shorts_render', 'shorts') ? `
-      <div style="margin-top: 24px;">
-        <h3 style="margin-bottom: 12px; font-size: 16px; font-weight: 600;">Shorts Series (Derived from this video)</h3>
-        <div style="display: flex; gap: 12px; overflow-x: auto; padding-bottom: 12px;">
-          ${[1,2,3,4].map(i => {
-            const shortVideoUrl = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=shorts/' + i + '/video.mp4';
-            return `
-            <div style="background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; min-width: 200px; flex: 1;">
-              <h4 style="margin: 0 0 8px 0; font-size: 14px;">Short ${i}</h4>
-              <video src="${shortVideoUrl}" controls style="width: 100%; border-radius: 4px; background: #000; margin-bottom: 8px; aspect-ratio: 9/16; object-fit: contain;"></video>
-              <a href="${shortVideoUrl}" download style="display: block; text-align: center; background: #2563eb; color: #fff; padding: 6px; border-radius: 4px; text-decoration: none; font-size: 12px; font-weight: 600;">⬇ Download</a>
-            </div>
-            `;
-          }).join('')}
+      ${(() => {
+        const shortsStage = (t.stages || []).find(st => st.name === 'shorts_autopilot');
+        const renderedShorts = ((shortsStage && shortsStage.sub_progress && shortsStage.sub_progress.shorts) || [])
+          .filter(s => s.status === 'rendered');
+        if (renderedShorts.length === 0) return '';
+        return `
+        <div style="margin-top: 24px;">
+          <h3 style="margin-bottom: 12px; font-size: 16px; font-weight: 600;">Shorts Series (Derived from this video)</h3>
+          <div style="display: flex; gap: 12px; overflow-x: auto; padding-bottom: 12px;">
+            ${renderedShorts.map(s => {
+              const shortVideoUrl = s.video_path ? ('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(s.video_path)) : '';
+              return `
+              <div style="background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; min-width: 200px; flex: 1;">
+                <h4 style="margin: 0 0 8px 0; font-size: 14px;">Short ${escapeHtml(s.short_id)}</h4>
+                <video src="${shortVideoUrl}" controls style="width: 100%; border-radius: 4px; background: #000; margin-bottom: 8px; aspect-ratio: 9/16; object-fit: contain;"></video>
+                <a href="${shortVideoUrl}" download style="display: block; text-align: center; background: #2563eb; color: #fff; padding: 6px; border-radius: 4px; text-decoration: none; font-size: 12px; font-weight: 600;">⬇ Download</a>
+              </div>
+              `;
+            }).join('')}
+          </div>
         </div>
-      </div>
-      ` : ''}
+        `;
+      })()}
       
       
     </div>

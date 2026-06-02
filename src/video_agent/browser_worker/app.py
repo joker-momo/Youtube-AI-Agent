@@ -324,6 +324,16 @@ async def _open_session_locked(site: str) -> str:
             print(f"[browser] Error during driver.open() for {site}: {exc}. Clearing browser data & retrying once...", flush=True)
             try:
                 await clear_browser_data_keep_login(context)
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+                page = await context.new_page()
+                await human_pause(page, min_ms=300, max_ms=900)
+                if site == "chatgpt":
+                    driver = ChatGPTDriver(page)
+                elif site == "gemini":
+                    driver = GeminiDriver(page)
                 await page.goto(_target_url(site), wait_until="domcontentloaded", timeout=30_000)
                 await driver.open()
             except Exception as retry_exc:
@@ -416,8 +426,20 @@ async def _send_in_session(session_id: str, prompt: str, timeout_ms: int) -> str
         print(f"[browser] Error in _send_in_session for {entry['site']}: {exc}. Clearing browser data & retrying once...", flush=True)
         try:
             await clear_browser_data_keep_login(page.context)
-            # Re-open or refresh page if needed, but since it is session, we can just try to navigate back or retry sending
-            # Let's try sending again directly first
+            try:
+                await page.close()
+            except Exception:
+                pass
+            page = await entry["browser"].contexts[0].new_page()
+            await human_pause(page, min_ms=300, max_ms=900)
+            if entry["site"] == "chatgpt":
+                driver = ChatGPTDriver(page)
+            elif entry["site"] == "gemini":
+                driver = GeminiDriver(page)
+            # Update session entry
+            entry["page"] = page
+            entry["driver"] = driver
+            await driver.open()
             return await driver.send_message(prompt, response_timeout_ms=timeout_ms)
         except Exception as retry_exc:
             if isinstance(retry_exc, LoginRequiredError):
@@ -498,7 +520,16 @@ async def _drive(site: str, prompt: str, timeout_ms: int) -> dict:
                 print(f"[browser] Error in _drive for {site}: {exc}. Clearing browser data & retrying once...", flush=True)
                 try:
                     await clear_browser_data_keep_login(context)
-                    # Retry page navigation & driving
+                    try:
+                        await page.close()
+                    except Exception:
+                        pass
+                    page = await context.new_page()
+                    await human_pause(page, min_ms=300, max_ms=900)
+                    if site == "chatgpt":
+                        driver = ChatGPTDriver(page)
+                    elif site == "gemini":
+                        driver = GeminiDriver(page)
                     await page.goto(_target_url(site), wait_until="domcontentloaded", timeout=30_000)
                     text = await driver.send(prompt, response_timeout_ms=timeout_ms)
                     return {"site": site, "raw_response": text}
@@ -651,8 +682,12 @@ async def chatgpt_image(payload: ImagePromptRequest) -> dict:
                 print(f"[browser] Error in chatgpt_image: {exc}. Clearing browser data & retrying once...", flush=True)
                 try:
                     await clear_browser_data_keep_login(context)
-                    # Retry page navigation & image generation
-                    # The driver needs a clean page navigation
+                    try:
+                        await page.close()
+                    except Exception:
+                        pass
+                    page = await context.new_page()
+                    await human_pause(page, min_ms=400, max_ms=900)
                     driver = ChatGPTImageDriver(page)
                     result = await driver.generate_image(
                         payload.prompt,
@@ -747,7 +782,12 @@ async def chatgpt_image_batch(payload: BatchImagePromptRequest) -> dict:
                 print(f"[browser] Error in chatgpt_image_batch: {exc}. Clearing browser data & retrying once...", flush=True)
                 try:
                     await clear_browser_data_keep_login(context)
-                    # Retry page navigation & image generation
+                    try:
+                        await page.close()
+                    except Exception:
+                        pass
+                    page = await context.new_page()
+                    await human_pause(page, min_ms=400, max_ms=900)
                     driver = ChatGPTImageDriver(page)
                     results = await driver.generate_images(
                         payload.prompts,

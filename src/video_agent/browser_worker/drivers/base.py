@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import json
@@ -215,10 +216,96 @@ def _is_auth_cookie(cookie: dict) -> bool:
     return False
 
 
+async def clear_browser_data_via_ui(context: "BrowserContext") -> None:
+    """Clear history and cache directly using Chrome's settings UI."""
+    try:
+        page = await context.new_page()
+        # Navigate to settings page with wait_until="commit" to avoid hanging on chrome:// urls
+        await page.goto("chrome://settings/clearBrowserData", wait_until="commit")
+        
+        # Wait for the settings page elements to be loaded in the shadow DOM
+        found = False
+        for _ in range(10):
+            has_elements = await page.evaluate("""() => {
+                try {
+                    const settingsUi = document.querySelector('settings-ui');
+                    const settingsMain = settingsUi.shadowRoot.querySelector('settings-main');
+                    const basicPage = settingsMain.shadowRoot.querySelector('settings-basic-page');
+                    const privacyPage = basicPage.shadowRoot.querySelector('settings-section > settings-privacy-page');
+                    const dialog = privacyPage.shadowRoot.querySelector('settings-clear-browsing-data-dialog');
+                    const clearBtn = dialog.shadowRoot.querySelector('#clearButton');
+                    return !!clearBtn;
+                } catch (e) {
+                    return false;
+                }
+            }""")
+            if has_elements:
+                found = True
+                break
+            await asyncio.sleep(1)
+            
+        if not found:
+            print("[browser] Warning: clearButton not found inside settings shadow DOM", flush=True)
+            await page.close()
+            return
+            
+        # Configure checkboxes and click the clear button
+        result = await page.evaluate("""() => {
+            try {
+                const settingsUi = document.querySelector('settings-ui');
+                const settingsMain = settingsUi.shadowRoot.querySelector('settings-main');
+                const basicPage = settingsMain.shadowRoot.querySelector('settings-basic-page');
+                const privacyPage = basicPage.shadowRoot.querySelector('settings-section > settings-privacy-page');
+                const dialog = privacyPage.shadowRoot.querySelector('settings-clear-browsing-data-dialog');
+                const shadow = dialog.shadowRoot;
+                
+                // Configure basic checkboxes: clear history and cache, but KEEP cookies unchecked
+                const browsingCheckboxBasic = shadow.querySelector('#browsingCheckboxBasic');
+                const cookiesCheckboxBasic = shadow.querySelector('#cookiesCheckboxBasic');
+                const cacheCheckboxBasic = shadow.querySelector('#cacheCheckboxBasic');
+                
+                if (browsingCheckboxBasic) browsingCheckboxBasic.checked = true;
+                if (cookiesCheckboxBasic) cookiesCheckboxBasic.checked = false; // preserve logins!
+                if (cacheCheckboxBasic) cacheCheckboxBasic.checked = true;
+                
+                // Configure advanced checkboxes if present (to be safe)
+                const browsingCheckbox = shadow.querySelector('#browsingCheckbox');
+                const cookiesCheckbox = shadow.querySelector('#cookiesCheckbox');
+                const cacheCheckbox = shadow.querySelector('#cacheCheckbox');
+                
+                if (browsingCheckbox) browsingCheckbox.checked = true;
+                if (cookiesCheckbox) cookiesCheckbox.checked = false; // preserve logins!
+                if (cacheCheckbox) cacheCheckbox.checked = true;
+                
+                // Click the clear button
+                const clearBtn = shadow.querySelector('#clearButton');
+                if (clearBtn) {
+                    clearBtn.click();
+                    return { success: true };
+                }
+                return { success: false, error: "clearButton not found in click step" };
+            } catch (e) {
+                return { success: false, error: String(e) };
+            }
+        }""")
+        
+        if result.get("success"):
+            print("[browser] Successfully cleared browsing history and cache via Chrome settings UI.", flush=True)
+            # Give Chrome 3 seconds to execute the deletion
+            await asyncio.sleep(3)
+        else:
+            print(f"[browser] Warning: Failed to trigger UI clear: {result.get('error')}", flush=True)
+            
+        await page.close()
+    except Exception as e:
+        print(f"[browser] Warning: Exception during UI-based clear: {e}", flush=True)
+
+
 async def clear_browser_data_keep_login(context: "BrowserContext") -> dict:
     """Clear all browser data (cookies, storage, cache) but keep login cookies.
 
     Steps:
+      0. Clear history and cache directly via Chrome Settings UI (preserving cookies).
       1. Snapshot cookies from the browser context.
       2. Filter → keep only auth-related cookies.
       3. Clear ALL cookies from the context.
@@ -227,6 +314,8 @@ async def clear_browser_data_keep_login(context: "BrowserContext") -> dict:
 
     Returns a summary dict with counts for logging.
     """
+    # 0. Clear history and cache directly using Chrome's settings UI
+    await clear_browser_data_via_ui(context)
     # 1. Snapshot all cookies
     all_cookies = await context.cookies()
     total_cookies = len(all_cookies)

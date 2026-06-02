@@ -24,16 +24,54 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_DIR}"
 
 WORKER_MODE="auto"
-APP_ONLY=false
+RUN_MODE="full"
 RUN_CLEANUP=false
+REINSTALL_DEPS=false
+STOP_HEAVY=false
+
+usage() {
+  echo "Usage: bash run.sh [--dashboard|--app-only|--full|--stop-heavy] [--cleanup] [--reinstall-deps] [--native-worker|--docker-worker]"
+  echo ""
+  echo "Mac default: full stack with native host worker, no prompt."
+  echo "Linux default: full stack with Docker worker."
+  echo ""
+  echo "Modes:"
+  echo "  --dashboard, --app-only  Start only the dashboard container."
+  echo "  --full                  Start dashboard + browser services + worker."
+  echo "  --stop-heavy            Stop worker/browser services and keep dashboard available."
+  echo ""
+  echo "Options:"
+  echo "  --cleanup               Prune Docker cache and local browser/public debug artifacts first."
+  echo "  --reinstall-deps        Reinstall native Python/Remotion dependencies."
+  echo "  --native-worker         Force native host worker on macOS."
+  echo "  --docker-worker         Force Docker worker."
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --dashboard)
+      RUN_MODE="dashboard"
+      shift
+      ;;
     --app-only)
-      APP_ONLY=true
+      RUN_MODE="dashboard"
+      shift
+      ;;
+    --full)
+      RUN_MODE="full"
+      shift
+      ;;
+    --stop-heavy)
+      STOP_HEAVY=true
+      RUN_MODE="dashboard"
       shift
       ;;
     --cleanup)
       RUN_CLEANUP=true
+      shift
+      ;;
+    --reinstall-deps)
+      REINSTALL_DEPS=true
       shift
       ;;
     --native-worker)
@@ -45,21 +83,20 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     -h|--help)
-      echo "Usage: bash run.sh [--app-only] [--cleanup] [--native-worker|--docker-worker]"
-      echo ""
-      echo "--app-only: start only the dashboard container for light Mac usage."
-      echo "--cleanup: prune Docker cache and local browser/public debug artifacts first."
-      echo "macOS default: native worker for faster local render."
-      echo "Linux/default: Docker worker unless --native-worker is supported later."
+      usage
       exit 0
       ;;
     *)
       echo -e "${RED}Unknown option: $1${NC}"
-      echo "Usage: bash run.sh [--app-only] [--cleanup] [--native-worker|--docker-worker]"
+      usage
       exit 2
       ;;
   esac
 done
+
+export PUBLIC_JOBS_KEEP="${PUBLIC_JOBS_KEEP:-5}"
+export BROWSER_TRACE_RETENTION_DAYS="${BROWSER_TRACE_RETENTION_DAYS:-3}"
+export BROWSER_TRACE_MAX_MB="${BROWSER_TRACE_MAX_MB:-512}"
 
 # 1. Check Docker Daemon
 echo -e "${CYAN}Checking Docker status...${NC}"
@@ -94,6 +131,15 @@ if [ "$RUN_CLEANUP" = true ]; then
   echo -e "${CYAN}Running Docker/local artifact cleanup...${NC}"
   bash scripts/docker_disk_cleanup.sh
 fi
+
+stop_native_worker() {
+  pkill -f "video_agent.cli worker --db-path jobs/queue.db" >/dev/null 2>&1 || true
+}
+
+stop_heavy_services() {
+  docker compose ${COMPOSE_ARGS:-"-f docker-compose.yml"} stop worker browser-worker browser-runtime >/dev/null 2>&1 || true
+  stop_native_worker
+}
 
 wait_for_url() {
   local name="$1"
@@ -149,6 +195,8 @@ fi
 # Print GPU status
 if [ "$HAS_GPU" = true ]; then
   echo -e "${GREEN}✅ Detected ${GPU_TYPE} GPU! Configuring Docker for GPU acceleration...${NC}"
+elif [[ "$OS" == "Darwin" ]]; then
+  echo -e "${BLUE}ℹ️  macOS detected. Native host worker is preferred for render performance.${NC}"
 else
   echo -e "${BLUE}ℹ️  No compatible Linux GPU detected. Running in standard CPU mode.${NC}"
 fi
@@ -159,36 +207,31 @@ if [[ "$OS" == "Darwin" ]]; then
   echo -e "\n${BOLD}${YELLOW}================ macOS Performance Optimization =================${NC}"
   echo -e "Docker on macOS runs inside a Linux VM and cannot use your Mac's hardware GPU/VideoToolbox."
   echo -e "Running the Worker natively on your Mac provides a ${BOLD}3x+ render speedup${NC}."
-  if [ "$APP_ONLY" = true ]; then
-    echo -e "${BLUE}App-only mode requested; worker/browser services will stay stopped.${NC}"
+  if [[ "$RUN_MODE" == "dashboard" ]]; then
+    echo -e "${BLUE}Dashboard-only mode requested; worker/browser services will stay stopped.${NC}"
   elif [[ "$WORKER_MODE" == "docker" ]]; then
     echo -e "${BLUE}Docker worker requested via --docker-worker.${NC}"
   elif [[ "$WORKER_MODE" == "native" ]]; then
     echo -e "${GREEN}Native worker requested via --native-worker.${NC}"
     USE_NATIVE_WORKER=true
   else
-    echo -e "Mac-first mode is enabled: Webapp/Browser stay in Docker, Worker runs natively on host Mac."
-    echo -ne "👉 Run Worker natively on host Mac? (Y/n): "
-
-    # Read user input with 5 second timeout defaulting to Yes (y) for Mac-first runs.
-    if read -t 5 -r REPLY; then
-      if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-        USE_NATIVE_WORKER=true
-      fi
-    else
-      REPLY="y"
-      USE_NATIVE_WORKER=true
-    fi
+    echo -e "Mac-first mode: Webapp/Browser stay in Docker, Worker runs natively on host Mac."
+    USE_NATIVE_WORKER=true
   fi
   echo -e "${BOLD}${YELLOW}=================================================================${NC}\n"
 elif [[ "$WORKER_MODE" == "native" ]]; then
   echo -e "${YELLOW}--native-worker is currently only supported on macOS. Falling back to Docker worker.${NC}"
 fi
 
-if [ "$APP_ONLY" = true ]; then
+if [ "$STOP_HEAVY" = true ]; then
+  echo -e "${CYAN}Stopping worker/browser services and keeping dashboard mode...${NC}"
+  stop_heavy_services
+fi
+
+if [[ "$RUN_MODE" == "dashboard" ]]; then
   echo -e "${CYAN}Starting dashboard only in Docker...${NC}"
   docker compose ${COMPOSE_ARGS} up -d app
-  docker compose stop worker browser-worker browser-runtime &>/dev/null || true
+  stop_heavy_services
 elif [ "$USE_NATIVE_WORKER" = true ]; then
   # Find best python command (prefer homebrew python3.11/3.12/3.10 over older system python3)
   PYTHON_CMD="python3"
@@ -217,30 +260,43 @@ elif [ "$USE_NATIVE_WORKER" = true ]; then
     fi
   fi
 
-  echo -e "${CYAN}Setting up native Python virtual environment on host Mac...${NC}"
+  echo -e "${CYAN}Checking native Python virtual environment on host Mac...${NC}"
   if [[ ! -d ".venv" ]]; then
     $PYTHON_CMD -m venv .venv
   fi
   source .venv/bin/activate
-  echo -e "${BLUE}Upgrading pip...${NC}"
-  python -m pip install --quiet --timeout 100 --retries 10 --upgrade pip
-  echo -e "${BLUE}Installing Python dependencies (this might take a minute)...${NC}"
-  python -m pip install --quiet --timeout 100 --retries 10 -r requirements.txt
+  DEPS_MARKER=".venv/.requirements-installed"
+  if [ "$REINSTALL_DEPS" = true ] || [[ ! -f "$DEPS_MARKER" ]] || [[ "requirements.txt" -nt "$DEPS_MARKER" ]]; then
+    echo -e "${BLUE}Installing Python dependencies (this might take a minute)...${NC}"
+    python -m pip install --quiet --timeout 100 --retries 10 --upgrade pip
+    python -m pip install --quiet --timeout 100 --retries 10 -r requirements.txt
+    date -u +"%Y-%m-%dT%H:%M:%SZ" > "$DEPS_MARKER"
+  else
+    echo -e "${GREEN}Native Python dependencies are up to date.${NC}"
+  fi
 
   echo -e "${CYAN}Checking Remotion dependencies on host Mac...${NC}"
-  if [[ ! -x "remotion/node_modules/.bin/remotion" ]]; then
+  REMOTION_MARKER="remotion/node_modules/.package-lock-installed"
+  if [ "$REINSTALL_DEPS" = true ] || [[ ! -x "remotion/node_modules/.bin/remotion" ]] || [[ "remotion/package-lock.json" -nt "$REMOTION_MARKER" ]]; then
     echo -e "${BLUE}Installing Remotion dependencies in remotion/node_modules...${NC}"
-    npm --prefix remotion install --quiet
+    npm --prefix remotion ci --quiet
+    date -u +"%Y-%m-%dT%H:%M:%SZ" > "$REMOTION_MARKER"
+  else
+    echo -e "${GREEN}Remotion dependencies are up to date.${NC}"
   fi
-  echo -e "${BLUE}Ensuring Remotion browser is available...${NC}"
-  npx --prefix remotion remotion browser ensure
+  if [[ ! -d ".remotion/chrome-headless-shell" ]]; then
+    echo -e "${BLUE}Ensuring Remotion browser is available...${NC}"
+    npx --prefix remotion remotion browser ensure
+  else
+    echo -e "${GREEN}Remotion browser is already available.${NC}"
+  fi
   
   # Start app and browser containers in Docker, but exclude the docker worker
   echo -e "${CYAN}Starting App & Browser containers in Docker...${NC}"
-  docker compose up -d app browser-worker browser-runtime
+  docker compose ${COMPOSE_ARGS} up -d app browser-worker browser-runtime
   
   # Ensure the docker worker is stopped to prevent conflicts
-  docker compose stop worker &>/dev/null || true
+  docker compose ${COMPOSE_ARGS} stop worker &>/dev/null || true
   
   # Run the native worker in the background
   mkdir -p logs
@@ -254,6 +310,9 @@ elif [ "$USE_NATIVE_WORKER" = true ]; then
       JOBS_DIR="${REPO_DIR}/jobs" \
       CHANNEL_CONFIG="${REPO_DIR}/configs/vida-plena-45/channel.yaml" \
       BROWSER_WORKER_URL="http://localhost:8001" \
+      PUBLIC_JOBS_KEEP="${PUBLIC_JOBS_KEEP}" \
+      BROWSER_TRACE_RETENTION_DAYS="${BROWSER_TRACE_RETENTION_DAYS}" \
+      BROWSER_TRACE_MAX_MB="${BROWSER_TRACE_MAX_MB}" \
       python -m video_agent.cli worker --db-path jobs/queue.db > logs/native_worker.log 2>&1 &
     echo -e "${GREEN}✅ Native Worker started in the background (PID: $!). Logs: logs/native_worker.log${NC}"
   fi
@@ -265,7 +324,7 @@ fi
 
 # 5. Check Health
 wait_for_url "web app" "http://localhost:8000/health" 90
-if [ "$APP_ONLY" != true ]; then
+if [[ "$RUN_MODE" != "dashboard" ]]; then
   wait_for_url "browser-worker" "http://localhost:8001/health" 90
   wait_for_url "browser runtime CDP bridge" "http://localhost:8001/runtime" 120
 fi
@@ -273,8 +332,8 @@ fi
 echo -e "\n${GREEN}✅ Services started successfully!${NC}"
 echo -e "${BOLD}${CYAN}=====================================================${NC}"
 echo -e "  - ${BOLD}Dashboard URL:${NC}      ${GREEN}http://localhost:8000${NC}"
-if [ "$APP_ONLY" = true ]; then
-  echo -e "  - ${BOLD}Worker Status:${NC}      ${YELLOW}STOPPED (app-only mode)${NC}"
+if [[ "$RUN_MODE" == "dashboard" ]]; then
+  echo -e "  - ${BOLD}Worker Status:${NC}      ${YELLOW}STOPPED (dashboard mode)${NC}"
 elif [ "$USE_NATIVE_WORKER" = true ]; then
   echo -e "  - ${BOLD}VNC Browser URL:${NC}    ${GREEN}http://localhost:7900${NC} (Manual ChatGPT/Claude Logins)"
   echo -e "  - ${BOLD}Worker Status:${NC}      ${GREEN}NATIVE HOST (GPU Enabled)${NC}"
@@ -286,7 +345,9 @@ echo -e "${BOLD}${CYAN}=====================================================${NC
 echo ""
 echo -e "To view web logs, run:"
 echo -e "  ${BOLD}docker compose logs -f app${NC}"
-if [ "$USE_NATIVE_WORKER" = true ]; then
+if [[ "$RUN_MODE" == "dashboard" ]]; then
+  echo -e "Worker/browser services are stopped in dashboard mode."
+elif [ "$USE_NATIVE_WORKER" = true ]; then
   echo -e "To view native worker logs, run:"
   echo -e "  ${BOLD}tail -f logs/native_worker.log${NC}"
 else

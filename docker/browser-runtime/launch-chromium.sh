@@ -61,6 +61,7 @@ exec "$CHROME_BIN" \
   --window-position=0,0 \
   --no-first-run \
   --no-default-browser-check \
+  --disable-extensions \
   --disable-dev-shm-usage \
   --disable-gpu \
   --no-sandbox

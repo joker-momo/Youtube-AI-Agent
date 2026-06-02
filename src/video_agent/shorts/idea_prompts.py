@@ -33,6 +33,13 @@ IMPORTANT:
 - Produce 8–12 ideas when possible.
 - If the source does not support 8 strong, distinct, source-backed ideas, return fewer ideas and explain why in warnings.
 - Never invent extra ideas just to reach 8.
+- Ignore intro, subscription, channel CTA, housekeeping, and transition scenes unless they contain a real content point.
+- Do not use subscription/CTA scenes as key_points.
+- JSON must be valid parseable JSON.
+- Use double quotes only.
+- No trailing commas.
+- If the source mentions anxiety, diabetes, blood pressure, dementia, medication, or medical conditions, keep the idea lifestyle-focused.
+- Do not imply replacing medication or professional care.
 
 Allowed formats:
 checklist, mistake_list, warning_signs, myth_truth, problem_solution, top_tips, recap, pain_to_tip
@@ -46,6 +53,7 @@ Field rules:
 - Every key_points[*].source_scene_ids must be a subset of the idea's source_scene_ids.
 - scores must be integers from 0 to 100.
 - Scores are first-pass estimates. Be consistent, but the system will validate and recompute overall.
+- idea_id must be sequential: idea-01, idea-02, idea-03...
 
 Required output shape:
 {{

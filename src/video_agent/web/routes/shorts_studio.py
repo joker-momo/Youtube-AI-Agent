@@ -277,6 +277,27 @@ def get_shorts_studio_ideas(job_id: str, jobs_root: Path = Depends(get_jobs_root
     return ideas
 
 
+@router.delete("/shorts-studio/jobs/{job_id}/ideas")
+def delete_shorts_studio_ideas(job_id: str, jobs_root: Path = Depends(get_jobs_root)) -> dict[str, Any]:
+    job_dir = _safe_job_dir(jobs_root, job_id)
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    busy, _active = system_has_active_job(jobs_root)
+    if busy:
+        raise HTTPException(status_code=409, detail={"error": "system_busy"})
+    deleted: list[str] = []
+    for path_fn in (
+        shorts_paths.short_ideas_path,
+        shorts_paths.idea_generation_run_path,
+        shorts_paths.selected_short_ideas_path,
+    ):
+        p = path_fn(job_dir)
+        if p.exists():
+            p.unlink()
+            deleted.append(p.name)
+    return {"status": "deleted", "job_id": job_id, "deleted_files": deleted}
+
+
 @router.post("/shorts-studio/jobs/{job_id}/ideas/generate", status_code=202)
 def post_shorts_studio_generate_ideas(
     job_id: str,

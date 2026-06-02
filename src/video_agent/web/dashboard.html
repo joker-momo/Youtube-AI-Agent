@@ -1097,6 +1097,7 @@
             <div class="gen-actions">
               <button class="action-btn" onclick="loadShortsStudioState()">↻ Refresh state</button>
               <button class="action-btn primary" id="shorts-studio-prepare-btn" onclick="generateShortsStudioIdeas()">Generate Short Ideas</button>
+              <button class="action-btn danger" id="shorts-studio-delete-btn" onclick="deleteShortsStudioIdeas()">🗑 Delete Ideas</button>
             </div>
           </div>
           <div id="shorts-studio-status" style="font-size:12px;color:var(--muted);margin-bottom:6px"></div>
@@ -3704,6 +3705,36 @@ async function generateShortsStudioIdeas() {
     }
     showToast('Short ideas generation enqueued successfully');
     setTimeout(() => { loadShortsStudioState(); }, 1500);
+  } catch (e) {
+    showToast('Network error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+}
+
+async function deleteShortsStudioIdeas() {
+  const jobId = document.getElementById('shorts-studio-job').value;
+  if (!jobId) { alert('Select a job first.'); return; }
+  if (!confirm('Delete all ideas for this job? This cannot be undone.')) return;
+  const btn = document.getElementById('shorts-studio-delete-btn');
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Deleting…';
+  try {
+    const r = await fetch('/shorts-studio/jobs/' + encodeURIComponent(jobId) + '/ideas', {
+      method: 'DELETE',
+    });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      const text = d.detail?.error || d.detail || r.statusText;
+      showToast('Delete failed: ' + text);
+      return;
+    }
+    const data = await r.json();
+    showToast('Deleted: ' + (data.deleted_files || []).join(', '));
+    document.getElementById('shorts-studio-ideas').innerHTML = '';
+    await loadShortsStudioState();
   } catch (e) {
     showToast('Network error');
   } finally {

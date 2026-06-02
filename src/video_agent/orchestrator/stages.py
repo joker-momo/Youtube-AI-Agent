@@ -1964,80 +1964,149 @@ def _scene_project_name(job_id: str, scene_id: str) -> str:
     return f"{job_id[:35]}-{scene_id}"[:45]
 
 
+_VARIANT_STRATEGY = {
+    1: (
+        "FACE-DRIVEN: subject's emotional close-up is the dominant element. "
+        "Tight framing, intense eye contact toward the viewer, the prop is "
+        "secondary and partly out of focus."
+    ),
+    2: (
+        "OBJECT-DRIVEN: the single topic prop is large, sharply lit, and "
+        "instantly communicates the topic at a glance. The subject is present "
+        "but positioned so the prop carries the meaning."
+    ),
+    3: (
+        "COMPARISON-DRIVEN: a clean visual contrast or simple choice — two "
+        "options, before/after of a daily habit, or right vs wrong routine — "
+        "without medical fear, weight-loss before/after, or shaming framing."
+    ),
+}
+
+
+def _topic_category_guidance() -> str:
+    return (
+        "If the topic is about sleep or rest, show evening routine cues (bed, "
+        "lamp, calm tea, phone put down). "
+        "If the topic is about food or digestion, show the specific food, "
+        "plate, or kitchen choice. "
+        "If the topic is about stiffness, mobility, or movement, show body "
+        "signals or gentle home movement (neck, back, hands, stairs, walk). "
+        "If the topic is about stress or mental load, show calm body language, "
+        "warm light, breathing or a simple pause. "
+        "If the topic is about energy, show daylight, water, balanced breakfast, "
+        "or a clear morning routine. "
+        "Never reuse a generic wellness portrait."
+    )
+
+
 def _build_thumbnail_prompt(
     title: str,
     thumbnail_text: str,
     accent_color: str,
     channel_description: str,
+    *,
+    variant_index: int = 1,
 ) -> str:
-    """Build a ChatGPT image prompt for a FULL composite thumbnail.
+    """Backward-compatible wrapper around :func:`thumbnail_planner.plan_thumbnail_prompts`.
 
-    The generated image will contain both the photorealistic background
-    AND the bold text hook baked directly into the image, so background
-    and typography are visually coherent from the start.
+    Phase 2 of spec v1.3 routes all thumbnail prompt construction through
+    the planner. Direct callers/tests using the old signature still work
+    via this shim; the planner produces the actual prompt body.
     """
+    from video_agent.thumbnail_planner import plan_thumbnail_prompts
+
+    seo = {
+        "title": title,
+        "title_variants": [
+            {"title": title, "thumbnail_text": thumbnail_text}
+        ],
+    }
+    channel_config = {
+        "description": channel_description,
+        "thumbnail": {"accent_color": accent_color},
+    }
+    plans = plan_thumbnail_prompts(seo, channel_config)
+    plan = plans[0]
+    # If the wrapper was asked for variant_index > 1, switch the visual strategy
+    # accordingly so the prompt reflects the requested face/object/comparison
+    # composition without rerouting the underlying classification.
+    if variant_index in {2, 3}:
+        from video_agent.thumbnail_planner import (
+            VISUAL_STRATEGIES,
+            build_thumbnail_prompt,
+            describe_strategy,
+        )
+
+        strategy = VISUAL_STRATEGIES.get(variant_index, "face_driven")
+        plan = dict(plan)
+        plan["visual_strategy"] = strategy
+        plan["visual_strategy_description"] = describe_strategy(strategy)
+        return build_thumbnail_prompt(plan)
+    return plan["prompt"]
+
+
+# Deprecated P0+P1 helpers kept temporarily for any test importing them.
+def _legacy_build_thumbnail_prompt(
+    title: str,
+    thumbnail_text: str,
+    accent_color: str,
+    channel_description: str,
+    *,
+    variant_index: int = 1,
+) -> str:
+    """Original inline template prior to v1.3 planner integration."""
+    variant_style = _VARIANT_STRATEGY.get(variant_index, _VARIANT_STRATEGY[1])
+    topic_guidance = _topic_category_guidance()
+    safe_text = (thumbnail_text or "").strip()
+
     return (
-        f"Create a complete YouTube thumbnail image — ultra-high-resolution, "
-        f"crystal-clear photorealistic, 1920x1080 (16:9 aspect ratio), 4K quality, "
-        f"tack-sharp focus, professional DSLR photograph (85mm portrait lens look, "
-        f"shot at f/2.8, ISO 100), no motion blur, no compression artifacts, "
-        f"no JPEG haze — every pixel crisp. "
-        f"Topic: '{title}'. "
-        f"Channel context: {channel_description}. "
-        f"\n\n"
-        f"SUBJECT: A Hispanic or Latina woman aged 45-55 years old. "
-        f"She is positioned in the LEFT half of the frame, face clearly visible, "
-        f"tack-sharp focus on the eyes (skin pores, eyelashes, fine hair strands "
-        f"all distinctly visible), looking slightly toward the right (center of image). "
-        f"Her expression is emotional and expressive — conveying concern, relief, or urgency "
-        f"that matches the hook text '{thumbnail_text}'. "
-        f"Skin tone natural, color-graded for warm cinematic look, no plastic / "
-        f"airbrushed / AI-smoothed appearance. "
-        f"\n\n"
-        f"PAIN-ANGLE ALIGNMENT: The background and subject must visually express the "
-        f"same pain angle as the title, not a generic wellness portrait. If the title "
-        f"mentions a plate taking energy after 45, include visual cues like plate, energy, fatigue, "
-        f"uncertainty, or a simple meal decision. "
-        f"\n\n"
-        f"BACKGROUND: Simple, warm-toned, professional studio lighting (key + fill + rim), "
-        f"shallow depth of field bokeh (creamy, smooth — not noisy). High dynamic range, "
-        f"natural skin tones, no banding, no posterization. "
-        f"\n\n"
-        f"TEXT OVERLAY — render this EXACTLY in the image: \"{thumbnail_text}\". "
-        f"Placement: right half of the image, vertically centered or lower-right area. "
-        f"Style: extremely bold, ALL-CAPS, very large font (occupying ~40% of image width), "
-        f"white color. MAXIMUM CONTRAST — the text must read instantly against ANY "
-        f"background: apply a thick black stroke/outline (5-6px, fully opaque, clean even "
-        f"width on every letter) PLUS a heavy dark drop shadow (offset, large soft blur, "
-        f"high opacity) so the type detaches completely from the scene behind it. If the "
-        f"background area behind the text is busy or light, add a subtle semi-transparent "
-        f"dark gradient/vignette directly behind the text block to guarantee separation — "
-        f"keep it understated, never a hard box. Letterforms must be razor-sharp, no jagged "
-        f"edges, no anti-alias fuzz — render at the highest typographic fidelity. "
-        f"Font style similar to Impact, Anton, or Bebas Neue — punchy and attention-grabbing. "
-        f"Accent color for a thin decorative underline or glow beneath the text: {accent_color}. "
-        f"\n\n"
-        f"PROP OBJECT: Include ONE real, photorealistic physical object that instantly "
-        f"signals the topic at a glance — a tangible prop the woman holds or that sits "
-        f"naturally in the scene (e.g. for sleep/night themes a real alarm clock or a cup "
-        f"of tea on a nightstand; for nutrition themes an actual plate of food; for energy "
-        f"themes a glass of water or supplement). The object must be a genuine, detailed, "
-        f"in-context photograph — NOT a flat icon, illustration, sticker, or emoji — lit and "
-        f"focused to match the scene, clearly recognizable. Place it so it supports the hook "
-        f"without covering the face or the text. Exactly ONE prop — keep the composition "
-        f"clean; the prop should clarify the theme, not clutter it. "
-        f"\n\n"
-        f"QUALITY KEYWORDS: 4K, UHD, ultra-sharp, photorealistic, hyper-detailed, "
-        f"high-resolution, professional photography, magazine cover quality, "
-        f"award-winning portrait. NEGATIVE — explicitly avoid: blurry, soft focus, "
-        f"out-of-focus subject, low-resolution, pixelated, noisy, grainy, JPEG artifacts, "
-        f"oil-painting look, illustration, cartoon, plastic-skin, over-smoothed, "
-        f"AI-generated artifacts, distorted faces, extra fingers, warped anatomy. "
-        f"\n\n"
-        f"RULES: No additional text, captions, watermarks, or UI elements. "
-        f"Only the subject, background, and the exact hook text \"{thumbnail_text}\". "
-        f"The final result must look like a polished professional YouTube thumbnail "
-        f"that holds up when zoomed in to 200%."
+        f"Create a complete photorealistic YouTube thumbnail, 16:9, 1920x1080, "
+        f"editorial magazine quality, sharp details, warm natural light.\n"
+        f"\n"
+        f"TOPIC: \"{title}\"\n"
+        f"CHANNEL: {channel_description}\n"
+        f"AUDIENCE: Spanish adults 45+, practical wellness, nutrition and "
+        f"lifestyle, Spain-first tone (not Latin American).\n"
+        f"\n"
+        f"VARIANT STRATEGY: {variant_style}\n"
+        f"\n"
+        f"VISUAL ANGLE: The image must express the same specific pain angle "
+        f"as the topic and hook. {topic_guidance}\n"
+        f"\n"
+        f"SUBJECT: A natural-looking Mediterranean Spanish adult aged 45-55. "
+        f"Skin texture realistic (not plastic, not airbrushed). Hair, eyes, "
+        f"and skin reflect a Spain/Mediterranean look, not Latin American "
+        f"styling. Expressive but not panicked — concerned and hopeful, "
+        f"practical urgency. Place the subject in the LEFT 45% of the frame, "
+        f"face clearly visible, sharp eyes, tasteful warm key + fill + rim "
+        f"lighting. Avoid frail-elderly stereotype, doctor framing, sad "
+        f"isolated senior cliché, or overly polished fitness model.\n"
+        f"\n"
+        f"TOPIC PROP: Include exactly ONE realistic physical object that "
+        f"signals the topic instantly — a genuine in-scene photograph, NOT "
+        f"an icon, sticker, emoji, or illustration. Lit and focused to match "
+        f"the scene. Do not cover the face or the text.\n"
+        f"\n"
+        f"TEXT OVERLAY — render this EXACT text only, baked into the image:\n"
+        f"\"{safe_text}\"\n"
+        f"Render the text EXACTLY as written, preserving Spanish accents and "
+        f"punctuation (ñ, á, é, í, ó, ú, ü, ¿, ¡). Do not add, drop, or "
+        f"transliterate any character. All caps, very bold, white, huge "
+        f"(~40% of image width). Place text on the RIGHT half of the frame. "
+        f"Use a thick black outline (5-6px, clean even width) plus a heavy "
+        f"dark drop shadow. If the area behind the text is busy or light, "
+        f"add a subtle dark gradient behind the text — never a hard box. "
+        f"Font style similar to Impact, Anton, or Bebas Neue. Accent color "
+        f"for a thin underline or glow under the text: {accent_color}.\n"
+        f"\n"
+        f"NEGATIVE: no extra text, no captions, no watermarks, no logos, no "
+        f"UI elements. No hospital scene, no doctor diagnosis, no pills, no "
+        f"miracle cure, no before/after weight-loss, no fear-based medical "
+        f"setup, no LatAm or US Hispanic stock styling. No blurry, soft "
+        f"focus, plastic skin, extra fingers, or warped anatomy.\n"
+        f"\n"
+        f"RULES: Only the subject, the prop, the background, and the exact "
+        f"hook text \"{safe_text}\". Final result must hold up at 200% zoom."
     )
 
 
@@ -2204,7 +2273,7 @@ async def auto_thumbnail_image_stage(
     The render stage detects these files and skips the Remotion still step.
     """
     import shutil as _shutil
-    from PIL import Image as _PilImage
+    from PIL import Image as _PilImage, ImageOps as _PilImageOps
 
     stage_name = "thumbnail_image"
     state = load_job(job_dir)
@@ -2225,30 +2294,82 @@ async def auto_thumbnail_image_stage(
     title = seo.get("title") or ""
     palette = (channel_config.get("style") or {}).get("palette") or {}
     accent_color = palette.get("accent", "#F2C94C")
+
+    # English channel context for ChatGPT image prompt. The raw `channel.description`
+    # is Spanish (Vida Plena 45+); injecting it into an English prompt confuses
+    # the image model. Use a stable English summary instead.
     channel_description = (
-        (channel_config.get("channel") or {}).get("description", "Wellness channel for adults 45+")
+        "Vida Plena 45+, practical wellness, nutrition, sleep, movement, and "
+        "daily lifestyle for Spanish adults aged 45 and over, Spain-first tone."
     )
 
-    # Build variant list: up to 3 title_variants, fallback to top-level thumbnail_text.
-    raw_variants = seo.get("title_variants") or []
-    variants: list[str] = [
-        v.get("thumbnail_text") or ""
-        for v in raw_variants[:3]
-        if v.get("thumbnail_text")
+    # Spec v1.3 Phase 2: route the variant list, classification, and prompt
+    # body through the topic-aware planner. The planner enforces variant
+    # title binding, three distinct visual strategies (face/object/comparison),
+    # category presets, avoid-list merge, and Spain-first persona.
+    from video_agent.thumbnail_planner import plan_thumbnail_prompts
+
+    planner_channel_config = dict(channel_config or {})
+    planner_channel_config["description"] = channel_description
+    planner_channel_config.setdefault(
+        "thumbnail", {"accent_color": accent_color}
+    )
+    plans = plan_thumbnail_prompts(seo, planner_channel_config)
+
+    variants: list[dict[str, str]] = [
+        {
+            "title": plan["variant_title"],
+            "thumbnail_text": plan["thumbnail_text"],
+        }
+        for plan in plans
     ]
-    if not variants:
-        fallback = seo.get("thumbnail_text") or title.split(" ")[:5]
-        variants = [fallback if isinstance(fallback, str) else " ".join(fallback)]
 
     assets_dir = job_dir / "assets"
     assets_dir.mkdir(parents=True, exist_ok=True)
     (job_dir / "json").mkdir(parents=True, exist_ok=True)
     (job_dir / "outputs").mkdir(parents=True, exist_ok=True)
+    prompt_log_dir = job_dir / "operator" / "chatgpt"
+    prompt_log_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write structured metadata JSON excluding full prompts
+    plans_json = []
+    for plan in plans:
+        item = dict(plan)
+        item.pop("prompt", None)
+        plans_json.append(item)
+    (job_dir / "json" / "thumbnail_prompt_plans.json").write_text(
+        json.dumps(plans_json, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
     logger = EventLogger(job_dir / EVENT_LOG)
     generated: list[Path] = []   # successfully created .jpg files
     errors: list[str] = []
     last_exc: Exception | None = None
+
+    def _save_thumbnail(source_path: Path, jpg_path: Path) -> None:
+        """Convert PNG → JPG and enforce 1920x1080 16:9 dimensions.
+
+        ChatGPT image models do not honor the requested output dimensions
+        consistently. We crop-fit to the canonical YouTube thumbnail size so
+        downstream Remotion stills and uploads always see the expected ratio.
+        """
+        img = _PilImage.open(source_path).convert("RGB")
+        img = _PilImageOps.fit(
+            img, (1920, 1080), method=_PilImage.Resampling.LANCZOS
+        )
+        img.save(jpg_path, "JPEG", quality=94, optimize=True)
+
+    def _write_prompt_log(index: int, prompt_text: str, variant: dict[str, str]) -> None:
+        log_path = prompt_log_dir / f"thumbnail_prompt_{index}.md"
+        body = (
+            f"# Thumbnail prompt — variant {index}\n\n"
+            f"- job_id: `{state.job_id}`\n"
+            f"- variant_title: {variant.get('title', '')}\n"
+            f"- thumbnail_text: {variant.get('thumbnail_text', '')}\n\n"
+            f"```text\n{prompt_text}\n```\n"
+        )
+        log_path.write_text(body, encoding="utf-8")
 
     has_batch = hasattr(image_fn, "generate_images")
     if has_batch:
@@ -2256,8 +2377,9 @@ async def auto_thumbnail_image_stage(
         png_paths = []
         jpg_paths = []
         project_name = f"{state.job_id[:30]}-thumbnails"[:45]
-        for i, thumb_text in enumerate(variants, start=1):
-            prompt = _build_thumbnail_prompt(title, thumb_text, accent_color, channel_description)
+        for i, (plan, variant) in enumerate(zip(plans, variants), start=1):
+            prompt = plan["prompt"]
+            _write_prompt_log(i, prompt, variant)
             prompts.append(prompt)
             png_paths.append((assets_dir / f"thumbnail_{i}.png").resolve())
             jpg_paths.append((job_dir / "outputs" / f"thumbnail_{i}.jpg").resolve())
@@ -2268,15 +2390,23 @@ async def auto_thumbnail_image_stage(
                 project_name=project_name,
                 out_paths=[str(p) for p in png_paths],
             )
-            for i, (png_path, jpg_path, thumb_text) in enumerate(zip(png_paths, jpg_paths, variants), start=1):
+            for i, (png_path, jpg_path, variant) in enumerate(
+                zip(png_paths, jpg_paths, variants), start=1
+            ):
+                thumb_text = variant["thumbnail_text"]
                 if png_path.exists():
-                    img = _PilImage.open(png_path).convert("RGB")
-                    img.save(jpg_path, "JPEG", quality=92, optimize=True)
+                    _save_thumbnail(png_path, jpg_path)
                     png_path.unlink(missing_ok=True)  # remove intermediate PNG
                     generated.append(jpg_path)
                     logger.log(
                         "THUMBNAIL_IMAGE_GENERATED",
-                        {"job_id": state.job_id, "variant": i, "path": str(jpg_path), "text": thumb_text},
+                        {
+                            "job_id": state.job_id,
+                            "variant": i,
+                            "path": str(jpg_path),
+                            "text": thumb_text,
+                            "variant_title": variant.get("title"),
+                        },
                     )
                 else:
                     errors.append(f"variant {i} ('{thumb_text}'): Output image file not found.")
@@ -2292,11 +2422,13 @@ async def auto_thumbnail_image_stage(
                 {"job_id": state.job_id, "error": str(exc)},
             )
     else:
-        for i, thumb_text in enumerate(variants, start=1):
+        for i, (plan, variant) in enumerate(zip(plans, variants), start=1):
             if i > 1:
                 await asyncio.sleep(throttle_sec)
 
-            prompt = _build_thumbnail_prompt(title, thumb_text, accent_color, channel_description)
+            thumb_text = variant["thumbnail_text"]
+            prompt = plan["prompt"]
+            _write_prompt_log(i, prompt, variant)
             project_name = f"{state.job_id[:30]}-thumb{i}"[:45]
             png_path = (assets_dir / f"thumbnail_{i}.png").resolve()
             jpg_path = (job_dir / "outputs" / f"thumbnail_{i}.jpg").resolve()
@@ -2316,14 +2448,19 @@ async def auto_thumbnail_image_stage(
                         source_path = Path(str(returned_path)).expanduser()
                 if not source_path.exists():
                     raise FileNotFoundError(f"Generated image file not found: {png_path}")
-                img = _PilImage.open(source_path).convert("RGB")
-                img.save(jpg_path, "JPEG", quality=92, optimize=True)
+                _save_thumbnail(source_path, jpg_path)
                 source_path.unlink(missing_ok=True)  # remove intermediate PNG
 
                 generated.append(jpg_path)
                 logger.log(
                     "THUMBNAIL_IMAGE_GENERATED",
-                    {"job_id": state.job_id, "variant": i, "path": str(jpg_path), "text": thumb_text},
+                    {
+                        "job_id": state.job_id,
+                        "variant": i,
+                        "path": str(jpg_path),
+                        "text": thumb_text,
+                        "variant_title": variant.get("title"),
+                    },
                 )
             except Exception as exc:
                 last_exc = exc

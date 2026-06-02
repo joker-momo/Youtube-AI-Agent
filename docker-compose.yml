@@ -4,6 +4,7 @@ networks:
 
 services:
   video-agent:
+    profiles: ["one-shot"]
     build: .
     working_dir: /app
     environment:
@@ -16,6 +17,7 @@ services:
       WHISPER_SYNTH_TIMEOUT_SEC: ${WHISPER_SYNTH_TIMEOUT_SEC:-900}
       WHISPER_MODEL_LOAD_TIMEOUT_SEC: ${WHISPER_MODEL_LOAD_TIMEOUT_SEC:-300}
       WHISPER_TRANSCRIBE_TIMEOUT_SEC: ${WHISPER_TRANSCRIBE_TIMEOUT_SEC:-1800}
+      PUBLIC_JOBS_KEEP: ${PUBLIC_JOBS_KEEP:-5}
     volumes:
       - ./jobs:/app/jobs
       - ./caches:/app/caches
@@ -47,6 +49,7 @@ services:
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://127.0.0.1:8000}
       SCENES_SHARDED_GENERATION: ${SCENES_SHARDED_GENERATION:-0}
+      PUBLIC_JOBS_KEEP: ${PUBLIC_JOBS_KEEP:-5}
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
@@ -70,6 +73,7 @@ services:
       - "8000"
 
   worker:
+    profiles: ["worker"]
     build: .
     working_dir: /app
     environment:
@@ -85,6 +89,7 @@ services:
       WHISPER_MODEL_LOAD_TIMEOUT_SEC: ${WHISPER_MODEL_LOAD_TIMEOUT_SEC:-300}
       WHISPER_TRANSCRIBE_TIMEOUT_SEC: ${WHISPER_TRANSCRIBE_TIMEOUT_SEC:-1800}
       SCENES_SHARDED_GENERATION: ${SCENES_SHARDED_GENERATION:-0}
+      PUBLIC_JOBS_KEEP: ${PUBLIC_JOBS_KEEP:-5}
     volumes:
       - ./jobs:/app/jobs
       - ./caches:/app/caches
@@ -107,6 +112,7 @@ services:
       - /app/jobs/queue.db
 
   browser-runtime:
+    profiles: ["browser"]
     build:
       context: .
       dockerfile: docker/browser-runtime/Dockerfile
@@ -126,6 +132,7 @@ services:
     # appliance_net Docker network from browser-worker.
 
   browser-worker:
+    profiles: ["browser"]
     build:
       context: .
       dockerfile: Dockerfile.browser-worker
@@ -136,6 +143,8 @@ services:
       # Docker network. No host Chrome, no host.docker.internal hop.
       CHROME_CDP_URL: ${CHROME_CDP_URL:-http://browser-runtime:9222}
       BROWSER_TRACE_DIR: /data/trace
+      BROWSER_TRACE_RETENTION_DAYS: ${BROWSER_TRACE_RETENTION_DAYS:-3}
+      BROWSER_TRACE_MAX_MB: ${BROWSER_TRACE_MAX_MB:-512}
     volumes:
       - ./browser_trace:/data/trace
       # jobs/ is shared with app so ChatGPT-generated assets can be

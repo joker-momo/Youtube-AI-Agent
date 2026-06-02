@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import time
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
@@ -65,6 +66,48 @@ from video_agent.browser_worker.drivers import (
 )
 
 app = FastAPI(title="video-agent-browser-worker", version="0.2.0")
+
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _cleanup_trace_dir() -> None:
+    root = Path(os.environ.get("BROWSER_TRACE_DIR", "/data/trace"))
+    if not root.exists():
+        return
+
+    retention_days = max(0, _int_env("BROWSER_TRACE_RETENTION_DAYS", 3))
+    max_bytes = max(1, _int_env("BROWSER_TRACE_MAX_MB", 512)) * 1024 * 1024
+    cutoff = time.time() - (retention_days * 24 * 60 * 60)
+
+    files = [path for path in root.rglob("*") if path.is_file()]
+    for path in files:
+        try:
+            if retention_days and path.stat().st_mtime < cutoff:
+                path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    files = [path for path in root.rglob("*") if path.is_file()]
+    files.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    total = 0
+    for path in files:
+        try:
+            size = path.stat().st_size
+        except OSError:
+            continue
+        total += size
+        if total > max_bytes:
+            path.unlink(missing_ok=True)
+
+
+@app.on_event("startup")
+def cleanup_runtime_artifacts() -> None:
+    _cleanup_trace_dir()
 
 
 def _driver_error_detail(

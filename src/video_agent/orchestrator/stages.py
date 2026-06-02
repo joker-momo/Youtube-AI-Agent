@@ -43,6 +43,7 @@ from video_agent.utils.json_io import read_json, read_yaml
 from video_agent.utils.logging import EventLogger
 from video_agent.runtime.providers import AUDIO_SUBPROCESS_ENV, SubprocessAudioTaskProvider
 from video_agent.storage.atomic import atomic_write_text
+from video_agent.storage.public_jobs import prepare_public_job_dir
 
 IDEA_FILE = "idea.json"
 SCRIPT_PROMPT_PATH = Path("operator/chatgpt/script_prompt.md")
@@ -2275,8 +2276,7 @@ async def auto_thumbnail_image_stage(
 
     # Copy all generated thumbnails to remotion/public/ so Remotion Studio
     # and the Thumbnail.tsx preview component can load them via staticFile().
-    public_job_dir = repo_root() / "remotion/public/jobs" / job_dir.name
-    public_job_dir.mkdir(parents=True, exist_ok=True)
+    public_job_dir = prepare_public_job_dir(repo_root(), job_dir.name)
     for jpg in generated:
         _shutil.copy2(jpg, public_job_dir / jpg.name)
     _shutil.copy2(primary, public_job_dir / "thumbnail.jpg")

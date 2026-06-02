@@ -65,10 +65,13 @@ RUN python -c "from pathlib import Path; Path('/app/caches/huggingface').mkdir(p
   && python -c "import whisper; whisper.load_model('tiny'); print('Whisper tiny warmup: ok')" || true \
   && python -c "from kokoro import KPipeline; KPipeline(lang_code='e', repo_id='hexgrad/Kokoro-82M'); print('Kokoro warmup: ok')" || true
 
-COPY remotion/package.json remotion/package.json
-RUN npm --prefix remotion install \
+COPY remotion/package.json remotion/package-lock.json ./remotion/
+RUN npm --prefix remotion ci \
   && npx --prefix remotion remotion browser ensure
 
-COPY . .
+COPY configs ./configs
+COPY inputs ./inputs
+COPY remotion/src ./remotion/src
+COPY schemas ./schemas
 
 CMD ["python", "-m", "video_agent.cli", "run", "--channel", "configs/vida-plena-45/channel.yaml", "--idea", "inputs/manual_idea.json"]

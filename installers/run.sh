@@ -24,8 +24,18 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_DIR}"
 
 WORKER_MODE="auto"
+APP_ONLY=false
+RUN_CLEANUP=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --app-only)
+      APP_ONLY=true
+      shift
+      ;;
+    --cleanup)
+      RUN_CLEANUP=true
+      shift
+      ;;
     --native-worker)
       WORKER_MODE="native"
       shift
@@ -35,15 +45,17 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     -h|--help)
-      echo "Usage: bash run.sh [--native-worker|--docker-worker]"
+      echo "Usage: bash run.sh [--app-only] [--cleanup] [--native-worker|--docker-worker]"
       echo ""
+      echo "--app-only: start only the dashboard container for light Mac usage."
+      echo "--cleanup: prune Docker cache and local browser/public debug artifacts first."
       echo "macOS default: native worker for faster local render."
       echo "Linux/default: Docker worker unless --native-worker is supported later."
       exit 0
       ;;
     *)
       echo -e "${RED}Unknown option: $1${NC}"
-      echo "Usage: bash run.sh [--native-worker|--docker-worker]"
+      echo "Usage: bash run.sh [--app-only] [--cleanup] [--native-worker|--docker-worker]"
       exit 2
       ;;
   esac
@@ -77,6 +89,11 @@ if ! docker info &>/dev/null; then
   echo ""
 fi
 echo -e "${GREEN}✅ Docker is active and running!${NC}\n"
+
+if [ "$RUN_CLEANUP" = true ]; then
+  echo -e "${CYAN}Running Docker/local artifact cleanup...${NC}"
+  bash scripts/docker_disk_cleanup.sh
+fi
 
 wait_for_url() {
   local name="$1"
@@ -142,7 +159,9 @@ if [[ "$OS" == "Darwin" ]]; then
   echo -e "\n${BOLD}${YELLOW}================ macOS Performance Optimization =================${NC}"
   echo -e "Docker on macOS runs inside a Linux VM and cannot use your Mac's hardware GPU/VideoToolbox."
   echo -e "Running the Worker natively on your Mac provides a ${BOLD}3x+ render speedup${NC}."
-  if [[ "$WORKER_MODE" == "docker" ]]; then
+  if [ "$APP_ONLY" = true ]; then
+    echo -e "${BLUE}App-only mode requested; worker/browser services will stay stopped.${NC}"
+  elif [[ "$WORKER_MODE" == "docker" ]]; then
     echo -e "${BLUE}Docker worker requested via --docker-worker.${NC}"
   elif [[ "$WORKER_MODE" == "native" ]]; then
     echo -e "${GREEN}Native worker requested via --native-worker.${NC}"
@@ -166,7 +185,11 @@ elif [[ "$WORKER_MODE" == "native" ]]; then
   echo -e "${YELLOW}--native-worker is currently only supported on macOS. Falling back to Docker worker.${NC}"
 fi
 
-if [ "$USE_NATIVE_WORKER" = true ]; then
+if [ "$APP_ONLY" = true ]; then
+  echo -e "${CYAN}Starting dashboard only in Docker...${NC}"
+  docker compose ${COMPOSE_ARGS} up -d app
+  docker compose stop worker browser-worker browser-runtime &>/dev/null || true
+elif [ "$USE_NATIVE_WORKER" = true ]; then
   # Find best python command (prefer homebrew python3.11/3.12/3.10 over older system python3)
   PYTHON_CMD="python3"
   if command -v python3.11 &>/dev/null; then
@@ -242,16 +265,21 @@ fi
 
 # 5. Check Health
 wait_for_url "web app" "http://localhost:8000/health" 90
-wait_for_url "browser-worker" "http://localhost:8001/health" 90
-wait_for_url "browser runtime CDP bridge" "http://localhost:8001/runtime" 120
+if [ "$APP_ONLY" != true ]; then
+  wait_for_url "browser-worker" "http://localhost:8001/health" 90
+  wait_for_url "browser runtime CDP bridge" "http://localhost:8001/runtime" 120
+fi
 
 echo -e "\n${GREEN}✅ Services started successfully!${NC}"
 echo -e "${BOLD}${CYAN}=====================================================${NC}"
 echo -e "  - ${BOLD}Dashboard URL:${NC}      ${GREEN}http://localhost:8000${NC}"
-echo -e "  - ${BOLD}VNC Browser URL:${NC}    ${GREEN}http://localhost:7900${NC} (Manual ChatGPT/Claude Logins)"
-if [ "$USE_NATIVE_WORKER" = true ]; then
+if [ "$APP_ONLY" = true ]; then
+  echo -e "  - ${BOLD}Worker Status:${NC}      ${YELLOW}STOPPED (app-only mode)${NC}"
+elif [ "$USE_NATIVE_WORKER" = true ]; then
+  echo -e "  - ${BOLD}VNC Browser URL:${NC}    ${GREEN}http://localhost:7900${NC} (Manual ChatGPT/Claude Logins)"
   echo -e "  - ${BOLD}Worker Status:${NC}      ${GREEN}NATIVE HOST (GPU Enabled)${NC}"
 else
+  echo -e "  - ${BOLD}VNC Browser URL:${NC}    ${GREEN}http://localhost:7900${NC} (Manual ChatGPT/Claude Logins)"
   echo -e "  - ${BOLD}Worker Status:${NC}      ${GREEN}DOCKER CONTAINER (CPU Mode)${NC}"
 fi
 echo -e "${BOLD}${CYAN}=====================================================${NC}"

@@ -14,6 +14,7 @@ from video_agent.assets.service import StockAssetService
 from video_agent.contracts import ARTIFACT_ASSETS, repo_root
 from video_agent.tts import build_tts_client, synthesize_scene_track
 from video_agent.qa.tts_report import audio_qa_report, build_tts_report
+from video_agent.storage.public_jobs import prepare_public_job_dir
 from video_agent.utils.json_io import write_json
 
 SUPPORTED_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp")
@@ -217,7 +218,7 @@ def prepare_assets(
 ) -> dict[str, Any]:
     assets_dir = job_dir / "assets"
     assets_dir.mkdir(parents=True, exist_ok=True)
-    public_assets_dir = repo_root() / "remotion/public/jobs" / job_dir.name / "assets"
+    public_assets_dir = prepare_public_job_dir(repo_root(), job_dir.name) / "assets"
     public_assets_dir.mkdir(parents=True, exist_ok=True)
     palette = style_dna["palette"]
     colors = [_hex_to_rgb(palette["background"]), _hex_to_rgb(palette["primary"]), _hex_to_rgb(palette["secondary"])]

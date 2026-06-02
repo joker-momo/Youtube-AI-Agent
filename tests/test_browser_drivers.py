@@ -209,3 +209,13 @@ def test_gemini_open_fails_when_temporary_chat_control_missing(monkeypatch):
         assert "temporary chat" in str(exc).lower()
     else:
         raise AssertionError("GeminiDriver.open should require temporary chat")
+
+
+def test_chatgpt_stable_detector_includes_json_completion_guard():
+    from video_agent.browser_worker.drivers.chatgpt import _stable_response_detector_js
+
+    detector = _stable_response_detector_js()
+    assert "const shouldCheckJson = expectJson === true" in detector
+    assert "expectJson !== false && (/^[\\[{]/.test(trimmed))" in detector
+    assert "jsonComplete = shouldCheckJson ? (depth === 0 && !inStr) : true" in detector
+    assert "jsonComplete" in detector

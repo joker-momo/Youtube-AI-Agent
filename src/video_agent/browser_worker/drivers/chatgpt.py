@@ -86,7 +86,7 @@ async def _ensure_temporary_chat(page: "Page") -> bool:
 def _stable_response_detector_js() -> str:
     """Page-side stable-response predicate shared by ChatGPT and Gemini."""
     return r"""
-        ({scrapeFnSource, priorText, stableMs}) => {
+        ({scrapeFnSource, priorText, stableMs, expectJson}) => {
           // Re-eval the scrape function on every check so the latest
           // assistant turn is always considered, not the one that
           // existed when the observer was first attached.
@@ -175,8 +175,8 @@ def _stable_response_detector_js() -> str:
           // looks like JSON, or when the caller explicitly opts in. This
           // avoids timing out on normal prose that happens to contain "{".
           const trimmed = current.trim();
-          const shouldCheckJson = args.expectJson === true
-            || (args.expectJson !== false && (/^[\[{]/.test(trimmed)));
+          const shouldCheckJson = expectJson === true
+            || (expectJson !== false && (/^[\[{]/.test(trimmed)));
           let jsonComplete = true;
           let depth = 0;
           let inStr = false;

@@ -70,7 +70,7 @@ def build_short(
     channel_config: dict,
     *,
     llm_fn: Callable[..., str] = _default_llm_fn,
-    claude_fn: Callable[[str], str] | None = None,
+    gemini_fn: Callable[[str], str] | None = None,
     tts_fn: Callable[..., Path] = _default_tts_fn,
     mix_fn: Callable[..., Path] = _default_mix_fn,
     render_fn: Callable[..., Path] = _default_render_fn,
@@ -116,7 +116,7 @@ def build_short(
 
         qa_result = qa.run_short_qa(
             long_job_dir, short_id, channel_config,
-            music_track=music_track, claude_fn=claude_fn, attempt=attempts,
+            music_track=music_track, gemini_fn=gemini_fn, attempt=attempts,
         )
         atomic_write_json(sd / paths.SHORT_QA_FILE, qa_result)
 

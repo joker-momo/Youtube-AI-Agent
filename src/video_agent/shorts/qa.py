@@ -5,10 +5,10 @@ Pipeline:
 1. ``_run_rule_qa`` (deterministic, no LLM) catches hard violations cheaply:
    greeting, long disclaimer, medical overclaim, duration, missing source map,
    etc. If the rule gate FAILS, we short-circuit and skip the LLM call.
-2. ``_run_claude_qa`` (LLM) is the final verdict for everything else:
+2. ``_run_gemini_qa`` (LLM) is the final verdict for everything else:
    layout choices, source fidelity, mobile readability, funnel quality.
 
-This matches spec v6 §2.5 (Claude is the QA gate) while keeping cheap rule
+This matches spec v6 §2.5 (Gemini is the QA gate) while keeping cheap rule
 checks first per §13 (which doesn't forbid pre-filtering).
 """
 from __future__ import annotations
@@ -20,7 +20,7 @@ from typing import Any, Callable
 from video_agent.shorts import paths, prompts
 from video_agent.shorts.llm import LLMCallLog, log_llm_call
 
-LLM_PROVIDER = "claude"
+LLM_PROVIDER = "gemini"
 
 _GREETINGS = ["hola", "bienvenid", "hoy vamos a", "en este short",
               "en este vídeo", "en este video", "buenas"]
@@ -113,33 +113,33 @@ def _run_rule_qa(
     }
 
 
-def _parse_claude(raw: str) -> dict:
+def _parse_gemini(raw: str) -> dict:
     from video_agent.operator import extract_json_objects
     objs = extract_json_objects(raw or "")
     return objs[0] if objs else {}
 
 
-def _run_claude_qa(
+def _run_gemini_qa(
     long_job_dir: Path,
     short_id: str,
     channel_config: dict,
     *,
-    claude_fn: Callable[[str], str],
+    gemini_fn: Callable[[str], str],
     attempt: int,
 ) -> dict[str, Any]:
     sd = paths.short_dir(long_job_dir, short_id)
     script = _load(sd / "short_script.json")
     scenes_doc = _load(sd / "short_scenes.json")
     source_map = _load(sd / "short_source_map.json")
-    prompt = prompts.claude_qa_prompt(channel_config, script, scenes_doc, source_map)
+    prompt = prompts.gemini_qa_prompt(channel_config, script, scenes_doc, source_map)
     log_llm_call(LLMCallLog(
         task="short_qa", provider=LLM_PROVIDER, short_id=short_id,
         attempt=attempt,
         input_artifacts=["short_script.json", "short_scenes.json", "short_source_map.json"],
         output_artifact="short_qa.json",
     ))
-    raw = claude_fn(prompt)
-    parsed = _parse_claude(raw) or {}
+    raw = gemini_fn(prompt)
+    parsed = _parse_gemini(raw) or {}
     verdict = str(parsed.get("verdict", "")).upper() or "FAIL"
     if verdict not in ("PASS", "FAIL"):
         verdict = "FAIL"
@@ -160,25 +160,25 @@ def run_short_qa(
     *,
     music_track: str | None = None,
     cover_text: str | None = None,
-    claude_fn: Callable[[str], str] | None = None,
+    gemini_fn: Callable[[str], str] | None = None,
     attempt: int = 1,
 ) -> dict[str, Any]:
     """Dual-gate Shorts QA.
 
-    1. Run cheap rule checks. If FAIL, return without calling Claude.
-    2. Otherwise, call Claude for the final verdict (spec v6 §2.5).
-    3. If no ``claude_fn`` is provided, return the rule verdict as-is
+    1. Run cheap rule checks. If FAIL, return without calling Gemini.
+    2. Otherwise, call Gemini for the final verdict (spec v6 §2.5).
+    3. If no ``gemini_fn`` is provided, return the rule verdict as-is
        (test/no-browser path).
     """
     rule = _run_rule_qa(long_job_dir, short_id, channel_config, music_track=music_track)
     if rule["verdict"] == "FAIL":
         return rule
-    if claude_fn is None:
+    if gemini_fn is None:
         return rule
-    claude = _run_claude_qa(long_job_dir, short_id, channel_config,
-                            claude_fn=claude_fn, attempt=attempt)
-    # Merge rule warnings (mostly soft) into Claude's output for diagnostics.
-    merged_warnings = sorted(set(claude["warnings"] + rule["warnings"]))
-    out = dict(claude)
+    gemini = _run_gemini_qa(long_job_dir, short_id, channel_config,
+                            gemini_fn=gemini_fn, attempt=attempt)
+    # Merge rule warnings (mostly soft) into Gemini's output for diagnostics.
+    merged_warnings = sorted(set(gemini["warnings"] + rule["warnings"]))
+    out = dict(gemini)
     out["warnings"] = merged_warnings
     return out

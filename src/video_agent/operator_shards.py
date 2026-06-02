@@ -247,7 +247,7 @@ def merge_scene_batches(
         "job_id": job_id,
         "scenes": scenes,
         "total_duration_sec": total_duration,
-        "qa": {"verdict": "PENDING_CLAUDE_QA"},
+        "qa": {"verdict": "PENDING_GEMINI_QA"},
     }
     try:
         validate_json(merged, repo_root() / "schemas/scenes.schema.json")

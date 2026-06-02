@@ -56,7 +56,7 @@ def _by_mode_f(fast: float, balanced: float, human: float) -> float:
     return human
 
 
-# Per-character keystroke delay window. ChatGPT/Claude both accept real
+# Per-character keystroke delay window. ChatGPT/Gemini both accept real
 # keystrokes; spacing them out makes the typing speed look human instead
 # of an instant insert_text dump. Tune via env without rebuild.
 #

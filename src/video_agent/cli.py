@@ -39,13 +39,13 @@ def build_parser() -> argparse.ArgumentParser:
     operator_render_parser.add_argument(
         "--skip-operator-qa",
         action="store_true",
-        help="Render without requiring promoted Claude QA JSON files for script, scenes, and SEO.",
+        help="Render without requiring promoted Gemini QA JSON files for script, scenes, and SEO.",
     )
     _add_tts_override_args(operator_render_parser)
 
     operator_prompts_parser = subparsers.add_parser(
         "operator-prompts",
-        help="Write ChatGPT/Claude prompt files for the semi-automated content workflow.",
+        help="Write ChatGPT/Gemini prompt files for the semi-automated content workflow.",
     )
     operator_prompts_parser.add_argument("--channel", required=True, type=Path)
     operator_prompts_parser.add_argument("--idea", required=True, type=Path)
@@ -63,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     operator_promote_qa_parser = subparsers.add_parser(
         "operator-promote-qa",
-        help="Extract, normalize, and promote a raw Claude QA response for an operator artifact.",
+        help="Extract, normalize, and promote a raw Gemini QA response for an operator artifact.",
     )
     operator_promote_qa_parser.add_argument("--job-dir", required=True, type=Path)
     operator_promote_qa_parser.add_argument("--artifact", choices=["script", "scenes", "seo"], required=True)

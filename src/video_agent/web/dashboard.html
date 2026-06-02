@@ -2578,16 +2578,16 @@ async function renderStageExtras(jobId, s) {
       insight.innerHTML = renderSeoInsight(await fetchArtifactJson(jobId, 'seo.json'));
       rendered = true;
     } else if (s.name === 'script_qa') {
-      if (!hasOutput('operator/claude/script_qa.json')) return;
-      insight.innerHTML = renderQaInsight(await fetchArtifactJson(jobId, 'operator/claude/script_qa.json'));
+      if (!hasOutput('operator/gemini/script_qa.json')) return;
+      insight.innerHTML = renderQaInsight(await fetchArtifactJson(jobId, 'operator/gemini/script_qa.json'));
       rendered = true;
     } else if (s.name === 'scenes_qa') {
-      if (!hasOutput('operator/claude/scenes_qa.json')) return;
-      insight.innerHTML = renderQaInsight(await fetchArtifactJson(jobId, 'operator/claude/scenes_qa.json'));
+      if (!hasOutput('operator/gemini/scenes_qa.json')) return;
+      insight.innerHTML = renderQaInsight(await fetchArtifactJson(jobId, 'operator/gemini/scenes_qa.json'));
       rendered = true;
     } else if (s.name === 'seo_qa') {
-      if (!hasOutput('operator/claude/seo_qa.json')) return;
-      insight.innerHTML = renderQaInsight(await fetchArtifactJson(jobId, 'operator/claude/seo_qa.json'));
+      if (!hasOutput('operator/gemini/seo_qa.json')) return;
+      insight.innerHTML = renderQaInsight(await fetchArtifactJson(jobId, 'operator/gemini/seo_qa.json'));
       rendered = true;
     } else if (s.name === 'thumbnail_image') {
       if (!hasOutput('thumbnail_bg.png') && !hasOutput('thumbnail_1.jpg') && !hasOutput('thumbnail_2.jpg') && !hasOutput('thumbnail_3.jpg') && !hasOutput('thumbnail.jpg')) return;
@@ -2736,9 +2736,9 @@ async function renderFinal(t) {
 
   // Fetch all 3 QA files to build YouTube Policy summary
   async function fetchQa(name) {
-    if (!stageHas(name, 'operator/claude/' + name + '_qa.json')) return null;
+    if (!stageHas(name, 'operator/gemini/' + name + '_qa.json')) return null;
     try {
-      const r = await fetch('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent('operator/claude/' + name + '_qa.json'));
+      const r = await fetch('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent('operator/gemini/' + name + '_qa.json'));
       return r.ok ? await r.json() : null;
     } catch (e) { return null; }
   }

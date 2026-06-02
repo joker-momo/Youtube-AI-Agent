@@ -275,7 +275,7 @@ Expected shape:
     "url": ""
   },
   "qa": {
-    "verdict": "PENDING_CLAUDE_QA"
+    "verdict": "PENDING_GEMINI_QA"
   }
 }
 ```
@@ -288,7 +288,7 @@ Rules:
 - narration: 55–95 words
 - beats: exactly 5 beats
 - on_screen_text: max 6 words each
-- qa.verdict must be PENDING_CLAUDE_QA, never PASS from writer
+- qa.verdict must be PENDING_GEMINI_QA, never PASS from writer
 ```
 
 ---
@@ -318,7 +318,7 @@ Expected shape:
     }
   ],
   "qa": {
-    "verdict": "PENDING_CLAUDE_QA"
+    "verdict": "PENDING_GEMINI_QA"
   }
 }
 ```
@@ -582,7 +582,7 @@ mobile-safe layout names
 
 ### 9.4 Shorts QA Prompt
 
-Use Claude QA, but lightweight.
+Use Gemini QA, but lightweight.
 
 QA must check:
 

@@ -33,10 +33,10 @@ def test_provider_protocols_import_cleanly():
 def test_browser_client_llm_adapter_delegates_to_run_session():
     client = FakeBrowserClient()
 
-    result = asyncio.run(BrowserClientLLMProvider(client).generate_text(["hello"], site="claude"))
+    result = asyncio.run(BrowserClientLLMProvider(client).generate_text(["hello"], site="gemini"))
 
     assert result == "text"
-    assert client.calls == [("run_session", "claude", ["hello"])]
+    assert client.calls == [("run_session", "gemini", ["hello"])]
 
 
 def test_browser_client_image_adapter_derives_worker_paths(tmp_path: Path):

@@ -98,7 +98,7 @@ def test_rework_feedback_injected_on_needs_rework(
     _prepare_promoted_script(job_dir, channel_path, idea_payload, valid_script_payload)
 
     # Write a mock scenes_qa.json with verdict NEEDS_REWORK
-    qa_dir = job_dir / "operator" / "claude"
+    qa_dir = job_dir / "operator" / "gemini"
     qa_dir.mkdir(parents=True, exist_ok=True)
     qa_data = {
         "verdict": "NEEDS_REWORK",
@@ -140,7 +140,7 @@ def test_rework_feedback_not_injected_on_pass(
     _prepare_promoted_script(job_dir, channel_path, idea_payload, valid_script_payload)
 
     # Write a mock scenes_qa.json with verdict PASS
-    qa_dir = job_dir / "operator" / "claude"
+    qa_dir = job_dir / "operator" / "gemini"
     qa_dir.mkdir(parents=True, exist_ok=True)
     qa_data = {
         "verdict": "PASS",
@@ -191,7 +191,7 @@ def test_write_operator_prompts_injects_rework_feedback(
     _prepare_promoted_script(job_dir, channel_path, idea_payload, valid_script_payload)
 
     # Write a mock scenes_qa.json with verdict NEEDS_REWORK
-    qa_dir = job_dir / "operator" / "claude"
+    qa_dir = job_dir / "operator" / "gemini"
     qa_dir.mkdir(parents=True, exist_ok=True)
     qa_data = {
         "verdict": "NEEDS_REWORK",

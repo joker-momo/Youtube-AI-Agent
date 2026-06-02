@@ -138,13 +138,13 @@ def _run_shorts_autopilot_job(job: dict, *, job_dir: Path, channel_path: Path, c
     target_short_id = payload.get("short_id") or None
     channel_config = read_yaml(channel_path)
 
-    # Spec v6 §2 + §3: ChatGPT for planner/script/scenes, Claude for QA.
+    # Spec v6 §2 + §3: ChatGPT for planner/script/scenes, Gemini for QA.
     # Every call opens a fresh temporary conversation via _send().
     def chatgpt_fn(prompt: str) -> str:
         return asyncio.run(client.chatgpt_send(prompt))
 
-    def claude_fn(prompt: str) -> str:
-        return asyncio.run(client.claude_send(prompt))
+    def gemini_fn(prompt: str) -> str:
+        return asyncio.run(client.gemini_send(prompt))
 
     def plan_fn(long_job_dir, channel_config, requested_count=None):
         from video_agent.shorts.planner import plan_shorts_from_long_video
@@ -155,7 +155,7 @@ def _run_shorts_autopilot_job(job: dict, *, job_dir: Path, channel_path: Path, c
     def build_short_fn(long_job_dir, short_plan, cfg):
         return build_short(
             long_job_dir, short_plan, cfg,
-            llm_fn=chatgpt_fn, claude_fn=claude_fn,
+            llm_fn=chatgpt_fn, gemini_fn=gemini_fn,
         )
 
     run_shorts_autopilot(

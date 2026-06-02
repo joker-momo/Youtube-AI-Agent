@@ -262,7 +262,7 @@ async def _execute_run_all_locked(
             )
 
     # Open ONE ChatGPT temp chat for the whole writing pipeline
-    # (script_promote, scenes_promote, seo_promote) and ONE Claude
+    # (script_promote, scenes_promote, seo_promote) and ONE Gemini
     # temp chat for the whole QA pipeline (script_qa, scenes_qa,
     # seo_qa). The tabs stay open across stages so the model carries
     # context, and we only close them when /run-all finishes.
@@ -370,7 +370,7 @@ async def _execute_run_all_locked(
         if need_writing_tab:
             chatgpt_sender, chatgpt_close = await _open_with_retry("chatgpt")
         if need_qa_tab:
-            qa_sender, qa_close = await _open_with_retry("claude")
+            qa_sender, qa_close = await _open_with_retry("gemini")
 
         writing_briefing = build_initial_briefing(
             channel_config,
@@ -406,11 +406,11 @@ async def _execute_run_all_locked(
                 await qa_close()
             except Exception:
                 pass
-            qa_sender, qa_close = await _open_with_retry("claude")
+            qa_sender, qa_close = await _open_with_retry("gemini")
             await _send_with_retry(
                 qa_sender,
                 [qa_briefing],
-                site="claude",
+                site="gemini",
                 phase="briefing",
                 response_timeout_ms=BRIEFING_RESPONSE_TIMEOUT_MS,
             )
@@ -445,13 +445,13 @@ async def _execute_run_all_locked(
             nonlocal qa_sender
             if qa_sender is None:
                 raise StageInputMissingError(
-                    "Claude session not available for QA stage."
+                    "Gemini session not available for QA stage."
                 )
             try:
                 return await _send_with_retry(
                     qa_sender,
                     msgs,
-                    site="claude",
+                    site="gemini",
                     phase="task",
                 )
             except BrowserClientError as exc:
@@ -463,7 +463,7 @@ async def _execute_run_all_locked(
                 return await _send_with_retry(
                     qa_sender,
                     msgs,
-                    site="claude",
+                    site="gemini",
                     phase="task",
                 )
 
@@ -486,7 +486,7 @@ async def _execute_run_all_locked(
                 await _send_with_retry(
                     qa_sender,
                     [qa_briefing],
-                    site="claude",
+                    site="gemini",
                     phase="briefing",
                     response_timeout_ms=BRIEFING_RESPONSE_TIMEOUT_MS,
                 )

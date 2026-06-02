@@ -1,10 +1,10 @@
-# JSON Artifact Sharding Spec — ChatGPT & Claude
+# JSON Artifact Sharding Spec — ChatGPT & Gemini
 
 ## Purpose
 
-Make all ChatGPT and Claude outputs safer, smaller, parseable, and recoverable by converting long model responses into **JSON artifact shards**.
+Make all ChatGPT and Gemini outputs safer, smaller, parseable, and recoverable by converting long model responses into **JSON artifact shards**.
 
-The current pipeline already asks ChatGPT/Claude to return raw JSON. The problem is that long JSON responses can still be truncated, malformed, or incomplete.
+The current pipeline already asks ChatGPT/Gemini to return raw JSON. The problem is that long JSON responses can still be truncated, malformed, or incomplete.
 
 This spec introduces:
 
@@ -20,14 +20,14 @@ This applies to both:
 
 ```text
 ChatGPT writing stages
-Claude QA stages
+Gemini QA stages
 ```
 
 Priority implementation:
 
 ```text
 Phase 1: ChatGPT scenes sharding
-Phase 2: Claude scenes QA sharding
+Phase 2: Gemini scenes QA sharding
 Phase 3: optional script sharding
 Phase 4: keep SEO single JSON unless needed
 ```
@@ -36,14 +36,14 @@ Phase 4: keep SEO single JSON unless needed
 
 ## Important Clarification
 
-Do **not** rely on ChatGPT or Claude to create downloadable files.
+Do **not** rely on ChatGPT or Gemini to create downloadable files.
 
 The model should return exactly one JSON object per response. Python then writes that JSON object to disk as a `.json` file.
 
 Correct flow:
 
 ```text
-ChatGPT/Claude raw_response
+ChatGPT/Gemini raw_response
 → parse JSON object
 → validate envelope
 → save to job folder
@@ -64,7 +64,7 @@ That is fragile because:
 - some scene fields may be skipped
 - one bad scene invalidates the whole artifact
 - retrying means regenerating everything
-- Claude QA may miss issues when reviewing huge artifacts
+- Gemini QA may miss issues when reviewing huge artifacts
 ```
 
 Current continuation loops are useful as fallback, but sharding is a better design because it prevents overlong responses upfront.
@@ -88,7 +88,7 @@ Current continuation loops are useful as fallback, but sharding is a better desi
 
 ## Standard JSON Envelope
 
-Every ChatGPT/Claude response should use this envelope shape:
+Every ChatGPT/Gemini response should use this envelope shape:
 
 ```json
 {
@@ -153,11 +153,11 @@ jobs/<job_id>/operator/chatgpt/scenes_batches/scenes_batch_01.json
 jobs/<job_id>/operator/chatgpt/scenes_batches/scenes_batch_02.json
 jobs/<job_id>/operator/chatgpt/scenes_batches/scenes_batch_03.json
 
-jobs/<job_id>/operator/claude/scenes_qa_batches/scenes_qa_batch_01.json
-jobs/<job_id>/operator/claude/scenes_qa_batches/scenes_qa_batch_02.json
+jobs/<job_id>/operator/gemini/scenes_qa_batches/scenes_qa_batch_01.json
+jobs/<job_id>/operator/gemini/scenes_qa_batches/scenes_qa_batch_02.json
 
 jobs/<job_id>/scenes.json
-jobs/<job_id>/operator/claude/scenes_qa.json
+jobs/<job_id>/operator/gemini/scenes_qa.json
 ```
 
 Final canonical artifacts remain:
@@ -166,9 +166,9 @@ Final canonical artifacts remain:
 script.json
 scenes.json
 seo.json
-operator/claude/script_qa.json
-operator/claude/scenes_qa.json
-operator/claude/seo_qa.json
+operator/gemini/script_qa.json
+operator/gemini/scenes_qa.json
+operator/gemini/seo_qa.json
 ```
 
 ---
@@ -479,7 +479,7 @@ Must return final canonical scenes artifact:
   "scenes": [],
   "total_duration_sec": 0,
   "qa": {
-    "verdict": "PENDING_CLAUDE_QA"
+    "verdict": "PENDING_GEMINI_QA"
   }
 }
 ```
@@ -491,7 +491,7 @@ Rules:
 - verify scene IDs are sequential from scene-01
 - reject duplicate scene IDs
 - compute total_duration_sec from sum(scene.duration_sec)
-- set qa.verdict = PENDING_CLAUDE_QA
+- set qa.verdict = PENDING_GEMINI_QA
 ```
 
 After merge, run existing validation and existing operator scene validation.
@@ -588,11 +588,11 @@ Do not silently continue with missing batches.
 
 ---
 
-# Phase 2 — Claude Scenes QA Sharding
+# Phase 2 — Gemini Scenes QA Sharding
 
 ## Goal
 
-Avoid asking Claude to review a huge `scenes.json` in one response.
+Avoid asking Gemini to review a huge `scenes.json` in one response.
 
 Use:
 
@@ -649,12 +649,12 @@ Envelope:
 
 ---
 
-## Claude QA Prompt Changes
+## Gemini QA Prompt Changes
 
 Add new prompt builder:
 
 ```python
-def _claude_scenes_qa_batch_prompt(
+def _gemini_scenes_qa_batch_prompt(
     channel_config: dict,
     scenes_batch: dict,
     batch_index: int,
@@ -678,7 +678,7 @@ Rules:
 
 ---
 
-## Merge Claude QA Batches
+## Merge Gemini QA Batches
 
 Add function:
 
@@ -692,7 +692,7 @@ def merge_scenes_qa_batches(
     ...
 ```
 
-Final `operator/claude/scenes_qa.json` shape should remain compatible with current QA promotion:
+Final `operator/gemini/scenes_qa.json` shape should remain compatible with current QA promotion:
 
 ```json
 {
@@ -793,10 +793,10 @@ Required tests:
 8. Scenes batch with duplicate scene IDs fails.
 9. Merge scene batches produces final `scenes.json`.
 10. Merge scene batches computes total_duration_sec.
-11. Merge scene batches sets `qa.verdict = PENDING_CLAUDE_QA`.
-12. Claude QA batch merge returns PASS when all batches pass.
-13. Claude QA batch merge returns NEEDS_REWORK when any batch fails.
-14. Claude QA batch merge aggregates issues and required_changes.
+11. Merge scene batches sets `qa.verdict = PENDING_GEMINI_QA`.
+12. Gemini QA batch merge returns PASS when all batches pass.
+13. Gemini QA batch merge returns NEEDS_REWORK when any batch fails.
+14. Gemini QA batch merge aggregates issues and required_changes.
 15. Existing non-sharded scenes path still works when feature flag is disabled.
 
 ---
@@ -810,8 +810,8 @@ Implementation is complete when:
 3. Invalid scene batches are rejected with clear errors.
 4. Python merges all batches into canonical `scenes.json`.
 5. Final `scenes.json` passes existing scene validators.
-6. Claude scenes QA can run in batch mode.
-7. Claude QA batches are merged into canonical `operator/claude/scenes_qa.json`.
+6. Gemini scenes QA can run in batch mode.
+7. Gemini QA batches are merged into canonical `operator/gemini/scenes_qa.json`.
 8. Existing pipeline can still run without sharding.
 9. No downstream render logic needs to know whether scenes came from one response or many.
 10. Retry can rerun a failed batch without regenerating all scenes.
@@ -852,13 +852,13 @@ Python:
   → existing validators
   → scenes QA
 
-Claude:
+Gemini:
   QA each scenes batch
   → scenes_qa_batch_N.json
 
 Python:
   merge QA batches
-  → operator/claude/scenes_qa.json
+  → operator/gemini/scenes_qa.json
 
 Pipeline:
   seo

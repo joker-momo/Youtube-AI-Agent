@@ -21,7 +21,7 @@ STAGE_ARTIFACTS = {
     },
     "script_qa": {
         "input": ["script.json"],
-        "output": ["operator/claude/script_qa.json"],
+        "output": ["operator/gemini/script_qa.json"],
     },
     "scenes": {
         "input": ["script.json"],
@@ -33,7 +33,7 @@ STAGE_ARTIFACTS = {
     },
     "scenes_qa": {
         "input": ["scenes.json"],
-        "output": ["operator/claude/scenes_qa.json"],
+        "output": ["operator/gemini/scenes_qa.json"],
     },
     "seo": {
         "input": ["scenes.json"],
@@ -45,7 +45,7 @@ STAGE_ARTIFACTS = {
     },
     "seo_qa": {
         "input": ["seo.json"],
-        "output": ["operator/claude/seo_qa.json"],
+        "output": ["operator/gemini/seo_qa.json"],
     },
     "thumbnail_image": {
         "input": ["seo.json"],

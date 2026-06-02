@@ -335,10 +335,10 @@ echo -e "  - ${BOLD}Dashboard URL:${NC}      ${GREEN}http://localhost:8000${NC}"
 if [[ "$RUN_MODE" == "dashboard" ]]; then
   echo -e "  - ${BOLD}Worker Status:${NC}      ${YELLOW}STOPPED (dashboard mode)${NC}"
 elif [ "$USE_NATIVE_WORKER" = true ]; then
-  echo -e "  - ${BOLD}VNC Browser URL:${NC}    ${GREEN}http://localhost:7900${NC} (Manual ChatGPT/Claude Logins)"
+  echo -e "  - ${BOLD}VNC Browser URL:${NC}    ${GREEN}http://localhost:7900${NC} (Manual ChatGPT/Gemini Logins)"
   echo -e "  - ${BOLD}Worker Status:${NC}      ${GREEN}NATIVE HOST (GPU Enabled)${NC}"
 else
-  echo -e "  - ${BOLD}VNC Browser URL:${NC}    ${GREEN}http://localhost:7900${NC} (Manual ChatGPT/Claude Logins)"
+  echo -e "  - ${BOLD}VNC Browser URL:${NC}    ${GREEN}http://localhost:7900${NC} (Manual ChatGPT/Gemini Logins)"
   echo -e "  - ${BOLD}Worker Status:${NC}      ${GREEN}DOCKER CONTAINER (CPU Mode)${NC}"
 fi
 echo -e "${BOLD}${CYAN}=====================================================${NC}"

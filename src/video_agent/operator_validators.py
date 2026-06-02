@@ -268,7 +268,7 @@ def _validate_seo(seo: dict[str, Any], channel_config: dict[str, Any]) -> Valida
     elif language != expected_language:
         result.warnings.append(
             f"language should be '{expected_language}' from channel_config.seo.language, got '{language}'. "
-            "Allowing promotion so Claude QA can force ChatGPT rework."
+            "Allowing promotion so Gemini QA can force ChatGPT rework."
         )
 
     result.merge(_validate_tags(seo.get("tags"), seo_config.get("min_tags", 5), seo_config.get("max_tags", 8)))

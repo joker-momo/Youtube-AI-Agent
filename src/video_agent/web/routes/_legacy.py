@@ -1835,7 +1835,7 @@ async def post_auto_script_qa(
     try:
         output = await auto_script_qa_stage(
             job_dir, channel_path,
-            _one_shot_with_briefing(client, "claude", "qa", channel_path, job_dir),
+            _one_shot_with_briefing(client, "gemini", "qa", channel_path, job_dir),
         )
     except StageInputMissingError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1858,7 +1858,7 @@ async def post_auto_scenes_qa(
     try:
         output = await auto_scenes_qa_stage(
             job_dir, channel_path,
-            _one_shot_with_briefing(client, "claude", "qa", channel_path, job_dir),
+            _one_shot_with_briefing(client, "gemini", "qa", channel_path, job_dir),
         )
     except StageInputMissingError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1881,7 +1881,7 @@ async def post_auto_seo_qa(
     try:
         output = await auto_seo_qa_stage(
             job_dir, channel_path,
-            _one_shot_with_briefing(client, "claude", "qa", channel_path, job_dir),
+            _one_shot_with_briefing(client, "gemini", "qa", channel_path, job_dir),
         )
     except StageInputMissingError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

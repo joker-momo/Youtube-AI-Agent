@@ -22,20 +22,12 @@ OPERATOR_ARTIFACTS = tuple(ARTIFACT_SCHEMAS.keys())
 
 
 def _qa_path(job_dir: Path, artifact: str) -> Path:
-    """Preferred QA artifact path (Claude)."""
-    return job_dir / "operator" / "claude" / f"{artifact}_qa.json"
-
-
-def _legacy_qa_path(job_dir: Path, artifact: str) -> Path:
-    """Legacy QA artifact path kept for backward compatibility."""
+    """Preferred QA artifact path (Gemini)."""
     return job_dir / "operator" / "gemini" / f"{artifact}_qa.json"
 
 
 def _resolve_existing_qa_path(job_dir: Path, artifact: str) -> Path:
-    p = _qa_path(job_dir, artifact)
-    if p.exists():
-        return p
-    return _legacy_qa_path(job_dir, artifact)
+    return _qa_path(job_dir, artifact)
 
 
 @dataclass
@@ -411,12 +403,12 @@ def _normalize_scenes_candidate(
         )
     qa = parsed.get("qa")
     if not isinstance(qa, dict):
-        parsed["qa"] = {"verdict": "PENDING_CLAUDE_QA"}
+        parsed["qa"] = {"verdict": "PENDING_GEMINI_QA"}
     else:
         # Scenes QA must be produced by the dedicated QA reviewer,
         # never prefilled by the writing model.
         qa_obj = dict(qa)
-        qa_obj["verdict"] = "PENDING_CLAUDE_QA"
+        qa_obj["verdict"] = "PENDING_GEMINI_QA"
         parsed["qa"] = qa_obj
     return parsed
 
@@ -992,7 +984,7 @@ def _chatgpt_scenes_prompt(
         "- Use layout=\"quote\" only for a short emotional or memorable sentence supported by the narration.",
         "- Every non-subtitle layout must include enough layout_payload for rendering.",
         "- Python will downgrade unsafe layouts; do not invent overlay facts that are not supported by the scene text.",
-        "- qa.verdict: must be PENDING_CLAUDE_QA — never mark your own scenes as PASS",
+        "- qa.verdict: must be PENDING_GEMINI_QA — never mark your own scenes as PASS",
         "",
         *_locale_block_lines(channel_config, header="LOCALE RULES:"),
         "• All Spanish scene fields (narration, caption, on_screen_text, layout_payload) must use the configured language.",
@@ -1175,7 +1167,7 @@ def _chatgpt_scenes_batch_prompt(
     return "\n".join(parts)
 
 
-def _claude_scenes_qa_batch_prompt(
+def _gemini_scenes_qa_batch_prompt(
     channel_config: dict[str, Any],
     scenes_batch: dict[str, Any],
     batch_index: int,
@@ -1302,7 +1294,7 @@ def _chatgpt_seo_prompt(channel_config: dict[str, Any], script: dict[str, Any], 
     )
 
 
-def _claude_qa_prompt(
+def _gemini_qa_prompt(
     artifact_name: str,
     artifact: dict[str, Any] | None,
     channel_config: dict[str, Any] | None = None,
@@ -1424,9 +1416,9 @@ def write_operator_prompts(
     idea = read_json(idea_path)
     prompt_dir = job_dir / "operator"
     chatgpt_dir = prompt_dir / "chatgpt"
-    claude_dir = prompt_dir / "claude"
+    gemini_dir = prompt_dir / "gemini"
     chatgpt_dir.mkdir(parents=True, exist_ok=True)
-    claude_dir.mkdir(parents=True, exist_ok=True)
+    gemini_dir.mkdir(parents=True, exist_ok=True)
 
     stages = ["script", "scenes", "seo"] if stage == "all" else [stage]
     written: list[Path] = []
@@ -1438,7 +1430,7 @@ def write_operator_prompts(
         if current_stage == "script":
             paths_and_text = [
                 (chatgpt_dir / "script_prompt.md", _chatgpt_script_prompt(channel_config, idea)),
-                (claude_dir / "script_qa_prompt.md", _claude_qa_prompt("script", script, channel_config)),
+                (gemini_dir / "script_qa_prompt.md", _gemini_qa_prompt("script", script, channel_config)),
             ]
         elif current_stage == "scenes":
             if script is None:
@@ -1446,7 +1438,7 @@ def write_operator_prompts(
             qa_feedback = get_scenes_qa_feedback(job_dir)
             paths_and_text = [
                 (chatgpt_dir / "scenes_prompt.md", _chatgpt_scenes_prompt(channel_config, script, qa_feedback=qa_feedback)),
-                (claude_dir / "scenes_qa_prompt.md", _claude_qa_prompt("scenes", scenes, channel_config)),
+                (gemini_dir / "scenes_qa_prompt.md", _gemini_qa_prompt("scenes", scenes, channel_config)),
             ]
         elif current_stage == "seo":
             if script is None:
@@ -1456,7 +1448,7 @@ def write_operator_prompts(
             seo = _read_optional_json(job_dir / "seo.json")
             paths_and_text = [
                 (chatgpt_dir / "seo_prompt.md", _chatgpt_seo_prompt(channel_config, script, scenes)),
-                (claude_dir / "seo_qa_prompt.md", _claude_qa_prompt("seo", seo, channel_config)),
+                (gemini_dir / "seo_qa_prompt.md", _gemini_qa_prompt("seo", seo, channel_config)),
             ]
         else:
             raise ValueError(f"Unsupported operator prompt stage: {current_stage}")
@@ -1572,8 +1564,6 @@ def promote_operator_qa(job_dir: Path, artifact: str, raw_path: Path) -> Promote
         )
     output_path = _qa_path(job_dir, artifact)
     write_json(output_path, qa)
-    # Keep writing legacy path so older tooling/tests remain functional.
-    write_json(_legacy_qa_path(job_dir, artifact), qa)
     return PromoteResult(artifact=artifact, raw_path=raw_path, output_path=output_path)
 
 
@@ -1605,17 +1595,17 @@ def build_operator_status(job_dir: Path) -> dict[str, Any]:
         }
 
     if artifacts["script"]["artifact"] == "missing":
-        next_step = "Generate and promote script.json, then run Claude QA for script."
+        next_step = "Generate and promote script.json, then run Gemini QA for script."
     elif artifacts["script"]["qa"] != "PASS":
-        next_step = "Promote a PASS Claude QA response for script."
+        next_step = "Promote a PASS Gemini QA response for script."
     elif artifacts["scenes"]["artifact"] == "missing":
-        next_step = "Generate and promote scenes.json, then run Claude QA for scenes."
+        next_step = "Generate and promote scenes.json, then run Gemini QA for scenes."
     elif artifacts["scenes"]["qa"] != "PASS":
-        next_step = "Promote a PASS Claude QA response for scenes."
+        next_step = "Promote a PASS Gemini QA response for scenes."
     elif artifacts["seo"]["artifact"] == "missing":
-        next_step = "Generate and promote seo.json, then run Claude QA for seo."
+        next_step = "Generate and promote seo.json, then run Gemini QA for seo."
     elif artifacts["seo"]["qa"] != "PASS":
-        next_step = "Promote a PASS Claude QA response for seo."
+        next_step = "Promote a PASS Gemini QA response for seo."
     elif not (job_dir / "render_props.json").exists():
         next_step = "Run operator-render to prepare assets and render props."
     elif not (job_dir / "operator_review.html").exists():
@@ -1638,7 +1628,7 @@ def build_operator_next(channel_path: Path, idea_path: Path, job_dir: Path) -> O
     for artifact in OPERATOR_ARTIFACTS:
         artifact_status = status["artifacts"][artifact]
         raw_artifact_path = job_dir / "operator" / "chatgpt" / f"{artifact}.raw.txt"
-        raw_qa_path = job_dir / "operator" / "claude" / f"{artifact}_qa.raw.txt"
+        raw_qa_path = job_dir / "operator" / "gemini" / f"{artifact}_qa.raw.txt"
 
         if artifact_status["artifact"] == "missing":
             if raw_artifact_path.exists():
@@ -1685,7 +1675,7 @@ def build_operator_next(channel_path: Path, idea_path: Path, job_dir: Path) -> O
             if raw_qa_path.exists():
                 return OperatorNextResult(
                     step=f"promote-{artifact}-qa",
-                    message=f"Raw Claude QA exists for {artifact}; promote it into {artifact}_qa.json.",
+                    message=f"Raw Gemini QA exists for {artifact}; promote it into {artifact}_qa.json.",
                     prompt_paths=[],
                     commands=[
                         _docker_cli_command(
@@ -1700,10 +1690,10 @@ def build_operator_next(channel_path: Path, idea_path: Path, job_dir: Path) -> O
                     ],
                 )
             write_operator_prompts(channel_path, idea_path, job_dir, stage=artifact)
-            prompt_path = job_dir / "operator" / "claude" / f"{artifact}_qa_prompt.md"
+            prompt_path = job_dir / "operator" / "gemini" / f"{artifact}_qa_prompt.md"
             return OperatorNextResult(
-                step=f"claude-{artifact}-qa",
-                message=f"Copy the {artifact} QA prompt into Claude, then save the response as {raw_qa_path}.",
+                step=f"gemini-{artifact}-qa",
+                message=f"Copy the {artifact} QA prompt into Gemini, then save the response as {raw_qa_path}.",
                 prompt_paths=[prompt_path],
                 commands=[
                     _docker_cli_command(
@@ -1721,7 +1711,7 @@ def build_operator_next(channel_path: Path, idea_path: Path, job_dir: Path) -> O
     if not (job_dir / "video.mp4").exists():
         return OperatorNextResult(
             step="render-video",
-            message="All operator artifacts and Claude QA are ready; render the video.",
+            message="All operator artifacts and Gemini QA are ready; render the video.",
             prompt_paths=[],
             commands=[
                 _docker_cli_command(
@@ -1846,7 +1836,7 @@ def write_operator_review(job_dir: Path, output_path: Path | None = None) -> Pat
     </section>
 
     <section>
-      <h2>Claude QA</h2>
+      <h2>Gemini QA</h2>
       <table>
         <thead><tr><th>Artifact</th><th>Verdict</th><th>Issues</th><th>Required Changes</th><th>File</th></tr></thead>
         <tbody>{''.join(qa_rows)}</tbody>
@@ -1872,8 +1862,3 @@ def write_operator_review(job_dir: Path, output_path: Path | None = None) -> Pat
     output_path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(output_path, html, encoding="utf-8")
     return output_path
-
-
-# Backward-compatible alias for callers not yet migrated.
-_gemini_qa_prompt = _claude_qa_prompt
-

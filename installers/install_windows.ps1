@@ -139,7 +139,7 @@ Write-Host "  - PEXELS_API_KEY & PIXABAY_API_KEY (For stock video/image download
 Write-Host ""
 Write-Host "You can now access the following endpoints in your browser:"
 Write-Host "  - Web Dashboard:    http://localhost:8000" -ForegroundColor Cyan
-Write-Host "  - Browser Runtime (VNC): http://localhost:7900 (For manual ChatGPT/Claude logins)" -ForegroundColor Cyan
+Write-Host "  - Browser Runtime (VNC): http://localhost:7900 (For manual ChatGPT/Gemini logins)" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "To view running logs, execute:"
 Write-Host "  docker compose logs -f" -ForegroundColor Yellow

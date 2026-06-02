@@ -59,7 +59,7 @@ jobs/<job_id>/shorts/
   - `schemas/shorts-seo.schema.json`
 - Add Remotion `ChannelShortStandard` via `remotion/src/ChannelShort.tsx`.
 - Render Shorts with `ChannelShortStandard`, `1080x1920`, duration 22-35 seconds.
-- Do not fake `qa.verdict = PASS`; use lightweight Claude QA.
+- Do not fake `qa.verdict = PASS`; use lightweight Gemini QA.
 - Add tests:
   - `tests/test_shorts_stages.py`
   - `tests/test_shorts_api.py`

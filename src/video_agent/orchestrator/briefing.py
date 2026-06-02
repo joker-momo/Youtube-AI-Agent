@@ -116,7 +116,7 @@ _SCHEMA_ES = {
         "    },\n"
         '  "narration": str (2900-4350 palabras = ~20-30 min a 145 wpm),\n'
         '  "cta": str (20-250 caracteres),\n'
-        '  "qa": { "verdict": "PENDING_CLAUDE_QA" }\n'
+        '  "qa": { "verdict": "PENDING_GEMINI_QA" }\n'
         "}"
     ),
     "scenes": (
@@ -135,7 +135,7 @@ _SCHEMA_ES = {
         '      "motion": str ("slow push-in" | "gentle pan" | "slow zoom-out" | "static"),\n'
         '      "asset_refs": objeto vacío {} (no array)\n'
         "    },\n"
-        '  "qa": { "verdict": "PENDING_CLAUDE_QA" }\n'
+        '  "qa": { "verdict": "PENDING_GEMINI_QA" }\n'
         "}\n"
         "REGLA DURA: la suma de duration_sec de las escenas DEBE igualar "
         "total_duration_sec exactamente."
@@ -338,7 +338,7 @@ def build_initial_briefing(
     """Initial message of a persistent temp chat.
 
     ``kind`` is ``"writing"`` (sent to ChatGPT before the
-    script/scenes/seo stages) or ``"qa"`` (sent to Claude before the
+    script/scenes/seo stages) or ``"qa"`` (sent to Gemini before the
     QA stages). The pipeline sends this exactly once per tab so the
     model commits the role + channel DNA + hard constraints to the
     conversation context, and the subsequent task messages stay short.

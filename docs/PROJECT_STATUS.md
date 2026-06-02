@@ -9,7 +9,7 @@ This file is the living project tracker. Update it whenever a meaningful system 
 Build a Docker-first standalone YouTube production app that can take a channel and idea through:
 
 ```text
-trend/data intake -> idea selection -> ChatGPT script/scenes/SEO -> Claude QA -> assets/images -> TTS -> Remotion render -> review -> final video
+trend/data intake -> idea selection -> ChatGPT script/scenes/SEO -> Gemini QA -> assets/images -> TTS -> Remotion render -> review -> final video
 ```
 
 The current v2 `operator-*` CLI flow remains functional during the transition. The approved v3 target is a standalone local FastAPI web app with WebSocket progress and a separate browser-worker service that attaches to the `browser-runtime` container over the internal Docker network. The Chromium profile is persisted under `browser_profiles/default`; CDP port 9222 is never published to host.
@@ -31,9 +31,9 @@ Decisions already chosen:
 
 - Standalone Python web app; Hermes is dropped.
 - Local FastAPI UI with WebSocket realtime progress.
-- Browser web UI access for ChatGPT Plus, Claude, keyword scoring, and ChatGPT image generation; no LLM API client in Phase 1.
+- Browser web UI access for ChatGPT Plus, Gemini, keyword scoring, and ChatGPT image generation; no LLM API client in Phase 1.
 - Separate `browser-worker` container using Playwright CDP attach to the in-cluster `browser-runtime` container over the internal Docker network. CDP port 9222 is internal-only and never published to host.
-- The `browser-runtime` container runs Chromium with a persisted profile mounted from `browser_profiles/default`. The user signs in to ChatGPT/Claude/keyword scoring manually through the KasmVNC console bound to `127.0.0.1:7900`. The system must not auto-login.
+- The `browser-runtime` container runs Chromium with a persisted profile mounted from `browser_profiles/default`. The user signs in to ChatGPT/Gemini/keyword scoring manually through the KasmVNC console bound to `127.0.0.1:7900`. The system must not auto-login.
 - A non-default profile directory is required because Chrome blocks remote debugging on the default user-data directory (`DevTools remote debugging requires a non-default data directory`). Mounting `browser_profiles/default` satisfies that requirement and keeps the sign-ins persistent across container restarts. Browser-worker auth checks should open the target page and report `login_required` when the profile is not signed in.
 - Sequential per-step flow with file-based state detection.
 - Fail-soft browser handling: save trace, expose prompt path, allow user retry.
@@ -44,7 +44,7 @@ Decisions already chosen:
 
 - Run project commands through Docker.
 - Use ChatGPT as the primary semi-automated operator for script, scenes, SEO, and optionally image generation.
-- Use Claude as the dedicated QA reviewer for operator-produced artifacts (`ChatGPT writes → Claude QA`). Any Gemini references in older sections are historical/legacy only; the `operator/gemini` folder name is kept as backwards-compatible storage.
+- Use Gemini as the dedicated QA reviewer for operator-produced artifacts (`ChatGPT writes → Gemini QA`). Any Gemini references in older sections are historical/legacy only; the `operator/gemini` folder name is kept as backwards-compatible storage.
 - Keep generated job outputs local under `jobs/`.
 - Keep the operator workflow resumable from files, not hidden browser state.
 - Update this status file as the system evolves.
@@ -79,10 +79,10 @@ Decisions already chosen:
 
 ### Semi-Automated Operator Flow
 
-- `operator-prompts` writes ChatGPT writing prompts and Claude QA prompts for `script`, `scenes`, and `seo`.
+- `operator-prompts` writes ChatGPT writing prompts and Gemini QA prompts for `script`, `scenes`, and `seo`.
 - `operator-promote` validates raw ChatGPT JSON into promoted artifacts and blocks stale or malformed artifacts before they enter the render flow.
-- `operator-promote-qa` normalizes raw Claude QA and requires `PASS`.
-- `operator-render` requires promoted Claude QA by default.
+- `operator-promote-qa` normalizes raw Gemini QA and requires `PASS`.
+- `operator-render` requires promoted Gemini QA by default.
 - `operator-review` writes `operator_review.html` for a single job.
 - `operator-render` refreshes `operator_review.html` automatically.
 - `operator-status` summarizes artifact/QA state for one job.
@@ -93,7 +93,7 @@ Decisions already chosen:
 - `operator-promote` blocks `job_id` mismatch for script, scenes, and SEO artifacts.
 - SEO artifacts now include `job_id`.
 - Scene promotion blocks invalid `scene-NN` IDs, list-shaped `asset_refs`, missing `visual_prompt`, and ChatGPT-prefilled `qa.verdict=PASS`.
-- SEO promotion validates the artifact language against `channel_config.seo.language` (Spain-first channels expect `es-ES`; legacy configs may still set `es-419`). It also blocks tag counts outside the channel rule, duplicate/empty tags, forbidden positioning such as `adultos mayores`, and placeholder social-link text. When `seo.strict_language: true`, any language mismatch is a hard error; otherwise reworkable Spanish variants emit a warning so Claude QA can force ChatGPT to regenerate.
+- SEO promotion validates the artifact language against `channel_config.seo.language` (Spain-first channels expect `es-ES`; legacy configs may still set `es-419`). It also blocks tag counts outside the channel rule, duplicate/empty tags, forbidden positioning such as `adultos mayores`, and placeholder social-link text. When `seo.strict_language: true`, any language mismatch is a hard error; otherwise reworkable Spanish variants emit a warning so Gemini QA can force ChatGPT to regenerate.
 - Vida Plena 45+ channel config now declares SEO language/tag limits and positioning rules.
 
 ### V3 Phase 1 Step 1 Skeleton
@@ -181,7 +181,7 @@ Decisions already chosen:
 ### V3 Phase 1 Step 9 Render + Review Stages
 
 - `src/video_agent/orchestrator/stages.py` exposes `run_render_stage(job_dir, channel_path)` and `run_review_stage(job_dir)`.
-- Historical note: `run_render_stage` originally used `require_operator_qa=False` while QA stages were being ported. Current run-all uses Claude QA before downstream SEO/thumbnail/assets/render work.
+- Historical note: `run_render_stage` originally used `require_operator_qa=False` while QA stages were being ported. Current run-all uses Gemini QA before downstream SEO/thumbnail/assets/render work.
 - `run_render_stage` writes the existing render artifacts (`render_props.json`, `visual_review.json`, `visual_contact_sheet.jpg`, `thumbnail.jpg`, `video.mp4`, `report.md`, and `operator_review.html` through the operator pipeline), emits `STAGE_COMPLETED`, and advances `current_stage` to `review`.
 - `run_review_stage` refreshes `operator_review.html` through `write_operator_review`, emits `STAGE_COMPLETED`, and completes the V3 job.
 - FastAPI exposes:
@@ -606,13 +606,13 @@ Every contract met by ChatGPT without manual fixup:
 
 No forbidden phrases. No invented stats. Accents preserved. The
 duration contract in particular is a big win. Historically, Gemini QA
-caught duration mismatches here; current QA uses Claude.
+caught duration mismatches here; current QA uses Gemini.
 
 Docker verification: `133 passed in 23.64s`.
 
 ### Historical: V3 Phase 1 Step 16 Auto QA + rework loop + DNA consistency
 
-This historical section predates the Claude switch and used real Gemini QA, including
+This historical section predates the Gemini switch and used real Gemini QA, including
 self-healing rework, and verifies the channel DNA holds across two
 different ideas without manual intervention.
 
@@ -740,36 +740,36 @@ Docker verification: ``143 passed in 18.48s``.
   - WS `/jobs/{id}/events` streamed into a live events log; each
     event also nudges a timeline refetch.
 
-### V3 Phase 1 Step 20 QA browser flow switched to Claude
+### V3 Phase 1 Step 20 QA browser flow switched to Gemini
 
 - Gemini's free tier turned out to be too rate-limited for the 3 QA
-  stages of a long-form video; switched the QA driver to Claude
-  (claude.ai), still through the Browser Appliance noVNC profile.
-- New `src/video_agent/browser_worker/drivers/claude.py` mirrors the
+  stages of a long-form video; switched the QA driver to Gemini
+  (gemini.google.com/app), still through the Browser Appliance noVNC profile.
+- New `src/video_agent/browser_worker/drivers/gemini.py` mirrors the
   ChatGPT driver shape (open / send_message / close, persistent
   session, humanized cadence, login URL detection at
-  `claude.ai/login` and `/sign-in`).
-- Worker dispatch + auth status routes know about a "claude" site;
-  `_open_session("claude")` works alongside chatgpt/gemini/keyword.
-- Orchestrator `/run-all` opens a persistent Claude tab for the QA
+  `gemini.google.com/app/login` and `/sign-in`).
+- Worker dispatch + auth status routes know about a "gemini" site;
+  `_open_session("gemini")` works alongside chatgpt/gemini/keyword.
+- Orchestrator `/run-all` opens a persistent Gemini tab for the QA
   trio instead of Gemini.
 - ``operator.py`` gained `extract_json_objects` which extracts every
-  parseable JSON block from Claude responses and tries each one
-  against the artifact schema (Claude tends to wrap JSON in
+  parseable JSON block from Gemini responses and tries each one
+  against the artifact schema (Gemini tends to wrap JSON in
   commentary). ``promote_operator_artifact`` uses this so a noisy
   response no longer aborts the stage.
-- Tests updated to cover Claude login-URL detection.
+- Tests updated to cover Gemini login-URL detection.
 
-### V3 Phase 1 Step 21 Resume `/run-all` + Claude artifact normalisation
+### V3 Phase 1 Step 21 Resume `/run-all` + Gemini artifact normalisation
 
 - `/run-all` now reads `job.json` and skips stages already
   `completed`, so the operator can interrupt and resume long-form
   runs without manual stage juggling.
-- Claude QA responses occasionally include extra `scores`-shaped
+- Gemini QA responses occasionally include extra `scores`-shaped
   JSON objects; the normaliser in `operator.py` picks the schema-
   valid candidate and rejects the noise.
 - `tests/test_operator_workflow.py` adds coverage for multi-JSON
-  Claude output.
+  Gemini output.
 
 ### V3 Phase 1 Step 22 ChatGPT per-scene image gen (Phase A + Phase B)
 
@@ -844,7 +844,7 @@ system added:
 
 - **217 tests pass** (`docker compose exec app python -m pytest -q`).
 - Pipeline produces 20-30 min long-form videos end-to-end with
-  ChatGPT writing + Claude QA + ChatGPT image gen + Remotion render,
+  ChatGPT writing + Gemini QA + ChatGPT image gen + Remotion render,
   all through the Browser Appliance (host noVNC for manual login once).
 - Full pipeline stage order: `idea_research → script → script_promote →
   script_qa → scenes → scenes_promote → scenes_qa → seo → seo_promote →
@@ -875,7 +875,7 @@ User browser
       -> existing assets/TTS/render code
   -> browser-worker container
       -> Playwright drivers
-      -> ChatGPT/Claude/keyword scoring/image generation browser operations
+      -> ChatGPT/Gemini/keyword scoring/image generation browser operations
       -> browser-runtime container (Chromium + Xvfb + noVNC + CDP) over internal appliance_net
 ```
 
@@ -886,8 +886,8 @@ State must remain file-based under `jobs/<job_id>/`, including:
 - `idea.json`
 - `operator/chatgpt/*_prompt.txt`
 - `operator/chatgpt/*_raw.json`
-- `operator/gemini/*_qa_prompt.txt` (legacy folder name; current QA provider is Claude)
-- `operator/gemini/*_qa_raw.json` (legacy folder name; current QA provider is Claude)
+- `operator/gemini/*_qa_prompt.txt` (legacy folder name; current QA provider is Gemini)
+- `operator/gemini/*_qa_raw.json` (legacy folder name; current QA provider is Gemini)
 - `script.json`
 - `scenes.json`
 - `seo.json`
@@ -912,9 +912,9 @@ Verified artifacts:
 - `script.json`
 - `scenes.json`
 - `seo.json`
-- `operator/gemini/script_qa.json` (legacy folder name; current QA provider is Claude)
-- `operator/gemini/scenes_qa.json` (legacy folder name; current QA provider is Claude)
-- `operator/gemini/seo_qa.json` (legacy folder name; current QA provider is Claude)
+- `operator/gemini/script_qa.json` (legacy folder name; current QA provider is Gemini)
+- `operator/gemini/scenes_qa.json` (legacy folder name; current QA provider is Gemini)
+- `operator/gemini/seo_qa.json` (legacy folder name; current QA provider is Gemini)
 - `render_props.json`
 - `visual_review.json`
 - `visual_contact_sheet.jpg`
@@ -942,7 +942,7 @@ Status:
 - `operator-next` reached `review-video`.
 - `operator-status` returned `Overall: READY`.
 - `script`, `scenes`, and `seo` artifacts are present.
-- Historical run: Gemini QA was `PASS` for `script`, `scenes`, and `seo`. Current QA provider is Claude.
+- Historical run: Gemini QA was `PASS` for `script`, `scenes`, and `seo`. Current QA provider is Gemini.
 - Rendered artifacts are present:
   - `video.mp4`
   - `thumbnail.jpg`
@@ -955,7 +955,7 @@ Important findings from this fresh run:
 - ChatGPT project tabs can reuse stale conversation state, so each job/artifact should use a clearly isolated chat or enforce artifact/job ID matching before promotion.
 - ChatGPT project prompt paste can appear as an attached prompt tile; the operator must click `Send prompt` before waiting for output.
 - Existing ChatGPT tabs can have clipboard/paste issues; a fresh project tab fixed the prompt input.
-- Historical Gemini finding: Gemini QA was more reliable in a fresh chat per artifact. Current QA uses Claude.
+- Historical Gemini finding: Gemini QA was more reliable in a fresh chat per artifact. Current QA uses Gemini.
 - Historical Gemini finding: Gemini sometimes showed `Submit` instead of a send icon; retained only as legacy driver context.
 - Scene output needs stricter validation:
   - `job_id` must match the current job folder.
@@ -984,7 +984,7 @@ docker compose run --rm video-agent python -m video_agent.cli operator-next \
 The command will either:
 
 - create the next ChatGPT prompt,
-- create the next Claude QA prompt,
+- create the next Gemini QA prompt,
 - point to a raw response that should be promoted,
 - tell you to run `operator-render`,
 - or tell you to open the review page.
@@ -1053,8 +1053,8 @@ Skipped: `qa/script_qa.py` disclaimer phrase variant list — intentional QA gat
 
 ## Recent Commits
 
-- `fef352e fix: resume run-all and normalize Claude artifact shapes`
-- `9a5d5a9 feat: switch QA browser flow from Gemini to Claude`
+- `fef352e fix: resume run-all and normalize Gemini artifact shapes`
+- `9a5d5a9 feat: switch QA browser flow from Gemini to Gemini`
 - `5846627 feat: redesign dashboard to youtube-style operations UI`
 - `a9dca52 Make dashboard step-by-step with artifacts, ETA, video, metadata`
 - `ba026ce Add minimal web dashboard for live job progress`

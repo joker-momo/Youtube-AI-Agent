@@ -21,7 +21,7 @@ Primary docs:
 trend/data intake
 -> idea selection
 -> ChatGPT script/scenes/SEO
--> Claude QA
+-> Gemini QA
 -> images/assets
 -> TTS
 -> Remotion render
@@ -56,7 +56,7 @@ User browser
       -> browser-runtime container (Chromium + persisted profile)
 ```
 
-Browser access uses the user's logged-in ChatGPT Plus, Claude, and keyword scoring sessions through a persisted Chromium profile mounted into the `browser-runtime` container at `browser_profiles/default`. The system must not auto-login or inspect browser secrets. CDP port 9222 is not published to the host; KasmVNC is bound to `127.0.0.1:7900` for manual sign-ins only.
+Browser access uses the user's logged-in ChatGPT Plus, Gemini, and keyword scoring sessions through a persisted Chromium profile mounted into the `browser-runtime` container at `browser_profiles/default`. The system must not auto-login or inspect browser secrets. CDP port 9222 is not published to the host; KasmVNC is bound to `127.0.0.1:7900` for manual sign-ins only.
 
 ## Requirements
 
@@ -124,7 +124,7 @@ This runner automatically verifies that Docker is running (and launches it if no
 
 Open in your browser:
 - **Web Dashboard**: `http://localhost:8000` (To manage jobs, generate ideas, and trigger renders)
-- **Browser Runtime (VNC)**: `http://localhost:7900` (Manual sign-ins for ChatGPT, Claude, keyword scoring)
+- **Browser Runtime (VNC)**: `http://localhost:7900` (Manual sign-ins for ChatGPT, Gemini, keyword scoring)
 
 In KasmVNC, sign in manually to the sites used by the pipeline. The profile is persisted in `browser_profiles/default`, so you will not need to login repeatedly.
 
@@ -184,7 +184,7 @@ docker compose run --rm video-agent python -m video_agent.cli run \
 
 ## Operator-Approved Content
 
-During the v3 transition, the existing semi-automated browser flow still works through `operator-*` commands. Place the ChatGPT/Claude-approved artifacts in a job directory:
+During the v3 transition, the existing semi-automated browser flow still works through `operator-*` commands. Place the ChatGPT/Gemini-approved artifacts in a job directory:
 
 ```text
 jobs/<job_id>/script.json
@@ -201,7 +201,7 @@ docker compose run --rm video-agent python -m video_agent.cli operator-next \
   --job-dir jobs/<job_id>
 ```
 
-`operator-next` looks at the current job folder, creates the next prompt file when needed, and prints the exact command to run after saving the ChatGPT or Claude raw response.
+`operator-next` looks at the current job folder, creates the next prompt file when needed, and prints the exact command to run after saving the ChatGPT or Gemini raw response.
 
 ```bash
 docker compose run --rm video-agent python -m video_agent.cli operator-prompts \
@@ -221,7 +221,7 @@ docker compose run --rm video-agent python -m video_agent.cli operator-promote \
   --channel configs/vida-plena-45/channel.yaml
 ```
 
-After Claude reviews that artifact, promote the raw QA response (the path keeps `operator/gemini` for backward compatibility):
+After Gemini reviews that artifact, promote the raw QA response (the path keeps `operator/gemini` for backward compatibility):
 
 ```bash
 docker compose run --rm video-agent python -m video_agent.cli operator-promote-qa \
@@ -324,7 +324,7 @@ docker compose run --rm video-agent python -m video_agent.cli audit \
 
 ## Browser Driver Speed Profile
 
-The ChatGPT / Claude / Gemini browser drivers run in **balanced mode** by default. The visible cadence still looks like a real user typing carefully — real keystrokes, hover-before-click, occasional "thinking" pauses, no instant insert-text dumps — but the wait-for-response layer is rewritten to detect stream-end via an in-page `MutationObserver` instead of polling `page.evaluate` every 250-500 ms. The result is roughly **50× fewer CDP round-trips per turn** and stream-end detection within ~100 ms of the final mutation instead of one full poll interval.
+The ChatGPT / Gemini / Gemini browser drivers run in **balanced mode** by default. The visible cadence still looks like a real user typing carefully — real keystrokes, hover-before-click, occasional "thinking" pauses, no instant insert-text dumps — but the wait-for-response layer is rewritten to detect stream-end via an in-page `MutationObserver` instead of polling `page.evaluate` every 250-500 ms. The result is roughly **50× fewer CDP round-trips per turn** and stream-end detection within ~100 ms of the final mutation instead of one full poll interval.
 
 Three modes, controlled by `BROWSER_HUMAN_MODE`:
 
@@ -341,7 +341,7 @@ Three modes, controlled by `BROWSER_HUMAN_MODE`:
 
 Notes:
 
-- **`balanced`** is the production default. Visible cadence (typing speed, pre-send pauses, paste review) stays in the human-typist range; only the Python⇄Chrome detection layer is accelerated. Use this when ChatGPT / Claude tabs are unattended automation tabs.
+- **`balanced`** is the production default. Visible cadence (typing speed, pre-send pauses, paste review) stays in the human-typist range; only the Python⇄Chrome detection layer is accelerated. Use this when ChatGPT / Gemini tabs are unattended automation tabs.
 - **`fast`** trims the visible cadence too. Pick this when latency matters more than the look (e.g. batch backfill of dozens of jobs overnight).
 - **`human`** restores the original slow, conspicuously-human cadence. Use this for trust-building sessions, live demos, or recovery from a rate-limit warning.
 

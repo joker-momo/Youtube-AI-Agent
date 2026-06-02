@@ -147,7 +147,7 @@ echo -e "  - ${BOLD}PEXELS_API_KEY${NC} & ${BOLD}PIXABAY_API_KEY${NC} (For stock
 echo ""
 echo -e "You can now access the following endpoints in your browser:"
 echo -e "  - ${BOLD}Web Dashboard:${NC}    ${CYAN}http://localhost:8000${NC}"
-echo -e "  - ${BOLD}Browser Runtime (VNC):${NC} ${CYAN}http://localhost:7900${NC} (For manual ChatGPT/Claude logins)"
+echo -e "  - ${BOLD}Browser Runtime (VNC):${NC} ${CYAN}http://localhost:7900${NC} (For manual ChatGPT/Gemini logins)"
 echo ""
 echo -e "To view running logs, execute:"
 echo -e "  ${BOLD}docker compose logs -f${NC}"

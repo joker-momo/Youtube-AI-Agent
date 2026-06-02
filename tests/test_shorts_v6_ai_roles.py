@@ -20,10 +20,10 @@ def test_llm_role_contract_uses_chatgpt_for_planner_script_and_scenes():
     assert short_scene_builder.PROVIDER == "chatgpt", short_scene_builder.PROVIDER
 
 
-def test_llm_role_contract_uses_claude_for_qa():
-    """Spec v6 §2.5: qa.py runs Claude as the final verdict gate."""
+def test_llm_role_contract_uses_gemini_for_qa():
+    """Spec v6 §2.5: qa.py runs Gemini as the final verdict gate."""
     from video_agent.shorts import qa
-    assert qa.LLM_PROVIDER == "claude", qa.LLM_PROVIDER
+    assert qa.LLM_PROVIDER == "gemini", qa.LLM_PROVIDER
 
 
 def test_short_llm_calls_use_temporary_conversations():
@@ -175,7 +175,7 @@ def test_layout_sequences_are_guidelines_not_hard_coded_assignment():
 
 
 # ---------------------------------------------------------------------------
-# §2.5 Claude QA — dual-gate: rule-based pre-filter, Claude final verdict
+# §2.5 Gemini QA — dual-gate: rule-based pre-filter, Gemini final verdict
 # ---------------------------------------------------------------------------
 
 def _make_short_dir(tmp_path: Path) -> Path:
@@ -204,12 +204,12 @@ def _make_short_dir(tmp_path: Path) -> Path:
     return job
 
 
-def test_claude_qa_passes_clean_short(tmp_path: Path):
-    """Dual gate: rule pre-filter passes → Claude returns PASS → final PASS."""
+def test_gemini_qa_passes_clean_short(tmp_path: Path):
+    """Dual gate: rule pre-filter passes → Gemini returns PASS → final PASS."""
     from video_agent.shorts import qa
     job = _make_short_dir(tmp_path)
 
-    def claude_fn(prompt: str) -> str:
+    def gemini_fn(prompt: str) -> str:
         return json.dumps({
             "verdict": "PASS", "issues": [], "required_changes": [], "warnings": [],
             "scores": {"hook": 90, "payoff": 85, "funnel": 80, "source_fidelity": 90,
@@ -217,18 +217,18 @@ def test_claude_qa_passes_clean_short(tmp_path: Path):
         })
 
     out = qa.run_short_qa(job, "short-01", {"channel": {}, "shorts": {}},
-                          music_track="shorts_sleep_stress", claude_fn=claude_fn)
+                          music_track="shorts_sleep_stress", gemini_fn=gemini_fn)
     assert out["verdict"] == "PASS"
-    assert out.get("provider") == "claude"
+    assert out.get("provider") == "gemini"
 
 
-def test_claude_qa_rejects_bad_layout_choices(tmp_path: Path):
-    """When Claude says FAIL for bad layout, final verdict = FAIL with
-    Claude's required_changes preserved."""
+def test_gemini_qa_rejects_bad_layout_choices(tmp_path: Path):
+    """When Gemini says FAIL for bad layout, final verdict = FAIL with
+    Gemini's required_changes preserved."""
     from video_agent.shorts import qa
     job = _make_short_dir(tmp_path)
 
-    def claude_fn(prompt: str) -> str:
+    def gemini_fn(prompt: str) -> str:
         return json.dumps({
             "verdict": "FAIL",
             "issues": ["scene-02 layout=short_cta but no CTA payoff"],
@@ -238,14 +238,14 @@ def test_claude_qa_rejects_bad_layout_choices(tmp_path: Path):
         })
 
     out = qa.run_short_qa(job, "short-01", {"channel": {}, "shorts": {}},
-                          music_track="shorts_sleep_stress", claude_fn=claude_fn)
+                          music_track="shorts_sleep_stress", gemini_fn=gemini_fn)
     assert out["verdict"] == "FAIL"
     assert any("short_cta" in c or "short_tip" in c for c in out["required_changes"])
 
 
-def test_dual_gate_rule_fail_skips_claude(tmp_path: Path):
+def test_dual_gate_rule_fail_skips_gemini(tmp_path: Path):
     """Rule pre-filter catches greeting → return FAIL without consulting
-    Claude (saves an LLM call, spec v6 §13 doesn't forbid)."""
+    Gemini (saves an LLM call, spec v6 §13 doesn't forbid)."""
     from video_agent.shorts import qa, paths
     job = _make_short_dir(tmp_path)
     sp = paths.short_dir(job, "short-01") / "short_script.json"
@@ -253,16 +253,16 @@ def test_dual_gate_rule_fail_skips_claude(tmp_path: Path):
     d["narration"] = "Hola, bienvenidos al canal."; d["hook"] = "Hola a todos"
     sp.write_text(json.dumps(d), encoding="utf-8")
 
-    claude_calls = []
+    gemini_calls = []
 
-    def claude_fn(prompt: str) -> str:
-        claude_calls.append(1)
+    def gemini_fn(prompt: str) -> str:
+        gemini_calls.append(1)
         return json.dumps({"verdict": "PASS"})
 
     out = qa.run_short_qa(job, "short-01", {"channel": {}, "shorts": {}},
-                          music_track="shorts_sleep_stress", claude_fn=claude_fn)
+                          music_track="shorts_sleep_stress", gemini_fn=gemini_fn)
     assert out["verdict"] == "FAIL"
-    assert claude_calls == []  # rule pre-filter short-circuited
+    assert gemini_calls == []  # rule pre-filter short-circuited
     assert any("greeting" in i for i in out["issues"])
 
 

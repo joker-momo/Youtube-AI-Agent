@@ -12,7 +12,6 @@ from video_agent.browser_worker.drivers.chatgpt import (
     CHATGPT_URL,
     _is_login_url as chatgpt_is_login,
 )
-from video_agent.browser_worker.drivers.claude import _is_login_url as claude_is_login
 from video_agent.browser_worker.drivers.gemini import _is_login_url as gemini_is_login
 
 
@@ -24,7 +23,7 @@ def test_login_required_error_is_browser_driver_error():
 
 def test_browser_driver_error_carries_layout_diagnostics():
     err = BrowserDriverError(
-        "Claude layout may have changed.",
+        "Gemini layout may have changed.",
         screenshot_path="/tmp/trace.png",
         diagnostic_path="/tmp/trace.json",
         layout_warning=True,
@@ -39,14 +38,14 @@ def test_browser_worker_error_detail_includes_layout_warning_metadata():
     from video_agent.browser_worker.app import _driver_error_detail
 
     err = BrowserDriverError(
-        "Claude composer not found. Claude layout may have changed.",
+        "Gemini composer not found. Gemini layout may have changed.",
         screenshot_path="/tmp/trace.png",
         diagnostic_path="/tmp/trace.json",
         layout_warning=True,
     )
 
     assert _driver_error_detail(err) == {
-        "error": "Claude composer not found. Claude layout may have changed.",
+        "error": "Gemini composer not found. Gemini layout may have changed.",
         "screenshot": "/tmp/trace.png",
         "diagnostic": "/tmp/trace.json",
         "layout_warning": True,
@@ -57,13 +56,13 @@ def test_browser_worker_error_detail_marks_quota_exhaustion():
     from video_agent.browser_worker.app import _driver_error_detail
 
     err = QuotaExceededError(
-        "Claude quota exhausted",
+        "Gemini quota exhausted",
         screenshot_path="/tmp/trace.png",
         diagnostic_path="/tmp/trace.json",
     )
 
     assert _driver_error_detail(err) == {
-        "error": "Claude quota exhausted",
+        "error": "Gemini quota exhausted",
         "screenshot": "/tmp/trace.png",
         "diagnostic": "/tmp/trace.json",
         "quota_exhausted": True,
@@ -113,12 +112,6 @@ def test_chatgpt_stable_detector_requires_streaming_to_stop():
 def test_gemini_login_url_detection():
     assert gemini_is_login("https://accounts.google.com/signin/v2/identifier")
     assert not gemini_is_login("https://gemini.google.com/app")
-
-
-def test_claude_login_url_detection():
-    assert claude_is_login("https://claude.ai/login")
-    assert claude_is_login("https://claude.ai/sign-in")
-    assert not claude_is_login("https://claude.ai/new")
 
 
 def test_humanize_env_threshold(monkeypatch):
@@ -181,43 +174,6 @@ def test_chatgpt_open_fails_when_temporary_url_cannot_open(monkeypatch):
         raise AssertionError("ChatGPTDriver.open should require temporary chat")
 
     assert page.calls == [mod.CHATGPT_URL, mod.CHATGPT_URL]
-
-
-def test_claude_open_fails_when_temporary_chat_control_missing(monkeypatch):
-    from video_agent.browser_worker.drivers import claude as mod
-
-    async def _noop(*args, **kwargs):
-        return None
-
-    monkeypatch.setattr(mod, "human_pause", _noop)
-
-    class _FakeLocator:
-        @property
-        def first(self):
-            return self
-
-        async def is_visible(self, timeout=0):
-            return False
-
-    class _FakePage:
-        # Simulate Claude bouncing back to a normal (non-incognito) chat and no
-        # temporary-chat toggle being present.
-        url = "https://claude.ai/new"
-
-        async def goto(self, url: str, **kwargs):
-            self.url = "https://claude.ai/new"
-            return None
-
-        def locator(self, selector: str):
-            return _FakeLocator()
-
-    driver = mod.ClaudeDriver(_FakePage())
-    try:
-        asyncio.run(driver.open())
-    except BrowserDriverError as exc:
-        assert "temporary chat" in str(exc).lower()
-    else:
-        raise AssertionError("ClaudeDriver.open should require temporary chat")
 
 
 def test_gemini_open_fails_when_temporary_chat_control_missing(monkeypatch):

@@ -47,7 +47,7 @@ def test_validator_warns_for_any_language_mismatch_so_qa_can_rework():
     report = result.format_report()
     assert result.is_valid
     assert "language should be 'es-ES'" in report
-    assert "Claude QA can force ChatGPT rework" in report
+    assert "Gemini QA can force ChatGPT rework" in report
 
 
 def test_validator_rejects_missing_language_with_dynamic_wording():
@@ -130,7 +130,7 @@ def test_validator_language_mismatch_routes_to_qa_rework():
     assert result.is_valid
     report = result.format_report()
     assert "language should be 'es-ES'" in report
-    assert "Claude QA can force ChatGPT rework" in report
+    assert "Gemini QA can force ChatGPT rework" in report
 
 
 def test_validator_language_passes_when_language_matches():

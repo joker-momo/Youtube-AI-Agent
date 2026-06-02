@@ -83,7 +83,7 @@ Write-Host ""
 Show-Success "Services started successfully!"
 Write-Host "=====================================================" -ForegroundColor Cyan -FontWeight Bold
 Write-Host "  - Dashboard URL:      http://localhost:8000" -ForegroundColor Green -FontWeight Bold
-Write-Host "  - VNC Browser URL:    http://localhost:7900 (Manual ChatGPT/Claude Logins)" -ForegroundColor Green -FontWeight Bold
+Write-Host "  - VNC Browser URL:    http://localhost:7900 (Manual ChatGPT/Gemini Logins)" -ForegroundColor Green -FontWeight Bold
 Write-Host "=====================================================" -ForegroundColor Cyan -FontWeight Bold
 Write-Host ""
 Write-Host "To view realtime logs, run:"

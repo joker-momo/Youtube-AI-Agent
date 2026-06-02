@@ -1,6 +1,6 @@
 # Coding Spec — Nâng cấp logic chấm điểm từ khóa keyword scoring cho YouTube
 
-Tài liệu này là **yêu cầu triển khai trực tiếp cho Codex / Claude Code**.  
+Tài liệu này là **yêu cầu triển khai trực tiếp cho Codex / Codex**.  
 Mục tiêu là nâng cấp pipeline chọn keyword trong module `Idea Generator` để không còn phụ thuộc đơn thuần vào `score DESC` của keyword scoring, mà dùng điểm tổng hợp theo mức độ phù hợp với kênh, ngôn ngữ, intent, khả năng sản xuất nội dung và độ khó SERP.
 
 ---

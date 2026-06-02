@@ -140,7 +140,7 @@ def short_qa_prompt(channel_config: dict, short_script: dict, short_scenes: dict
 
 
 # ---------------------------------------------------------------------------
-# Spec v6 §9 — additional prompts (planner, scene v6, claude_qa)
+# Spec v6 §9 — additional prompts (planner, scene v6, gemini_qa)
 # ---------------------------------------------------------------------------
 
 _SHORT_LAYOUT_NAMES = (
@@ -244,9 +244,9 @@ def short_scene_prompt_v6(channel_config: dict, short_plan: dict,
     )
 
 
-def claude_qa_prompt(channel_config: dict, short_script: dict,
+def gemini_qa_prompt(channel_config: dict, short_script: dict,
                      short_scenes: dict, short_source_map: dict | None = None) -> str:
-    """Spec v6 §2.5 / §9.4 — Claude QA validates layout + safety + funnel."""
+    """Spec v6 §2.5 / §9.4 — Gemini QA validates layout + safety + funnel."""
     schema = {
         "verdict": "PASS",
         "issues": [],
@@ -259,7 +259,7 @@ def claude_qa_prompt(channel_config: dict, short_script: dict,
         },
     }
     rules = (
-        "CLAUDE QA RULES (spec v6 §13):\n"
+        "GEMINI QA RULES (spec v6 §13):\n"
         "- duration 20-45s; first 2s = pain/curiosity/number/mistake; no greeting.\n"
         "- one main idea; payoff before CTA; CTA short; CTA <= 20% of duration.\n"
         "- on_screen_text 2-5 words; captions <= 2 lines.\n"

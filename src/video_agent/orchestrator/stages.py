@@ -15,8 +15,8 @@ from video_agent.operator import (
     _chatgpt_scenes_prompt,
     _chatgpt_seo_prompt,
     _chatgpt_script_prompt,
-    _claude_scenes_qa_batch_prompt,
-    _claude_qa_prompt,
+    _gemini_scenes_qa_batch_prompt,
+    _gemini_qa_prompt,
     extract_json_object,
     extract_json_objects,
     get_scenes_qa_feedback,
@@ -52,12 +52,12 @@ SCENES_PROMPT_PATH = Path("operator/chatgpt/scenes_prompt.md")
 SCENES_RAW_PATH = Path("operator/chatgpt/scenes.raw.txt")
 SCENES_PLAN_PATH = Path("operator/chatgpt/scenes_plan.json")
 SCENES_BATCHES_DIR = Path("operator/chatgpt/scenes_batches")
-SCENES_QA_BATCHES_DIR = Path("operator/claude/scenes_qa_batches")
+SCENES_QA_BATCHES_DIR = Path("operator/gemini/scenes_qa_batches")
 SEO_PROMPT_PATH = Path("operator/chatgpt/seo_prompt.md")
 SEO_RAW_PATH = Path("operator/chatgpt/seo.raw.txt")
-SCRIPT_QA_RAW_PATH = Path("operator/claude/script_qa.raw.txt")
-SCENES_QA_RAW_PATH = Path("operator/claude/scenes_qa.raw.txt")
-SEO_QA_RAW_PATH = Path("operator/claude/seo_qa.raw.txt")
+SCRIPT_QA_RAW_PATH = Path("operator/gemini/script_qa.raw.txt")
+SCENES_QA_RAW_PATH = Path("operator/gemini/scenes_qa.raw.txt")
+SEO_QA_RAW_PATH = Path("operator/gemini/seo_qa.raw.txt")
 
 
 class StageInputMissingError(Exception):
@@ -818,7 +818,7 @@ def run_persona_eval_stage(job_dir: Path, channel_path: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Claude QA stages (script_qa, scenes_qa, seo_qa).
+# Gemini QA stages (script_qa, scenes_qa, seo_qa).
 # ---------------------------------------------------------------------------
 
 _QA_ARTIFACT_FILE = {
@@ -840,7 +840,7 @@ def promote_qa_stage(
     *,
     channel_path: Path | None = None,
 ) -> Path:
-    """Promote a raw Claude QA response into ``operator/claude/<art>_qa.json``.
+    """Promote a raw Gemini QA response into ``operator/gemini/<art>_qa.json``.
 
     ``artifact`` is one of ``script``, ``scenes``, ``seo``. The stage
     name written to the job state is ``<artifact>_qa``. Verdict must
@@ -858,13 +858,13 @@ def promote_qa_stage(
             f"Cannot run {stage_name} from current_stage={state.current_stage!r}"
         )
     if not raw_response.strip():
-        raise StageInputMissingError(f"Missing raw Claude QA response for {artifact}")
+        raise StageInputMissingError(f"Missing raw Gemini QA response for {artifact}")
 
     raw_path = job_dir / _QA_RAW_PATH[artifact]
     raw_path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(raw_path, raw_response, encoding="utf-8")
 
-    qa_output = job_dir / "operator" / "claude" / f"{artifact}_qa.json"
+    qa_output = job_dir / "operator" / "gemini" / f"{artifact}_qa.json"
 
     try:
         result = promote_operator_qa(job_dir, artifact, raw_path)
@@ -876,7 +876,7 @@ def promote_qa_stage(
         try:
             parsed = extract_json_object(raw_response)
         except Exception:
-            # extract_json_object failed (e.g. truncated prefix from Claude UI).
+            # extract_json_object failed (e.g. truncated prefix from Gemini UI).
             # Try extract_json_objects which tolerates corrupt leading chunks.
             objects = extract_json_objects(raw_response)
             if not objects:
@@ -897,7 +897,7 @@ def promote_qa_stage(
         qa_output.parent.mkdir(parents=True, exist_ok=True)
         _write_json(qa_output, qa_payload)
         raise StageInputMissingError(
-            f"Claude QA verdict for {artifact} is "
+            f"Gemini QA verdict for {artifact} is "
             f"{qa_payload['verdict']}: {qa_payload['issues']}"
         ) from exc
 
@@ -917,7 +917,7 @@ def promote_qa_stage(
     if verdict != "PASS":
         issues = qa_payload.get("issues") or qa_payload.get("required_changes") or []
         raise StageInputMissingError(
-            f"Claude QA verdict for {artifact} is {verdict or 'MISSING'}: {issues}"
+            f"Gemini QA verdict for {artifact} is {verdict or 'MISSING'}: {issues}"
         )
 
     _complete_stage(job_dir, stage_name, result.output_path)
@@ -931,7 +931,7 @@ def _enforce_seo_language_qa(
     *,
     channel_path: Path | None = None,
 ) -> None:
-    """Force SEO rework if Claude misses the configured language contract."""
+    """Force SEO rework if Gemini misses the configured language contract."""
     seo_path = job_dir / "seo.json"
     if not seo_path.exists():
         return
@@ -1603,7 +1603,7 @@ async def auto_seo_stage(
 
 
 # ---------------------------------------------------------------------------
-# Auto Claude QA stages: orchestrator -> browser-worker -> Claude.
+# Auto Gemini QA stages: orchestrator -> browser-worker -> Gemini.
 # ---------------------------------------------------------------------------
 
 
@@ -1626,7 +1626,7 @@ async def _auto_qa(
 
     artifact_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
     channel_config = read_yaml(channel_path)
-    base_prompt = _claude_qa_prompt(artifact, artifact_payload, channel_config)
+    base_prompt = _gemini_qa_prompt(artifact, artifact_payload, channel_config)
 
     from video_agent.orchestrator.briefing import build_task_prompt
 
@@ -1635,7 +1635,7 @@ async def _auto_qa(
     raw_response = await session_fn([task])
     if not isinstance(raw_response, str) or not raw_response.strip():
         raise StageInputMissingError(
-            f"browser-worker returned an empty Claude QA response for {artifact}"
+            f"browser-worker returned an empty Gemini QA response for {artifact}"
         )
     return promote_qa_stage(job_dir, artifact, raw_response, channel_path=channel_path)
 
@@ -1760,7 +1760,7 @@ async def auto_scenes_qa_stage_sharded(
                     "batches_done": len(qa_envelopes),
                 },
             )
-            prompt = _claude_scenes_qa_batch_prompt(
+            prompt = _gemini_scenes_qa_batch_prompt(
                 channel_config,
                 batch_doc,
                 batch_index,
@@ -1792,7 +1792,7 @@ async def auto_scenes_qa_stage_sharded(
             channel_id=state.channel_id,
             qa_batch_envelopes=qa_envelopes,
         )
-        output_path = job_dir / "operator" / "claude" / "scenes_qa.json"
+        output_path = job_dir / "operator" / "gemini" / "scenes_qa.json"
         output_path.parent.mkdir(parents=True, exist_ok=True)
         _write_json(output_path, merged)
     except Exception as exc:
@@ -1800,7 +1800,7 @@ async def auto_scenes_qa_stage_sharded(
 
     if str(merged.get("verdict") or "").upper() != "PASS":
         issues = merged.get("issues") or merged.get("required_changes") or []
-        raise StageInputMissingError(f"Claude QA verdict for scenes is {merged.get('verdict')}: {issues}")
+        raise StageInputMissingError(f"Gemini QA verdict for scenes is {merged.get('verdict')}: {issues}")
     _complete_stage(job_dir, "scenes_qa", output_path)
     return output_path
 
@@ -2346,12 +2346,12 @@ async def auto_rework_artifact(
 ) -> Path:
     """Send QA issues back to ChatGPT and re-promote the artifact.
 
-    Reads ``operator/claude/<artifact>_qa.json`` to extract issues and
+    Reads ``operator/gemini/<artifact>_qa.json`` to extract issues and
     required_changes, resets the ``<artifact>_promote`` + ``<artifact>_qa``
     stages to pending, sends a rework message into the persistent
     ChatGPT tab, and re-runs the promoter with the new response.
     """
-    qa_path = job_dir / "operator" / "claude" / f"{artifact}_qa.json"
+    qa_path = job_dir / "operator" / "gemini" / f"{artifact}_qa.json"
     if not qa_path.exists():
         raise StageInputMissingError(
             f"Missing {qa_path}; cannot rework {artifact}"
@@ -2391,7 +2391,7 @@ async def auto_rework_artifact(
     rework_msg = (
         f"# Rework del artefacto `{artifact}`\n"
         f"Tu artefacto anterior recibió verdict NEEDS_REWORK del revisor "
-        f"(Claude). Reescribe el artefacto JSON corrigiendo SOLO los puntos "
+        f"(Gemini). Reescribe el artefacto JSON corrigiendo SOLO los puntos "
         f"a continuación. Mantén el mismo esquema, idioma {expected_language}, job_id y "
         f"channel_id.\n\n"
         f"## Issues detectadas\n{issue_lines}\n\n"
@@ -2464,7 +2464,7 @@ async def auto_qa_with_rework(
             # Only attempt rework if qa.json exists (QA ran but verdict=NEEDS_REWORK).
             # If qa.json is missing, the QA response itself was empty/invalid — skip
             # rework and retry qa_fn directly on the next iteration.
-            qa_path = job_dir / "operator" / "claude" / f"{artifact}_qa.json"
+            qa_path = job_dir / "operator" / "gemini" / f"{artifact}_qa.json"
             if qa_path.exists():
                 try:
                     await auto_rework_artifact(

@@ -232,7 +232,7 @@ shorts:
     planner_provider: "chatgpt"
     script_provider: "chatgpt"
     scenes_provider: "chatgpt"
-    qa_provider: "claude"
+    qa_provider: "gemini"
   auto_generate:
     enabled: true
     default_count: 3

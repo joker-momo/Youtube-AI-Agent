@@ -13,7 +13,7 @@ Current status observed:
 - `job.json` already uses atomic writes.
 - `app.py` is still too large and still contains most route logic.
 - Provider interfaces are not yet implemented.
-- Docs still contain Claude/Gemini naming drift.
+- Docs still contain Gemini/Gemini naming drift.
 - Atomic writes and queue behavior are not consistently covered by tests.
 
 ---
@@ -517,7 +517,7 @@ Keep tests deterministic and fast.
 
 - New tests pass locally.
 - Existing tests still pass.
-- Tests do not require real Docker browser runtime, ChatGPT, Claude, or keyword scoring.
+- Tests do not require real Docker browser runtime, ChatGPT, Gemini, or keyword scoring.
 
 ---
 
@@ -602,7 +602,7 @@ stage_whisper_timestamps
 stage_thumbnail_image_auto
 ```
 
-Do not queue every single ChatGPT/Claude stage in the first pass unless easy.
+Do not queue every single ChatGPT/Gemini stage in the first pass unless easy.
 
 ### Worker changes
 
@@ -736,14 +736,14 @@ Only add interfaces and a small adapter, plus tests/import checks.
 
 ---
 
-## 6. Phase 6 — Clean docs/naming drift: Claude vs Gemini
+## 6. Phase 6 — Clean docs/naming drift: Gemini vs Gemini
 
 ### Problem
 
 The current README describes the V3 target flow as:
 
 ```text
-ChatGPT script/scenes/SEO -> Claude QA
+ChatGPT script/scenes/SEO -> Gemini QA
 ```
 
 But `docs/PROJECT_STATUS.md` still contains old references to Gemini QA in several sections.
@@ -758,7 +758,7 @@ Update docs to use:
 
 ```text
 ChatGPT = writing / generation
-Claude = QA
+Gemini = QA
 Gemini = legacy/deferred/optional, only mention where historically relevant
 ```
 
@@ -769,14 +769,14 @@ README.md
 docs/PROJECT_STATUS.md
 docs/HANDOFF.md
 docs/VIDEO_AGENT_V3_STANDALONE_HANDOFF.md
-CLAUDE.md
+GEMINI.md
 ```
 
 ### Rules
 
 - Do not erase useful historical notes if they explain old behavior.
 - If a section is historical, mark it explicitly as historical.
-- Current operating rules should not tell the user to use Gemini if the code now uses Claude QA.
+- Current operating rules should not tell the user to use Gemini if the code now uses Gemini QA.
 - Keep phase/status language consistent with the current repo.
 
 ### Acceptance criteria
@@ -913,7 +913,7 @@ Add provider Protocol interfaces and BrowserClient adapters without changing orc
 ```text
 Implement Phases 6 and 7 from docs/codex_remaining_optimization_spec.md.
 
-Clean Claude/Gemini docs drift, update keyword scoring V2 docstrings, keep SERP inspection disabled by default, and add V2 integration tests.
+Clean Gemini/Gemini docs drift, update keyword scoring V2 docstrings, keep SERP inspection disabled by default, and add V2 integration tests.
 ```
 
 ---
@@ -931,7 +931,7 @@ The optimization work is complete when:
 [ ] Env editor tests prove secrets are masked and writes are protected.
 [ ] Queue tests cover retry/requeue behavior.
 [ ] Provider interfaces exist and import cleanly.
-[ ] Docs no longer confuse Claude and Gemini in current instructions.
+[ ] Docs no longer confuse Gemini and Gemini in current instructions.
 [ ] Keyword scoring V2 docs and tests match current behavior.
 [ ] pytest -q passes.
 ```

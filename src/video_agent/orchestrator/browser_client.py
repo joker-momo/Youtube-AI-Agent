@@ -83,18 +83,6 @@ class BrowserClient:
     ) -> str:
         return await self._send("gemini", prompt, response_timeout_ms)
 
-    async def claude_send(
-        self,
-        prompt: str,
-        *,
-        response_timeout_ms: int = 300_000,
-    ) -> str:
-        """Fresh Claude temporary chat → send prompt → return raw response.
-
-        Mirrors ``chatgpt_send``: a brand-new temp conversation per call so the
-        Shorts QA gate stays isolated per artifact (spec v6 §3.1)."""
-        return await self._send("claude", prompt, response_timeout_ms)
-
     async def generate_image(
         self,
         prompt: str,

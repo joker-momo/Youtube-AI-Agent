@@ -318,7 +318,7 @@ Docs still contain stale descriptions:
 
 - Browser worker attaching to host Chrome on port 9222.
 - Dedicated host Chrome profile.
-- Old Gemini wording in places where Claude is now the QA reviewer.
+- Old Gemini wording in places where Gemini is now the QA reviewer.
 - Old `es-419` validator language for Vida Plena 45+ even though the channel is now Spain-first `es-ES`.
 
 ### Files to update
@@ -345,7 +345,7 @@ KasmVNC remains bound to 127.0.0.1:7900 for manual sign-ins.
 Replace Gemini wording where it refers to the active QA flow:
 
 ```text
-Claude QA
+Gemini QA
 ```
 
 If there are legacy folder names such as `operator/gemini`, explain them as historical compatibility only.
@@ -361,7 +361,7 @@ For Vida Plena 45+, expected language is es-ES.
 
 - README does not describe host Chrome as the current architecture.
 - PROJECT_STATUS does not claim Vida Plena 45+ SEO must be `es-419`.
-- QA flow is described as ChatGPT writing + Claude QA.
+- QA flow is described as ChatGPT writing + Gemini QA.
 - Any Gemini references are explicitly marked historical/legacy.
 
 ---
@@ -399,7 +399,7 @@ description: "Salud y bienestar práctico para personas de más de 45 años en E
 
 ### Problem
 
-The current validator allows some reworkable language mismatches such as `es-419` as warnings so Claude QA can force rework. This is flexible, but for Spain-first production we may want stricter behavior.
+The current validator allows some reworkable language mismatches such as `es-419` as warnings so Gemini QA can force rework. This is flexible, but for Spain-first production we may want stricter behavior.
 
 ### Required config change
 
@@ -461,7 +461,7 @@ Also keep existing non-strict behavior test.
 
 ---
 
-## 7. Change stale QA wording from Gemini to dedicated QA reviewer / Claude
+## 7. Change stale QA wording from Gemini to dedicated QA reviewer / Gemini
 
 ### Problem
 
@@ -471,14 +471,14 @@ In `src/video_agent/operator_validators.py`, `_detect_prefilled_qa` still says:
 QA must come from Gemini, not ChatGPT.
 ```
 
-The active flow is Claude QA, and old Gemini wording can confuse future changes.
+The active flow is Gemini QA, and old Gemini wording can confuse future changes.
 
 ### Required implementation
 
 Change the error message to either:
 
 ```text
-QA must come from Claude, not ChatGPT.
+QA must come from Gemini, not ChatGPT.
 ```
 
 or better, more future-proof:
@@ -487,7 +487,7 @@ or better, more future-proof:
 QA must come from the dedicated QA reviewer, not ChatGPT.
 ```
 
-Use the future-proof wording unless other docs strongly prefer Claude explicitly.
+Use the future-proof wording unless other docs strongly prefer Gemini explicitly.
 
 ### Tests
 
@@ -567,7 +567,7 @@ This task is complete only if:
 - [ ] `seo.strict_language: true` is supported and tested.
 - [ ] Provider exports include `MockProvider` and all interfaces/adapters.
 - [ ] Active docs describe browser-runtime + browser-worker, not host Chrome CDP.
-- [ ] Active docs say Claude QA or dedicated QA reviewer, not Gemini QA, except historical notes.
+- [ ] Active docs say Gemini QA or dedicated QA reviewer, not Gemini QA, except historical notes.
 - [ ] No active validator message says “QA must come from Gemini”.
 - [ ] `_legacy.py` is reduced or at least one real route group has been extracted without endpoint changes.
 - [ ] Tests pass.

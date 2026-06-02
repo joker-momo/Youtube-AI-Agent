@@ -17,7 +17,7 @@ from video_agent.operator_shards import (
 from video_agent.operator import (
     _chatgpt_scenes_batch_prompt,
     _chatgpt_scenes_plan_prompt,
-    _claude_scenes_qa_batch_prompt,
+    _gemini_scenes_qa_batch_prompt,
 )
 
 
@@ -213,7 +213,7 @@ def test_merge_scene_batches_produces_canonical_scenes_doc():
 
     assert [scene["id"] for scene in merged["scenes"]] == ["scene-01", "scene-02"]
     assert merged["total_duration_sec"] == 10
-    assert merged["qa"]["verdict"] == "PENDING_CLAUDE_QA"
+    assert merged["qa"]["verdict"] == "PENDING_GEMINI_QA"
 
 
 def test_merge_scene_batches_rejects_schema_invalid_final_doc():
@@ -343,7 +343,7 @@ def test_sharded_prompt_builders_require_json_envelopes():
 
     plan_prompt = _chatgpt_scenes_plan_prompt(channel, script)
     batch_prompt = _chatgpt_scenes_batch_prompt(channel, script, plan, batch)
-    qa_prompt = _claude_scenes_qa_batch_prompt(channel, {"scenes": [_scene("scene-01")]}, 1, 1)
+    qa_prompt = _gemini_scenes_qa_batch_prompt(channel, {"scenes": [_scene("scene-01")]}, 1, 1)
 
     assert '"artifact_type": "scenes_plan"' in plan_prompt
     assert '"artifact_type": "scenes_batch"' in batch_prompt

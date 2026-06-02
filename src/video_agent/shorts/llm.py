@@ -1,6 +1,6 @@
 """Shorts AI role wiring (spec v6 §2 + §3).
 
-Every Shorts LLM call uses a temporary conversation: a fresh ChatGPT/Claude
+Every Shorts LLM call uses a temporary conversation: a fresh ChatGPT/Gemini
 chat per task, no shared history. This module centralizes provider routing,
 the temp-chat contract, and structured logging metadata.
 """
@@ -64,7 +64,7 @@ def make_sync_sender(async_send: Callable[[str], "asyncio.Future[str]"]) -> Sync
 
     Every invocation creates a fresh event loop (or reuses the running one via
     ``asyncio.run_coroutine_threadsafe`` when called from a thread). This is
-    what ``BrowserClient.chatgpt_send`` / ``claude_send`` expect."""
+    what ``BrowserClient.chatgpt_send`` / ``gemini_send`` expect."""
 
     def _send(prompt: str) -> str:
         try:

@@ -83,7 +83,7 @@ Use this strict responsibility split:
 ChatGPT = content author
 Python planner = content-aware validator + rhythm corrector
 Remotion = renderer
-Claude QA = reviewer
+Gemini QA = reviewer
 ```
 
 ### ChatGPT responsibilities
@@ -1005,7 +1005,7 @@ Python layout planner
 → downgrades unsafe layouts
 → keeps rhythm without inventing claims
 
-Claude QA
+Gemini QA
 → reviews final scenes artifact
 
 Remotion ChannelVideo

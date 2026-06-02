@@ -315,7 +315,7 @@ Add:
 • Avoid medical certainty claims. Use 'puede ayudarte', 'hábitos sencillos', 'rutina realista'.
 ```
 
-### 2.6. Update `_claude_qa_prompt`
+### 2.6. Update `_gemini_qa_prompt`
 
 Current QA prompt says:
 
@@ -333,10 +333,10 @@ LOCALE QA:
 • Flag forbidden age-positioning terms from channel_config.positioning.forbidden_phrases.
 ```
 
-However `_claude_qa_prompt` currently only receives `artifact_name` and `artifact`, not `channel_config`. Change signature to:
+However `_gemini_qa_prompt` currently only receives `artifact_name` and `artifact`, not `channel_config`. Change signature to:
 
 ```python
-def _claude_qa_prompt(
+def _gemini_qa_prompt(
     artifact_name: str,
     artifact: dict[str, Any] | None,
     channel_config: dict[str, Any] | None = None,
@@ -346,9 +346,9 @@ def _claude_qa_prompt(
 Then update callers in `write_operator_prompts`:
 
 ```python
-_claude_qa_prompt("script", script, channel_config)
-_claude_qa_prompt("scenes", scenes, channel_config)
-_claude_qa_prompt("seo", seo, channel_config)
+_gemini_qa_prompt("script", script, channel_config)
+_gemini_qa_prompt("scenes", scenes, channel_config)
+_gemini_qa_prompt("seo", seo, channel_config)
 ```
 
 Backward compatibility: default `channel_config=None` should still work.
@@ -564,7 +564,7 @@ visual_prompt: English
 
 ### 6.5. QA prompt locale test
 
-Test `_claude_qa_prompt("seo", seo, channel_config)` contains:
+Test `_gemini_qa_prompt("seo", seo, channel_config)` contains:
 
 ```text
 expected language is es-ES

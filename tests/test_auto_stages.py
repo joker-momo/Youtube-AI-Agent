@@ -591,12 +591,12 @@ def test_auto_scenes_qa_can_run_sharded_when_enabled(
     monkeypatch.setenv("SCENES_SHARDED_GENERATION", "1")
 
     output = asyncio.run(
-        auto_scenes_qa_stage(job_dir, channel_path, lambda msgs: fake.run_session("claude", msgs))
+        auto_scenes_qa_stage(job_dir, channel_path, lambda msgs: fake.run_session("gemini", msgs))
     )
 
-    assert output == job_dir / "operator/claude/scenes_qa.json"
-    assert (job_dir / "operator/claude/scenes_qa_batches/scenes_qa_batch_01.json").exists()
-    assert (job_dir / "operator/claude/scenes_qa_batches/scenes_qa_batch_02.json").exists()
+    assert output == job_dir / "operator/gemini/scenes_qa.json"
+    assert (job_dir / "operator/gemini/scenes_qa_batches/scenes_qa_batch_01.json").exists()
+    assert (job_dir / "operator/gemini/scenes_qa_batches/scenes_qa_batch_02.json").exists()
     merged = json.loads(output.read_text(encoding="utf-8"))
     assert merged["verdict"] == "PASS"
     assert [row["batch_index"] for row in merged["batch_results"]] == [1, 2]
@@ -658,7 +658,7 @@ def test_auto_scenes_qa_sharded_reuses_existing_batches_and_logs_progress(
         "warnings": [],
     }
     qa_batch_2 = {**qa_batch_1, "batch_index": 2}
-    batch_dir = job_dir / "operator/claude/scenes_qa_batches"
+    batch_dir = job_dir / "operator/gemini/scenes_qa_batches"
     batch_dir.mkdir(parents=True, exist_ok=True)
     (batch_dir / "scenes_qa_batch_01.json").write_text(
         json.dumps(qa_batch_1, ensure_ascii=False),
@@ -668,10 +668,10 @@ def test_auto_scenes_qa_sharded_reuses_existing_batches_and_logs_progress(
     monkeypatch.setenv("SCENES_SHARDED_GENERATION", "1")
 
     output = asyncio.run(
-        auto_scenes_qa_stage(job_dir, channel_path, lambda msgs: fake.run_session("claude", msgs))
+        auto_scenes_qa_stage(job_dir, channel_path, lambda msgs: fake.run_session("gemini", msgs))
     )
 
-    assert output == job_dir / "operator/claude/scenes_qa.json"
+    assert output == job_dir / "operator/gemini/scenes_qa.json"
     assert len(fake.calls) == 1
     events = (job_dir / "events.jsonl").read_text(encoding="utf-8")
     assert '"SCENES_QA_PROGRESS"' in events
@@ -976,7 +976,7 @@ def test_browser_client_wraps_transport_errors_as_retryable_502():
     client = BrowserClient()
 
     wrapped = client._wrap_transport_error(
-        "claude/sessions",
+        "gemini/sessions",
         httpx.RemoteProtocolError("Server disconnected without sending a response."),
     )
 
@@ -1103,7 +1103,7 @@ def test_http_run_all_success(
     assert all(s["status"] == "completed" for s in body["state"]["stages"])
     # 2 briefing sends + 3 ChatGPT task sends + 3 Gemini task sends = 8
     assert len(fake.calls) == 8
-    assert fake.send_timeouts[:2] == [("chatgpt", 60_000), ("claude", 60_000)]
+    assert fake.send_timeouts[:2] == [("chatgpt", 60_000), ("gemini", 60_000)]
     assert all(timeout == 300_000 for _, timeout in fake.send_timeouts[2:8])
 
 
@@ -1413,7 +1413,7 @@ def test_http_run_all_opens_writing_session_when_resuming_at_seo_qa_rework(
 
     assert r.status_code == 200, r.text
     assert "open:chatgpt" in fake.events
-    assert "open:claude" in fake.events
+    assert "open:gemini" in fake.events
     assert json.loads((job_dir / "seo.json").read_text(encoding="utf-8"))["language"] == "es-ES"
 
 
@@ -1597,7 +1597,7 @@ def test_auto_script_qa_pass_advances_to_scenes(
         )
     )
 
-    assert output == job_dir / "operator" / "claude" / "script_qa.json"
+    assert output == job_dir / "operator" / "gemini" / "script_qa.json"
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
     assert state["current_stage"] == "scenes"
     assert any(s["name"] == "script_qa" and s["status"] == "completed" for s in state["stages"])
@@ -1646,18 +1646,18 @@ def test_auto_seo_qa_prompt_uses_channel_language(
         auto_seo_qa_stage(
             job_dir,
             channel_path,
-            lambda msgs: fake.run_session("claude", msgs),
+            lambda msgs: fake.run_session("gemini", msgs),
         )
     )
 
-    assert output == job_dir / "operator" / "claude" / "seo_qa.json"
+    assert output == job_dir / "operator" / "gemini" / "seo_qa.json"
     task = fake.calls[0][0]
     assert "expected language is es-ES" in task
     assert "not EXACTLY the expected language, verdict MUST be NEEDS_REWORK" in task
     assert "expected language is es-MX" not in task
 
 
-def test_auto_seo_qa_forces_rework_when_language_mismatches_even_if_claude_passes(
+def test_auto_seo_qa_forces_rework_when_language_mismatches_even_if_gemini_passes(
     tmp_path: Path,
     channel_path: Path,
     valid_seo_payload: dict,
@@ -1675,11 +1675,11 @@ def test_auto_seo_qa_forces_rework_when_language_mismatches_even_if_claude_passe
             auto_seo_qa_stage(
                 job_dir,
                 channel_path,
-                lambda msgs: fake.run_session("claude", msgs),
+                lambda msgs: fake.run_session("gemini", msgs),
             )
         )
 
-    qa = json.loads((job_dir / "operator/claude/seo_qa.json").read_text(encoding="utf-8"))
+    qa = json.loads((job_dir / "operator/gemini/seo_qa.json").read_text(encoding="utf-8"))
     assert qa["verdict"] == "NEEDS_REWORK"
     assert "SEO language must be exactly es-ES" in qa["issues"][0]
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
@@ -1711,11 +1711,11 @@ def test_auto_seo_qa_rework_repromotes_before_retrying_qa(
             job_dir,
             channel_path,
             chatgpt_fn=lambda msgs: fake.run_session("chatgpt", msgs),
-            qa_session_fn=lambda msgs: fake.run_session("claude", msgs),
+            qa_session_fn=lambda msgs: fake.run_session("gemini", msgs),
         )
     )
 
-    assert output == job_dir / "operator" / "claude" / "seo_qa.json"
+    assert output == job_dir / "operator" / "gemini" / "seo_qa.json"
     promoted = json.loads((job_dir / "seo.json").read_text(encoding="utf-8"))
     assert promoted["language"] == "es-ES"
     assert "idioma es-ES" in fake.calls[1][0]
@@ -1757,7 +1757,7 @@ def test_auto_qa_with_rework_passes_after_one_retry(
             qa_session_fn=lambda msgs: fake.run_session("gemini", msgs),
         )
     )
-    assert output == job_dir / "operator" / "claude" / "script_qa.json"
+    assert output == job_dir / "operator" / "gemini" / "script_qa.json"
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
     script_qa = next(s for s in state["stages"] if s["name"] == "script_qa")
     assert script_qa["status"] == "completed"
@@ -1813,7 +1813,7 @@ def test_auto_qa_with_rework_feeds_promotion_validation_errors_back_to_chatgpt(
         )
     )
 
-    assert output == job_dir / "operator" / "claude" / "scenes_qa.json"
+    assert output == job_dir / "operator" / "gemini" / "scenes_qa.json"
     assert len(fake.calls) == 4
     repair_prompt = fake.calls[2][0]
     assert "scenes validation failed" in repair_prompt

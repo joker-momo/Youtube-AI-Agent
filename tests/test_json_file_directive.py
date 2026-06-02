@@ -5,7 +5,7 @@ import json
 from video_agent.operator import (
     _chatgpt_scenes_batch_prompt,
     _chatgpt_scenes_plan_prompt,
-    _claude_scenes_qa_batch_prompt,
+    _gemini_scenes_qa_batch_prompt,
     _chatgpt_script_prompt,
     _chatgpt_seo_prompt,
     _json_file_directive,
@@ -53,7 +53,7 @@ def test_scenes_batch_prompt_requests_named_file_with_index():
 
 
 def test_scenes_qa_batch_prompt_requests_named_file_with_index():
-    p = _claude_scenes_qa_batch_prompt({}, {"job_id": "job-a"}, 2, 8)
+    p = _gemini_scenes_qa_batch_prompt({}, {"job_id": "job-a"}, 2, 8)
     assert "// FILE: scenes_qa_batch_02.json" in p
 
 

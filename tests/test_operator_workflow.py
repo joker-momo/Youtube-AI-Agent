@@ -159,7 +159,7 @@ def test_promote_operator_artifact_normalizes_compact_scenes_shape(tmp_path):
     assert promoted["scenes"][0]["id"] == "scene-01"
     assert promoted["scenes"][0]["visual_prompt"] == "Warm bedroom at night"
     assert promoted["scenes"][0]["on_screen_text"] == "Baja la luz"
-    assert promoted["qa"]["verdict"] == "PENDING_CLAUDE_QA"
+    assert promoted["qa"]["verdict"] == "PENDING_GEMINI_QA"
 
 
 def test_promote_operator_artifact_unwraps_scenes_rework_envelope(tmp_path):
@@ -195,7 +195,7 @@ def test_promote_operator_artifact_unwraps_scenes_rework_envelope(tmp_path):
     assert promoted["scenes"][0]["id"] == "scene-01"
     assert promoted["scenes"][0]["visual_prompt"] == "Warm bedroom at night"
     assert promoted["scenes"][0]["motion"] == "Slow push-in."
-    assert promoted["qa"]["verdict"] == "PENDING_CLAUDE_QA"
+    assert promoted["qa"]["verdict"] == "PENDING_GEMINI_QA"
 
 
 def test_promote_operator_artifact_rewrites_scenes_prefilled_qa(tmp_path):
@@ -226,7 +226,7 @@ def test_promote_operator_artifact_rewrites_scenes_prefilled_qa(tmp_path):
 
     result = promote_operator_artifact(tmp_path / "operator-job", "scenes", raw_path)
     promoted = json.loads(result.output_path.read_text(encoding="utf-8"))
-    assert promoted["qa"]["verdict"] == "PENDING_CLAUDE_QA"
+    assert promoted["qa"]["verdict"] == "PENDING_GEMINI_QA"
 
 
 def test_promote_operator_artifact_promotes_final_scene_cta_from_script(tmp_path):
@@ -264,7 +264,7 @@ def test_promote_operator_artifact_promotes_final_scene_cta_from_script(tmp_path
                         "layout": "subtitle",
                     },
                 ],
-                "qa": {"verdict": "PENDING_CLAUDE_QA"},
+                "qa": {"verdict": "PENDING_GEMINI_QA"},
             }
         ),
         encoding="utf-8",
@@ -322,7 +322,7 @@ def test_promote_operator_artifact_rejects_invalid_seo_contract(tmp_path):
 
 
 def test_promote_operator_artifact_preserves_wrong_language_for_qa_rework(tmp_path):
-    """Language mismatches promote with a warning so Claude QA can force rework."""
+    """Language mismatches promote with a warning so Gemini QA can force rework."""
     raw_path = tmp_path / "seo.raw.txt"
     raw_path.write_text(
         json.dumps(
@@ -428,7 +428,7 @@ Gemini said
 
     result = promote_operator_qa(tmp_path / "operator-job", "script", raw_path)
 
-    assert result.output_path == tmp_path / "operator-job/operator/claude/script_qa.json"
+    assert result.output_path == tmp_path / "operator-job/operator/gemini/script_qa.json"
     promoted = json.loads(result.output_path.read_text(encoding="utf-8"))
     assert promoted["verdict"] == "PASS"
     assert promoted["required_changes"] == []
@@ -504,7 +504,7 @@ def test_build_operator_status_reports_next_missing_step(tmp_path):
     assert status["artifacts"]["script"]["artifact"] == "present"
     assert status["artifacts"]["script"]["qa"] == "PASS"
     assert status["artifacts"]["scenes"]["artifact"] == "missing"
-    assert status["next_step"] == "Generate and promote scenes.json, then run Claude QA for scenes."
+    assert status["next_step"] == "Generate and promote scenes.json, then run Gemini QA for scenes."
 
 
 def test_build_operator_next_writes_script_prompt_for_empty_job(tmp_path):
@@ -546,7 +546,7 @@ def test_build_operator_next_promotes_existing_raw_before_prompting(tmp_path):
 
 def test_extract_json_objects_robustness_with_preamble():
     from video_agent.operator import extract_json_objects
-    raw_text = 'Claude responded: {\n\n{\n  "title": "Uno"\n}\n'
+    raw_text = 'Gemini responded: {\n\n{\n  "title": "Uno"\n}\n'
     candidates = extract_json_objects(raw_text)
     assert len(candidates) == 1
     assert candidates[0] == {"title": "Uno"}
@@ -562,12 +562,12 @@ def test_extract_json_objects_recovers_truncated_root_object():
         '"channel_id": "ch",\n'
         '"sections": [{"title": "A"}, {"title": "B"}],\n'
         '"qa": {\n'
-        '"verdict": "PENDING_CLAUDE_QA"\n'
+        '"verdict": "PENDING_GEMINI_QA"\n'
         '}\n'
     )
     candidates = extract_json_objects(raw_text)
     assert any(
-        c.get("channel_id") == "ch" and c.get("qa") == {"verdict": "PENDING_CLAUDE_QA"}
+        c.get("channel_id") == "ch" and c.get("qa") == {"verdict": "PENDING_GEMINI_QA"}
         for c in candidates
     ), candidates
 

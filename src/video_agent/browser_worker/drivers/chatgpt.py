@@ -84,7 +84,7 @@ async def _ensure_temporary_chat(page: "Page") -> bool:
 
 
 def _stable_response_detector_js() -> str:
-    """Page-side stable-response predicate shared by ChatGPT and Claude."""
+    """Page-side stable-response predicate shared by ChatGPT and Gemini."""
     return """
         ({scrapeFnSource, priorText, stableMs}) => {
           // Re-eval the scrape function on every check so the latest
@@ -154,7 +154,7 @@ def _stable_response_detector_js() -> str:
           // generating* (token/render gaps, network stalls). Quiet time alone
           // then latches a half-finished response. So also require that the
           // model is NOT actively streaming, detected via the "stop
-          // generating" control both ChatGPT and Claude expose only while a
+          // generating" control both ChatGPT and Gemini expose only while a
           // response is in flight. Best-effort: if no known stop control is
           // present (unknown UI), fall back to quiet-only so we never hang.
           const stopSelectors = [
@@ -225,7 +225,7 @@ async def _wait_for_stable_response(
     # Installs a MutationObserver lazily and only resolves when the latest
     # assistant turn has been quiet and no visible stop-generating control
     # remains. The observer survives between calls because state lives on
-    # ``window``, which is fine for persistent ChatGPT/Claude tabs.
+    # ``window``, which is fine for persistent ChatGPT/Gemini tabs.
     detector_js = _stable_response_detector_js()
 
     try:

@@ -56,7 +56,7 @@ def test_worker_does_not_retry_browser_quota_exhaustion():
     exc = HTTPException(
         status_code=429,
         detail={
-            "error": "Claude quota exhausted",
+            "error": "Gemini quota exhausted",
             "browser_worker_detail": {"quota_exhausted": True},
         },
     )

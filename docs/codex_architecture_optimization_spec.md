@@ -2,7 +2,7 @@
 
 Repo mục tiêu: `https://github.com/joker-momo/Youtube-AI-Agent`
 
-Tài liệu này là spec thực thi cho Codex / Claude Code. Mục tiêu là tối ưu kiến trúc hiện tại mà **không rewrite toàn bộ project**, giữ nguyên khả năng chạy local Docker-first, giữ dashboard hiện tại hoạt động, và giảm rủi ro khi tiếp tục phát triển pipeline sản xuất video YouTube.
+Tài liệu này là spec thực thi cho Codex / Codex. Mục tiêu là tối ưu kiến trúc hiện tại mà **không rewrite toàn bộ project**, giữ nguyên khả năng chạy local Docker-first, giữ dashboard hiện tại hoạt động, và giảm rủi ro khi tiếp tục phát triển pipeline sản xuất video YouTube.
 
 ---
 
@@ -17,7 +17,7 @@ User browser
 -> stage modules
 -> browser-worker
 -> browser-runtime Chromium + Playwright CDP
--> ChatGPT / Claude / keyword scoring sessions
+-> ChatGPT / Gemini / keyword scoring sessions
 -> local artifacts under jobs/<job_id>/
 -> TTS / Whisper / Remotion render
 -> review page / final video
@@ -45,7 +45,7 @@ Có 6 nhóm tối ưu chính:
 3. **Thêm file locking + atomic writes** cho `job.json`, artifact JSON và event logs.
 4. **Chuẩn hóa provider interfaces** cho LLM, keyword scorer, browser automation, asset/image, TTS, renderer.
 5. **Hardening security cho `.env` / config endpoints**.
-6. **Dọn documentation/naming drift** giữa ChatGPT, Claude, Gemini legacy, v2/v3.
+6. **Dọn documentation/naming drift** giữa ChatGPT, Gemini, Gemini legacy, v2/v3.
 
 Không làm trong scope này:
 
@@ -423,7 +423,7 @@ events.jsonl
 
 ### 6.1. Vấn đề
 
-Browser automation hiện là lợi thế lớn, nhưng cũng là điểm brittle. Nếu orchestrator phụ thuộc trực tiếp vào ChatGPT/Claude/keyword scoring browser workflow, sau này khó đổi sang API/provider khác.
+Browser automation hiện là lợi thế lớn, nhưng cũng là điểm brittle. Nếu orchestrator phụ thuộc trực tiếp vào ChatGPT/Gemini/keyword scoring browser workflow, sau này khó đổi sang API/provider khác.
 
 ### 6.2. Mục tiêu
 
@@ -485,11 +485,11 @@ class VideoRenderer(Protocol):
 
 ### 6.5. Adapter requirement
 
-Existing browser-worker based ChatGPT/Claude/keyword scoring should become adapter implementations:
+Existing browser-worker based ChatGPT/Gemini/keyword scoring should become adapter implementations:
 
 ```text
 BrowserChatGPTProvider
-BrowserClaudeProvider
+BrowserGeminiProvider
 BrowserKeywordScorer
 ```
 
@@ -570,7 +570,7 @@ Example response:
 
 ### 8.1. Vấn đề
 
-Docs and paths may still contain legacy references such as `gemini` for QA even though current flow uses Claude QA. This confuses Codex and future maintainers.
+Docs and paths may still contain legacy references such as `gemini` for QA even though current flow uses Gemini QA. This confuses Codex and future maintainers.
 
 ### 8.2. Mục tiêu
 
@@ -593,7 +593,7 @@ Add a section:
 ## Provider naming
 
 - Writer: ChatGPT browser session.
-- QA reviewer: Claude browser session.
+- QA reviewer: Gemini browser session.
 - Some legacy paths may still use `gemini` in folder names for backward compatibility.
 - Do not rename legacy job artifact paths unless migration is implemented.
 ```

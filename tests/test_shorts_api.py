@@ -269,6 +269,48 @@ def test_worker_dispatches_shorts_confirm_render_command(tmp_path: Path, monkeyp
     assert called == {"job_id": "job-1", "job_dir": "job-1"}
 
 
+def test_worker_dispatches_shorts_generate_ideas_command(tmp_path: Path, monkeypatch):
+    from video_agent.orchestrator import worker
+
+    _make_job(tmp_path, with_shorts=False)
+    called = {}
+
+    def fake_generate(job, *, job_dir, channel_path, client):
+        called["job_id"] = job["job_id"]
+        called["job_dir"] = job_dir.name
+
+    monkeypatch.setattr(worker, "_run_shorts_generate_ideas_job", fake_generate)
+    worker._dispatch_queue_job(
+        {"job_id": "job-1", "enforce_approvals": 0, "command": "shorts_generate_ideas", "payload": "{\"target_count\":10}"},
+        jobs_root=tmp_path,
+        channel_path=Path("configs/vida-plena-45/channel.yaml"),
+        client=object(),
+    )
+
+    assert called == {"job_id": "job-1", "job_dir": "job-1"}
+
+
+def test_worker_dispatches_shorts_render_selected_ideas_command(tmp_path: Path, monkeypatch):
+    from video_agent.orchestrator import worker
+
+    _make_job(tmp_path, with_shorts=False)
+    called = {}
+
+    def fake_render_selected(job, *, job_dir, channel_path, client):
+        called["job_id"] = job["job_id"]
+        called["job_dir"] = job_dir.name
+
+    monkeypatch.setattr(worker, "_run_shorts_render_selected_ideas_job", fake_render_selected)
+    worker._dispatch_queue_job(
+        {"job_id": "job-1", "enforce_approvals": 0, "command": "shorts_render_selected_ideas", "payload": "{\"idea_ids\":[\"idea-01\"]}"},
+        jobs_root=tmp_path,
+        channel_path=Path("configs/vida-plena-45/channel.yaml"),
+        client=object(),
+    )
+
+    assert called == {"job_id": "job-1", "job_dir": "job-1"}
+
+
 def test_short_render_job_updates_draft_ready_manifest_and_run(tmp_path: Path, monkeypatch):
     from video_agent.orchestrator import worker
 

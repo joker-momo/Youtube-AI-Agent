@@ -22,12 +22,40 @@ echo ""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_DIR}"
+source "${SCRIPT_DIR}/lib/run_state.sh"
 
 WORKER_MODE="auto"
 RUN_MODE="full"
 RUN_CLEANUP=false
 REINSTALL_DEPS=false
 STOP_HEAVY=false
+SMART_AUTO_STATE_DIR="${REPO_DIR}/.cache/run-state"
+IMAGE_CHANGED=false
+RUNTIME_CHANGED=false
+
+IMAGE_INPUTS=(
+  "Dockerfile"
+  "docker-compose.yml"
+  "docker-compose.nvidia.yml"
+  "docker-compose.amd.yml"
+  "requirements.txt"
+  "pyproject.toml"
+  "remotion/package.json"
+  "remotion/package-lock.json"
+)
+
+RUNTIME_INPUTS=(
+  ".env"
+  "run.sh"
+  "installers/run.sh"
+  "src"
+  "configs"
+  "remotion/src"
+  "requirements.txt"
+  "pyproject.toml"
+  "remotion/package.json"
+  "remotion/package-lock.json"
+)
 
 usage() {
   echo "Usage: bash run.sh [--dashboard|--app-only|--full|--stop-heavy|--stop] [--cleanup] [--reinstall-deps] [--native-worker|--docker-worker]"
@@ -143,9 +171,48 @@ stop_native_worker() {
   pkill -f "video_agent.cli worker --db-path jobs/queue.db" >/dev/null 2>&1 || true
 }
 
+native_worker_running() {
+  pgrep -f "video_agent.cli worker --db-path jobs/queue.db" >/dev/null 2>&1
+}
+
 stop_heavy_services() {
   docker compose ${COMPOSE_ARGS:-"-f docker-compose.yml"} stop worker browser-worker browser-runtime >/dev/null 2>&1 || true
   stop_native_worker
+}
+
+docker_build_services() {
+  local services=("$@")
+  if [[ ${#services[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  echo -e "${CYAN}Rebuilding Docker services: ${services[*]}${NC}"
+  docker compose ${COMPOSE_ARGS} build "${services[@]}"
+}
+
+docker_restart_services() {
+  local services=("$@")
+  if [[ ${#services[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  echo -e "${CYAN}Restarting services to load updated code: ${services[*]}${NC}"
+  docker compose ${COMPOSE_ARGS} restart "${services[@]}"
+}
+
+start_native_worker() {
+  mkdir -p logs
+  echo -e "${CYAN}Launching Native Worker on host Mac (3x speedup)...${NC}"
+  nohup env \
+    PYTHONPATH=src \
+    JOBS_DIR="${REPO_DIR}/jobs" \
+    CHANNEL_CONFIG="${REPO_DIR}/configs/vida-plena-45/channel.yaml" \
+    BROWSER_WORKER_URL="http://localhost:8001" \
+    PUBLIC_JOBS_KEEP="${PUBLIC_JOBS_KEEP}" \
+    BROWSER_TRACE_RETENTION_DAYS="${BROWSER_TRACE_RETENTION_DAYS}" \
+    BROWSER_TRACE_MAX_MB="${BROWSER_TRACE_MAX_MB}" \
+    python -m video_agent.cli worker --db-path jobs/queue.db > logs/native_worker.log 2>&1 &
+  echo -e "${GREEN}✅ Native Worker started in the background (PID: $!). Logs: logs/native_worker.log${NC}"
 }
 
 wait_for_url() {
@@ -247,9 +314,40 @@ if [ "$STOP_HEAVY" = true ]; then
   stop_heavy_services
 fi
 
+IMAGE_HASH_FILE="$(smart_auto_hash_file image)"
+RUNTIME_HASH_FILE="$(smart_auto_hash_file runtime)"
+CURRENT_IMAGE_HASH="$(compute_path_fingerprint "${IMAGE_INPUTS[@]}")"
+CURRENT_RUNTIME_HASH="$(compute_path_fingerprint "${RUNTIME_INPUTS[@]}")"
+
+if smart_auto_hash_changed "$CURRENT_IMAGE_HASH" "$IMAGE_HASH_FILE"; then
+  IMAGE_CHANGED=true
+  echo -e "${YELLOW}Detected Docker image/dependency changes. Containers will be rebuilt as needed.${NC}"
+fi
+
+if smart_auto_hash_changed "$CURRENT_RUNTIME_HASH" "$RUNTIME_HASH_FILE"; then
+  RUNTIME_CHANGED=true
+  echo -e "${YELLOW}Detected runtime code/config changes. Running processes will be restarted as needed.${NC}"
+fi
+
+START_MODE="docker"
+if [[ "$RUN_MODE" == "dashboard" ]]; then
+  START_MODE="dashboard"
+elif [[ "$USE_NATIVE_WORKER" == "true" ]]; then
+  START_MODE="native"
+fi
+
+read -r -a START_SERVICES <<< "$(smart_auto_service_targets "$START_MODE")"
+
+if [[ "$IMAGE_CHANGED" == "true" ]]; then
+  docker_build_services "${START_SERVICES[@]}"
+fi
+
 if [[ "$RUN_MODE" == "dashboard" ]]; then
   echo -e "${CYAN}Starting dashboard only in Docker...${NC}"
   docker compose ${COMPOSE_ARGS} up -d app
+  if smart_auto_should_restart_services "$IMAGE_CHANGED" "$RUNTIME_CHANGED"; then
+    docker_restart_services app
+  fi
   stop_heavy_services
 elif [ "$USE_NATIVE_WORKER" = true ]; then
   # Find best python command (prefer homebrew python3.11/3.12/3.10 over older system python3)
@@ -313,32 +411,37 @@ elif [ "$USE_NATIVE_WORKER" = true ]; then
   # Start app and browser containers in Docker, but exclude the docker worker
   echo -e "${CYAN}Starting App & Browser containers in Docker...${NC}"
   docker compose ${COMPOSE_ARGS} up -d app browser-worker browser-runtime
+  if smart_auto_should_restart_services "$IMAGE_CHANGED" "$RUNTIME_CHANGED"; then
+    docker_restart_services app browser-worker browser-runtime
+  fi
   
   # Ensure the docker worker is stopped to prevent conflicts
   docker compose ${COMPOSE_ARGS} stop worker &>/dev/null || true
   
   # Run the native worker in the background
-  mkdir -p logs
-  if pgrep -f "video_agent.cli worker --db-path jobs/queue.db" >/dev/null; then
-    echo -e "${YELLOW}Native Worker already appears to be running. Keeping existing process.${NC}"
-    echo -e "${YELLOW}Logs may still be in logs/native_worker.log.${NC}"
+  NATIVE_WORKER_RUNNING=false
+  if native_worker_running; then
+    NATIVE_WORKER_RUNNING=true
+  fi
+
+  if smart_auto_should_restart_native_worker "$RUNTIME_CHANGED" "$NATIVE_WORKER_RUNNING"; then
+    if [[ "$NATIVE_WORKER_RUNNING" == "true" ]]; then
+      echo -e "${CYAN}Restarting native worker to load updated code/config...${NC}"
+      stop_native_worker
+      sleep 1
+    fi
+    start_native_worker
   else
-    echo -e "${CYAN}Launching Native Worker on host Mac (3x speedup)...${NC}"
-    nohup env \
-      PYTHONPATH=src \
-      JOBS_DIR="${REPO_DIR}/jobs" \
-      CHANNEL_CONFIG="${REPO_DIR}/configs/vida-plena-45/channel.yaml" \
-      BROWSER_WORKER_URL="http://localhost:8001" \
-      PUBLIC_JOBS_KEEP="${PUBLIC_JOBS_KEEP}" \
-      BROWSER_TRACE_RETENTION_DAYS="${BROWSER_TRACE_RETENTION_DAYS}" \
-      BROWSER_TRACE_MAX_MB="${BROWSER_TRACE_MAX_MB}" \
-      python -m video_agent.cli worker --db-path jobs/queue.db > logs/native_worker.log 2>&1 &
-    echo -e "${GREEN}✅ Native Worker started in the background (PID: $!). Logs: logs/native_worker.log${NC}"
+    echo -e "${GREEN}Native worker is already current; no restart needed.${NC}"
+    echo -e "${YELLOW}Logs may still be in logs/native_worker.log.${NC}"
   fi
 else
   # Standard Docker startup
   echo -e "${CYAN}Starting YouTube AI Agent services in Docker...${NC}"
   docker compose ${COMPOSE_ARGS} up -d app worker browser-worker browser-runtime
+  if smart_auto_should_restart_services "$IMAGE_CHANGED" "$RUNTIME_CHANGED"; then
+    docker_restart_services app worker browser-worker browser-runtime
+  fi
 fi
 
 # 5. Check Health
@@ -347,6 +450,9 @@ if [[ "$RUN_MODE" != "dashboard" ]]; then
   wait_for_url "browser-worker" "http://localhost:8001/health" 90
   wait_for_url "browser runtime CDP bridge" "http://localhost:8001/runtime" 120
 fi
+
+write_smart_auto_hash "$CURRENT_IMAGE_HASH" "$IMAGE_HASH_FILE"
+write_smart_auto_hash "$CURRENT_RUNTIME_HASH" "$RUNTIME_HASH_FILE"
 
 echo -e "\n${GREEN}✅ Services started successfully!${NC}"
 echo -e "${BOLD}${CYAN}=====================================================${NC}"

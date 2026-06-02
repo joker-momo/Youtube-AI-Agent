@@ -50,7 +50,27 @@ _SAFETY_RULES = (
 def _source_block(source_artifacts: dict) -> str:
     if not source_artifacts:
         return ""
-    return "SOURCE (rewrite faithfully, do not invent):\n" + json.dumps(source_artifacts, ensure_ascii=False)[:2000] + "\n\n"
+    return "SOURCE (rewrite faithfully, do not invent):\n" + json.dumps(source_artifacts, ensure_ascii=False)[:8000] + "\n\n"
+
+
+def _idea_block(short_plan: dict) -> str:
+    if not short_plan.get("idea_id"):
+        return ""
+    key_points = short_plan.get("key_points") or []
+    points_text = "\n".join(
+        f"- {item.get('point', '')} | source_scene_ids={item.get('source_scene_ids', [])}"
+        for item in key_points
+    )
+    return (
+        "SHORT IDEA:\n"
+        f"Title: {short_plan.get('title', '')}\n"
+        f"Hook text: {short_plan.get('hook_text', '')}\n"
+        f"Viewer pain: {short_plan.get('viewer_pain', '')}\n"
+        f"Practical payoff: {short_plan.get('practical_payoff', '')}\n"
+        f"Format: {short_plan.get('format', '')}\n"
+        f"Key points:\n{points_text}\n"
+        f"Narration seed:\n{short_plan.get('narration_seed', '')}\n\n"
+    )
 
 
 def short_script_prompt(channel_config: dict, short_plan: dict, source_artifacts: dict | None = None) -> str:
@@ -69,6 +89,12 @@ def short_script_prompt(channel_config: dict, short_plan: dict, source_artifacts
     return (
         f"You are a YouTube Shorts writer for a Spain-first wellness channel (adults 45+).\n"
         f"Write a single vertical Short in format '{short_plan.get('format', 'pain_to_tip')}'.\n\n"
+        f"Use the selected synthesis idea when present.\n"
+        f"Do not summarize the entire long video.\n"
+        f"Only use claims supported by the provided key points and source scenes.\n"
+        f"Create a 20-45 second Short.\n"
+        f"Keep one main idea.\n\n"
+        f"{_idea_block(short_plan)}"
         f"{_source_block(source_artifacts or {})}"
         f"SOURCE NARRATION SEED:\n{seed}\n\n"
         f"{_OUTPUT_RULES}\n{_LANGUAGE_RULES}\n{_RETENTION_RULES}\n{_STYLE_RULES}\n{_SAFETY_RULES}\n"

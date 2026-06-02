@@ -240,3 +240,84 @@ def test_shorts_studio_confirm_render_enqueues_new_command(client: TestClient, t
     row = JobQueue(tmp_path / "queue.db").get_job("job-1")
     assert row is not None
     assert row["command"] == "shorts_confirm_render"
+
+
+def test_shorts_studio_state_maps_generate_ideas_queue_command(client: TestClient, tmp_path: Path):
+    job_dir = _write_job(tmp_path, "job-1")
+    shorts_dir = job_dir / "shorts"
+    shorts_dir.mkdir(parents=True, exist_ok=True)
+    queue = JobQueue(tmp_path / "queue.db")
+    queue.enqueue("job-1", enforce_approvals=False, command="shorts_generate_ideas", payload={"target_count": 10})
+
+    response = client.get("/shorts-studio/state")
+
+    assert response.status_code == 200, response.text
+    jobs = {item["job_id"]: item for item in response.json()["jobs"]}
+    assert jobs["job-1"]["shorts_status"] == "ideas_generating"
+
+
+def test_shorts_studio_state_failed_idea_run_overrides_old_ideas_ready(client: TestClient, tmp_path: Path):
+    job_dir = _write_job(tmp_path, "job-1")
+    shorts_dir = job_dir / "shorts"
+    shorts_dir.mkdir(parents=True, exist_ok=True)
+    (shorts_dir / "short_ideas.json").write_text(
+        json.dumps({"generation_id": "ideas-old", "ideas": [{"idea_id": "idea-01"}]}),
+        encoding="utf-8",
+    )
+    (shorts_dir / "idea_generation_run.json").write_text(
+        json.dumps({"generation_id": "ideas-new", "status": "failed", "errors": ["boom"]}),
+        encoding="utf-8",
+    )
+
+    response = client.get("/shorts-studio/state")
+
+    assert response.status_code == 200, response.text
+    jobs = {item["job_id"]: item for item in response.json()["jobs"]}
+    assert jobs["job-1"]["shorts_status"] == "failed"
+
+
+def test_shorts_studio_generate_ideas_enqueues_new_command(client: TestClient, tmp_path: Path):
+    _write_job(tmp_path, "job-1")
+
+    response = client.post("/shorts-studio/jobs/job-1/ideas/generate", json={"target_count": 8, "force": True})
+
+    assert response.status_code == 202, response.text
+    body = response.json()
+    assert body["command"] == "shorts_generate_ideas"
+    row = JobQueue(tmp_path / "queue.db").get_job("job-1")
+    assert row is not None
+    assert row["command"] == "shorts_generate_ideas"
+
+
+def test_shorts_studio_get_ideas_returns_short_ideas_doc(client: TestClient, tmp_path: Path):
+    job_dir = _write_job(tmp_path, "job-1")
+    shorts_dir = job_dir / "shorts"
+    shorts_dir.mkdir(parents=True, exist_ok=True)
+    (shorts_dir / "short_ideas.json").write_text(
+        json.dumps({"generation_id": "ideas-1", "ideas": [{"idea_id": "idea-01"}]}),
+        encoding="utf-8",
+    )
+
+    response = client.get("/shorts-studio/jobs/job-1/ideas")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["ideas"][0]["idea_id"] == "idea-01"
+
+
+def test_shorts_studio_render_selected_enqueues_new_command(client: TestClient, tmp_path: Path):
+    job_dir = _write_job(tmp_path, "job-1")
+    shorts_dir = job_dir / "shorts"
+    shorts_dir.mkdir(parents=True, exist_ok=True)
+    (shorts_dir / "short_ideas.json").write_text(
+        json.dumps({"generation_id": "ideas-1", "ideas": [{"idea_id": "idea-01"}]}),
+        encoding="utf-8",
+    )
+
+    response = client.post("/shorts-studio/jobs/job-1/ideas/render", json={"idea_ids": ["idea-01"], "force": False})
+
+    assert response.status_code == 202, response.text
+    body = response.json()
+    assert body["command"] == "shorts_render_selected_ideas"
+    row = JobQueue(tmp_path / "queue.db").get_job("job-1")
+    assert row is not None
+    assert row["command"] == "shorts_render_selected_ideas"

@@ -1087,21 +1087,20 @@
         </div>
         <div class="ideas-body" id="shorts-studio-body" style="display:none">
           <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
-            Generate draft Shorts first, then confirm render only for PASS drafts you want to keep.
+            Generate grounded Short ideas from the full long-form narration, then select and render them directly.
           </div>
           <div class="gen-form">
             <label>Job</label>
-            <select id="shorts-studio-job" onchange="loadShortsStudioDrafts()">
+            <select id="shorts-studio-job" onchange="loadShortsStudioIdeas()">
               <option value="">Select a long-form job…</option>
             </select>
             <div class="gen-actions">
               <button class="action-btn" onclick="loadShortsStudioState()">↻ Refresh state</button>
-              <button class="action-btn primary" id="shorts-studio-prepare-btn" onclick="prepareShortsStudioDrafts()">Generate Short Drafts</button>
-              <button class="action-btn primary" id="shorts-studio-confirm-btn" onclick="confirmShortsStudioRender()">Confirm Render</button>
+              <button class="action-btn primary" id="shorts-studio-prepare-btn" onclick="generateShortsStudioIdeas()">Generate Short Ideas</button>
             </div>
           </div>
           <div id="shorts-studio-status" style="font-size:12px;color:var(--muted);margin-bottom:6px"></div>
-          <div class="ideas-grid" id="shorts-studio-drafts"></div>
+          <div class="ideas-grid" id="shorts-studio-ideas"></div>
         </div>
       </section>
       <section class="content-grid">
@@ -3638,84 +3637,108 @@ async function loadShortsStudioState() {
       const firstEligible = jobs.find(job => job.eligible);
       if (firstEligible) selectEl.value = firstEligible.job_id;
     }
-    if (selectEl.value) await loadShortsStudioDrafts();
+    if (selectEl.value) await loadShortsStudioIdeas();
   } catch (e) {
     statusEl.textContent = 'Failed to load Shorts Studio state: ' + e;
   }
 }
 
-async function loadShortsStudioDrafts() {
+async function loadShortsStudioIdeas() {
   const jobId = document.getElementById('shorts-studio-job').value;
-  const grid = document.getElementById('shorts-studio-drafts');
+  const grid = document.getElementById('shorts-studio-ideas');
   if (!jobId) {
     grid.innerHTML = '<div style="font-size:12px;color:var(--muted)">Select an eligible long-form job.</div>';
     return;
   }
-  const r = await fetch('/shorts-studio/jobs/' + encodeURIComponent(jobId) + '/drafts');
+  const r = await fetch('/shorts-studio/jobs/' + encodeURIComponent(jobId) + '/ideas');
   if (!r.ok) {
-    grid.innerHTML = '<div style="font-size:12px;color:var(--muted)">No draft data yet.</div>';
+    grid.innerHTML = '<div style="font-size:12px;color:var(--muted)">No synthesis ideas yet. Click "Generate Short Ideas".</div>';
     return;
   }
   const data = await r.json();
-  const drafts = data.drafts || [];
-  if (!drafts.length) {
-    grid.innerHTML = '<div style="font-size:12px;color:var(--muted)">No drafts yet. Click "Generate Short Drafts".</div>';
+  const ideas = data.ideas || [];
+  if (!ideas.length) {
+    grid.innerHTML = '<div style="font-size:12px;color:var(--muted)">No ideas found. Click "Generate Short Ideas".</div>';
     return;
   }
-  grid.innerHTML = drafts.map(draft => `
+  grid.innerHTML = ideas.map(idea => `
     <div class="idea-card">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
         <div>
-          <div style="font-weight:700">${escapeHtml(draft.short_id || '')}</div>
-          <div style="font-size:12px;color:var(--muted)">Status: ${escapeHtml(draft.status || 'unknown')} · QA: ${escapeHtml(draft.qa_verdict || '-')}</div>
+          <div style="font-weight:700">${escapeHtml(idea.title || '')} (${escapeHtml(idea.idea_id || '')})</div>
+          <div style="font-size:12px;color:var(--muted)">
+            Format: ${escapeHtml(idea.format || '')} · 
+            Score: ${escapeHtml(idea.scores?.overall || '-')} · 
+            Safety: ${escapeHtml(idea.scores?.safety || '-')}
+          </div>
         </div>
-        <label style="font-size:12px;display:flex;gap:6px;align-items:center">
-          <input type="checkbox" class="shorts-studio-check" value="${escapeHtml(draft.short_id || '')}" ${draft.status === 'ready_for_render' ? '' : 'disabled'}>
-          confirm
-        </label>
+        <button class="action-btn primary" onclick="renderSingleShortIdea('${escapeHtml(jobId)}', '${escapeHtml(idea.idea_id)}', this)">Render Short</button>
       </div>
-      <div style="font-size:12px;margin-top:8px">${escapeHtml(draft.hook || '')}</div>
-      <div style="font-size:11px;color:var(--muted);margin-top:4px">
-        ${draft.duration_sec ? draft.duration_sec + 's · ' : ''}source: ${escapeHtml((draft.source_scene_ids || []).join(', ') || '-')}
+      <div style="font-size:12px;margin-top:8px"><strong>Hook:</strong> ${escapeHtml(idea.hook_text || '')}</div>
+      <div style="font-size:12px;margin-top:4px"><strong>Pain:</strong> ${escapeHtml(idea.viewer_pain || '')}</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:6px">
+        Source Scenes: ${escapeHtml((idea.source_scene_ids || []).join(', ') || '-')}
       </div>
     </div>
   `).join('');
 }
 
-async function prepareShortsStudioDrafts() {
+async function generateShortsStudioIdeas() {
   const jobId = document.getElementById('shorts-studio-job').value;
   if (!jobId) { alert('Select an eligible long-form job first.'); return; }
-  const r = await fetch('/shorts-studio/jobs/' + encodeURIComponent(jobId) + '/prepare', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({force: false}),
-  });
-  if (!r.ok) {
-    const text = await r.text();
-    showToast('Prepare failed: ' + text);
-    return;
+  const btn = document.getElementById('shorts-studio-prepare-btn');
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Enqueuing…';
+  try {
+    const r = await fetch('/shorts-studio/jobs/' + encodeURIComponent(jobId) + '/ideas/generate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({target_count: 10, force: true}),
+    });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      const text = d.detail?.error || d.detail || r.statusText;
+      showToast('Generate failed: ' + text);
+      return;
+    }
+    showToast('Short ideas generation enqueued successfully');
+    setTimeout(() => { loadShortsStudioState(); }, 1500);
+  } catch (e) {
+    showToast('Network error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
   }
-  showToast('Short draft generation enqueued');
-  setTimeout(() => { loadShortsStudioState(); }, 1000);
 }
 
-async function confirmShortsStudioRender() {
-  const jobId = document.getElementById('shorts-studio-job').value;
-  if (!jobId) { alert('Select a job first.'); return; }
-  const short_ids = Array.from(document.querySelectorAll('.shorts-studio-check:checked')).map(el => el.value);
-  if (!short_ids.length) { alert('Select at least one PASS draft to render.'); return; }
-  const r = await fetch('/shorts-studio/jobs/' + encodeURIComponent(jobId) + '/confirm-render', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({short_ids}),
-  });
-  if (!r.ok) {
-    const text = await r.text();
-    showToast('Confirm render failed: ' + text);
-    return;
+async function renderSingleShortIdea(jobId, ideaId, btn) {
+  if (!jobId || !ideaId) return;
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⏳ Enqueuing…';
+  try {
+    const r = await fetch('/shorts-studio/jobs/' + encodeURIComponent(jobId) + '/ideas/render', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({idea_ids: [ideaId], force: false}),
+    });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      const text = d.detail?.error || d.detail || r.statusText;
+      showToast('Render failed: ' + text);
+      btn.disabled = false;
+      btn.textContent = originalText;
+      return;
+    }
+    showToast('Short render enqueued successfully');
+    btn.textContent = '✓ Enqueued';
+    setTimeout(() => { loadShortsStudioState(); }, 1500);
+  } catch (e) {
+    showToast('Network error');
+    btn.disabled = false;
+    btn.textContent = originalText;
   }
-  showToast('Short render enqueued');
-  setTimeout(() => { loadShortsStudioState(); }, 1000);
 }
 
 // ---- Channel Videos panel ----

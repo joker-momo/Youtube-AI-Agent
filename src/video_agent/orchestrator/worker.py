@@ -86,6 +86,12 @@ def _dispatch_queue_job(
     if command == "shorts_prepare_drafts":
         _run_shorts_prepare_drafts_job(job, job_dir=job_dir, channel_path=channel_path, client=client)
         return
+    if command == "shorts_generate_ideas":
+        _run_shorts_generate_ideas_job(job, job_dir=job_dir, channel_path=channel_path, client=client)
+        return
+    if command == "shorts_render_selected_ideas":
+        _run_shorts_render_selected_ideas_job(job, job_dir=job_dir, channel_path=channel_path, client=client)
+        return
     if command == "shorts_render_one":
         _run_short_render_job(job, job_dir=job_dir, channel_path=channel_path)
         return
@@ -217,6 +223,71 @@ def _run_shorts_prepare_drafts_job(job: dict, *, job_dir: Path, channel_path: Pa
         plan_fn=plan_fn,
         build_short_fn=build_short_fn,
         require_render_confirmation=True,
+    )
+
+
+def _run_shorts_generate_ideas_job(job: dict, *, job_dir: Path, channel_path: Path, client: BrowserClient) -> None:
+    import json as _json
+
+    from video_agent.shorts.idea_generator import generate_short_ideas
+    from video_agent.utils.json_io import read_yaml
+
+    payload: dict = {}
+    raw = job.get("payload")
+    if raw:
+        try:
+            payload = _json.loads(raw) if isinstance(raw, str) else dict(raw)
+        except Exception:
+            payload = {}
+    target_count = int(payload.get("target_count") or 10)
+    channel_config = read_yaml(channel_path)
+
+    def chatgpt_fn(prompt: str) -> str:
+        return asyncio.run(client.chatgpt_send(prompt))
+
+    generate_short_ideas(job_dir, channel_config, llm_fn=chatgpt_fn, target_count=target_count)
+
+
+def _run_shorts_render_selected_ideas_job(job: dict, *, job_dir: Path, channel_path: Path, client: BrowserClient) -> None:
+    import json as _json
+
+    from video_agent.shorts.short_builder import build_short
+    from video_agent.shorts.synthesis import render_selected_short_ideas
+    from video_agent.utils.json_io import read_yaml
+
+    payload: dict = {}
+    raw = job.get("payload")
+    if raw:
+        try:
+            payload = _json.loads(raw) if isinstance(raw, str) else dict(raw)
+        except Exception:
+            payload = {}
+    idea_ids = list(payload.get("idea_ids") or [])
+    force = bool(payload.get("force"))
+    channel_config = read_yaml(channel_path)
+
+    def chatgpt_fn(prompt: str) -> str:
+        return asyncio.run(client.chatgpt_send(prompt))
+
+    def gemini_fn(prompt: str) -> str:
+        return asyncio.run(client.gemini_send(prompt))
+
+    def build_short_fn(long_job_dir, short_plan, cfg, **kwargs):
+        return build_short(
+            long_job_dir,
+            short_plan,
+            cfg,
+            llm_fn=chatgpt_fn,
+            gemini_fn=gemini_fn,
+            **kwargs,
+        )
+
+    render_selected_short_ideas(
+        job_dir,
+        channel_config,
+        idea_ids,
+        build_short_fn=build_short_fn,
+        force=force,
     )
 
 

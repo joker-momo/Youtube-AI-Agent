@@ -143,6 +143,82 @@ def test_auto_thumbnail_image_stage_uses_variant_text(tmp_path, channel_path):
     assert any("INSOMNIO SECRETO" in p for p in captured)
 
 
+def test_auto_thumbnail_image_stage_binds_variant_title_per_image(tmp_path, channel_path):
+    """Spec v5.6 P0: each variant prompt must use the variant's own title."""
+    job_dir = tmp_path / "job-thumb-variants"
+    _seed_at_thumbnail_image(job_dir)
+    seo = json.loads((job_dir / "seo.json").read_text())
+    seo["title_variants"] = [
+        {"title": "Variant A face", "thumbnail_text": "INSOMNIO 45", "score": 90},
+        {"title": "Variant B object", "thumbnail_text": "TU CAMA HABLA", "score": 88},
+        {"title": "Variant C compare", "thumbnail_text": "ANTES Y DESPUÉS", "score": 85},
+    ]
+    (job_dir / "seo.json").write_text(json.dumps(seo))
+
+    captured = []
+
+    async def fake_image_fn(*, prompt, project_name, out_path, **kwargs):
+        captured.append(prompt)
+        from PIL import Image
+        Image.new("RGB", (640, 360), (12, 34, 56)).save(out_path, format="PNG")
+        return {"src": "x", "bytes": 9}
+
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        asyncio.run(auto_thumbnail_image_stage(job_dir, channel_path, fake_image_fn))
+
+    assert len(captured) == 3
+    # Each prompt carries its own variant title (not the top-level seo.title).
+    assert any("Variant A face" in p for p in captured)
+    assert any("Variant B object" in p for p in captured)
+    assert any("Variant C compare" in p for p in captured)
+    # Each prompt advertises a distinct variant strategy.
+    assert sum("FACE-DRIVEN" in p for p in captured) == 1
+    assert sum("OBJECT-DRIVEN" in p for p in captured) == 1
+    assert sum("COMPARISON-DRIVEN" in p for p in captured) == 1
+
+
+def test_auto_thumbnail_image_stage_writes_prompt_logs(tmp_path, channel_path):
+    """Spec v5.6 P1: persist per-variant prompts under operator/chatgpt/."""
+    job_dir = tmp_path / "job-thumb-logs"
+    _seed_at_thumbnail_image(job_dir)
+
+    async def fake_image_fn(*, prompt, project_name, out_path, **kwargs):
+        from PIL import Image
+        Image.new("RGB", (640, 360), (12, 34, 56)).save(out_path, format="PNG")
+        return {"src": "x", "bytes": 9}
+
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        asyncio.run(auto_thumbnail_image_stage(job_dir, channel_path, fake_image_fn))
+
+    log_dir = job_dir / "operator" / "chatgpt"
+    log_paths = sorted(log_dir.glob("thumbnail_prompt_*.md"))
+    assert log_paths, "expected at least one persisted thumbnail prompt"
+    body = log_paths[0].read_text(encoding="utf-8")
+    assert "Thumbnail prompt — variant" in body
+    assert "thumbnail_text:" in body
+
+
+def test_auto_thumbnail_image_stage_enforces_1920x1080(tmp_path, channel_path):
+    """Spec v5.6 P1: ImageOps.fit crop to canonical YouTube thumbnail size."""
+    job_dir = tmp_path / "job-thumb-size"
+    _seed_at_thumbnail_image(job_dir)
+
+    async def fake_image_fn(*, prompt, project_name, out_path, **kwargs):
+        # Simulate ChatGPT returning the wrong size.
+        from PIL import Image
+        Image.new("RGB", (1024, 1024), (200, 50, 50)).save(out_path, format="PNG")
+        return {"src": "x", "bytes": 9}
+
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        asyncio.run(auto_thumbnail_image_stage(job_dir, channel_path, fake_image_fn))
+
+    from PIL import Image as _PilImage
+
+    jpg = next((job_dir / "outputs").glob("thumbnail_*.jpg"))
+    with _PilImage.open(jpg) as img:
+        assert img.size == (1920, 1080)
+
+
 def test_auto_thumbnail_image_stage_wrong_stage_raises(tmp_path, channel_path):
     job_dir = tmp_path / "job-wrong"
     _seed_at_thumbnail_image(job_dir)

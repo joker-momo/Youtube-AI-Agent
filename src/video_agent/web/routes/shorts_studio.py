@@ -12,6 +12,11 @@ from pydantic import BaseModel
 from video_agent.orchestrator.queue import JobQueue
 from video_agent.shorts import paths as shorts_paths
 from video_agent.shorts import status as shorts_status
+from video_agent.shorts.idea_store import (
+    read_idea_generation_run,
+    read_short_ideas,
+    read_studio_render_run,
+)
 from video_agent.web.routes._legacy import _job_idea_title, _safe_job_dir, get_jobs_root
 from video_agent.web.run_all_pipeline import is_run_locked
 
@@ -26,6 +31,16 @@ class PrepareDraftsRequest(BaseModel):
 
 class ConfirmRenderRequest(BaseModel):
     short_ids: list[str]
+
+
+class GenerateIdeasRequest(BaseModel):
+    target_count: int = 10
+    force: bool = False
+
+
+class RenderIdeasRequest(BaseModel):
+    idea_ids: list[str]
+    force: bool = False
 
 
 def _is_file_locked(path: Path) -> bool:
@@ -89,6 +104,10 @@ def system_has_active_job(jobs_root: Path) -> tuple[bool, list[dict[str, Any]]]:
             active_jobs.append({"kind": "run_lock", "job_id": job_dir.name, "status": "running"})
         if _is_file_locked(shorts_paths.autopilot_lock_path(job_dir)):
             active_jobs.append({"kind": "shorts_autopilot_lock", "job_id": job_dir.name, "status": "running"})
+        if _is_file_locked(shorts_paths.idea_generation_lock_path(job_dir)):
+            active_jobs.append({"kind": "idea_generation_lock", "job_id": job_dir.name, "status": "running"})
+        if _is_file_locked(shorts_paths.render_selected_lock_path(job_dir)):
+            active_jobs.append({"kind": "render_selected_lock", "job_id": job_dir.name, "status": "running"})
         shorts_root = shorts_paths.shorts_dir(job_dir)
         if not shorts_root.exists():
             continue
@@ -107,10 +126,78 @@ def system_has_active_job(jobs_root: Path) -> tuple[bool, list[dict[str, Any]]]:
     return bool(active_jobs), active_jobs
 
 
-def _studio_job_state(job_dir: Path) -> dict[str, Any]:
+def _queued_or_running_synthesis_state(job_dir: Path, active_jobs: list[dict[str, Any]]) -> str | None:
+    job_id = job_dir.name
+    for item in active_jobs:
+        if item.get("job_id") != job_id:
+            continue
+        command = str(item.get("command") or "")
+        if command == "shorts_generate_ideas":
+            return "ideas_generating"
+        if command == "shorts_render_selected_ideas":
+            return "rendering_selected"
+    if _is_file_locked(shorts_paths.render_selected_lock_path(job_dir)):
+        return "rendering_selected"
+    if _is_file_locked(shorts_paths.idea_generation_lock_path(job_dir)):
+        return "ideas_generating"
+    return None
+
+
+def _derive_synthesis_shorts_status(job_dir: Path, active_jobs: list[dict[str, Any]]) -> str:
+    active_state = _queued_or_running_synthesis_state(job_dir, active_jobs)
+    if active_state:
+        return active_state
+
+    ideas = read_short_ideas(job_dir) or {}
+    idea_run = read_idea_generation_run(job_dir) or {}
+    if idea_run:
+        idea_status = idea_run.get("status")
+        idea_generation_id = idea_run.get("generation_id")
+        ideas_generation_id = ideas.get("generation_id")
+        if idea_status in ("queued", "running", "ideas_generating"):
+            return "ideas_generating"
+        if idea_status == "failed":
+            return "failed"
+        if idea_status == "ideas_ready" and (
+            not ideas or idea_generation_id != ideas_generation_id or not ideas.get("ideas")
+        ):
+            return "failed"
+
+    current_generation_id = ideas.get("generation_id")
+    render_run = read_studio_render_run(job_dir) or {}
+    if (
+        render_run
+        and render_run.get("status") != "stale"
+        and render_run.get("generation_id") == current_generation_id
+    ):
+        status = render_run.get("status")
+        if status in ("completed", "completed_with_warnings", "failed"):
+            return status
+
+    if ideas and ideas.get("ideas"):
+        return "ideas_ready"
+
+    manifest = _read_json(shorts_paths.manifest_path(job_dir))
+    if manifest and manifest.get("mode") == "synthesis_ideas":
+        status = manifest.get("status")
+        if status == "rendered":
+            return "completed"
+        if status in ("completed", "completed_with_warnings", "failed"):
+            return status
+    return "none"
+
+
+def _studio_job_state(job_dir: Path, active_jobs: list[dict[str, Any]]) -> dict[str, Any]:
     summary = shorts_status.summarize_shorts(job_dir)
+    ideas = read_short_ideas(job_dir) or {}
+    manifest = _read_json(shorts_paths.manifest_path(job_dir))
     missing = _job_missing_artifacts(job_dir)
     job = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    rendered_short_count = sum(
+        1
+        for entry in (manifest.get("shorts") or [])
+        if entry.get("rendered") is True and entry.get("status") != "archived"
+    )
     return {
         "job_id": job.get("job_id") or job_dir.name,
         "title": _job_idea_title(job_dir),
@@ -119,7 +206,10 @@ def _studio_job_state(job_dir: Path) -> dict[str, Any]:
         "eligible": not missing,
         "missing": missing,
         "video_exists": _resolve_artifact(job_dir, "video.mp4") is not None,
-        "shorts_status": summary.get("state") or "none",
+        "shorts_status": _derive_synthesis_shorts_status(job_dir, active_jobs),
+        "idea_count": len(ideas.get("ideas") or []),
+        "rendered_short_count": rendered_short_count,
+        "legacy_shorts_status": summary.get("state") or "none",
     }
 
 
@@ -137,7 +227,7 @@ def get_shorts_studio_state(jobs_root: Path = Depends(get_jobs_root)) -> dict[st
     for job_dir in sorted(jobs_root.iterdir(), reverse=True) if jobs_root.exists() else []:
         if not job_dir.is_dir() or not (job_dir / "job.json").exists():
             continue
-        jobs.append(_studio_job_state(job_dir))
+        jobs.append(_studio_job_state(job_dir, active_jobs))
     return {
         "can_start": not busy,
         "active_jobs": active_jobs,
@@ -174,6 +264,79 @@ def get_shorts_studio_drafts(job_id: str, jobs_root: Path = Depends(get_jobs_roo
         )
         drafts.append(merged)
     return {"job_id": job_id, "drafts": drafts}
+
+
+@router.get("/shorts-studio/jobs/{job_id}/ideas")
+def get_shorts_studio_ideas(job_id: str, jobs_root: Path = Depends(get_jobs_root)) -> dict[str, Any]:
+    job_dir = _safe_job_dir(jobs_root, job_id)
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    ideas = read_short_ideas(job_dir)
+    if not ideas:
+        raise HTTPException(status_code=404, detail={"error": "ideas_not_found"})
+    return ideas
+
+
+@router.post("/shorts-studio/jobs/{job_id}/ideas/generate", status_code=202)
+def post_shorts_studio_generate_ideas(
+    job_id: str,
+    req: GenerateIdeasRequest,
+    jobs_root: Path = Depends(get_jobs_root),
+) -> dict[str, Any]:
+    job_dir = _safe_job_dir(jobs_root, job_id)
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    missing = _job_missing_artifacts(job_dir)
+    if missing:
+        raise HTTPException(status_code=400, detail={"error": "missing_artifacts", "missing": missing})
+    busy, _active = system_has_active_job(jobs_root)
+    if busy:
+        raise HTTPException(status_code=409, detail={"error": "system_busy"})
+    queue = JobQueue(jobs_root / "queue.db")
+    queue.enqueue(
+        job_id,
+        enforce_approvals=False,
+        command="shorts_generate_ideas",
+        payload={"target_count": int(req.target_count), "force": bool(req.force)},
+    )
+    return {"status": "enqueued", "command": "shorts_generate_ideas", "job_id": job_id}
+
+
+@router.post("/shorts-studio/jobs/{job_id}/ideas/render", status_code=202)
+def post_shorts_studio_render_ideas(
+    job_id: str,
+    req: RenderIdeasRequest,
+    jobs_root: Path = Depends(get_jobs_root),
+) -> dict[str, Any]:
+    job_dir = _safe_job_dir(jobs_root, job_id)
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    busy, _active = system_has_active_job(jobs_root)
+    if busy:
+        raise HTTPException(status_code=409, detail={"error": "system_busy"})
+    ideas = read_short_ideas(job_dir)
+    if not ideas:
+        raise HTTPException(status_code=400, detail={"error": "ideas_not_found"})
+    valid_ids = {str(idea.get("idea_id")) for idea in ideas.get("ideas") or []}
+    idea_ids = [idea_id for idea_id in req.idea_ids if idea_id]
+    if not idea_ids:
+        raise HTTPException(status_code=400, detail={"error": "missing_idea_ids"})
+    invalid = [idea_id for idea_id in idea_ids if idea_id not in valid_ids]
+    if invalid:
+        raise HTTPException(status_code=400, detail={"error": "invalid_idea_ids", "idea_ids": invalid})
+    queue = JobQueue(jobs_root / "queue.db")
+    queue.enqueue(
+        job_id,
+        enforce_approvals=False,
+        command="shorts_render_selected_ideas",
+        payload={"idea_ids": idea_ids, "force": bool(req.force)},
+    )
+    return {
+        "status": "enqueued",
+        "command": "shorts_render_selected_ideas",
+        "job_id": job_id,
+        "idea_ids": idea_ids,
+    }
 
 
 @router.post("/shorts-studio/jobs/{job_id}/prepare", status_code=202)

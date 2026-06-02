@@ -75,6 +75,29 @@ def test_build_source_map_records_used_scenes_with_timestamps(tmp_path: Path):
     assert sm["funnel"]["cta"]
 
 
+def test_build_source_map_includes_synthesis_idea_metadata(tmp_path: Path):
+    from video_agent.shorts import source_map
+
+    job = _long_job(tmp_path)
+    sm = source_map.build_source_map(
+        job,
+        short_plan={
+            "short_id": "short-01",
+            "idea_id": "idea-01",
+            "idea_type": "synthesis",
+            "scene_ids": ["scene-09"],
+            "source_scene_ids": ["scene-09"],
+            "key_points": [{"point": "Marca una hora", "source_scene_ids": ["scene-09"]}],
+        },
+        short_script={"narration": "Marca una hora de cierre.", "cta": "Vídeo completo en el canal."},
+        channel_config=_cfg(),
+    )
+
+    assert sm["idea_id"] == "idea-01"
+    assert sm["idea_type"] == "synthesis"
+    assert sm["key_points"][0]["source_scene_ids"] == ["scene-09"]
+
+
 # --------------------------------------------------------------------------
 # QA (rule-based)
 # --------------------------------------------------------------------------
@@ -258,6 +281,46 @@ def test_build_short_prepare_mode_stops_before_render(tmp_path: Path):
     assert res["rendered"] is False
     assert res["requires_render_confirmation"] is True
     assert calls == []
+
+
+def test_build_short_passes_source_artifacts_to_script_builder(tmp_path: Path, monkeypatch):
+    from video_agent.shorts import paths, short_builder
+
+    job = _long_job(tmp_path)
+    calls: list[str] = []
+    captured: dict[str, object] = {}
+    plan = {
+        "short_id": "short-04",
+        "format": "pain_to_tip",
+        "scene_ids": ["scene-09"],
+        "source_scene_ids": ["scene-09"],
+        "idea_id": "idea-01",
+        "narration_seed": "Marca una hora de cierre.",
+        "music_track": "shorts_sleep_stress",
+    }
+
+    def fake_build_short_script(long_job_dir, short_plan, channel_config, llm_fn, **kwargs):
+        captured["source_artifacts"] = kwargs.get("source_artifacts")
+        return _GOOD_SCRIPT
+
+    monkeypatch.setattr(short_builder.short_script_builder, "build_short_script", fake_build_short_script)
+    monkeypatch.setattr(
+        short_builder.qa,
+        "run_short_qa",
+        lambda *args, **kwargs: {"verdict": "PASS", "issues": [], "required_changes": [], "warnings": []},
+    )
+
+    res = short_builder.build_short(
+        job,
+        plan,
+        _cfg(),
+        llm_fn=_llm_fn_factory(),
+        source_artifacts={"idea": {"idea_id": "idea-01"}, "source_scenes": [{"scene_id": "scene-09"}]},
+        **_stub_io(calls),
+    )
+
+    assert res["status"] == "rendered"
+    assert captured["source_artifacts"]["idea"]["idea_id"] == "idea-01"
     sd = paths.short_dir(job, "short-03")
     assert not (sd / "short.mp4").exists()
     assert not (sd / "short_cover.jpg").exists()

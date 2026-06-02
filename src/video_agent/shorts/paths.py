@@ -12,8 +12,14 @@ ARCHIVE_DIRNAME = "archive"
 MANIFEST_FILE = "shorts_manifest.json"
 PLAN_FILE = "shorts_plan.json"
 AUTOPILOT_RUN_FILE = "autopilot_run.json"
+STUDIO_RENDER_RUN_FILE = "studio_render_run.json"
 SOURCE_SNAPSHOT_FILE = "source_snapshot.json"
 AUTOPILOT_LOCK_FILE = ".autopilot.lock"
+IDEA_GENERATION_RUN_FILE = "idea_generation_run.json"
+SHORT_IDEAS_FILE = "short_ideas.json"
+SELECTED_SHORT_IDEAS_FILE = "selected_short_ideas.json"
+IDEA_GENERATION_LOCK_FILE = ".ideas.lock"
+RENDER_SELECTED_LOCK_FILE = ".render-selected.lock"
 
 SHORT_STATUS_FILE = "short_status.json"
 SHORT_IDEA_FILE = "short_idea.json"
@@ -69,9 +75,33 @@ def autopilot_lock_path(long_job_dir: Path) -> Path:
     return shorts_dir(long_job_dir) / AUTOPILOT_LOCK_FILE
 
 
+def idea_generation_lock_path(long_job_dir: Path) -> Path:
+    return shorts_dir(long_job_dir) / IDEA_GENERATION_LOCK_FILE
+
+
+def render_selected_lock_path(long_job_dir: Path) -> Path:
+    return shorts_dir(long_job_dir) / RENDER_SELECTED_LOCK_FILE
+
+
 def short_status_path(long_job_dir: Path, short_id: str) -> Path:
     return short_dir(long_job_dir, short_id) / SHORT_STATUS_FILE
 
 
 def short_lock_path(long_job_dir: Path, short_id: str) -> Path:
     return short_dir(long_job_dir, short_id) / SHORT_LOCK_FILE
+
+
+def short_ideas_path(long_job_dir: Path) -> Path:
+    return shorts_dir(long_job_dir) / SHORT_IDEAS_FILE
+
+
+def selected_short_ideas_path(long_job_dir: Path) -> Path:
+    return shorts_dir(long_job_dir) / SELECTED_SHORT_IDEAS_FILE
+
+
+def idea_generation_run_path(long_job_dir: Path) -> Path:
+    return shorts_dir(long_job_dir) / IDEA_GENERATION_RUN_FILE
+
+
+def studio_render_run_path(long_job_dir: Path) -> Path:
+    return shorts_dir(long_job_dir) / STUDIO_RENDER_RUN_FILE

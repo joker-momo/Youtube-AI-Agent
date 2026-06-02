@@ -77,6 +77,7 @@ def build_short(
     cover_fn: Callable[..., Path] = _default_cover_fn,
     long_video_url: str = "",
     require_render_confirmation: bool = False,
+    source_artifacts: dict | None = None,
 ) -> dict[str, Any]:
     short_id = short_plan["short_id"]
     sd = paths.short_dir(long_job_dir, short_id)
@@ -101,6 +102,7 @@ def build_short(
         plan_for_prompt = {**short_plan, "source_long_job_id": long_job_dir.name}
         short_script = short_script_builder.build_short_script(
             long_job_dir, plan_for_prompt, channel_config, llm_fn,
+            source_artifacts=source_artifacts,
             feedback=feedback, attempt=attempts,
         )
         short_scenes = short_scene_builder.build_short_scenes(
@@ -138,6 +140,7 @@ def build_short(
         "short_id": short_id,
         "source_long_job_id": long_job_dir.name,
         "format": short_plan.get("format"),
+        "idea_id": short_plan.get("idea_id"),
         "hook": hook,
         "cover_text": cover_text,
         "duration_sec": round(duration_sec, 1),

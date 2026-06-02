@@ -53,6 +53,9 @@ def build_source_map(
     cta = short_script.get("cta") or funnel_cfg.get("default_cta_without_url", "Vídeo completo en el canal.")
     return {
         "short_id": short_plan.get("short_id"),
+        "idea_id": short_plan.get("idea_id"),
+        "idea_type": short_plan.get("idea_type") or short_plan.get("candidate_type"),
+        "key_points": list(short_plan.get("key_points") or []),
         "source_long_job_id": long_job_dir.name,
         "source_video_title": _long_title(long_job_dir),
         "source_video_url": long_video_url,

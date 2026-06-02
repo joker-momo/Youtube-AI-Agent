@@ -218,6 +218,15 @@ def run_shorts_autopilot(
         continue_on_fail = ap.get("continue_if_one_short_fails", True)
         for sp in selected:
             short_id = sp.get("short_id")
+            if (long_job_dir / ".stop_requested").exists() or (paths.short_dir(long_job_dir, short_id) / ".stop_requested").exists():
+                from fastapi import HTTPException
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "Stop requested by operator.",
+                        "stop_requested": True,
+                    }
+                )
             res: dict[str, Any]
             prior = _prior_status(long_job_dir, short_id)
             if not force and prior and prior.get("status") == "rendered":

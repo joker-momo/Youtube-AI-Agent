@@ -132,13 +132,15 @@ def _queued_or_running_synthesis_state(job_dir: Path, active_jobs: list[dict[str
         if item.get("job_id") != job_id:
             continue
         command = str(item.get("command") or "")
-        if command == "shorts_generate_ideas":
+        if command in ("shorts_generate_ideas", "shorts_prepare_drafts", "shorts_autopilot"):
             return "ideas_generating"
-        if command == "shorts_render_selected_ideas":
+        if command in ("shorts_render_selected_ideas", "shorts_confirm_render", "shorts_render_one"):
             return "rendering_selected"
     if _is_file_locked(shorts_paths.render_selected_lock_path(job_dir)):
         return "rendering_selected"
     if _is_file_locked(shorts_paths.idea_generation_lock_path(job_dir)):
+        return "ideas_generating"
+    if _is_file_locked(shorts_paths.autopilot_lock_path(job_dir)):
         return "ideas_generating"
     return None
 
@@ -337,6 +339,66 @@ def get_short_detail(job_id: str, short_id: str, jobs_root: Path = Depends(get_j
     }
 
 
+@router.delete("/shorts-studio/jobs/{job_id}/shorts/{short_id}")
+def delete_short(job_id: str, short_id: str, jobs_root: Path = Depends(get_jobs_root)) -> dict[str, Any]:
+    import shutil
+    job_dir = _safe_job_dir(jobs_root, job_id)
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    short_dir_path = shorts_paths.short_dir(job_dir, short_id)
+    if not short_dir_path.exists():
+        raise HTTPException(status_code=404, detail=f"Unknown short: {short_id}")
+
+    # Check if currently active/running
+    busy, active_jobs = system_has_active_job(jobs_root)
+    is_active = False
+    for job in active_jobs:
+        if job.get("job_id") == job_id and job.get("short_id") == short_id:
+            is_active = True
+            break
+    lock_file = short_dir_path / shorts_paths.SHORT_LOCK_FILE
+    if is_active or _is_file_locked(lock_file):
+        raise HTTPException(status_code=409, detail={"error": "short_busy"})
+
+    # 1. Delete the directories
+    shutil.rmtree(short_dir_path, ignore_errors=True)
+    shutil.rmtree(shorts_paths.short_tmp_dir(job_dir, short_id), ignore_errors=True)
+
+    # 2. Delete short_status file
+    status_file = shorts_paths.short_status_path(job_dir, short_id)
+    if status_file.exists():
+        status_file.unlink(missing_ok=True)
+
+    # 3. Update manifest.json
+    manifest_path = shorts_paths.manifest_path(job_dir)
+    deleted_from_manifest = False
+    if manifest_path.exists():
+        try:
+            manifest_doc = json.loads(manifest_path.read_text(encoding="utf-8"))
+            shorts_list = manifest_doc.get("shorts") or []
+            new_shorts = [s for s in shorts_list if s.get("short_id") != short_id]
+            if len(new_shorts) != len(shorts_list):
+                manifest_doc["shorts"] = new_shorts
+                from video_agent.shorts import manifest as manifest_mod
+                manifest_mod.write_manifest(job_dir, manifest_doc)
+                deleted_from_manifest = True
+        except Exception:
+            pass
+
+    return {
+        "status": "deleted",
+        "job_id": job_id,
+        "short_id": short_id,
+        "deleted_from_manifest": deleted_from_manifest,
+    }
+
+
+def _clear_stop_requested(job_dir: Path) -> None:
+    stop_file = job_dir / ".stop_requested"
+    if stop_file.exists():
+        stop_file.unlink(missing_ok=True)
+
+
 @router.post("/shorts-studio/jobs/{job_id}/ideas/generate", status_code=202)
 def post_shorts_studio_generate_ideas(
     job_id: str,
@@ -352,6 +414,7 @@ def post_shorts_studio_generate_ideas(
     busy, _active = system_has_active_job(jobs_root)
     if busy:
         raise HTTPException(status_code=409, detail={"error": "system_busy"})
+    _clear_stop_requested(job_dir)
     queue = JobQueue(jobs_root / "queue.db")
     queue.enqueue(
         job_id,
@@ -384,6 +447,7 @@ def post_shorts_studio_render_ideas(
     invalid = [idea_id for idea_id in idea_ids if idea_id not in valid_ids]
     if invalid:
         raise HTTPException(status_code=400, detail={"error": "invalid_idea_ids", "idea_ids": invalid})
+    _clear_stop_requested(job_dir)
     queue = JobQueue(jobs_root / "queue.db")
     queue.enqueue(
         job_id,
@@ -414,6 +478,7 @@ def post_shorts_studio_prepare(
     busy, _active = system_has_active_job(jobs_root)
     if busy:
         raise HTTPException(status_code=409, detail={"error": "system_busy"})
+    _clear_stop_requested(job_dir)
     queue = JobQueue(jobs_root / "queue.db")
     queue.enqueue(
         job_id,
@@ -455,6 +520,7 @@ def post_shorts_studio_confirm_render(
                     status_code=400,
                     detail={"error": "missing_short_artifacts", "short_id": short_id, "missing": required},
                 )
+    _clear_stop_requested(job_dir)
     queue = JobQueue(jobs_root / "queue.db")
     queue.enqueue(
         job_id,

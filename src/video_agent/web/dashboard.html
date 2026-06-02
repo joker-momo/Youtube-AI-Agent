@@ -3942,6 +3942,8 @@ async function loadShortsRendersTab(jobId) {
       drafts.map((d, idx) => {
         const st = d.status || 'pending';
         const stClass = st === 'rendered' ? 'rendered' : st === 'failed' ? 'failed' : st.includes('progress') ? 'in_progress' : '';
+        const isRunning = st === 'generating' || st === 'rendering' || st === 'in_progress';
+        const isStoppedOrFailed = st === 'failed' || st === 'needs_review' || st === 'ready_for_render';
         const stages = inferRenderStages(d);
         const isOpen = (stClass === 'in_progress' || drafts.length === 1) ? ' open' : '';
         return `<div class="render-card ${stClass}${isOpen}" id="rc-${escapeHtml(d.short_id)}">
@@ -3975,6 +3977,12 @@ async function loadShortsRendersTab(jobId) {
               <div><span class="rm-label">QA:</span> <span class="rm-value">${escapeHtml(d.qa_verdict || '-')}</span></div>
               <div><span class="rm-label">Scenes:</span> <span class="rm-value">${(d.source_scene_ids || []).length}</span></div>
               <div><span class="rm-label">Format:</span> <span class="rm-value">${escapeHtml(d.format || '-')}</span></div>
+            </div>
+            
+            <div class="rc-actions" style="margin-top: 14px; display: flex; gap: 8px; border-top: 1px solid var(--border); padding-top: 12px; justify-content: flex-end;">
+              <button class="action-btn warn" onclick="spStopShort('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', this)" ${isRunning ? '' : 'disabled'}>Stop</button>
+              <button class="action-btn primary" onclick="spResumeShort('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', '${escapeHtml(st)}', this)" ${isStoppedOrFailed ? '' : 'disabled'}>Resume</button>
+              <button class="action-btn danger" onclick="spDeleteShort('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', this)" ${isRunning ? 'disabled' : ''}>Delete</button>
             </div>
           </div>
         </div>`;
@@ -4060,6 +4068,91 @@ async function spRenderIdea(ideaId, btn) {
     SHORTS_ACTIVE_TAB = 'renders';
     setTimeout(() => refreshShortsDetail(), 2000);
   } catch (e) { showToast('Network error'); btn.disabled = false; btn.textContent = orig; }
+}
+
+async function spStopShort(jobId, shortId, btn) {
+  if (!jobId || !shortId) return;
+  if (!confirm(`Stop rendering Short "${shortId}"?`)) return;
+  const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Stopping…';
+  try {
+    const r = await fetch('/jobs/' + encodeURIComponent(jobId) + '/stop', { method: 'POST' });
+    if (!r.ok) {
+      let msg = 'Stop request failed';
+      try {
+        const body = await r.json();
+        msg = body.detail?.error || body.detail || msg;
+      } catch (e) {}
+      showToast(msg);
+      btn.disabled = false; btn.textContent = orig;
+      return;
+    }
+    showToast('Stop requested');
+    setTimeout(() => refreshShortsDetail(), 1000);
+  } catch (e) {
+    showToast('Stop request failed');
+    btn.disabled = false; btn.textContent = orig;
+  }
+}
+
+async function spResumeShort(jobId, shortId, currentStatus, btn) {
+  if (!jobId || !shortId) return;
+  const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Resuming…';
+  try {
+    let url = '';
+    let method = 'POST';
+    let body = null;
+    
+    if (currentStatus === 'ready_for_render') {
+      url = '/shorts-studio/jobs/' + encodeURIComponent(jobId) + '/confirm-render';
+      body = JSON.stringify({ short_ids: [shortId] });
+    } else {
+      url = '/jobs/' + encodeURIComponent(jobId) + '/shorts/' + encodeURIComponent(shortId) + '/render';
+    }
+    
+    const r = await fetch(url, {
+      method: method,
+      headers: body ? { 'Content-Type': 'application/json' } : {},
+      body: body
+    });
+    
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      showToast('Failed to resume: ' + (d.detail?.error || d.detail || r.statusText));
+      btn.disabled = false; btn.textContent = orig;
+      return;
+    }
+    
+    showToast('Resume enqueued');
+    setTimeout(() => refreshShortsDetail(), 1000);
+  } catch (e) {
+    showToast('Network error');
+    btn.disabled = false; btn.textContent = orig;
+  }
+}
+
+async function spDeleteShort(jobId, shortId, btn) {
+  if (!jobId || !shortId) return;
+  if (!confirm(`Delete Short "${shortId}"? This will delete its folder from disk and remove it from the manifest.`)) return;
+  const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Deleting…';
+  try {
+    const r = await fetch('/shorts-studio/jobs/' + encodeURIComponent(jobId) + '/shorts/' + encodeURIComponent(shortId), {
+      method: 'DELETE'
+    });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      showToast('Failed to delete: ' + (d.detail?.error || d.detail || r.statusText));
+      btn.disabled = false; btn.textContent = orig;
+      return;
+    }
+    showToast('Short deleted');
+    await refreshShortsDetail();
+  } catch (e) {
+    showToast('Network error');
+    btn.disabled = false; btn.textContent = orig;
+  }
 }
 
 async function refreshShortsDetail() {

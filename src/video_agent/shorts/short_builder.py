@@ -158,6 +158,17 @@ def build_short(
         status["updated_at"] = now_str
         write_short_status(long_job_dir, short_id, status)
 
+    def check_stop():
+        if (long_job_dir / ".stop_requested").exists() or (sd / ".stop_requested").exists():
+            from fastapi import HTTPException
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "Stop requested by operator.",
+                    "stop_requested": True,
+                }
+            )
+
     qa_result: dict[str, Any] = {"verdict": "FAIL", "issues": ["not_generated"]}
     short_script: dict[str, Any] = {}
     short_scenes: dict[str, Any] = {}
@@ -165,12 +176,14 @@ def build_short(
     attempts = 0
 
     for attempt in range(max_regen + 1):  # initial + N regenerations
+        check_stop()
         attempts = attempt + 1
         plan_for_prompt = {**short_plan, "source_long_job_id": long_job_dir.name}
         
         # --- Stage 1: Script ---
         update_stage("script", "in_progress")
         try:
+            check_stop()
             short_script = short_script_builder.build_short_script(
                 long_job_dir, plan_for_prompt, channel_config, llm_fn,
                 source_artifacts=source_artifacts,
@@ -190,6 +203,7 @@ def build_short(
         # --- Stage 2: Scenes ---
         update_stage("scenes", "in_progress")
         try:
+            check_stop()
             short_scenes = short_scene_builder.build_short_scenes(
                 long_job_dir, plan_for_prompt, short_script, channel_config, llm_fn,
                 attempt=attempts,
@@ -204,9 +218,11 @@ def build_short(
         # --- Stage 3: SEO & Source Map ---
         update_stage("seo", "in_progress")
         try:
+            check_stop()
             sm = source_map.build_source_map(long_job_dir, short_plan, short_script, channel_config, long_video_url)
             atomic_write_json(sd / paths.SHORT_SOURCE_MAP_FILE, sm)
 
+            check_stop()
             short_seo_builder.build_short_seo(
                 long_job_dir, short_id, plan_for_prompt, short_script, channel_config, llm_fn, long_video_url
             )
@@ -220,6 +236,7 @@ def build_short(
         # --- Stage 4: QA ---
         update_stage("qa", "in_progress")
         try:
+            check_stop()
             qa_result = qa.run_short_qa(
                 long_job_dir, short_id, channel_config,
                 music_track=music_track, gemini_fn=gemini_fn, attempt=attempts,
@@ -290,7 +307,9 @@ def build_short(
     # --- Stage 5: Audio ---
     update_stage("audio", "in_progress")
     try:
+        check_stop()
         narration_wav = tts_fn(sd, short_scenes, channel_config)
+        check_stop()
         mix_fn(sd, narration_wav, music_track, channel_config, duration_sec)
         _write_render_props(sd, short_scenes, channel_config, music_track)
         update_stage("audio", "completed")
@@ -303,7 +322,9 @@ def build_short(
     # --- Stage 6: Render ---
     update_stage("render", "in_progress")
     try:
+        check_stop()
         video_path = render_fn(sd, channel_config)
+        check_stop()
         cover_path = cover_fn(sd, channel_config)
         update_stage("render", "completed")
     except Exception as exc:

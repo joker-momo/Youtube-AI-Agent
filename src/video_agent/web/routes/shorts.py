@@ -107,6 +107,9 @@ async def post_autopilot(
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     cfg = _channel_config(job_dir)
+    stop_file = job_dir / ".stop_requested"
+    if stop_file.exists():
+        stop_file.unlink(missing_ok=True)
     enqueue_shorts_autopilot(job_dir, cfg, force=req.force, client=client)
     return {"status": "enqueued", "job_id": job_id, "force": req.force}
 
@@ -125,6 +128,9 @@ async def post_regenerate(
     if not paths.short_dir(job_dir, short_id).exists():
         raise HTTPException(status_code=404, detail=f"Unknown short: {short_id}")
     legacy_cleanup.archive_short_dir(job_dir, short_id)
+    stop_file = job_dir / ".stop_requested"
+    if stop_file.exists():
+        stop_file.unlink(missing_ok=True)
     enqueue_shorts_autopilot(job_dir, cfg, force=True, client=client, short_id=short_id)
     return {"status": "enqueued", "job_id": job_id, "short_id": short_id}
 
@@ -142,6 +148,9 @@ async def post_render(
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     if not paths.short_dir(job_dir, short_id).exists():
         raise HTTPException(status_code=404, detail=f"Unknown short: {short_id}")
+    stop_file = job_dir / ".stop_requested"
+    if stop_file.exists():
+        stop_file.unlink(missing_ok=True)
     enqueue_short_render(job_dir, cfg, short_id=short_id, client=client)
     return {"status": "enqueued", "job_id": job_id, "short_id": short_id}
 

@@ -359,15 +359,35 @@ def _run_short_render_job(job: dict, *, job_dir: Path, channel_path: Path) -> No
         status["updated_at"] = now_str
         manifest_mod.write_short_status(job_dir, short_id, status)
 
+    def check_stop():
+        if (job_dir / ".stop_requested").exists() or (short_dir / ".stop_requested").exists():
+            from fastapi import HTTPException
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "Stop requested by operator.",
+                    "stop_requested": True,
+                }
+            )
+
     # 1. Audio TTS & Mix
     update_stage("audio", "in_progress")
-    # Remotion materialize will generate cached audio if not present, so we mark completed
-    update_stage("audio", "completed")
+    try:
+        check_stop()
+        # Remotion materialize will generate cached audio if not present, so we mark completed
+        update_stage("audio", "completed")
+    except Exception as exc:
+        update_stage("audio", "failed")
+        status.update({"status": "failed"})
+        manifest_mod.write_short_status(job_dir, short_id, status)
+        raise exc
 
     # 2. Video & Cover Render
     update_stage("render", "in_progress")
     try:
+        check_stop()
         video_path = render_short_video(short_dir, channel_config)
+        check_stop()
         cover_path = render_short_cover(short_dir, channel_config)
         update_stage("render", "completed")
         status.update(

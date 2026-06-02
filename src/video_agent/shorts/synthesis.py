@@ -286,6 +286,14 @@ def render_selected_short_ideas(
             result = {"short_id": short_id, "idea_id": idea_id, "status": "failed", "rendered": False, "qa_verdict": "FAIL"}
             failed_count += 1
             errors.append(str(exc))
+            is_stop = False
+            from fastapi import HTTPException
+            if isinstance(exc, HTTPException):
+                detail = exc.detail
+                if isinstance(detail, dict) and detail.get("stop_requested"):
+                    is_stop = True
+            if is_stop:
+                raise exc
         else:
             status = result.get("status")
             if status == "rendered":

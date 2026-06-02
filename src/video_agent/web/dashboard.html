@@ -3926,6 +3926,7 @@ async function loadShortsRendersTab(jobId) {
     }
     const data = await r.json();
     const drafts = data.drafts || [];
+    window.SHORTS_DRAFTS_CACHE = drafts;
     if (!drafts.length) {
       container.innerHTML = '<div class="ideas-empty">No rendered shorts yet. Select an idea and click "Render Short".</div>';
       return;
@@ -4108,7 +4109,20 @@ async function spResumeShort(jobId, shortId, currentStatus, btn) {
       url = '/shorts-studio/jobs/' + encodeURIComponent(jobId) + '/confirm-render';
       body = JSON.stringify({ short_ids: [shortId] });
     } else {
-      url = '/jobs/' + encodeURIComponent(jobId) + '/shorts/' + encodeURIComponent(shortId) + '/render';
+      // Check if preceding generation stages are completed
+      const draft = (window.SHORTS_DRAFTS_CACHE || []).find(d => d.short_id === shortId);
+      const stages = draft ? (draft.stages || []) : [];
+      const genStages = ['script', 'scenes', 'seo', 'qa'];
+      const needsRegen = genStages.some(name => {
+        const stage = stages.find(s => s.name === name);
+        return !stage || stage.status !== 'completed';
+      });
+      
+      if (needsRegen) {
+        url = '/jobs/' + encodeURIComponent(jobId) + '/shorts/' + encodeURIComponent(shortId) + '/regenerate';
+      } else {
+        url = '/jobs/' + encodeURIComponent(jobId) + '/shorts/' + encodeURIComponent(shortId) + '/render';
+      }
     }
     
     const r = await fetch(url, {

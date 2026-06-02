@@ -326,11 +326,16 @@ def _run_short_render_job(job: dict, *, job_dir: Path, channel_path: Path) -> No
 
     # Initialize default stages if missing (backward compatibility)
     if "stages" not in status:
+        script_ok = (short_dir / paths.SHORT_SCRIPT_FILE).exists()
+        scenes_ok = (short_dir / paths.SHORT_SCENES_FILE).exists()
+        seo_ok = (short_dir / paths.SHORT_SEO_FILE).exists()
+        qa_ok = (short_dir / paths.SHORT_QA_FILE).exists()
+
         status["stages"] = [
-            {"name": "script", "label": "Short Script", "status": "completed", "started_at": None, "completed_at": None, "actual_seconds": None},
-            {"name": "scenes", "label": "Short Scenes", "status": "completed", "started_at": None, "completed_at": None, "actual_seconds": None},
-            {"name": "seo", "label": "Short SEO", "status": "completed", "started_at": None, "completed_at": None, "actual_seconds": None},
-            {"name": "qa", "label": "Quality Assurance", "status": "completed", "started_at": None, "completed_at": None, "actual_seconds": None},
+            {"name": "script", "label": "Short Script", "status": "completed" if script_ok else "failed", "started_at": None, "completed_at": None, "actual_seconds": None},
+            {"name": "scenes", "label": "Short Scenes", "status": "completed" if scenes_ok else "failed", "started_at": None, "completed_at": None, "actual_seconds": None},
+            {"name": "seo", "label": "Short SEO", "status": "completed" if seo_ok else "failed", "started_at": None, "completed_at": None, "actual_seconds": None},
+            {"name": "qa", "label": "Quality Assurance", "status": "completed" if qa_ok else "failed", "started_at": None, "completed_at": None, "actual_seconds": None},
             {"name": "audio", "label": "Audio TTS & Mix", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
             {"name": "render", "label": "Video & Cover Render", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         ]
@@ -369,6 +374,30 @@ def _run_short_render_job(job: dict, *, job_dir: Path, channel_path: Path) -> No
                     "stop_requested": True,
                 }
             )
+
+    # Ensure pre-render files exist
+    missing_files = []
+    for s in status.get("stages") or []:
+        if s["name"] == "script" and not (short_dir / paths.SHORT_SCRIPT_FILE).exists():
+            s["status"] = "failed"
+            missing_files.append("Short Script")
+        elif s["name"] == "scenes" and not (short_dir / paths.SHORT_SCENES_FILE).exists():
+            s["status"] = "failed"
+            missing_files.append("Short Scenes")
+        elif s["name"] == "seo" and not (short_dir / paths.SHORT_SEO_FILE).exists():
+            s["status"] = "failed"
+            missing_files.append("Short SEO")
+        elif s["name"] == "qa" and not (short_dir / paths.SHORT_QA_FILE).exists():
+            s["status"] = "failed"
+            missing_files.append("Quality Assurance")
+            
+    if missing_files:
+        status["status"] = "failed"
+        manifest_mod.write_short_status(job_dir, short_id, status)
+        raise FileNotFoundError(
+            f"Cannot run render-only job for short {short_id}. Missing required files: {', '.join(missing_files)}. "
+            f"Please regenerate this Short instead of running render/resume."
+        )
 
     # 1. Audio TTS & Mix
     update_stage("audio", "in_progress")

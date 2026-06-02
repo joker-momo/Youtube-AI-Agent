@@ -12,17 +12,17 @@ export const SHORT_LAYOUT = {
   // Hard safe zones — never render readable text outside these.
   safeTop: 170,
   safeBottom: 280,
-  safeX: 72,
+  safeX: 108,
 
   // Logo / watermark slot (top-right).
   logoTop: 62,
   logoRight: 62,
 
   // Primary text zones (y px, top-down).
-  hookZone: {yMin: 360, yMax: 850, width: 920},
-  bodyZone: {yMin: 860, yMax: 1250, width: 880},
-  captionZone: {yMin: 1180, yMax: 1460, width: 860},
-  ctaZone: {yMin: 1180, yMax: 1420, width: 860},
+  hookZone: {yMin: 360, yMax: 850, width: 864},
+  bodyZone: {yMin: 860, yMax: 1250, width: 820},
+  captionZone: {yMin: 1180, yMax: 1460, width: 800},
+  ctaZone: {yMin: 1180, yMax: 1420, width: 800},
 
   // Absolute hard floor — anything readable below this risks YouTube UI.
   dangerBottomY: 1500,
@@ -39,8 +39,8 @@ export type OverlayKey = keyof typeof SHORT_OVERLAYS;
 
 /** Spec §4.1 font stacks. */
 export const HOOK_FONT_FAMILY = 'Montserrat, Manrope, "Segoe UI", Arial, sans-serif';
-export const BODY_FONT_FAMILY = 'Manrope, Montserrat, "Segoe UI", Arial, sans-serif';
-export const CAPTION_FONT_FAMILY = 'Manrope, Montserrat, "Segoe UI", Arial, sans-serif';
+export const BODY_FONT_FAMILY = 'Montserrat, Manrope, "Segoe UI", Arial, sans-serif';
+export const CAPTION_FONT_FAMILY = 'Montserrat, Manrope, "Segoe UI", Arial, sans-serif';
 
 /** Spec §4.3 text length limits. */
 export const TEXT_LIMITS = {

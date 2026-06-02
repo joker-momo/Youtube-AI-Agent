@@ -683,7 +683,10 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
 
     render_config = channel_config["render"].copy()
     if job_dir.parent.name == "shorts":
-        render_config["resolution"] = "1080x1920"
+        shorts_render = (channel_config.get("shorts") or {}).get("render") or {}
+        for k, v in shorts_render.items():
+            if v is not None:
+                render_config[k] = v
 
     render_props = {
         "channel": channel_config["channel"],

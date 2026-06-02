@@ -131,11 +131,13 @@ def build_remotion_commands(render_props_path: Path, video_path: Path, thumbnail
     video_bitrate = _render_video_bitrate(render_props_path)
     gl_backend = _render_gl(render_props_path)
     base = ["npx", "--prefix", str(remotion_root), "remotion"]
+    props = read_json(render_props_path)
+    composition = props.get("render", {}).get("composition", "ChannelVideoStandard")
     video_cmd = [
         *base,
         "render",
         str(entry),
-        "ChannelVideoStandard",
+        composition,
         str(video_path),
         "--props",
         input_props,

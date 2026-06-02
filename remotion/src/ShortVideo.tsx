@@ -52,6 +52,14 @@ const ShortLogo: React.FC<{src?: string}> = ({src}) => {
   );
 };
 
+const FontLoader: React.FC = () => (
+  <style>
+    {`
+      @import url('https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,400;0,700;0,800;0,900;1,400;1,700;1,800;1,900&display=swap');
+    `}
+  </style>
+);
+
 export const ShortVideo: React.FC<RenderProps> = (props) => {
   const {fps} = useVideoConfig();
   const scenes = props.scenes || [];
@@ -68,8 +76,11 @@ export const ShortVideo: React.FC<RenderProps> = (props) => {
     }
   })();
 
+  const accentColor = props.style?.palette?.accent;
+
   return (
     <AbsoluteFill style={{backgroundColor: '#0b1020'}}>
+      <FontLoader />
       {scenes.map((scene, i) => {
         const durFrames = Math.max(1, Math.round((scene.duration_sec || 1) * fps));
         const from = cursor;
@@ -84,6 +95,7 @@ export const ShortVideo: React.FC<RenderProps> = (props) => {
                 on_screen_text={scene.on_screen_text}
                 caption={scene.caption}
                 layout_payload={scene.layout_payload}
+                accentColor={accentColor}
               />
               <ShortLogo src={logoSrc} />
             </AbsoluteFill>

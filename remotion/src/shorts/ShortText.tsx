@@ -11,6 +11,23 @@ import {
   TEXT_ENTRANCE,
 } from './ShortLayoutConstants';
 
+export function parseHighlights(text: React.ReactNode, highlightColor: string = '#F5C24B'): React.ReactNode {
+  if (typeof text !== 'string') {
+    return text;
+  }
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, index) => {
+    if (part.startsWith('**') && part.endsWith('**')) {
+      return (
+        <span key={index} style={{color: highlightColor}}>
+          {part.slice(2, -2)}
+        </span>
+      );
+    }
+    return part;
+  });
+}
+
 function useEntrance(): {opacity: number; transform: string} {
   const frame = useCurrentFrame();
   const t = interpolate(frame, [0, TEXT_ENTRANCE.durationFrames], [0, 1], {
@@ -22,9 +39,10 @@ function useEntrance(): {opacity: number; transform: string} {
   return {opacity: t, transform: `translateY(${y}px) scale(${scale})`};
 }
 
-export const HookTitle: React.FC<{children: React.ReactNode; fontSize?: number}> = ({
+export const HookTitle: React.FC<{children: React.ReactNode; fontSize?: number; accentColor?: string}> = ({
   children,
   fontSize = 96,
+  accentColor,
 }) => {
   const anim = useEntrance();
   return (
@@ -43,14 +61,15 @@ export const HookTitle: React.FC<{children: React.ReactNode; fontSize?: number}>
         textAlign: 'center',
       }}
     >
-      {children}
+      {parseHighlights(children, accentColor)}
     </div>
   );
 };
 
-export const BodyText: React.FC<{children: React.ReactNode; fontSize?: number}> = ({
+export const BodyText: React.FC<{children: React.ReactNode; fontSize?: number; accentColor?: string}> = ({
   children,
   fontSize = 54,
+  accentColor,
 }) => {
   const anim = useEntrance();
   return (
@@ -64,17 +83,19 @@ export const BodyText: React.FC<{children: React.ReactNode; fontSize?: number}> 
         letterSpacing: -0.3,
         color: '#FFFFFF',
         textShadow: '0 6px 18px rgba(0,0,0,0.68)',
+        WebkitTextStroke: '1.25px rgba(0,0,0,0.8)',
         textAlign: 'center',
       }}
     >
-      {children}
+      {parseHighlights(children, accentColor)}
     </div>
   );
 };
 
-export const CaptionText: React.FC<{children: React.ReactNode; fontSize?: number}> = ({
+export const CaptionText: React.FC<{children: React.ReactNode; fontSize?: number; accentColor?: string}> = ({
   children,
   fontSize = 42,
+  accentColor,
 }) => {
   const anim = useEntrance();
   return (
@@ -87,15 +108,20 @@ export const CaptionText: React.FC<{children: React.ReactNode; fontSize?: number
         lineHeight: 1.16,
         color: '#F7F7F2',
         textShadow: '0 4px 14px rgba(0,0,0,0.72)',
+        WebkitTextStroke: '1px rgba(0,0,0,0.85)',
         textAlign: 'center',
       }}
     >
-      {children}
+      {parseHighlights(children, accentColor)}
     </div>
   );
 };
 
-export const BulletPill: React.FC<{n: number; children: React.ReactNode}> = ({n, children}) => (
+export const BulletPill: React.FC<{n: number; children: React.ReactNode; accentColor?: string}> = ({
+  n,
+  children,
+  accentColor,
+}) => (
   <div
     style={{
       display: 'flex',
@@ -112,7 +138,7 @@ export const BulletPill: React.FC<{n: number; children: React.ReactNode}> = ({n,
         width: 56,
         height: 56,
         borderRadius: 28,
-        background: '#F5C24B',
+        background: accentColor || '#F5C24B',
         color: '#1A1207',
         fontFamily: HOOK_FONT_FAMILY,
         fontWeight: 900,
@@ -134,14 +160,15 @@ export const BulletPill: React.FC<{n: number; children: React.ReactNode}> = ({n,
         lineHeight: 1.1,
       }}
     >
-      {children}
+      {parseHighlights(children, accentColor)}
     </div>
   </div>
 );
 
-export const CtaText: React.FC<{children: React.ReactNode; fontSize?: number}> = ({
+export const CtaText: React.FC<{children: React.ReactNode; fontSize?: number; accentColor?: string}> = ({
   children,
   fontSize = 52,
+  accentColor,
 }) => {
   const anim = useEntrance();
   return (
@@ -154,12 +181,13 @@ export const CtaText: React.FC<{children: React.ReactNode; fontSize?: number}> =
         lineHeight: 1.06,
         color: '#FFFFFF',
         textShadow: '0 6px 18px rgba(0,0,0,0.7)',
+        WebkitTextStroke: '1.5px rgba(0,0,0,0.8)',
         textAlign: 'center',
         textTransform: 'uppercase',
         letterSpacing: -0.5,
       }}
     >
-      {children}
+      {parseHighlights(children, accentColor)}
     </div>
   );
 };

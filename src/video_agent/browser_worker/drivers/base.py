@@ -190,9 +190,29 @@ def _is_auth_cookie(cookie: dict) -> bool:
     domain = (cookie.get("domain") or "").lower()
     if not any(domain == d or domain.endswith(d) for d in _AUTH_COOKIE_DOMAINS):
         return False
-    if _AUTH_COOKIE_NAMES:
-        return cookie.get("name", "") in _AUTH_COOKIE_NAMES
-    return True
+        
+    name = cookie.get("name", "")
+    
+    # ChatGPT / OpenAI essential tokens
+    if "session-token" in name or "csrf-token" in name or name == "__Secure-oai-is" or name == "cf_clearance":
+        return True
+        
+    # Google / Gemini essential login tokens
+    essential_google_names = {
+        "SID", "HSID", "SSID", "APISID", "SAPISID",
+        "__Secure-1PSID", "__Secure-3PSID",
+        "__Secure-1PAPISID", "__Secure-3PAPISID",
+        "__Secure-ENID", "__Secure-1PSIDTS", "__Secure-3PSIDTS",
+        "NID", "LOGIN_INFO"
+    }
+    if name in essential_google_names:
+        return True
+        
+    # Also check if it's an Auth0 cookie (for auth.openai.com)
+    if "auth0" in domain or "auth0" in name.lower():
+        return True
+        
+    return False
 
 
 async def clear_browser_data_keep_login(context: "BrowserContext") -> dict:

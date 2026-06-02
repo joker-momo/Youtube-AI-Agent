@@ -30,7 +30,7 @@ REINSTALL_DEPS=false
 STOP_HEAVY=false
 
 usage() {
-  echo "Usage: bash run.sh [--dashboard|--app-only|--full|--stop-heavy] [--cleanup] [--reinstall-deps] [--native-worker|--docker-worker]"
+  echo "Usage: bash run.sh [--dashboard|--app-only|--full|--stop-heavy|--stop] [--cleanup] [--reinstall-deps] [--native-worker|--docker-worker]"
   echo ""
   echo "Mac default: full stack with native host worker, no prompt."
   echo "Linux default: full stack with Docker worker."
@@ -39,6 +39,7 @@ usage() {
   echo "  --dashboard, --app-only  Start only the dashboard container."
   echo "  --full                  Start dashboard + browser services + worker."
   echo "  --stop-heavy            Stop worker/browser services and keep dashboard available."
+  echo "  --stop, --down          Stop all services (containers and native worker)."
   echo ""
   echo "Options:"
   echo "  --cleanup               Prune Docker cache and local browser/public debug artifacts first."
@@ -64,6 +65,10 @@ while [[ $# -gt 0 ]]; do
     --stop-heavy)
       STOP_HEAVY=true
       RUN_MODE="dashboard"
+      shift
+      ;;
+    --stop|--down)
+      RUN_MODE="stop"
       shift
       ;;
     --cleanup)
@@ -99,33 +104,35 @@ export BROWSER_TRACE_RETENTION_DAYS="${BROWSER_TRACE_RETENTION_DAYS:-3}"
 export BROWSER_TRACE_MAX_MB="${BROWSER_TRACE_MAX_MB:-512}"
 
 # 1. Check Docker Daemon
-echo -e "${CYAN}Checking Docker status...${NC}"
-if ! docker info &>/dev/null; then
-  # Detect OS
-  OS="$(uname -s)"
-  if [[ "$OS" == "Darwin" ]]; then
-    echo -e "${YELLOW}Docker is not running. Launching Docker Desktop on macOS...${NC}"
-    open -a Docker
-  elif [[ "$OS" == "Linux" ]]; then
-    echo -e "${YELLOW}Docker is not running. Attempting to start service on Linux...${NC}"
-    sudo systemctl start docker
-  fi
-
-  echo -e "${BLUE}Waiting for Docker to start...${NC}"
-  count=0
-  until docker info &>/dev/null; do
-    echo -ne "."
-    sleep 3
-    count=$((count + 3))
-    if [[ $count -ge 60 ]]; then
-      echo ""
-      echo -e "${RED}❌ Docker took too long to start. Please start Docker manually and run this script again.${NC}"
-      exit 1
+if [[ "$RUN_MODE" != "stop" ]]; then
+  echo -e "${CYAN}Checking Docker status...${NC}"
+  if ! docker info &>/dev/null; then
+    # Detect OS
+    OS="$(uname -s)"
+    if [[ "$OS" == "Darwin" ]]; then
+      echo -e "${YELLOW}Docker is not running. Launching Docker Desktop on macOS...${NC}"
+      open -a Docker
+    elif [[ "$OS" == "Linux" ]]; then
+      echo -e "${YELLOW}Docker is not running. Attempting to start service on Linux...${NC}"
+      sudo systemctl start docker
     fi
-  done
-  echo ""
+
+    echo -e "${BLUE}Waiting for Docker to start...${NC}"
+    count=0
+    until docker info &>/dev/null; do
+      echo -ne "."
+      sleep 3
+      count=$((count + 3))
+      if [[ $count -ge 60 ]]; then
+        echo ""
+        echo -e "${RED}❌ Docker took too long to start. Please start Docker manually and run this script again.${NC}"
+        exit 1
+      fi
+    done
+    echo ""
+  fi
+  echo -e "${GREEN}✅ Docker is active and running!${NC}\n"
 fi
-echo -e "${GREEN}✅ Docker is active and running!${NC}\n"
 
 if [ "$RUN_CLEANUP" = true ]; then
   echo -e "${CYAN}Running Docker/local artifact cleanup...${NC}"
@@ -199,6 +206,18 @@ elif [[ "$OS" == "Darwin" ]]; then
   echo -e "${BLUE}ℹ️  macOS detected. Native host worker is preferred for render performance.${NC}"
 else
   echo -e "${BLUE}ℹ️  No compatible Linux GPU detected. Running in standard CPU mode.${NC}"
+fi
+
+if [[ "$RUN_MODE" == "stop" ]]; then
+  echo -e "${CYAN}Stopping all services...${NC}"
+  if docker info &>/dev/null; then
+    docker compose ${COMPOSE_ARGS} down
+  else
+    echo -e "${YELLOW}Docker is not running; skipping container shutdown.${NC}"
+  fi
+  stop_native_worker
+  echo -e "${GREEN}✅ All services stopped successfully.${NC}"
+  exit 0
 fi
 
 # 4. Handle macOS Native Worker Speedup Option
@@ -356,9 +375,5 @@ else
 fi
 echo ""
 echo -e "To stop all services, run:"
-if [ "$USE_NATIVE_WORKER" = true ]; then
-  echo -e "  ${BOLD}docker compose down && pkill -f \"video_agent.cli worker\"${NC}"
-else
-  echo -e "  ${BOLD}docker compose down${NC}"
-fi
+echo -e "  ${BOLD}bash run.sh --stop${NC}"
 echo -e "${BOLD}${CYAN}=====================================================${NC}"

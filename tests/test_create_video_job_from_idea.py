@@ -147,7 +147,18 @@ def test_create_job_from_full_idea_requires_title_seed(client: TestClient):
 
 def test_create_job_from_full_idea_appends_suffix_on_job_id_collision(
     client: TestClient,
+    monkeypatch,
 ):
+    import datetime as dt
+    fixed_now = dt.datetime(2026, 6, 2, 12, 0, 0)
+
+    class FakeDatetime:
+        @classmethod
+        def now(cls):
+            return fixed_now
+
+    monkeypatch.setattr("video_agent.utils.paths.datetime", FakeDatetime)
+
     payload = {
         "channel_id": "vida-plena-45",
         "idea": VALID_IDEA,
@@ -192,6 +203,24 @@ def test_create_job_from_full_idea_warn_only_creates_job_with_duplicate_warning(
     body = response.json()
     assert body["duplicate_verdict"]["policy_action"] == "warning"
     assert body["pipeline_status"] == "created_not_started"
+
+
+def test_create_job_from_full_idea_preserves_explicit_job_id(client: TestClient, tmp_path: Path):
+    response = client.post(
+        "/jobs/from-idea",
+        json={
+            "channel_id": "vida-plena-45",
+            "idea": VALID_IDEA,
+            "job_id": "Manual.Job_01",
+            "run_now": False,
+            "check_duplicates": False,
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["job_id"] == "Manual.Job_01"
+    assert (tmp_path / "Manual.Job_01" / "job.json").exists()
 
 
 def test_existing_video_history_filters_by_channel_id_and_prefers_seo_title(tmp_path: Path):

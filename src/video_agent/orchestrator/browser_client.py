@@ -259,6 +259,7 @@ class BrowserClient:
         messages: list[str],
         *,
         response_timeout_ms: int = 300_000,
+        attempts: int = 3,
     ) -> str:
         """Open a temp chat, send each ``messages`` in order, return last response.
 
@@ -275,22 +276,37 @@ class BrowserClient:
                 status_code=400,
                 detail={},
             )
-        session_id = await self.open_session(site)
-        try:
-            last = ""
-            for prompt in messages:
-                last = await self.send_in_session(
-                    site,
-                    session_id,
-                    prompt,
-                    response_timeout_ms=response_timeout_ms,
-                )
-            return last
-        finally:
+
+        import asyncio
+        last_exc: BrowserClientError | None = None
+        for idx in range(attempts):
+            session_id = None
             try:
-                await self.close_session(site, session_id)
-            except Exception as exc:
-                _log.warning("close_session(%s, %s) failed: %s", site, session_id, exc)
+                session_id = await self.open_session(site)
+                last = ""
+                for prompt in messages:
+                    last = await self.send_in_session(
+                        site,
+                        session_id,
+                        prompt,
+                        response_timeout_ms=response_timeout_ms,
+                    )
+                return last
+            except BrowserClientError as exc:
+                last_exc = exc
+                if exc.status_code < 500 or idx == attempts - 1:
+                    raise
+                _log.warning(
+                    "run_session(%s) attempt %d/%d failed with HTTP %d: %s. Retrying...",
+                    site, idx + 1, attempts, exc.status_code, exc
+                )
+                await asyncio.sleep(1.0 + idx * 0.5)
+            finally:
+                if session_id is not None:
+                    try:
+                        await self.close_session(site, session_id)
+                    except Exception as exc:
+                        _log.warning("close_session(%s, %s) failed: %s", site, session_id, exc)
 
     async def open_persistent_session(self, site: str):
         """Open a long-lived temp chat; return ``(sender, closer)``.

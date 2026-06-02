@@ -85,7 +85,7 @@ async def _ensure_temporary_chat(page: "Page") -> bool:
 
 def _stable_response_detector_js() -> str:
     """Page-side stable-response predicate shared by ChatGPT and Gemini."""
-    return """
+    return r"""
         ({scrapeFnSource, priorText, stableMs}) => {
           // Re-eval the scrape function on every check so the latest
           // assistant turn is always considered, not the one that
@@ -170,11 +170,41 @@ def _stable_response_detector_js() -> str:
           }
 
           const quietFor = Date.now() - tracker.lastMutationTs;
+
+          // JSON completion guard: only engage when the response actually
+          // looks like JSON, or when the caller explicitly opts in. This
+          // avoids timing out on normal prose that happens to contain "{".
+          const trimmed = current.trim();
+          const shouldCheckJson = args.expectJson === true
+            || (args.expectJson !== false && (/^[\[{]/.test(trimmed)));
+          let jsonComplete = true;
+          let depth = 0;
+          let inStr = false;
+          if (shouldCheckJson) {
+            let esc = false;
+            const openCh = trimmed[0];
+            const closeCh = openCh === '[' ? ']' : '}';
+            for (let i = 0; i < trimmed.length; i++) {
+              const ch = trimmed[i];
+              if (inStr) {
+                if (esc) { esc = false; continue; }
+                if (ch === '\\') { esc = true; continue; }
+                if (ch === '"') { inStr = false; }
+                continue;
+              }
+              if (ch === '"') inStr = true;
+              else if (ch === openCh) depth++;
+              else if (ch === closeCh) depth--;
+            }
+          }
+          jsonComplete = shouldCheckJson ? (depth === 0 && !inStr) : true;
+
           const ready = !!(
             current &&
             current !== priorText &&
             quietFor >= stableMs &&
-            !streaming
+            !streaming &&
+            jsonComplete
           );
           return ready ? {ready, len: current.length, quietFor, streaming} : false;
         }
@@ -189,6 +219,7 @@ async def _wait_for_stable_response(
     response_timeout_ms: int,
     poll_ms: int | None = None,
     stable_ms: int | None = None,
+    expect_json: bool | None = None,
     log_tag: str = "scrape",
 ) -> str | None:
     """Wait for the assistant turn to (a) differ from ``prior_text`` and
@@ -235,6 +266,7 @@ async def _wait_for_stable_response(
                 "scrapeFnSource": scrape_js.strip(),
                 "priorText": prior_text or "",
                 "stableMs": int(stable_ms),
+                "expectJson": expect_json,
             },
             timeout=response_timeout_ms,
             polling=poll_ms,
@@ -247,12 +279,21 @@ async def _wait_for_stable_response(
         except Exception:
             pass
         elapsed_ms = int((response_timeout_ms / 1000.0 - max(0.0, deadline - time.monotonic())) * 1000)
-        print(
-            f"[{log_tag}] TIMEOUT after ~{elapsed_ms}ms ({exc.__class__.__name__})",
-            flush=True,
-            file=sys.stderr,
-        )
-        return None
+        from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+        if isinstance(exc, PlaywrightTimeoutError) or "timeout" in str(exc).lower():
+            print(
+                f"[{log_tag}] TIMEOUT after ~{elapsed_ms}ms ({exc.__class__.__name__})",
+                flush=True,
+                file=sys.stderr,
+            )
+            return None
+        else:
+            print(
+                f"[{log_tag}] ERROR after ~{elapsed_ms}ms ({exc.__class__.__name__}: {exc})",
+                flush=True,
+                file=sys.stderr,
+            )
+            raise
 
     try:
         info = await handle.json_value()

@@ -963,6 +963,19 @@
   .render-meta-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px; font-size:12px; }
   .render-meta-grid .rm-label { color:var(--muted); font-weight:650; }
   .render-meta-grid .rm-value { color:#1a1a1a; }
+  /* ---- Short rendered output ---- */
+  .short-output-grid { display:grid; grid-template-columns:190px minmax(0,1fr); gap:20px; align-items:start; margin-top:16px; }
+  .short-media-col { display:flex; flex-direction:column; gap:8px; }
+  .short-video-preview { width:100%; aspect-ratio:9/16; border-radius:10px; background:#000; display:block; box-shadow:0 4px 16px rgba(0,0,0,.22); object-fit:contain; }
+  .short-cover-row { display:flex; gap:10px; align-items:flex-start; }
+  .short-cover-thumb { width:60px; height:107px; object-fit:cover; border-radius:6px; border:1px solid var(--line); flex-shrink:0; }
+  .short-seo-col { display:flex; flex-direction:column; gap:10px; }
+  .short-stage-summary { margin-top:14px; border-top:1px dashed var(--line); padding-top:10px; }
+  .short-stage-summary > summary { font-size:11px; color:var(--muted); cursor:pointer; list-style:none; display:flex; align-items:center; gap:6px; user-select:none; }
+  .short-stage-summary > summary::marker, .short-stage-summary > summary::-webkit-details-marker { display:none; }
+  .short-stage-summary > summary::before { content:'▸'; font-size:10px; transition:transform 140ms; display:inline-block; }
+  .short-stage-summary[open] > summary::before { transform:rotate(90deg); }
+  .short-needs-review-notice { font-size:12px; color:var(--amber); padding:10px 12px; background:#fffbeb; border:1px solid #fcd34d; border-radius:6px; margin-top:12px; line-height:1.5; }
   /* ---- end Shorts Studio Page ---- */
 </style>
 </head>
@@ -4081,100 +4094,96 @@ function renderSingleCardHtml(jobId, d, idx, shortsSeoData, isOpen) {
     <div class="sum-bar ${barClass}" style="margin: 0 14px 10px 54px; height: 5px;"><div style="width: ${percent}%;"></div></div>
     
     <div class="render-card-body">
-      <div class="render-stage-labels">
-        ${stages.map(s => `<div class="render-stage-label ${s.cls}">${s.label}</div>`).join('')}
-      </div>
-      <div class="render-stages">
-        ${stages.map(s => `<div class="render-stage ${s.cls}" title="${s.label}"></div>`).join('')}
-      </div>
-      
-      <div style="font-size:12px; font-weight:750; color:var(--muted); margin: 18px 0 8px; text-transform: uppercase; letter-spacing: 0.05em;">Pipeline Stages</div>
-      ${renderShortStepsTimeline(jobId, d)}
-      
-      ${d.status === 'rendered' ? (() => {
+      ${st === 'rendered' ? (() => {
         const shortVideoUrl = d.video_path ? ('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(d.video_path)) : '';
-        const shortSeo = shortsSeoData[d.short_id] || {};
-        const shortTitle = shortSeo.title || d.short_id;
+        const shortCoverUrl = d.cover_path ? ('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(d.cover_path)) : '';
+        const shortSeo = shortsSeoData[d.short_id] || d.seo || {};
+        const shortTitle = shortSeo.title || d.title || d.short_id;
         const shortDesc = shortSeo.description || '';
         const shortPinned = shortSeo.pinned_comment || shortSeo.suggested_pinned_comments || '';
         const shortTagsList = shortSeo.hashtags || shortSeo.tags || [];
         const shortTagsHtml = shortTagsList.map(tag => `<span class="tag-chip">${escapeHtml(tag)}</span>`).join('');
         const shortLang = shortSeo.language || 'es-ES';
         const shortAiDisclosure = shortSeo.ai_disclosure !== undefined ? shortSeo.ai_disclosure : true;
+        const totalSec = stagesList.reduce((acc, s) => acc + (s.actual_seconds || 0), 0);
+        const totalTime = totalSec > 0 ? (totalSec >= 60 ? Math.floor(totalSec/60) + 'm ' + (totalSec%60) + 's' : totalSec + 's') : '';
         return `
-        <div style="margin-top: 18px; display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 20px; align-items: start;">
-          <!-- Left column: Video & Cover/Download -->
-          <div>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-              <div>
-                ${d.video_path ? `<video src="${shortVideoUrl}" controls style="width: 100%; border-radius: 8px; background: #000; aspect-ratio: 9/16; object-fit: contain; box-shadow: 0 4px 12px rgba(0,0,0,0.1);"></video>` : '<div style="font-size:12px;color:var(--muted)">No video</div>'}
-                ${d.video_path ? `
-                  <a href="${shortVideoUrl}" download class="download-link" style="display: flex; justify-content: center; background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 6px; padding: 6px; text-decoration: none; font-size: 11px; color: #374151; font-weight: 600; margin-top: 8px; transition: all 0.2s; text-align: center;">
-                    ⬇ Video
-                  </a>
-                ` : ''}
-              </div>
-              <div>
-                ${d.cover_path ? `<img src="/jobs/${encodeURIComponent(jobId)}/artifact?path=${encodeURIComponent(d.cover_path)}" alt="Cover" style="width: 100%; border-radius: 8px; aspect-ratio: 9/16; object-fit: cover; box-shadow: 0 4px 12px rgba(0,0,0,0.1); border: 1px solid #e5e7eb;">` : '<div style="font-size:12px;color:var(--muted);text-align:center;padding-top:40px;">No cover</div>'}
-                ${d.cover_path ? `
-                  <a href="/jobs/${encodeURIComponent(jobId)}/artifact?path=${encodeURIComponent(d.cover_path)}" download class="download-link" style="display: flex; justify-content: center; background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 6px; padding: 6px; text-decoration: none; font-size: 11px; color: #374151; font-weight: 600; margin-top: 8px; transition: all 0.2s; text-align: center;">
-                    ⬇ Cover
-                  </a>
-                ` : ''}
-              </div>
-            </div>
+        <div class="short-output-grid">
+          <!-- Left: Media column -->
+          <div class="short-media-col">
+            ${shortVideoUrl
+              ? `<video src="${shortVideoUrl}" controls class="short-video-preview" preload="metadata"></video>
+                 <a href="${shortVideoUrl}" download class="action-btn primary" style="justify-content:center;text-align:center;">⬇ Video MP4</a>`
+              : `<div style="aspect-ratio:9/16;background:#0f172a;border-radius:10px;display:grid;place-items:center;font-size:12px;color:#64748b;">No video</div>`}
+            ${shortCoverUrl ? `
+              <div class="short-cover-row">
+                <img src="${shortCoverUrl}" alt="Cover" class="short-cover-thumb">
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:11px;font-weight:650;color:var(--muted);margin-bottom:6px">Cover / Thumbnail</div>
+                  <a href="${shortCoverUrl}" download class="action-btn" style="width:100%;justify-content:center;text-align:center;">⬇ Cover JPG</a>
+                </div>
+              </div>` : ''}
           </div>
-          <!-- Right column: SEO copy rows -->
-          <div style="display: flex; flex-direction: column; gap: 10px;">
-            <div class="copy-row" style="margin-bottom: 0;">
+          <!-- Right: SEO copy -->
+          <div class="short-seo-col">
+            <div class="copy-row" style="margin-bottom:0">
               <div class="crh">
                 <div class="cr-label">Title <span class="count">${shortTitle.length} chars</span></div>
                 <button class="copy-btn" onclick="copyText(this, document.getElementById('seo-title-${d.short_id}').innerText)">copy</button>
               </div>
-              <div class="copy-content" id="seo-title-${d.short_id}" style="font-weight: 700; font-size: 13px;">${escapeHtml(shortTitle)}</div>
+              <div class="copy-content" id="seo-title-${d.short_id}" style="font-weight:700;font-size:13px">${escapeHtml(shortTitle)}</div>
             </div>
-            
-            <div class="copy-row" style="margin-bottom: 0;">
+            <div class="copy-row" style="margin-bottom:0">
               <div class="crh">
                 <div class="cr-label">Description <span class="count">${shortDesc.length} chars</span></div>
                 <button class="copy-btn" onclick="copyText(this, document.getElementById('seo-desc-${d.short_id}').innerText)">copy</button>
               </div>
-              <div class="copy-content scroll" id="seo-desc-${d.short_id}" style="max-height: 120px; overflow: auto;">${escapeHtml(shortDesc || '(missing)')}</div>
+              <div class="copy-content scroll" id="seo-desc-${d.short_id}" style="max-height:120px;overflow:auto">${escapeHtml(shortDesc || '(missing)')}</div>
             </div>
-            
-            <div class="copy-row" style="margin-bottom: 0;">
+            <div class="copy-row" style="margin-bottom:0">
               <div class="crh">
-                <div class="cr-label">Suggested Pinned Comment</div>
+                <div class="cr-label">Pinned Comment</div>
                 <button class="copy-btn" onclick="copyText(this, document.getElementById('pinned-${d.short_id}').innerText)">copy</button>
               </div>
-              <div class="copy-content scroll" id="pinned-${d.short_id}" style="max-height: 100px; overflow: auto;">${escapeHtml(shortPinned || '(missing)')}</div>
+              <div class="copy-content scroll" id="pinned-${d.short_id}" style="max-height:80px;overflow:auto">${escapeHtml(shortPinned || '(missing)')}</div>
             </div>
-            
-            <div class="copy-row" style="margin-bottom: 0;">
+            <div class="copy-row" style="margin-bottom:0">
               <div class="crh">
-                <div class="cr-label">Tags <span class="count">${shortTagsList.length}</span></div>
-                <button class="copy-btn" data-clip="${escapeHtml(shortTagsList.join(', '))}" onclick="copyText(this, this.dataset.clip)">copy</button>
+                <div class="cr-label">Hashtags <span class="count">${shortTagsList.length}</span></div>
+                <button class="copy-btn" data-clip="${escapeHtml(shortTagsList.join(' '))}" onclick="copyText(this, this.dataset.clip)">copy</button>
               </div>
-              <div class="tag-chips">${shortTagsHtml || '<span class="tag-chip">(missing)</span>'}</div>
+              <div class="tag-chips">${shortTagsHtml || '<span style="font-size:12px;color:var(--muted)">(missing)</span>'}</div>
             </div>
-            
-            <div class="copy-row" style="margin-bottom: 0;">
-              <div class="copy-content" style="padding: 8px 10px;">Language: ${escapeHtml(shortLang)} · AI disclosure: ${shortAiDisclosure ? 'yes' : 'no'}</div>
+            <div style="font-size:11px;color:var(--muted-2);padding:4px 0">
+              ${escapeHtml(shortLang)} · AI disclosure: ${shortAiDisclosure ? 'yes' : 'no'} · ${escapeHtml(d.format || '-')} · ${(d.source_scene_ids || []).length} source scenes
             </div>
           </div>
         </div>
+        <!-- Pipeline accordion -->
+        <details class="short-stage-summary">
+          <summary>Pipeline — ${doneCount}/${totalCount} stages complete${totalTime ? ' · ' + totalTime : ''}</summary>
+          ${renderShortStepsTimeline(jobId, d)}
+        </details>
         `;
-      })() : ''}
-      <div class="render-meta-grid" style="margin-top: 14px; border-top: 1px dashed var(--line); padding-top: 10px;">
-        <div><span class="rm-label">Status:</span> <span class="rm-value">${escapeHtml(st)}</span></div>
-        <div><span class="rm-label">QA:</span> <span class="rm-value">${escapeHtml(d.qa_verdict || '-')}</span></div>
-        <div><span class="rm-label">Scenes:</span> <span class="rm-value">${(d.source_scene_ids || []).length}</span></div>
-        <div><span class="rm-label">Format:</span> <span class="rm-value">${escapeHtml(d.format || '-')}</span></div>
-      </div>
-      
-      <div class="rc-actions" style="margin-top: 14px; display: flex; gap: 8px; border-top: 1px solid var(--border); padding-top: 12px; justify-content: flex-end;">
+      })() : `
+        <!-- In-progress / failed: show stage visualization -->
+        <div class="render-stage-labels">
+          ${stages.map(s => `<div class="render-stage-label ${s.cls}">${s.label}</div>`).join('')}
+        </div>
+        <div class="render-stages">
+          ${stages.map(s => `<div class="render-stage ${s.cls}" title="${s.label}"></div>`).join('')}
+        </div>
+        ${renderShortStepsTimeline(jobId, d)}
+        ${st === 'needs_review' ? `
+          <div class="short-needs-review-notice">
+            QA failed after max regeneration attempts. Review the generated script or scenes and try Regenerate.
+          </div>` : ''}
+      `}
+
+      <div class="rc-actions" style="margin-top:14px;display:flex;gap:8px;border-top:1px solid var(--line);padding-top:12px;align-items:center">
         <button class="action-btn warn" onclick="spStopShort('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', this)" ${isRunning ? '' : 'disabled'}>Stop</button>
-        <button class="action-btn primary" onclick="spResumeShort('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', '${escapeHtml(st)}', this)" ${isStoppedOrFailed ? '' : 'disabled'}>Resume</button>
+        <button class="action-btn" onclick="spResumeShort('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', '${escapeHtml(st)}', this)" ${isStoppedOrFailed ? '' : 'disabled'}>Resume</button>
+        <div style="flex:1"></div>
         <button class="action-btn danger" onclick="spDeleteShort('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', this)" ${isRunning ? 'disabled' : ''}>Delete</button>
       </div>
     </div>

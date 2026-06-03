@@ -210,9 +210,13 @@ def _stub_io(calls):
     def mix_fn(short_dir, narration_wav, music_track, channel_config, duration_sec):
         calls.append("mix"); (short_dir / "audio" / "short_mix.m4a").write_bytes(b"m"); return short_dir / "audio" / "short_mix.m4a"
     def render_fn(short_dir, channel_config):
-        calls.append("render"); (short_dir / "short.mp4").write_bytes(b"v"); return short_dir / "short.mp4"
+        calls.append("render"); (short_dir / "outputs").mkdir(parents=True, exist_ok=True)
+        out = short_dir / "outputs" / "short.mp4"
+        out.write_bytes(b"v"); return out
     def cover_fn(short_dir, channel_config):
-        calls.append("cover"); (short_dir / "short_cover.jpg").write_bytes(b"j"); return short_dir / "short_cover.jpg"
+        calls.append("cover"); (short_dir / "outputs").mkdir(parents=True, exist_ok=True)
+        out = short_dir / "outputs" / "short_cover.jpg"
+        out.write_bytes(b"j"); return out
     return dict(tts_fn=tts_fn, mix_fn=mix_fn, render_fn=render_fn, cover_fn=cover_fn)
 
 
@@ -227,8 +231,10 @@ def test_build_short_pass_renders_and_writes_artifacts(tmp_path: Path):
     assert res["status"] == "rendered"
     assert res["qa_verdict"] == "PASS"
     sd = paths.short_dir(job, "short-01")
-    for f in ("short_script.json", "short_scenes.json", "short_source_map.json", "short_seo.json", "short_script_qa.json", "short_scenes_qa.json", "short.mp4", "short_cover.jpg"):
-        assert (sd / f).exists(), f
+    for f in ("short_script.json", "short_scenes.json", "short_source_map.json", "short_seo.json", "short_script_qa.json", "short_scenes_qa.json"):
+        assert (sd / "json" / f).exists(), f
+    for f in ("short.mp4", "short_cover.jpg"):
+        assert (sd / "outputs" / f).exists(), f
     assert calls == ["tts", "mix", "render", "cover"]
     assert res["music_track"] == "shorts_sleep_stress"
 

@@ -13,14 +13,14 @@ def test_materialize_short_job_aliases_emits_schema_valid_longform(tmp_path: Pat
     (sd / "short_scenes.json").write_text(json.dumps({"scenes": [{"id": "s1", "duration_sec": 3.0}]}), encoding="utf-8")
     (sd / "short_seo.json").write_text(json.dumps({"title": "t", "description": "d", "hashtags": ["#x"]}), encoding="utf-8")
     renderer.materialize_short_job_aliases(sd, {"channel": {"id": "vida-plena-45"}})
-    script = json.loads((sd / "script.json").read_text())
+    script = json.loads((sd / "json" / "script.json").read_text())
     for k in ("channel_id", "job_id", "hook", "sections", "narration", "cta", "qa"):
         assert k in script, k
-    scenes = json.loads((sd / "scenes.json").read_text())
+    scenes = json.loads((sd / "json" / "scenes.json").read_text())
     for k in ("channel_id", "job_id", "scenes", "total_duration_sec", "qa"):
         assert k in scenes, k
     assert scenes["scenes"][0]["id"] == "s1"
-    seo = json.loads((sd / "seo.json").read_text())
+    seo = json.loads((sd / "json" / "seo.json").read_text())
     for k in ("job_id", "title", "description", "tags", "language", "ai_disclosure", "thumbnail_path", "thumbnail_text", "suggested_pinned_comments"):
         assert k in seo, k
     assert seo["tags"] == ["#x"]

@@ -1599,7 +1599,7 @@ function renderTimeline(t) {
   // video.mp4 happens to exist from a previous run while render is in_progress.
   const videoReady = renderStage &&
     renderStage.status === 'completed' &&
-    (renderStage.outputs || []).some(o => o.path === 'video.mp4' && o.exists);
+    (renderStage.outputs || []).some(o => (o.path === 'video.mp4' || o.path === 'outputs/video.mp4') && o.exists);
   const channelInitials = (t.channel_id || 'VA').split('-').slice(0, 2).map(s => s[0] || '').join('').toUpperCase();
   const stageStrip = t.stages.map((s, i) => {
     const shownStatus = displayStageStatus(s);
@@ -2598,7 +2598,7 @@ async function renderStageExtras(jobId, s) {
   const insight = document.getElementById('insight-' + s.name);
   if (!actions || !insight) return;
   if (s.name === 'shorts_autopilot') return;
-  const hasOutput = (path) => Array.isArray(s.outputs) && s.outputs.some(o => o.path === path && o.exists);
+  const hasOutput = (path) => Array.isArray(s.outputs) && s.outputs.some(o => (o.path === path || o.path.endsWith('/' + path)) && o.exists);
 
   if (isStageApprovalRequired(s.name) && s.status === 'completed') {
     actions.innerHTML = ``;
@@ -2769,7 +2769,7 @@ async function renderFinal(t) {
   for (const st of (t.stages || [])) byName[st.name] = st;
   const stageHas = (stageName, p) => {
     const st = byName[stageName];
-    return !!(st && Array.isArray(st.outputs) && st.outputs.some(o => o.path === p && o.exists));
+    return !!(st && Array.isArray(st.outputs) && st.outputs.some(o => (o.path === p || o.path.endsWith('/' + p)) && o.exists));
   };
   let seo = {};
   if (stageHas('seo_promote', 'seo.json')) {

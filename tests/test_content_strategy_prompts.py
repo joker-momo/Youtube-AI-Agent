@@ -100,8 +100,9 @@ def test_thumbnail_prompt_requires_visuals_to_match_title_pain_angle():
         "Bienestar 45+",
     )
 
-    # v5.6 P0+P1 rewrite uses topic-category guidance instead of plate-specific
-    # bias; pain-angle binding is enforced via the title/hook + per-category cues.
-    assert "same specific pain angle" in prompt
-    assert "food or digestion" in prompt
-    assert "Never reuse a generic wellness portrait" in prompt
+    # v1.3 planner uses topic-category classification; pain-angle binding is
+    # enforced via Visual category + Main prop derived from title/topic.
+    assert "food choice" in prompt  # topic classified as food category
+    assert "Mediterranean plate" in prompt or "plato" in prompt.lower() or "food" in prompt
+    assert "lifestyle-oriented" in prompt  # safety tone replaces old genre warning
+    assert "TU PLATO TE HABLA" in prompt  # hook text rendered verbatim

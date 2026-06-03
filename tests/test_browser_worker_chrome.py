@@ -19,9 +19,9 @@ def test_runtime_returns_503_when_cdp_unreachable(monkeypatch):
     assert "error" in detail
 
 
-def test_cdp_url_defaults_to_runtime_container(monkeypatch):
+def test_cdp_url_defaults_to_localhost(monkeypatch):
     monkeypatch.delenv("CHROME_CDP_URL", raising=False)
-    assert _cdp_url() == "http://browser-runtime:9222"
+    assert _cdp_url() == "http://127.0.0.1:9222"
 
 
 def test_cdp_url_respects_override(monkeypatch):

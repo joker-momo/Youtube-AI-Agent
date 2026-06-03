@@ -540,7 +540,7 @@ def test_build_operator_next_promotes_existing_raw_before_prompting(tmp_path):
     assert result.prompt_paths == []
     assert "Raw ChatGPT response exists" in result.message
     assert result.commands == [
-        f"docker compose run --rm video-agent python -m video_agent.cli operator-promote --job-dir {job_dir} --artifact script --raw-file {raw_path} --channel {ROOT / 'configs/vida-plena-45/channel.yaml'}"
+        f"python -m video_agent.cli operator-promote --job-dir {job_dir} --artifact script --raw-file {raw_path} --channel {ROOT / 'configs/vida-plena-45/channel.yaml'}"
     ]
 
 

@@ -571,6 +571,11 @@ def delete_short(job_id: str, short_id: str, jobs_root: Path = Depends(get_jobs_
     # 1. Delete the directories
     shutil.rmtree(short_dir_path, ignore_errors=True)
     shutil.rmtree(shorts_paths.short_tmp_dir(job_dir, short_id), ignore_errors=True)
+    # Also delete from remotion/public/jobs/<short_id>
+    from video_agent.contracts import repo_root
+    public_short_dir = repo_root() / "remotion" / "public" / "jobs" / short_id
+    if public_short_dir.exists():
+        shutil.rmtree(public_short_dir, ignore_errors=True)
 
     # 2. Delete short_status file
     status_file = shorts_paths.short_status_path(job_dir, short_id)

@@ -714,6 +714,11 @@ def delete_job(
             detail="Cannot delete a running job. Stop it first, then delete.",
         )
     shutil.rmtree(job_dir)
+    # Also delete from remotion/public/jobs/<job_id>
+    from video_agent.contracts import repo_root
+    public_job_dir = repo_root() / "remotion" / "public" / "jobs" / job_id
+    if public_job_dir.exists():
+        shutil.rmtree(public_job_dir, ignore_errors=True)
 
 
 @router.post("/jobs/{job_id}/stop")

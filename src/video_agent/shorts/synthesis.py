@@ -163,7 +163,7 @@ def _prior_short_ids_for_idea(long_job_dir: Path, idea_id: str) -> list[str]:
             if short_id in found:
                 continue
             status_doc = _read_json(paths.short_status_path(long_job_dir, short_id))
-            idea_doc = _read_json(child / paths.SHORT_IDEA_FILE)
+            idea_doc = _read_json(paths.resolve_short_json(child, paths.SHORT_IDEA_FILE))
             if status_doc.get("idea_id") == idea_id or idea_doc.get("idea_id") == idea_id:
                 found.append(short_id)
     return found
@@ -265,7 +265,12 @@ def render_selected_short_ideas(
             active_entries = list(manifest_doc.get("shorts") or [])
 
         short_number = _next_short_number(long_job_dir)
-        short_id = f"short-{short_number:02d}"
+        idea_id = str(idea.get("idea_id") or "idea")
+        title = idea.get("title") or idea.get("hook_text") or "short"
+        from video_agent.shorts.paths import slugify
+        title_slug = slugify(title)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        short_id = f"short-{short_number:02d}_{idea_id}_{ts}_{title_slug}"
         short_plan = idea_to_short_plan(
             idea,
             short_id=short_id,

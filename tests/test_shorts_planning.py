@@ -145,7 +145,7 @@ def test_planner_picks_up_to_three_strong_shorts(tmp_path: Path):
     plan = planner.plan_shorts_from_long_video(job, _cfg())
     sel = plan["selected_shorts"]
     assert 1 <= len(sel) <= 3
-    assert sel[0]["short_id"] == "short-01"
+    assert sel[0]["short_id"].startswith("short-01")
     assert sel[0]["format"] == "pain_to_tip"
     assert sel[0]["voice_preset"]["voice_id"] == "ef_dora" or plan["voice_preset"]["voice_id"] == "ef_dora"
     assert sel[0]["music_track"] == "shorts_sleep_stress"

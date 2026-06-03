@@ -21,7 +21,7 @@ SELECTED_SHORT_IDEAS_FILE = "selected_short_ideas.json"
 IDEA_GENERATION_LOCK_FILE = ".ideas.lock"
 RENDER_SELECTED_LOCK_FILE = ".render-selected.lock"
 
-SHORT_STATUS_FILE = "short_status.json"
+SHORT_STATUS_FILE = "short_status.json"     # root — job state marker
 SHORT_IDEA_FILE = "short_idea.json"
 SHORT_SCRIPT_FILE = "short_script.json"
 SHORT_SCENES_FILE = "short_scenes.json"
@@ -36,6 +36,10 @@ SHORT_THUMBNAIL_FILE = "thumbnail.jpg"
 SHORT_VIDEO_FILE = "short.mp4"
 SHORT_REPORT_FILE = "short_report.md"
 SHORT_LOCK_FILE = ".short.lock"
+
+# Sub-directory names (mirrors long-form job layout)
+SHORT_JSON_SUBDIR = "json"
+SHORT_OUTPUTS_SUBDIR = "outputs"
 
 
 def shorts_dir(long_job_dir: Path) -> Path:
@@ -52,6 +56,28 @@ def short_dir(long_job_dir: Path, short_id: str) -> Path:
 
 def short_tmp_dir(long_job_dir: Path, short_id: str) -> Path:
     return short_dir(long_job_dir, short_id) / "tmp"
+
+
+def short_json_dir(long_job_dir: Path, short_id: str) -> Path:
+    """json/ subdirectory inside a short folder (data/config files)."""
+    return short_dir(long_job_dir, short_id) / SHORT_JSON_SUBDIR
+
+
+def short_outputs_dir(long_job_dir: Path, short_id: str) -> Path:
+    """outputs/ subdirectory inside a short folder (deliverable files)."""
+    return short_dir(long_job_dir, short_id) / SHORT_OUTPUTS_SUBDIR
+
+
+def resolve_short_json(sd: Path, filename: str) -> Path:
+    """Read-path helper: prefer sd/json/filename, fall back to sd/filename."""
+    preferred = sd / SHORT_JSON_SUBDIR / filename
+    return preferred if preferred.exists() else sd / filename
+
+
+def resolve_short_output(sd: Path, filename: str) -> Path:
+    """Read-path helper: prefer sd/outputs/filename, fall back to sd/filename."""
+    preferred = sd / SHORT_OUTPUTS_SUBDIR / filename
+    return preferred if preferred.exists() else sd / filename
 
 
 def short_audio_dir(long_job_dir: Path, short_id: str) -> Path:
@@ -108,3 +134,17 @@ def idea_generation_run_path(long_job_dir: Path) -> Path:
 
 def studio_render_run_path(long_job_dir: Path) -> Path:
     return shorts_dir(long_job_dir) / STUDIO_RENDER_RUN_FILE
+
+
+def slugify(text: str) -> str:
+    """Normalize and slugify a title or text to a clean URL-friendly string of max 20 chars."""
+    import unicodedata
+    import re
+    if not text:
+        return "short"
+    normalized = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('utf-8')
+    slug = normalized.lower()
+    slug = re.sub(r'[^a-z0-9\s-]', '', slug)
+    slug = re.sub(r'[\s-]+', '-', slug).strip('-')
+    return slug[:20].strip('-') or "short"
+

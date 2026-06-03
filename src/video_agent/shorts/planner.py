@@ -98,8 +98,17 @@ def _deterministic_pick(scored: list[dict], target: int, allow_fewer: bool) -> t
 
 def _build_short_from_pick(idx: int, cand: dict, formats: list[str], voice_preset: dict,
                             music_track: str) -> dict:
+    from datetime import datetime
+    from video_agent.shorts.paths import slugify
+
+    cand_id = cand.get("candidate_id") or "cand"
+    raw_title = cand.get("narration", "")
+    title_slug = slugify(raw_title)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    short_id = f"short-{idx:02d}_{cand_id}_{ts}_{title_slug}"
+
     return {
-        "short_id": f"short-{idx:02d}",
+        "short_id": short_id,
         "format": formats[(idx - 1) % len(formats)] if formats else "pain_to_tip",
         "candidate_id": cand.get("candidate_id"),
         "scene_ids": cand.get("scene_ids"),

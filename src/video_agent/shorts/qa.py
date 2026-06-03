@@ -46,9 +46,9 @@ def _run_rule_qa(
     music_track: str | None,
 ) -> dict[str, Any]:
     sd = paths.short_dir(long_job_dir, short_id)
-    script = _load(sd / "short_script.json")
-    scenes_doc = _load(sd / "short_scenes.json")
-    source_map = _load(sd / "short_source_map.json")
+    script = _load(paths.resolve_short_json(sd, paths.SHORT_SCRIPT_FILE))
+    scenes_doc = _load(paths.resolve_short_json(sd, paths.SHORT_SCENES_FILE))
+    source_map = _load(paths.resolve_short_json(sd, paths.SHORT_SOURCE_MAP_FILE))
     scenes = scenes_doc.get("scenes") or []
 
     dcfg = (channel_config.get("shorts") or {}).get("duration") or {}
@@ -128,9 +128,9 @@ def _run_gemini_qa(
     attempt: int,
 ) -> dict[str, Any]:
     sd = paths.short_dir(long_job_dir, short_id)
-    script = _load(sd / "short_script.json")
-    scenes_doc = _load(sd / "short_scenes.json")
-    source_map = _load(sd / "short_source_map.json")
+    script = _load(paths.resolve_short_json(sd, paths.SHORT_SCRIPT_FILE))
+    scenes_doc = _load(paths.resolve_short_json(sd, paths.SHORT_SCENES_FILE))
+    source_map = _load(paths.resolve_short_json(sd, paths.SHORT_SOURCE_MAP_FILE))
     prompt = prompts.gemini_qa_prompt(channel_config, script, scenes_doc, source_map)
     log_llm_call(LLMCallLog(
         task="short_qa", provider=LLM_PROVIDER, short_id=short_id,
@@ -192,8 +192,8 @@ def _run_rule_script_qa(
     music_track: str | None,
 ) -> dict[str, Any]:
     sd = paths.short_dir(long_job_dir, short_id)
-    script = _load(sd / paths.SHORT_SCRIPT_FILE)
-    source_map = _load(sd / paths.SHORT_SOURCE_MAP_FILE)
+    script = _load(paths.resolve_short_json(sd, paths.SHORT_SCRIPT_FILE))
+    source_map = _load(paths.resolve_short_json(sd, paths.SHORT_SOURCE_MAP_FILE))
 
     cta_max_words = int(((channel_config.get("shorts") or {}).get("funnel") or {}).get("cta_max_words", 8))
 
@@ -245,8 +245,8 @@ def _run_gemini_script_qa(
     attempt: int,
 ) -> dict[str, Any]:
     sd = paths.short_dir(long_job_dir, short_id)
-    script = _load(sd / paths.SHORT_SCRIPT_FILE)
-    source_map = _load(sd / paths.SHORT_SOURCE_MAP_FILE)
+    script = _load(paths.resolve_short_json(sd, paths.SHORT_SCRIPT_FILE))
+    source_map = _load(paths.resolve_short_json(sd, paths.SHORT_SOURCE_MAP_FILE))
     prompt = prompts.gemini_script_qa_prompt(channel_config, script, source_map)
     log_llm_call(LLMCallLog(
         task="short_script_qa", provider=LLM_PROVIDER, short_id=short_id,
@@ -297,7 +297,7 @@ def _run_rule_scenes_qa(
     channel_config: dict,
 ) -> dict[str, Any]:
     sd = paths.short_dir(long_job_dir, short_id)
-    scenes_doc = _load(sd / paths.SHORT_SCENES_FILE)
+    scenes_doc = _load(paths.resolve_short_json(sd, paths.SHORT_SCENES_FILE))
     scenes = scenes_doc.get("scenes") or []
 
     dcfg = (channel_config.get("shorts") or {}).get("duration") or {}
@@ -346,8 +346,8 @@ def _run_gemini_scenes_qa(
     attempt: int,
 ) -> dict[str, Any]:
     sd = paths.short_dir(long_job_dir, short_id)
-    script = _load(sd / paths.SHORT_SCRIPT_FILE)
-    scenes_doc = _load(sd / paths.SHORT_SCENES_FILE)
+    script = _load(paths.resolve_short_json(sd, paths.SHORT_SCRIPT_FILE))
+    scenes_doc = _load(paths.resolve_short_json(sd, paths.SHORT_SCENES_FILE))
     prompt = prompts.gemini_scenes_qa_prompt(channel_config, script, scenes_doc)
     log_llm_call(LLMCallLog(
         task="short_scenes_qa", provider=LLM_PROVIDER, short_id=short_id,

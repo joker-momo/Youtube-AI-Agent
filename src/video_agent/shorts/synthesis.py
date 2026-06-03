@@ -56,7 +56,7 @@ def _next_short_number(long_job_dir: Path) -> int:
         for child in shorts_root.iterdir():
             if not child.is_dir():
                 continue
-            match = re.fullmatch(r"short-(\d+)", child.name)
+            match = re.match(r"^short-(\d+)", child.name)
             if match:
                 highest = max(highest, int(match.group(1)))
     return highest + 1

@@ -301,7 +301,7 @@ def get_shorts_studio_drafts(job_id: str, jobs_root: Path = Depends(get_jobs_roo
     shorts_root = shorts_paths.shorts_dir(job_dir)
     if shorts_root.exists():
         import re
-        _SHORT_DIR_RE = re.compile(r"^short-\d+$")
+        _SHORT_DIR_RE = re.compile(r"^short-\d+(?:_.*)?$")
         for child in sorted(shorts_root.iterdir()):
             if not child.is_dir() or not _SHORT_DIR_RE.match(child.name):
                 continue
@@ -418,7 +418,7 @@ def get_shorts_studio_ideas(job_id: str, jobs_root: Path = Depends(get_jobs_root
     shorts_root = shorts_paths.shorts_dir(job_dir)
     if shorts_root.exists():
         import re
-        _SHORT_DIR_RE = re.compile(r"^short-\d+$")
+        _SHORT_DIR_RE = re.compile(r"^short-\d+(?:_.*)?$")
         for child in sorted(shorts_root.iterdir()):
             if not child.is_dir() or not _SHORT_DIR_RE.match(child.name):
                 continue
@@ -667,7 +667,7 @@ def post_shorts_studio_render_ideas(
         shorts_root = shorts_paths.shorts_dir(job_dir)
         if shorts_root.exists():
             import re
-            _SHORT_DIR_RE = re.compile(r"^short-\d+$")
+            _SHORT_DIR_RE = re.compile(r"^short-\d+(?:_.*)?$")
             for child in sorted(shorts_root.iterdir()):
                 if not child.is_dir() or not _SHORT_DIR_RE.match(child.name):
                     continue

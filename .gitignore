@@ -44,3 +44,4 @@ remotion/src/*.js
 /.agent
 .worktrees/
 /docs/plans
+queue.db

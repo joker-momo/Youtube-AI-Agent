@@ -29,15 +29,22 @@ def materialize_short_job_aliases(short_dir: Path, channel_config: dict | None =
     channel_id = (channel_config.get("channel") or {}).get("id", "vida-plena-45")
     job_id = short_dir.name
 
-    short_script = _load(short_dir / "short_script.json")
-    short_scenes = _load(short_dir / "short_scenes.json")
-    short_seo = _load(short_dir / "short_seo.json")
+    # Read from json/ subdir first (new layout), fall back to root (legacy).
+    short_script = _load(paths.resolve_short_json(short_dir, paths.SHORT_SCRIPT_FILE))
+    short_scenes = _load(paths.resolve_short_json(short_dir, paths.SHORT_SCENES_FILE))
+    short_seo = _load(paths.resolve_short_json(short_dir, paths.SHORT_SEO_FILE))
+    short_render_props = _load(paths.resolve_short_json(short_dir, paths.SHORT_RENDER_PROPS_FILE))
+
+    # Write Remotion aliases to json/ subdirectory so pipeline._resolve_json_file
+    # picks them up automatically (it checks json/ before root).
+    jd = short_dir / paths.SHORT_JSON_SUBDIR
+    jd.mkdir(parents=True, exist_ok=True)
 
     if short_script:
         sections = short_script.get("sections") or [
             {"title": short_script.get("hook", ""), "focus": short_script.get("narration", "")}
         ]
-        atomic_write_json(short_dir / "script.json", {
+        atomic_write_json(jd / "script.json", {
             "channel_id": channel_id,
             "job_id": job_id,
             "hook": short_script.get("hook", ""),
@@ -56,21 +63,24 @@ def materialize_short_job_aliases(short_dir: Path, channel_config: dict | None =
                 sum(float(s.get("duration_sec") or 0) for s in (scenes.get("scenes") or [])), 1
             )
         scenes["qa"] = {"verdict": "PASS"}
-        atomic_write_json(short_dir / "scenes.json", scenes)
+        atomic_write_json(jd / "scenes.json", scenes)
 
     if short_seo:
         title = short_seo.get("title", "")
-        atomic_write_json(short_dir / "seo.json", {
+        atomic_write_json(jd / "seo.json", {
             "job_id": job_id,
             "title": title,
             "description": short_seo.get("description", ""),
             "tags": short_seo.get("tags") or short_seo.get("hashtags") or ["shorts"],
             "language": short_seo.get("language", "es-ES"),
             "ai_disclosure": bool(short_seo.get("ai_disclosure", True)),
-            "thumbnail_path": "short_cover.jpg",
+            "thumbnail_path": "outputs/short_cover.jpg",
             "thumbnail_text": (title[:25] or "SHORT").upper(),
             "suggested_pinned_comments": short_seo.get("pinned_comment", ""),
         })
+
+    if short_render_props:
+        atomic_write_json(jd / "render_props.json", {**short_render_props, "_render_props_path": str(jd / "render_props.json")})
 
 
 def _is_portrait_image(image_path: Path) -> bool:
@@ -122,13 +132,16 @@ def render_short_video(short_dir: Path, channel_config: dict) -> Path:  # pragma
 
     materialize_short_job_aliases(short_dir, channel_config)
 
+    outputs_dir = short_dir / paths.SHORT_OUTPUTS_SUBDIR
+    outputs_dir.mkdir(parents=True, exist_ok=True)
+
     # Bypass Remotion thumbnail generation:
     # If the ChatGPT-generated thumbnail.jpg exists, copy it to outputs/thumbnail_1.jpg
     # so that render_with_remotion will see it and completely skip Remotion still rendering.
-    thumb = short_dir / paths.SHORT_THUMBNAIL_FILE
+    thumb = paths.resolve_short_output(short_dir, paths.SHORT_THUMBNAIL_FILE)
+    if not thumb.exists():
+        thumb = short_dir / paths.SHORT_THUMBNAIL_FILE  # fallback root location
     if thumb.exists():
-        outputs_dir = short_dir / "outputs"
-        outputs_dir.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(thumb, outputs_dir / "thumbnail_1.jpg")
 
     render_operator_job(
@@ -139,10 +152,10 @@ def render_short_video(short_dir: Path, channel_config: dict) -> Path:  # pragma
             require_operator_qa=False,
         )
     )
-    produced = short_dir / "outputs" / "video.mp4"
+    produced = outputs_dir / "video.mp4"  # render_operator_job puts it here
     if not produced.exists():
         produced = short_dir / "video.mp4"
-    out = short_dir / paths.SHORT_VIDEO_FILE
+    out = outputs_dir / paths.SHORT_VIDEO_FILE
     if produced.exists() and produced != out:
         shutil.copyfile(produced, out)
     try:
@@ -171,8 +184,13 @@ def render_short_cover(short_dir: Path, channel_config: dict) -> Path:
     Bypasses Remotion completely. If the ChatGPT thumbnail is missing,
     falls back to extracting a frame from the rendered video using ffmpeg.
     """
-    out = short_dir / paths.SHORT_COVER_FILE
-    thumb = short_dir / paths.SHORT_THUMBNAIL_FILE
+    outputs_dir = short_dir / paths.SHORT_OUTPUTS_SUBDIR
+    outputs_dir.mkdir(parents=True, exist_ok=True)
+    out = outputs_dir / paths.SHORT_COVER_FILE
+    # Find the ChatGPT-generated thumbnail (may be in outputs/ or at root)
+    thumb = outputs_dir / paths.SHORT_THUMBNAIL_FILE
+    if not thumb.exists():
+        thumb = short_dir / paths.SHORT_THUMBNAIL_FILE
 
     if thumb.exists():
         # Copy ChatGPT generated thumbnail as the cover image
@@ -186,7 +204,9 @@ def render_short_cover(short_dir: Path, channel_config: dict) -> Path:
     # Fallback: ffmpeg frame extraction from the rendered video.
     cover_cfg = (channel_config.get("shorts") or {}).get("cover") or {}
     frame_sec = float(cover_cfg.get("cover_frame_sec", 0.3))
-    video = short_dir / paths.SHORT_VIDEO_FILE
+    video = outputs_dir / paths.SHORT_VIDEO_FILE
+    if not video.exists():
+        video = short_dir / paths.SHORT_VIDEO_FILE
     if video.exists():
         try:
             subprocess.run(
@@ -206,7 +226,7 @@ def _save_friendly_copy(short_dir: Path, source_file: Path, ext: str) -> None:
     import datetime
     import shutil
     
-    idea_path = short_dir / "short_idea.json"
+    idea_path = paths.resolve_short_json(short_dir, paths.SHORT_IDEA_FILE)
     if not idea_path.exists():
         return
         

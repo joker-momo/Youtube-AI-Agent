@@ -74,32 +74,79 @@ def _idea_block(short_plan: dict) -> str:
 
 
 def short_script_prompt(channel_config: dict, short_plan: dict, source_artifacts: dict | None = None) -> str:
-    schema = {
-        "short_id": short_plan.get("short_id", "short-01"),
-        "source_long_job_id": short_plan.get("source_long_job_id", ""),
-        "short_format": short_plan.get("format", "pain_to_tip"),
-        "target_duration_sec": 35,
-        "hook": "...",
-        "narration": "...",
-        "beats": [],
-        "cta": "...",
-        "qa": {"verdict": "PENDING_SHORTS_QA"},
-    }
+    fmt = short_plan.get("format", "pain_to_tip")
     seed = short_plan.get("narration_seed", "")
+    idea_block = _idea_block(short_plan).strip() or "(none)"
+    source_block_text = _source_block(source_artifacts or {}).strip() or "(none)"
+
+    schema = (
+        "{\n"
+        '  "short_id": "string",\n'
+        '  "source_long_job_id": "string or null",\n'
+        f'  "short_format": "{fmt}",\n'
+        '  "target_duration_sec": 35,\n'
+        '  "hook": "string",\n'
+        '  "narration": "string",\n'
+        '  "beats": [\n'
+        "    {\n"
+        '      "time_sec": "0-3",\n'
+        '      "visual": "string",\n'
+        '      "narration": "string",\n'
+        '      "purpose": "hook | setup | payoff | cta"\n'
+        "    }\n"
+        "  ],\n"
+        '  "cta": "string",\n'
+        '  "qa": {\n'
+        '    "verdict": "PENDING_SHORTS_QA"\n'
+        "  }\n"
+        "}"
+    )
+
     return (
-        f"You are a YouTube Shorts writer for a Spain-first wellness channel (adults 45+).\n"
-        f"Write a single vertical Short in format '{short_plan.get('format', 'pain_to_tip')}'.\n\n"
-        f"Use the selected synthesis idea when present.\n"
-        f"Do not summarize the entire long video.\n"
-        f"Only use claims supported by the provided key points and source scenes.\n"
-        f"Create a 20-45 second Short.\n"
-        f"Keep one main idea.\n\n"
-        f"{_idea_block(short_plan)}"
-        f"{_source_block(source_artifacts or {})}"
+        "You are a YouTube Shorts writer for a Spain-first wellness channel for adults aged 45+.\n\n"
+        f"Write ONE vertical YouTube Short in format \"{fmt}\".\n\n"
+        "Use the selected SHORT IDEA when present, but SOURCE always has priority.\n"
+        "Do not summarize the full long video.\n"
+        "Use only claims clearly supported by the provided key_points, source scenes, and narration seed.\n"
+        "If a claim is not supported, omit it.\n"
+        "Create a 20–45 second Short with ONE main idea.\n\n"
+        "INPUTS:\n"
+        f"SHORT IDEA block:\n{idea_block}\n\n"
+        f"SOURCE block:\n{source_block_text}\n\n"
         f"SOURCE NARRATION SEED:\n{seed}\n\n"
-        f"{_OUTPUT_RULES}\n{_LANGUAGE_RULES}\n{_RETENTION_RULES}\n{_STYLE_RULES}\n{_SAFETY_RULES}\n"
-        f"Return JSON exactly in this shape (qa.verdict MUST stay PENDING_SHORTS_QA):\n"
-        f"{json.dumps(schema, ensure_ascii=False, indent=2)}\n"
+        "OUTPUT RULES:\n"
+        "Return exactly ONE raw valid JSON object.\n"
+        "No markdown fences.\n"
+        "No commentary.\n"
+        "No trailing commas.\n"
+        "All strings must be valid JSON strings.\n\n"
+        "LANGUAGE RULES:\n"
+        "Use es-ES.\n"
+        "Speak to adults 45+ without using words like \"ancianos\", \"abuelos\", \"seniors\", \"personas mayores\", or age-shaming language.\n\n"
+        "RETENTION RULES:\n"
+        "The first 2 seconds must open with pain, curiosity, a number, or a common mistake.\n"
+        "No greeting.\n"
+        "Do not say \"en este short\", \"en este vídeo\", \"hoy\", \"bienvenidos\", or \"hola\".\n"
+        "Keep one main idea only.\n"
+        "Deliver the payoff before the CTA.\n"
+        "CTA must be 8 words or fewer.\n"
+        "No generic recap.\n\n"
+        "STYLE RULES:\n"
+        "Warm, direct, calm.\n"
+        "Short and medium sentences.\n"
+        "No TikTok slang.\n"
+        "No melodrama.\n"
+        "No miracle language.\n"
+        "No aggressive medical tone.\n\n"
+        "SAFETY RULES:\n"
+        "Do not add new health claims.\n"
+        "Do not imply cures, diagnosis, or treatment.\n"
+        "Do not include long disclaimers.\n"
+        "Do not use fear-based medical language.\n\n"
+        "DURATION RULES:\n"
+        "Target duration: around 35 seconds.\n"
+        "Narration should be approximately 80–105 Spanish words.\n\n"
+        f"RETURN JSON SCHEMA:\n{schema}\n"
     )
 
 
@@ -159,8 +206,8 @@ def short_qa_prompt(channel_config: dict, short_script: dict, short_scenes: dict
         "Review this Short for hook strength, retention in the first 2 seconds, one main idea, standalone "
         "value, funnel CTA, source fidelity, safety/no overclaim, Spain-first language, mobile readability, "
         "and vertical scene logic.\n\n"
-        f"SCRIPT:\n{json.dumps(short_script, ensure_ascii=False)[:1500]}\n\n"
-        f"SCENES:\n{json.dumps(short_scenes, ensure_ascii=False)[:1500]}\n\n"
+        f"SCRIPT:\n{json.dumps(short_script, ensure_ascii=False)}\n\n"
+        f"SCENES:\n{json.dumps(short_scenes, ensure_ascii=False)}\n\n"
         f"{_OUTPUT_RULES}\nReturn JSON exactly:\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n"
     )
 
@@ -227,50 +274,103 @@ def planner_prompt(channel_config: dict, candidates: list[dict],
 def short_scene_prompt_v6(channel_config: dict, short_plan: dict,
                           short_script: dict, feedback: str = "") -> str:
     """Spec v6 §2.4 / §9.3 — ChatGPT chooses each scene's layout."""
-    schema = {
-        "channel_id": (channel_config.get("channel") or {}).get("id", ""),
-        "job_id": short_plan.get("source_long_job_id", ""),
-        "short_id": short_plan.get("short_id", "short-01"),
-        "total_duration_sec": short_script.get("target_duration_sec", 35),
-        "scenes": [
-            {
-                "id": "short-scene-01",
-                "duration_sec": 2.4,
-                "layout": "short_hook",
-                "narration": "...",
-                "caption": "...",
-                "on_screen_text": "TWO TO FIVE WORDS",
-                "visual_prompt": "English vertical-friendly shot",
-                "motion": "slow_push",
-                "layout_payload": {"title": "TWO TO FIVE WORDS"},
-                "source_scene_ids": ["scene-09"],
-            }
-        ],
-        "qa": {"verdict": "PENDING_SHORTS_QA"},
-    }
-    rules = (
-        "SCENE LAYOUT RULES (spec v6 §2.4 + §9.3):\n"
-        "- Use ONLY these layouts: " + ", ".join(_SHORT_LAYOUT_NAMES) + ".\n"
-        "- First scene MUST be short_hook.\n"
-        "- Last scene SHOULD be short_cta if a CTA is present.\n"
-        "- on_screen_text 2-5 words. layout_payload.title 2-5 words.\n"
-        "- visual_prompt: English, vertical-friendly framing (close-up face, "
-        "hands, kitchen, bed, yoga mat, chair, walking).\n"
+    script_json = json.dumps(short_script, ensure_ascii=False)[:2000]
+    feedback_block = feedback.strip() if feedback else "(none)"
+
+    schema = (
+        "{\n"
+        '  "channel_id": "string or null",\n'
+        '  "job_id": "string or null",\n'
+        '  "short_id": "string",\n'
+        '  "total_duration_sec": 35,\n'
+        '  "scenes": [\n'
+        "    {\n"
+        '      "id": "s01",\n'
+        '      "duration_sec": 5,\n'
+        '      "layout": "short_hook",\n'
+        '      "narration": "string",\n'
+        '      "caption": "string",\n'
+        '      "on_screen_text": "string",\n'
+        '      "visual_prompt": "English visual generation prompt, vertical 9:16",\n'
+        '      "motion": "string",\n'
+        '      "layout_payload": {\n'
+        '        "title": "string",\n'
+        '        "items": ["string"],\n'
+        '        "emphasis": "string"\n'
+        "      },\n"
+        '      "source_scene_ids": []\n'
+        "    }\n"
+        "  ],\n"
+        '  "qa": {\n'
+        '    "verdict": "PENDING_SCENES_QA"\n'
+        "  }\n"
+        "}"
+    )
+
+    return (
+        "Turn this approved Short script into vertical 9:16 scenes for generation.\n\n"
+        f"SCRIPT:\n{script_json}\n\n"
+        f"RETRY FEEDBACK:\n{feedback_block}\n\n"
+        "TASK:\n"
+        "Create scene-by-scene visual instructions for a vertical YouTube Short.\n"
+        "Do not rewrite the core message.\n"
+        "Do not add new health claims.\n"
+        "Keep the narration faithful to the SCRIPT.\n\n"
+        "OUTPUT RULES:\n"
+        "Return exactly ONE raw valid JSON object.\n"
+        "No markdown fences.\n"
+        "No commentary.\n"
+        "No trailing commas.\n"
+        "All strings must be valid JSON strings.\n\n"
+        "SCENE COUNT & TIMING:\n"
+        "- Create 4–7 scenes.\n"
+        "- Each scene should be 3–8 seconds.\n"
+        "- total_duration_sec must equal the sum of all scene duration_sec values.\n"
+        "- Preserve the script's CTA if present.\n"
+        "- First scene MUST use layout \"short_hook\".\n"
+        "- Last scene SHOULD use layout \"short_cta\" if CTA is present.\n\n"
+        "ALLOWED SHORT LAYOUTS ONLY:\n"
+        "- short_hook\n"
+        "- short_pain\n"
+        "- short_tip\n"
+        "- short_checklist\n"
+        "- short_myth\n"
+        "- short_quote\n"
+        "- short_cta\n\n"
+        "Do NOT use long-form layouts.\n"
+        "Do NOT use layouts without the \"short_\" prefix.\n\n"
+        "TEXT RULES:\n"
+        "- on_screen_text: 2–5 words.\n"
+        "- layout_payload.title: 2–5 words.\n"
+        "- caption: short subtitle-style text, maximum 12 words.\n"
         "- No long bottom subtitle paragraphs.\n"
-        "- Do NOT use long-form layouts (hook, subtitle, warning, checklist, "
-        "quote, cta WITHOUT the short_ prefix).\n"
-        "- ChatGPT decides each scene's layout — sequence examples are "
-        "recommendations, not deterministic code output.\n"
+        "- Do not duplicate the full narration as on-screen text.\n"
+        "- Use es-ES for narration, caption, on_screen_text, and layout_payload.\n"
+        "- visual_prompt must be in English.\n\n"
+        "VISUAL RULES:\n"
+        "- visual_prompt must be vertical-friendly for 9:16.\n"
+        "- Prefer simple realistic scenes: close-up face, hands, kitchen, supermarket aisle, bed, yoga mat, chair, walking, daily routine.\n"
+        "- Show adults aged 45+ naturally and respectfully.\n"
+        "- Do not make people look frail, sick, helpless, ashamed, or mocked.\n"
+        "- No scary medical imagery.\n"
+        "- No hospital, pills, needles, organs, scans, or diagnosis visuals unless explicitly supported by the script.\n"
+        "- Do not introduce unsupported before/after transformations.\n"
+        "- Keep visuals practical, warm, calm, and Spain-first.\n\n"
+        "LAYOUT DECISION RULES:\n"
+        "- ChatGPT decides the best layout for each scene.\n"
+        "- Use short_hook for the opening curiosity/pain/mistake.\n"
+        "- Use short_pain for the relatable problem.\n"
+        "- Use short_tip for one clear action.\n"
+        "- Use short_checklist only when there are 2–3 simple checks.\n"
+        "- Use short_myth only when correcting a misconception.\n"
+        "- Use short_quote only for a short memorable line from the script.\n"
+        "- Use short_cta only for the final CTA.\n\n"
+        "SOURCE RULES:\n"
+        "- source_scene_ids must only contain IDs already present in the SCRIPT or source references.\n"
+        "- If no source_scene_ids are available, use [].\n"
+        "- Do not invent source_scene_ids.\n\n"
+        f"RETURN JSON SCHEMA:\n{schema}\n"
     )
-    prompt = (
-        "Turn this Short script into vertical (9:16) scenes.\n\n"
-        f"SCRIPT:\n{json.dumps(short_script, ensure_ascii=False)[:2000]}\n\n"
-        f"{_OUTPUT_RULES}\n{rules}\n"
-        f"Return JSON exactly:\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n"
-    )
-    if feedback:
-        prompt += f"\nFIX THESE QA ISSUES FROM THE PREVIOUS ATTEMPT:\n{feedback}\n"
-    return prompt
 
 
 def gemini_qa_prompt(channel_config: dict, short_script: dict,
@@ -301,11 +401,11 @@ def gemini_qa_prompt(channel_config: dict, short_script: dict,
         "when regeneration is needed.\n"
     )
     body = (
-        f"SCRIPT:\n{json.dumps(short_script, ensure_ascii=False)[:1500]}\n\n"
-        f"SCENES:\n{json.dumps(short_scenes, ensure_ascii=False)[:1500]}\n\n"
+        f"SCRIPT:\n{json.dumps(short_script, ensure_ascii=False)}\n\n"
+        f"SCENES:\n{json.dumps(short_scenes, ensure_ascii=False)}\n\n"
     )
     if short_source_map:
-        body += f"SOURCE MAP:\n{json.dumps(short_source_map, ensure_ascii=False)[:600]}\n\n"
+        body += f"SOURCE MAP:\n{json.dumps(short_source_map, ensure_ascii=False)}\n\n"
     return (
         "You are the Shorts QA reviewer for a Spain-first wellness channel (45+).\n\n"
         f"{body}{_OUTPUT_RULES}\n{rules}\n"
@@ -315,69 +415,193 @@ def gemini_qa_prompt(channel_config: dict, short_script: dict,
 
 def gemini_script_qa_prompt(channel_config: dict, short_script: dict, short_source_map: dict | None = None) -> str:
     """Gemini QA validates script quality, language, and safety."""
-    schema = {
-        "verdict": "PASS",
-        "issues": [],
-        "required_changes": [],
-        "warnings": [],
-        "scores": {
-            "hook": 90, "payoff": 85, "funnel": 80,
-            "source_fidelity": 90, "safety": 95,
-        },
-    }
-    rules = (
-        "GEMINI SCRIPT QA RULES:\n"
-        "- first 2s = pain/curiosity/number/mistake; no greeting.\n"
-        "- one main idea; payoff before CTA; CTA short; CTA <= 8 words.\n"
-        "- no medical overclaim, no miracle promise, no long disclaimer.\n"
-        "- source fidelity OK (references to original topics match and make sense).\n"
-        "- Spanish for Spain, es-ES.\n"
-        "- PASS only if script is ready to generate scenes. FAIL with specific required_changes "
-        "when script regeneration is needed.\n"
+    script_json = json.dumps(short_script, ensure_ascii=False)
+    source_map_json = json.dumps(short_source_map, ensure_ascii=False) if short_source_map else "(none)"
+
+    schema = (
+        "{\n"
+        '  "verdict": "PASS | FAIL",\n'
+        '  "issues": [\n'
+        "    {\n"
+        '      "type": "hook | structure | cta | source_fidelity | safety | language | schema | style",\n'
+        '      "severity": "major | minor",\n'
+        '      "detail": "string"\n'
+        "    }\n"
+        "  ],\n"
+        '  "required_changes": [\n'
+        '    "string"\n'
+        "  ],\n"
+        '  "warnings": [\n'
+        '    "string"\n'
+        "  ],\n"
+        '  "scores": {\n'
+        '    "hook": 0,\n'
+        '    "payoff": 0,\n'
+        '    "funnel": 0,\n'
+        '    "source_fidelity": 0,\n'
+        '    "safety": 0\n'
+        "  }\n"
+        "}"
     )
-    body = f"SCRIPT:\n{json.dumps(short_script, ensure_ascii=False)[:1500]}\n\n"
-    if short_source_map:
-        body += f"SOURCE MAP:\n{json.dumps(short_source_map, ensure_ascii=False)[:600]}\n\n"
+
     return (
-        "You are the Shorts Script QA reviewer for a Spain-first wellness channel (45+).\n\n"
-        f"{body}{_OUTPUT_RULES}\n{rules}\n"
-        f"Return JSON exactly:\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n"
+        "You are the Shorts Script QA reviewer for a Spain-first wellness channel for adults aged 45+.\n\n"
+        "Review the provided Short script against retention, style, safety, source fidelity, and readiness for scene generation.\n\n"
+        f"SCRIPT:\n{script_json}\n\n"
+        f"SOURCE MAP:\n{source_map_json}\n\n"
+        "OUTPUT RULES:\n"
+        "Return exactly ONE raw valid JSON object.\n"
+        "No markdown fences.\n"
+        "No commentary.\n"
+        "No trailing commas.\n"
+        "All strings must be valid JSON strings.\n\n"
+        "QA RULES:\n"
+        "- First 2 seconds must open with pain, curiosity, a number, or a common mistake.\n"
+        "- No greeting.\n"
+        "- No banned intro phrases such as \"hola\", \"bienvenidos\", \"en este short\", \"en este vídeo\", or \"hoy\".\n"
+        "- Script must keep ONE main idea.\n"
+        "- Payoff must appear before the CTA.\n"
+        "- CTA must be short and 8 words or fewer.\n"
+        "- No generic recap.\n"
+        "- No medical overclaim.\n"
+        "- No miracle promise.\n"
+        "- No diagnosis, cure, or treatment claims.\n"
+        "- No long disclaimer.\n"
+        "- Spanish must be Spain-first es-ES.\n"
+        "- Tone must be warm, direct, calm, and suitable for adults 45+.\n"
+        "- Do not use \"ancianos\", \"abuelos\", \"seniors\", \"personas mayores\", or age-shaming language.\n"
+        "- Source fidelity must be checked against SOURCE MAP when present.\n"
+        "- If SOURCE MAP is missing, do not invent support. Add a warning.\n\n"
+        "SCHEMA CHECK:\n"
+        "The script should include:\n"
+        "- short_id\n"
+        "- source_long_job_id\n"
+        "- short_format\n"
+        "- target_duration_sec\n"
+        "- hook\n"
+        "- narration\n"
+        "- beats\n"
+        "- cta\n"
+        "- qa.verdict\n\n"
+        "PASS / FAIL RULES:\n"
+        "Return \"PASS\" only if the script is ready to generate scenes.\n"
+        "Return \"FAIL\" if regeneration is needed.\n"
+        "FAIL if:\n"
+        "- unsupported health claims appear\n"
+        "- hook fails the first-2-seconds rule\n"
+        "- script has more than one main idea\n"
+        "- payoff is missing or appears only after CTA\n"
+        "- CTA is longer than 8 words\n"
+        "- Spanish is not es-ES\n"
+        "- required JSON fields are missing\n"
+        "- source fidelity cannot be confirmed for important claims when SOURCE MAP is present\n\n"
+        "SCORING:\n"
+        "Scores must be integers from 0 to 10.\n"
+        "- hook: first-2-seconds strength and clarity\n"
+        "- payoff: usefulness and placement before CTA\n"
+        "- funnel: flow from hook to setup to payoff to CTA\n"
+        "- source_fidelity: support from SOURCE MAP\n"
+        "- safety: absence of overclaims or unsafe framing\n\n"
+        f"RETURN JSON SCHEMA:\n{schema}\n"
     )
 
 
 def gemini_scenes_qa_prompt(channel_config: dict, short_script: dict, short_scenes: dict) -> str:
     """Gemini QA validates vertical scene layout, mobile readability, and visuals."""
-    schema = {
-        "verdict": "PASS",
-        "issues": [],
-        "required_changes": [],
-        "warnings": [],
-        "scores": {
-            "funnel": 80,
-            "mobile_readability": 90,
-            "layout": 90,
-        },
-    }
-    rules = (
-        "GEMINI SCENES QA RULES:\n"
-        "- duration 20-45s.\n"
-        "- 5-12 short scenes total.\n"
-        "- first scene layout must be short_hook.\n"
-        "- last scene should be short_cta if a CTA is present in the script.\n"
-        "- on_screen_text 2-5 words; captions <= 2 lines.\n"
-        "- visuals match the script topics and are vertical-friendly.\n"
-        "- layout choices correct; only short_* layouts used.\n"
-        "- primary text not too low.\n"
-        "- PASS only if scenes are ready to render. FAIL with specific required_changes "
-        "when scenes regeneration is needed.\n"
+    script_json = json.dumps(short_script, ensure_ascii=False)
+    scenes_json = json.dumps(short_scenes, ensure_ascii=False)
+
+    schema = (
+        "{\n"
+        '  "verdict": "PASS | FAIL",\n'
+        '  "issues": [\n'
+        "    {\n"
+        '      "type": "duration | scene_count | layout | text | caption | visual | safe_zone | source_fidelity | safety | language | schema",\n'
+        '      "scene_id": "string or null",\n'
+        '      "severity": "major | minor",\n'
+        '      "detail": "string"\n'
+        "    }\n"
+        "  ],\n"
+        '  "required_changes": [\n'
+        '    "string"\n'
+        "  ],\n"
+        '  "warnings": [\n'
+        '    "string"\n'
+        "  ],\n"
+        '  "scores": {\n'
+        '    "funnel": 0,\n'
+        '    "mobile_readability": 0,\n'
+        '    "layout": 0\n'
+        "  }\n"
+        "}"
     )
-    body = (
-        f"SCRIPT:\n{json.dumps(short_script, ensure_ascii=False)[:1500]}\n\n"
-        f"SCENES:\n{json.dumps(short_scenes, ensure_ascii=False)[:1500]}\n\n"
-    )
+
     return (
-        "You are the Shorts Scenes QA reviewer for a Spain-first wellness channel (45+).\n\n"
-        f"{body}{_OUTPUT_RULES}\n{rules}\n"
-        f"Return JSON exactly:\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n"
+        "You are the Shorts Scenes QA reviewer for a Spain-first wellness channel for adults aged 45+.\n\n"
+        "Review whether the generated scenes are ready for vertical 9:16 rendering.\n\n"
+        f"SCRIPT:\n{script_json}\n\n"
+        f"SCENES:\n{scenes_json}\n\n"
+        "OUTPUT RULES:\n"
+        "Return exactly ONE raw valid JSON object.\n"
+        "No markdown fences.\n"
+        "No commentary.\n"
+        "No trailing commas.\n"
+        "All strings must be valid JSON strings.\n\n"
+        "QA RULES:\n"
+        "- total_duration_sec must be 20–45 seconds.\n"
+        "- total_duration_sec must equal the sum of all scene duration_sec values.\n"
+        "- Create 4–7 scenes total.\n"
+        "- Each scene should be 3–8 seconds.\n"
+        "- First scene layout must be \"short_hook\".\n"
+        "- Last scene must be \"short_cta\" if the script has a CTA.\n"
+        "- Only short_* layouts are allowed.\n"
+        "- Allowed layouts:\n"
+        "  - short_hook\n"
+        "  - short_pain\n"
+        "  - short_tip\n"
+        "  - short_checklist\n"
+        "  - short_myth\n"
+        "  - short_quote\n"
+        "  - short_cta\n"
+        "- Do not allow long-form layouts or layouts without the \"short_\" prefix.\n"
+        "- on_screen_text must be 2–5 words.\n"
+        "- layout_payload.title must be 2–5 words.\n"
+        "- captions must be short and fit within 2 lines.\n"
+        "- caption must not duplicate long narration.\n"
+        "- visual_prompt must be in English.\n"
+        "- narration, caption, on_screen_text, and layout_payload must use es-ES.\n"
+        "- visuals must match the script topic and scene narration.\n"
+        "- visuals must be vertical-friendly for 9:16.\n"
+        "- Primary text must stay in a mobile safe zone, not too low, not near the bottom UI area.\n"
+        "- Visuals must be respectful toward adults 45+.\n"
+        "- No frail, sick, helpless, mocked, or ashamed portrayal.\n"
+        "- No scary medical imagery.\n"
+        "- No hospital, pills, needles, organs, scans, or diagnosis visuals unless explicitly supported by the script.\n"
+        "- Scenes must not add new health claims beyond the SCRIPT.\n"
+        "- Scene narration must remain faithful to the SCRIPT.\n"
+        "- source_scene_ids must not be invented.\n\n"
+        "PASS / FAIL RULES:\n"
+        "Return \"PASS\" only if the scenes are ready to render.\n"
+        "Return \"FAIL\" if regeneration is needed.\n"
+        "FAIL if:\n"
+        "- total duration is outside 20–45 seconds\n"
+        "- total_duration_sec does not equal the sum of scenes\n"
+        "- scene count is outside the required range\n"
+        "- first scene is not short_hook\n"
+        "- CTA exists but last scene is not short_cta\n"
+        "- any layout is not allowed\n"
+        "- on_screen_text or title length violates rules\n"
+        "- visual_prompt is not English\n"
+        "- captions are too long\n"
+        "- visuals do not match the topic\n"
+        "- primary text is likely too low for Shorts UI\n"
+        "- scenes add unsupported health claims\n"
+        "- any scene contains unsafe or age-shaming visual framing\n\n"
+        "SCORING:\n"
+        "Scores must be integers from 0 to 10.\n"
+        "- funnel: scene flow from hook to pain/setup to payoff to CTA\n"
+        "- mobile_readability: text length, safe-zone placement, caption readability\n"
+        "- layout: correct use of short layouts and visual-scene fit\n\n"
+        f"RETURN JSON SCHEMA:\n{schema}\n"
     )
 

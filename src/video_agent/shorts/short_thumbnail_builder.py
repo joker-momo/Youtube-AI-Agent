@@ -79,7 +79,7 @@ def build_short_thumbnail(
     from video_agent.thumbnail_planner import plan_thumbnail_prompts
 
     short_dir = paths.short_dir(long_job_dir, short_id)
-    seo_path = short_dir / paths.SHORT_SEO_FILE
+    seo_path = paths.resolve_short_json(short_dir, paths.SHORT_SEO_FILE)
     if not seo_path.exists():
         raise FileNotFoundError(f"Missing SEO file: {seo_path}")
 
@@ -108,8 +108,14 @@ def build_short_thumbnail(
     prompt = _build_short_thumbnail_prompt(plan)
 
     # Output paths
-    png_path = short_dir / "thumbnail_raw.png"
-    jpg_path = short_dir / "thumbnail.jpg"
+    tmp_dir = paths.short_tmp_dir(long_job_dir, short_id)
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    png_path = tmp_dir / "thumbnail_raw.png"
+
+    outputs_dir = paths.short_outputs_dir(long_job_dir, short_id)
+    outputs_dir.mkdir(parents=True, exist_ok=True)
+    jpg_path = outputs_dir / paths.SHORT_THUMBNAIL_FILE
+
     project_name = f"{long_job_dir.name[:25]}-{short_id}-thumb"[:45]
 
     # Prepend the portrait image gen instruction
@@ -166,6 +172,8 @@ def build_short_thumbnail(
         "dimensions": "1080x1920",
         "aspect_ratio": "9:16",
     }
-    atomic_write_json(short_dir / "thumbnail_prompt_meta.json", meta)
+    meta_dir = paths.short_json_dir(long_job_dir, short_id)
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(meta_dir / "thumbnail_prompt_meta.json", meta)
 
     return jpg_path

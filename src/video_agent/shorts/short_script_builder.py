@@ -39,10 +39,9 @@ def build_short_script(
     ))
     raw = _invoke(llm_fn, "script", prompt)
     script = _parse(raw)
-    atomic_write_json(
-        paths.short_dir(long_job_dir, short_plan["short_id"]) / paths.SHORT_SCRIPT_FILE,
-        script,
-    )
+    jd = paths.short_json_dir(long_job_dir, short_plan["short_id"])
+    jd.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(jd / paths.SHORT_SCRIPT_FILE, script)
     return script
 
 

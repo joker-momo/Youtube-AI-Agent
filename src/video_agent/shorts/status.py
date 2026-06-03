@@ -29,7 +29,7 @@ def summarize_shorts(long_job_dir: Path) -> dict[str, Any]:
         if short_id:
             short_dir = paths.short_dir(long_job_dir, short_id)
             status_doc = _read(paths.short_status_path(long_job_dir, short_id))
-            seo_doc = _read(short_dir / paths.SHORT_SEO_FILE)
+            seo_doc = _read(paths.resolve_short_json(short_dir, paths.SHORT_SEO_FILE))
             
             # Merge status doc fields if not present in manifest entry
             for k, v in status_doc.items():

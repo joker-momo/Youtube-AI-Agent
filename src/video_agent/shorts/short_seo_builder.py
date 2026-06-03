@@ -95,5 +95,7 @@ def build_short_seo(
         "language": "es-ES",
         "ai_disclosure": True,
     }
-    atomic_write_json(paths.short_dir(long_job_dir, short_id) / paths.SHORT_SEO_FILE, seo)
+    jd = paths.short_json_dir(long_job_dir, short_id)
+    jd.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(jd / paths.SHORT_SEO_FILE, seo)
     return seo

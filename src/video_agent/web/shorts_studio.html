@@ -1453,7 +1453,7 @@ function renderTimeline(t) {
   // video.mp4 happens to exist from a previous run while render is in_progress.
   const videoReady = renderStage &&
     renderStage.status === 'completed' &&
-    (renderStage.outputs || []).some(o => (o.path === 'video.mp4' || o.path === 'outputs/video.mp4') && o.exists);
+    (renderStage.outputs || []).some(o => (o.path === 'video.mp4' || o.path.endsWith('/video.mp4')) && o.exists);
   const channelInitials = (t.channel_id || 'VA').split('-').slice(0, 2).map(s => s[0] || '').join('').toUpperCase();
   const stageStrip = t.stages.map((s, i) => {
     const shownStatus = displayStageStatus(s);

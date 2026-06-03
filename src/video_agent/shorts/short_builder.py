@@ -91,13 +91,17 @@ def build_short(
     sd = paths.short_dir(long_job_dir, short_id)
     sd.mkdir(parents=True, exist_ok=True)
     paths.short_tmp_dir(long_job_dir, short_id).mkdir(parents=True, exist_ok=True)
+    _jd = paths.short_json_dir(long_job_dir, short_id)
+    _jd.mkdir(parents=True, exist_ok=True)
+    _od = paths.short_outputs_dir(long_job_dir, short_id)
+    _od.mkdir(parents=True, exist_ok=True)
 
     ap = (channel_config.get("shorts") or {}).get("autopilot") or {}
     max_regen = int(ap.get("max_regeneration_attempts", 2))
     music_track = short_plan.get("music_track")
     cover_words = int(((channel_config.get("shorts") or {}).get("cover") or {}).get("text_max_words", 5))
 
-    atomic_write_json(sd / paths.SHORT_IDEA_FILE, short_plan)
+    atomic_write_json(_jd / paths.SHORT_IDEA_FILE, short_plan)
 
     # Initialize basic info and stages
     base = {
@@ -212,7 +216,7 @@ def build_short(
         # Build Source Map early so Script QA can read it
         try:
             sm = source_map.build_source_map(long_job_dir, short_plan, short_script, channel_config, long_video_url)
-            atomic_write_json(sd / paths.SHORT_SOURCE_MAP_FILE, sm)
+            atomic_write_json(_jd / paths.SHORT_SOURCE_MAP_FILE, sm)
         except Exception:
             pass
 
@@ -224,7 +228,7 @@ def build_short(
                 long_job_dir, short_id, channel_config,
                 music_track=music_track, gemini_fn=gemini_fn, attempt=script_attempts,
             )
-            atomic_write_json(sd / paths.SHORT_SCRIPT_QA_FILE, script_qa_result)
+            atomic_write_json(_jd / paths.SHORT_SCRIPT_QA_FILE, script_qa_result)
             verdict = script_qa_result.get("verdict", "FAIL")
             update_stage("qa_script", "completed" if verdict == "PASS" else "failed", qa_verdict=verdict)
         except Exception as exc:
@@ -288,7 +292,7 @@ def build_short(
                 long_job_dir, short_id, channel_config,
                 gemini_fn=gemini_fn, attempt=scenes_attempts,
             )
-            atomic_write_json(sd / paths.SHORT_SCENES_QA_FILE, scenes_qa_result)
+            atomic_write_json(_jd / paths.SHORT_SCENES_QA_FILE, scenes_qa_result)
             verdict = scenes_qa_result.get("verdict", "FAIL")
             update_stage("qa_scenes", "completed" if verdict == "PASS" else "failed", qa_verdict=verdict)
         except Exception as exc:
@@ -425,8 +429,8 @@ def build_short(
         "youtube_url": "",
         "requires_user_review": False,
         "requires_render_confirmation": False,
-        "video_path": f"shorts/{short_id}/{paths.SHORT_VIDEO_FILE}",
-        "cover_path": f"shorts/{short_id}/{paths.SHORT_COVER_FILE}",
+        "video_path": f"shorts/{short_id}/{paths.SHORT_OUTPUTS_SUBDIR}/{paths.SHORT_VIDEO_FILE}",
+        "cover_path": f"shorts/{short_id}/{paths.SHORT_OUTPUTS_SUBDIR}/{paths.SHORT_COVER_FILE}",
     })
     write_short_status(long_job_dir, short_id, status)
     return status
@@ -459,4 +463,6 @@ def _write_render_props(short_dir: Path, short_scenes: dict, channel_config: dic
         "audio": "audio/short_mix.m4a",
         "music_track": music_track,
     }
-    atomic_write_json(short_dir / paths.SHORT_RENDER_PROPS_FILE, props)
+    jd = short_dir / paths.SHORT_JSON_SUBDIR
+    jd.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(jd / paths.SHORT_RENDER_PROPS_FILE, props)

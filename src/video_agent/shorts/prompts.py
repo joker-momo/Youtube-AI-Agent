@@ -178,19 +178,70 @@ def short_scene_prompt(channel_config: dict, short_plan: dict, short_script: dic
 
 
 def short_seo_prompt(channel_config: dict, short_plan: dict, short_script: dict, long_video_url: str = "") -> str:
-    schema = {
-        "title": "...",
-        "description": "...",
-        "hashtags": ["#shorts"],
-        "pinned_comment": "...",
-        "long_video_url": long_video_url,
-    }
+    hook = str(short_script.get("hook") or "").strip()
+    narration = str(short_script.get("narration") or "").strip()
+    cta = str(short_script.get("cta") or "").strip()
+    short_format = str(short_plan.get("format") or "").strip()
+    viewer_pain = str(short_plan.get("viewer_pain") or "").strip()
+    payoff = str(short_plan.get("practical_payoff") or "").strip()
+    title_seed = str(short_plan.get("title") or "").strip()
+    pillar = str(
+        short_plan.get("pillar")
+        or short_plan.get("detected_pillar")
+        or (channel_config.get("channel") or {}).get("pillar")
+        or ""
+    ).strip()
+
+    schema = (
+        "{\n"
+        '  "title": "string, <= 60 chars, includes the core pain and the 45+ frame",\n'
+        '  "description": "string, 1-3 sentences in es-ES, echoes the script payoff, ends with 3-5 hashtags",\n'
+        '  "hashtags": ["#string", "#string", "#string", "#string", "#string"],\n'
+        '  "pinned_comment": "string, opens a real conversation about the script\'s pain, ends with a question to the viewer",\n'
+        f'  "long_video_url": "{long_video_url}"\n'
+        "}"
+    )
+
     return (
-        "Write SEO for a vertical YouTube Short, Spain Spanish es-ES.\n\n"
-        f"SHORT HOOK: {short_script.get('hook', '')}\n\n"
+        "You are the SEO copywriter for a Spain-first wellness channel for adults aged 45+.\n\n"
+        "Write the YouTube Short metadata in Spain Spanish (es-ES). Every field MUST match the actual content of the script below. "
+        "Off-topic hashtags will get the Short shown to the wrong audience, kill retention, and stop YouTube from recommending the channel — so accuracy beats keyword volume.\n\n"
+        "SCRIPT CONTEXT:\n"
+        f"- Pillar / topic family: {pillar or '(infer from the script)'}\n"
+        f"- Short format: {short_format or '(unspecified)'}\n"
+        f"- Idea title seed: {title_seed or '(none)'}\n"
+        f"- Viewer pain: {viewer_pain or '(infer from hook)'}\n"
+        f"- Practical payoff: {payoff or '(infer from narration)'}\n"
+        f"- HOOK: {hook}\n"
+        f"- NARRATION: {narration[:1200]}\n"
+        f"- CTA: {cta}\n\n"
         f"{_OUTPUT_RULES}\n"
-        "- Title <= 60 chars, no clickbait. Include 3-6 hashtags. Pinned comment points to the long video.\n"
-        f"Return JSON exactly:\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n"
+        "LANGUAGE RULES:\n"
+        "- es-ES, adults 45+ register.\n"
+        "- Do NOT use \"ancianos\", \"abuelos\", \"seniors\", \"personas mayores\", or any age-shaming wording.\n\n"
+        "TITLE RULES:\n"
+        "- Maximum 60 characters including spaces.\n"
+        "- Name the actual pain or payoff from the script (e.g. \"carga mental\", \"insomnio\", \"sarcopenia\") AND the 45+ frame.\n"
+        "- No clickbait (\"increíble\", \"NADIE te dijo\", \"el truco que…\"), no all-caps screaming.\n"
+        "- At most one tasteful emoji at the end if it reinforces the topic; never multiple.\n\n"
+        "DESCRIPTION RULES:\n"
+        "- 1 to 3 short sentences in es-ES that echo the script payoff (do NOT just repeat the title).\n"
+        "- End the description with the same 3-5 hashtags returned in the hashtags array.\n"
+        "- No links to other channels, no sponsor text, no calls to subscribe.\n\n"
+        "HASHTAG RULES:\n"
+        "- 3 to 5 hashtags, all lowercase, no spaces, each starting with '#'.\n"
+        "- Every hashtag MUST be semantically tied to the actual script topic (mental health, sleep, nutrition, joints, balance, etc.).\n"
+        "- FORBIDDEN unless the script is genuinely about that exact topic: #gym, #fitness, #workout, #crossfit, #musculacion, #pesas, #cardio, #abs, #motivation, #mindset, #shortsviral, #fyp, #parati, #viral, #foryou, #trending.\n"
+        "- Prefer specific, topical Spain-Spanish wellness tags such as #saludmental, #bienestar, #descanso, #sueño, #mindfulness, #estres, #ansiedad, #nutricion45, #vida45plus, #saludable, #autocuidado — but ONLY if they actually match the script.\n"
+        "- Always include #shorts ONLY as a 5th hashtag at most; never as the first.\n\n"
+        "PINNED COMMENT RULES:\n"
+        "- 1 to 2 sentences in es-ES that reflect the real pain from the script (carga mental, insomnio, ansiedad, etc.).\n"
+        "- End with one open question that invites the viewer to share their own experience (no yes/no).\n"
+        "- Do NOT shove the long-video URL into the pinned comment unless the long_video_url field is non-empty AND the question naturally invites watching more.\n\n"
+        "SAFETY RULES:\n"
+        "- No medical claims, no cures, no diagnosis, no \"this solves your X\".\n"
+        "- No fear language. No miracle promises.\n\n"
+        f"RETURN JSON SCHEMA:\n{schema}\n"
     )
 
 

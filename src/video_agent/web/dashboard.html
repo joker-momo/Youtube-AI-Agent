@@ -3555,6 +3555,13 @@ async function regenShort(jobId, shortId) {
 async function rerenderShort(jobId, shortId) {
   await fetch('/jobs/' + encodeURIComponent(jobId) + '/shorts/' + encodeURIComponent(shortId) + '/render', {method: 'POST'});
   setTimeout(refreshShorts, 1500);
+  // Also kick the Shorts Studio renders tab if it's the active view, so the
+  // progress poller can attach without waiting for the user to tab-switch.
+  if (ACTIVE_PAGE === 'shorts' && SHORTS_SELECTED_JOB === jobId) {
+    [500, 1500, 3500, 6000].forEach((ms) => {
+      setTimeout(() => loadShortsRendersTab(jobId), ms);
+    });
+  }
 }
 	async function markShortUploaded(jobId, shortId) {
   const url = prompt('YouTube URL for this Short (optional):', '') || '';
@@ -4133,9 +4140,29 @@ async function loadShortsRendersTab(jobId) {
     // Check if any draft has active rendering to start duration ticker
     const anyRunning = drafts.some(d => {
       const activeStages = d.stages || [];
-      return activeStages.some(s => s.status === 'in_progress') || (d.status && d.status.includes('progress')) || d.status === 'rendering';
+      return activeStages.some(s => s.status === 'in_progress') || (d.status && d.status.includes('progress')) || d.status === 'rendering' || d.status === 'queued';
     });
     if (anyRunning) startStageDurationTicker();
+
+    // Keep the renders list itself refreshing while any draft is queued/in
+    // progress so the per-Short progress poller picks up as soon as the
+    // worker flips the status. Without this we'd only refresh on tab switch
+    // and the bar never attaches.
+    if (anyRunning) {
+      if (!window.SHORTS_RENDERS_LIST_POLL) {
+        window.SHORTS_RENDERS_LIST_POLL = setInterval(() => {
+          if (ACTIVE_PAGE !== 'shorts' || SHORTS_SELECTED_JOB !== jobId) {
+            clearInterval(window.SHORTS_RENDERS_LIST_POLL);
+            window.SHORTS_RENDERS_LIST_POLL = null;
+            return;
+          }
+          loadShortsRendersTab(jobId);
+        }, 4000);
+      }
+    } else if (window.SHORTS_RENDERS_LIST_POLL) {
+      clearInterval(window.SHORTS_RENDERS_LIST_POLL);
+      window.SHORTS_RENDERS_LIST_POLL = null;
+    }
 
     // Start progress polling for active renders/audio
     drafts.forEach(d => {
@@ -4392,7 +4419,20 @@ async function spRenderIdea(ideaId, btn) {
     if (!r.ok) { const d = await r.json().catch(() => ({})); showToast('Render failed: ' + (d.detail?.error || d.detail || r.statusText)); btn.disabled = false; btn.textContent = orig; return; }
     showToast('Render enqueued');
     btn.textContent = '✓ Enqueued';
-    SHORTS_ACTIVE_TAB = 'renders';
+    // Jump to the Renders tab and poll the list immediately so the progress
+    // panel can attach the moment the worker flips the Short to "rendering".
+    // Without these explicit kicks, the renders-list stays stale until the
+    // user clicks the tab manually.
+    if (typeof switchShortsTab === 'function') {
+      switchShortsTab('renders');
+    } else {
+      SHORTS_ACTIVE_TAB = 'renders';
+    }
+    const jobId = SHORTS_SELECTED_JOB;
+    loadShortsRendersTab(jobId);
+    [1500, 3500, 6000, 10000].forEach((ms) => {
+      setTimeout(() => loadShortsRendersTab(jobId), ms);
+    });
     setTimeout(() => refreshShortsDetail(), 2000);
   } catch (e) { showToast('Network error'); btn.disabled = false; btn.textContent = orig; }
 }

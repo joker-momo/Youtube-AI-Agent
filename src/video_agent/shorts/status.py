@@ -21,11 +21,30 @@ def summarize_shorts(long_job_dir: Path) -> dict[str, Any]:
     running = paths.autopilot_lock_path(long_job_dir).exists()
     shorts = manifest.get("shorts") or []
 
-    rendered = sum(1 for s in shorts if s.get("status") == "rendered")
-    ready_for_render = sum(1 for s in shorts if s.get("status") == "ready_for_render")
-    needs_review = sum(1 for s in shorts if s.get("status") == "needs_review")
-    failed = sum(1 for s in shorts if s.get("status") == "failed")
-    total = len(shorts)
+    # Dynamically enrich shorts in manifest summary with their title/hook
+    enriched_shorts = []
+    for s in shorts:
+        s_copy = dict(s)
+        short_id = s.get("short_id")
+        if short_id:
+            short_dir = paths.short_dir(long_job_dir, short_id)
+            status_doc = _read(paths.short_status_path(long_job_dir, short_id))
+            seo_doc = _read(short_dir / paths.SHORT_SEO_FILE)
+            
+            # Merge status doc fields if not present in manifest entry
+            for k, v in status_doc.items():
+                if k not in s_copy:
+                    s_copy[k] = v
+            
+            # Populate title
+            s_copy["title"] = seo_doc.get("title") or s.get("hook") or status_doc.get("hook") or ""
+        enriched_shorts.append(s_copy)
+
+    rendered = sum(1 for s in enriched_shorts if s.get("status") == "rendered")
+    ready_for_render = sum(1 for s in enriched_shorts if s.get("status") == "ready_for_render")
+    needs_review = sum(1 for s in enriched_shorts if s.get("status") == "needs_review")
+    failed = sum(1 for s in enriched_shorts if s.get("status") == "failed")
+    total = len(enriched_shorts)
 
     if running:
         state, label = "running", "running"
@@ -58,6 +77,6 @@ def summarize_shorts(long_job_dir: Path) -> dict[str, Any]:
         },
         "label": label,
         "running": running,
-        "shorts": shorts,
+        "shorts": enriched_shorts,
         "manifest": manifest,
     }

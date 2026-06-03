@@ -405,6 +405,21 @@ def _run_short_render_job(job: dict, *, job_dir: Path, channel_path: Path) -> No
             f"Please regenerate this Short instead of running render/resume."
         )
 
+    # Set status to rendering
+    status["status"] = "rendering"
+    manifest_mod.write_short_status(job_dir, short_id, status)
+    
+    manifest_path = paths.manifest_path(job_dir)
+    if manifest_path.exists():
+        try:
+            manifest = _json.loads(manifest_path.read_text(encoding="utf-8"))
+            for entry in manifest.get("shorts") or []:
+                if entry.get("short_id") == short_id:
+                    entry["status"] = "rendering"
+            manifest_mod.write_manifest(job_dir, manifest)
+        except Exception:
+            pass
+
     # 1. Audio TTS & Mix
     update_stage("audio", "in_progress")
     try:

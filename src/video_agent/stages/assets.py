@@ -210,6 +210,16 @@ def _mix_bgm_with_narration(
     return mixed_path.exists() and mixed_path.stat().st_size > 0
 
 
+def _write_audio_progress(job_dir: Path, percent: float, stage: str) -> None:
+    try:
+        from video_agent.storage.atomic import atomic_write_json
+        progress_dir = job_dir / "json"
+        progress_dir.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(progress_dir / "audio_progress.json", {"percent": percent, "stage": stage})
+    except Exception:
+        pass
+
+
 def prepare_assets(
     job_dir: Path,
     style_dna: dict[str, Any],
@@ -245,7 +255,9 @@ def prepare_assets(
     )
 
     scene_assets = []
+    num_scenes = len(scene_doc["scenes"])
     for index, scene in enumerate(scene_doc["scenes"]):
+        _write_audio_progress(job_dir, round((index / num_scenes) * 50.0, 1), f"visuals (scene {index+1}/{num_scenes})")
         primary_asset = _find_asset_refs_primary(scene, job_dir)
         local_image = primary_asset or _find_local_scene_image(scene["id"], source_dir)
         stock_asset = None
@@ -316,6 +328,7 @@ def prepare_assets(
         outputs_dir=job_dir,
     )
 
+    _write_audio_progress(job_dir, 50.0, "tts")
     tts_config = tts_config or {"provider": "mock-local"}
     music_cfg = (tts_config.get("music") or {}) if isinstance(tts_config, dict) else {}
     tts_provider = tts_config.get("provider", "mock-local")
@@ -356,7 +369,7 @@ def prepare_assets(
                 _wj(job_dir / "tts_report.json", report)
             except Exception:
                 pass
-        except Exception:
+        except Exception as exc:
             # Fallback for environments without optional TTS runtime deps
             # or network/model bootstrap failures in external providers.
             _write_silent_wav(narration_path, int(scene_doc["total_duration_sec"]))
@@ -365,6 +378,7 @@ def prepare_assets(
                 "source": "silent_placeholder",
                 "sample_rate": 44100,
             }
+    _write_audio_progress(job_dir, 95.0, "mixing")
     public_narration_path = public_assets_dir / "narration.wav"
     shutil.copy2(narration_path, public_narration_path)
     public_narration_ref = f"jobs/{job_dir.name}/assets/narration.wav"
@@ -446,4 +460,5 @@ def prepare_assets(
         "thumbnail_source": scene_assets[0]["background"],
     }
     write_json(job_dir / ARTIFACT_ASSETS, manifest)
+    _write_audio_progress(job_dir, 100.0, "completed")
     return manifest

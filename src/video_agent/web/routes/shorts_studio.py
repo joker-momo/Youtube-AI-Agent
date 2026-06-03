@@ -254,10 +254,13 @@ def get_shorts_studio_drafts(job_id: str, jobs_root: Path = Depends(get_jobs_roo
         status_doc = _read_json(shorts_paths.short_status_path(job_dir, short_id))
         qa_doc = _read_json(short_dir / shorts_paths.SHORT_QA_FILE)
         source_map = _read_json(short_dir / shorts_paths.SHORT_SOURCE_MAP_FILE)
+        seo_doc = _read_json(short_dir / shorts_paths.SHORT_SEO_FILE)
+
         merged = dict(entry)
         merged.update(status_doc)
         if "qa_verdict" not in merged and qa_doc.get("qa_verdict"):
             merged["qa_verdict"] = qa_doc.get("qa_verdict")
+        merged["title"] = seo_doc.get("title") or entry.get("hook") or status_doc.get("hook") or ""
         merged["source_scene_ids"] = (
             merged.get("source_scene_ids")
             or source_map.get("source_scene_ids")
@@ -266,6 +269,46 @@ def get_shorts_studio_drafts(job_id: str, jobs_root: Path = Depends(get_jobs_roo
         )
         drafts.append(merged)
     return {"job_id": job_id, "drafts": drafts}
+
+
+@router.get("/shorts-studio/jobs/{job_id}/shorts/{short_id}/render/progress")
+def get_short_render_progress(
+    job_id: str,
+    short_id: str,
+    jobs_root: Path = Depends(get_jobs_root),
+) -> dict:
+    job_dir = _safe_job_dir(jobs_root, job_id)
+    short_dir = shorts_paths.short_dir(job_dir, short_id)
+    progress_path = short_dir / "json" / "render_progress.json"
+    if not progress_path.exists():
+        progress_path = short_dir / "render_progress.json"
+    if not progress_path.exists():
+        return {"percent": 0, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""}
+    try:
+        import json as _json
+        return _json.loads(progress_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"percent": 0, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""}
+
+
+@router.get("/shorts-studio/jobs/{job_id}/shorts/{short_id}/audio/progress")
+def get_short_audio_progress(
+    job_id: str,
+    short_id: str,
+    jobs_root: Path = Depends(get_jobs_root),
+) -> dict:
+    job_dir = _safe_job_dir(jobs_root, job_id)
+    short_dir = shorts_paths.short_dir(job_dir, short_id)
+    progress_path = short_dir / "json" / "audio_progress.json"
+    if not progress_path.exists():
+        progress_path = short_dir / "audio_progress.json"
+    if not progress_path.exists():
+        return {"percent": 0, "stage": "Preparing"}
+    try:
+        import json as _json
+        return _json.loads(progress_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"percent": 0, "stage": "Preparing"}
 
 
 @router.get("/shorts-studio/jobs/{job_id}/ideas")

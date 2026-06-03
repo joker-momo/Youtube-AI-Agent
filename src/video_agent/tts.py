@@ -65,6 +65,16 @@ def _segment_speed(base_speed: float, scene_idx: int, seg_idx: int, jitter_pct: 
     return max(0.85, min(1.15, base_speed * (1.0 + jitter)))
 
 
+def _write_audio_progress(job_dir: Path, percent: float, stage: str) -> None:
+    try:
+        from video_agent.storage.atomic import atomic_write_json
+        progress_dir = job_dir / "json"
+        progress_dir.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(progress_dir / "audio_progress.json", {"percent": percent, "stage": stage})
+    except Exception:
+        pass
+
+
 def synthesize_scene_track(
     scene_doc: dict[str, Any],
     output_path: Path,
@@ -84,7 +94,13 @@ def synthesize_scene_track(
 
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_root = Path(temp_dir)
+        num_scenes = len(scene_doc["scenes"])
         for index, scene in enumerate(scene_doc["scenes"], start=1):
+            _write_audio_progress(
+                output_path.parent.parent,
+                round(50.0 + ((index - 1) / num_scenes) * 45.0, 1),
+                f"tts (scene {index}/{num_scenes})"
+            )
             scene_audio: list[np.ndarray] = []
             if index > 1 and scene_lead_in_sec > 0:
                 scene_audio.append(np.zeros(int(round(sample_rate * scene_lead_in_sec)), dtype=np.float32))

@@ -43,3 +43,4 @@ remotion/src/*.js
 .run/
 /.agent
 .worktrees/
+/docs/plans

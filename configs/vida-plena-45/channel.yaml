@@ -149,6 +149,9 @@ visuals:
   providers: ["pexels_video"]
   fallback_providers: ["pexels"]
   query_cache_ttl_hours: 24
+  # Long-form videos are 16:9 → request landscape from Pexels.
+  # Shorts override this to "portrait" automatically (see shorts.source.prefer_vertical_assets
+  # and the auto-detect in pipeline.render_operator_job).
   orientation: "landscape"
   per_page: 10
   scene_count_target: 5

@@ -670,11 +670,33 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
         _run_prepare_assets_audio_subprocess(job_dir, options.channel_path)
         scene_doc = read_json(_resolve_json_file(job_dir, "scenes.json"))
 
+    # Force portrait stock-asset orientation when this job is a Short, so the
+    # render-path call to prepare_assets stays in sync with the TTS-path
+    # override in shorts/audio.py. Without this, Shorts re-fetch landscape
+    # Pexels clips here and overwrite the portrait ones from the TTS stage.
+    visual_config = dict(channel_config.get("visuals") or {})
+    short_render_props = job_dir / "short_render_props.json"
+    is_short_job = False
+    if short_render_props.exists():
+        is_short_job = True
+    else:
+        try:
+            render_resolution = str((channel_config.get("render") or {}).get("resolution") or "")
+            w_str, h_str = render_resolution.lower().split("x", 1)
+            if int(h_str) > int(w_str):
+                is_short_job = True
+        except (ValueError, AttributeError):
+            pass
+    if is_short_job and (channel_config.get("shorts") or {}).get(
+        "source", {}
+    ).get("prefer_vertical_assets", True):
+        visual_config["orientation"] = "portrait"
+
     assets = prepare_assets(
         job_dir,
         style,
         scene_doc,
-        visual_config=channel_config.get("visuals"),
+        visual_config=visual_config,
         tts_config=(channel_config.get("tts") or {})
         | {"music": channel_config.get("music") or {}},
         channel_id=channel_config["channel"]["id"],

@@ -34,53 +34,17 @@ function resolveAudio(p: string | null): string | undefined {
   }
 }
 
-const ShortLogo: React.FC<{src?: string}> = ({src}) => {
-  if (!src) return null;
-  return (
-    <img
-      src={src}
-      style={{
-        position: 'absolute',
-        top: 62,
-        right: 62,
-        width: 100,
-        height: 'auto',
-        opacity: 0.88,
-        filter: 'drop-shadow(0 4px 12px rgba(0,0,0,0.6))',
-      }}
-    />
-  );
-};
-
-const FontLoader: React.FC = () => (
-  <style>
-    {`
-      @import url('https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,400;0,700;0,800;0,900;1,400;1,700;1,800;1,900&display=swap');
-    `}
-  </style>
-);
-
 export const ShortVideo: React.FC<RenderProps> = (props) => {
   const {fps} = useVideoConfig();
   const scenes = props.scenes || [];
   let cursor = 0;
 
   const narrationSrc = resolveAudio(props.audio?.narration ?? null);
-  // Channel/brand logo (optional). We look for a conventional channel logo
-  // file; falls back to nothing when absent. Path is staticFile-resolved.
-  const logoSrc = ((): string | undefined => {
-    try {
-      return staticFile('channel_logo.png');
-    } catch {
-      return undefined;
-    }
-  })();
 
   const accentColor = props.style?.palette?.accent;
 
   return (
     <AbsoluteFill style={{backgroundColor: '#0b1020'}}>
-      <FontLoader />
       {scenes.map((scene, i) => {
         const durFrames = Math.max(1, Math.round((scene.duration_sec || 1) * fps));
         const from = cursor;
@@ -97,7 +61,6 @@ export const ShortVideo: React.FC<RenderProps> = (props) => {
                 layout_payload={scene.layout_payload}
                 accentColor={accentColor}
               />
-              <ShortLogo src={logoSrc} />
             </AbsoluteFill>
           </Sequence>
         );

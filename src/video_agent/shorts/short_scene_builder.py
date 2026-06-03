@@ -104,6 +104,35 @@ def normalize_short_scenes(scenes_doc: dict, short_script: dict) -> dict[str, An
         sc.setdefault("duration_sec", 3.0)
         norm_scenes.append(sc)
 
+    # Guarantee a closing short_cta scene whenever the script declared a CTA
+    # but the LLM forgot to add the layout. Without a CTA scene viewers swipe
+    # away on the last beat with no save/comment prompt → retention drop.
+    script_cta = str((short_script or {}).get("cta") or "").strip()
+    has_cta_scene = any(
+        str(s.get("layout") or "").strip().lower() == "short_cta"
+        for s in norm_scenes
+    )
+    if script_cta and not has_cta_scene:
+        cta_idx = len(norm_scenes) + 1
+        cta_caption = script_cta
+        cta_oneliner = " ".join(script_cta.split()[:6]).upper() or "GUÁRDALO"
+        norm_scenes.append({
+            "id": f"s{cta_idx}",
+            "narration": script_cta,
+            "on_screen_text": cta_oneliner,
+            "caption": cta_caption,
+            "visual_prompt": "Close-up of a calm person looking warmly at camera, soft natural light",
+            "layout": "short_cta",
+            "layout_payload": {"title": cta_oneliner, "subtitle": cta_caption},
+            "layout_reason": "auto_cta_appended",
+            "motion": "slow_zoom",
+            "asset_refs": {},
+            "word_segments": [],
+            "planner_warnings": [],
+            "audio_offset_sec": 0.0,
+            "duration_sec": 3.5,
+        })
+
     out["scenes"] = norm_scenes
     if not out.get("total_duration_sec"):
         out["total_duration_sec"] = round(sum(float(s.get("duration_sec") or 0) for s in norm_scenes), 1)

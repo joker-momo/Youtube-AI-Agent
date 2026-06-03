@@ -5,6 +5,9 @@ import {Thumbnail} from './Thumbnail';
 import {ShortVideo} from './ShortVideo';
 import {ShortCover} from './ShortCover';
 import {defaultRenderProps, RenderProps} from './render-props';
+// Side-effect import: registers webfonts via delayRender so Shorts
+// compositions render with the correct typeface from frame 0.
+import './shorts/loadFonts';
 
 const calculateVideoMetadata = ({props}: {props: RenderProps}) => {
   const fps = props.render?.fps ?? defaultRenderProps.render.fps;

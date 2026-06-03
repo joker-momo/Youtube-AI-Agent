@@ -28,11 +28,12 @@ export const SHORT_LAYOUT = {
   dangerBottomY: 1500,
 } as const;
 
-/** Three overlay presets per spec §3.2. */
+/** Three overlay presets per spec §3.2. Tuned up after legibility review
+ *  (bright-background scenes were washing out the hook copy). */
 export const SHORT_OVERLAYS = {
-  default: {fullDarkenOpacity: 0.20, bottomGradientOpacity: 0.52, centerTextScrimOpacity: 0.28},
-  dark: {fullDarkenOpacity: 0.12, bottomGradientOpacity: 0.44, centerTextScrimOpacity: 0.24},
-  bright: {fullDarkenOpacity: 0.24, bottomGradientOpacity: 0.58, centerTextScrimOpacity: 0.34},
+  default: {fullDarkenOpacity: 0.30, bottomGradientOpacity: 0.60, centerTextScrimOpacity: 0.42},
+  dark: {fullDarkenOpacity: 0.20, bottomGradientOpacity: 0.52, centerTextScrimOpacity: 0.34},
+  bright: {fullDarkenOpacity: 0.40, bottomGradientOpacity: 0.66, centerTextScrimOpacity: 0.50},
 } as const;
 
 export type OverlayKey = keyof typeof SHORT_OVERLAYS;

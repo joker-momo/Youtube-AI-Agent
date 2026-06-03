@@ -52,12 +52,13 @@ export const HookTitle: React.FC<{children: React.ReactNode; fontSize?: number; 
         fontFamily: HOOK_FONT_FAMILY,
         fontWeight: 900,
         fontSize,
-        lineHeight: 0.94,
-        letterSpacing: -1.6,
+        lineHeight: 0.96,
+        letterSpacing: -0.6,
         textTransform: 'uppercase',
         color: '#FFFFFF',
-        textShadow: '0 8px 22px rgba(0,0,0,0.72)',
-        WebkitTextStroke: '2px rgba(0,0,0,0.75)',
+        textShadow:
+          '0 6px 18px rgba(0,0,0,0.55), 0 2px 4px rgba(0,0,0,0.55), 0 0 2px rgba(0,0,0,0.6)',
+        WebkitTextStroke: '0.6px rgba(0,0,0,0.55)',
         textAlign: 'center',
       }}
     >
@@ -77,13 +78,14 @@ export const BodyText: React.FC<{children: React.ReactNode; fontSize?: number; a
       style={{
         ...anim,
         fontFamily: BODY_FONT_FAMILY,
-        fontWeight: 800,
+        fontWeight: 700,
         fontSize,
-        lineHeight: 1.08,
-        letterSpacing: -0.3,
+        lineHeight: 1.12,
+        letterSpacing: 0,
         color: '#FFFFFF',
-        textShadow: '0 6px 18px rgba(0,0,0,0.68)',
-        WebkitTextStroke: '1.25px rgba(0,0,0,0.8)',
+        textShadow:
+          '0 4px 14px rgba(0,0,0,0.55), 0 1px 3px rgba(0,0,0,0.5), 0 0 2px rgba(0,0,0,0.55)',
+        WebkitTextStroke: '0.4px rgba(0,0,0,0.5)',
         textAlign: 'center',
       }}
     >
@@ -103,12 +105,13 @@ export const CaptionText: React.FC<{children: React.ReactNode; fontSize?: number
       style={{
         ...anim,
         fontFamily: CAPTION_FONT_FAMILY,
-        fontWeight: 800,
+        fontWeight: 700,
         fontSize,
-        lineHeight: 1.16,
+        lineHeight: 1.18,
         color: '#F7F7F2',
-        textShadow: '0 4px 14px rgba(0,0,0,0.72)',
-        WebkitTextStroke: '1px rgba(0,0,0,0.85)',
+        textShadow:
+          '0 3px 12px rgba(0,0,0,0.6), 0 1px 2px rgba(0,0,0,0.5), 0 0 2px rgba(0,0,0,0.55)',
+        WebkitTextStroke: '0.4px rgba(0,0,0,0.5)',
         textAlign: 'center',
       }}
     >
@@ -176,15 +179,16 @@ export const CtaText: React.FC<{children: React.ReactNode; fontSize?: number; ac
       style={{
         ...anim,
         fontFamily: BODY_FONT_FAMILY,
-        fontWeight: 900,
+        fontWeight: 800,
         fontSize,
-        lineHeight: 1.06,
+        lineHeight: 1.08,
         color: '#FFFFFF',
-        textShadow: '0 6px 18px rgba(0,0,0,0.7)',
-        WebkitTextStroke: '1.5px rgba(0,0,0,0.8)',
+        textShadow:
+          '0 5px 16px rgba(0,0,0,0.55), 0 1px 3px rgba(0,0,0,0.5), 0 0 2px rgba(0,0,0,0.55)',
+        WebkitTextStroke: '0.5px rgba(0,0,0,0.55)',
         textAlign: 'center',
         textTransform: 'uppercase',
-        letterSpacing: -0.5,
+        letterSpacing: 0,
       }}
     >
       {parseHighlights(children, accentColor)}

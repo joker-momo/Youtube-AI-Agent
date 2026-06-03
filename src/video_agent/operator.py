@@ -301,7 +301,7 @@ def _status_badge(status: str) -> str:
 
 def _docker_cli_command(*parts: str | Path) -> str:
     rendered = " ".join(str(part) for part in parts)
-    return f"docker compose run --rm video-agent python -m video_agent.cli {rendered}"
+    return f"python -m video_agent.cli {rendered}"
 
 
 def _normalize_script_candidate(candidate: dict[str, Any]) -> dict[str, Any]:

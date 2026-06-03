@@ -32,8 +32,8 @@ class BrowserDriverError(RuntimeError):
 class LoginRequiredError(BrowserDriverError):
     """The dedicated profile is not logged in to the target site.
 
-    The operator needs to open KasmVNC (http://localhost:7900) and sign
-    in once. The driver should never attempt to log the user in.
+    The operator needs to bring the native Chromium window forward and
+    sign in once. The driver should never attempt to log the user in.
     """
 
 

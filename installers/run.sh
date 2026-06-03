@@ -1,485 +1,243 @@
 #!/usr/bin/env bash
-# Runner script for YouTube AI Agent
-# Starts Docker if needed, verifies environment, and launches all containers.
+# Native macOS runner. No Docker.
+# Starts: dashboard (uvicorn :8000), browser-worker (uvicorn :8001),
+# pipeline worker, and Playwright Chromium with CDP on :9222.
 
 set -euo pipefail
 
-# Text formatting helper constants
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 YELLOW='\033[1;33m'
 BOLD='\033[1m'
-NC='\033[0m' # No Color
-
-# Print banner
-echo -e "${BOLD}${BLUE}=====================================================${NC}"
-echo -e "${BOLD}${BLUE}          YouTube AI Agent Launcher                  ${NC}"
-echo -e "${BOLD}${BLUE}=====================================================${NC}"
-echo ""
+NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_DIR}"
-source "${SCRIPT_DIR}/lib/run_state.sh"
 
-WORKER_MODE="auto"
 RUN_MODE="full"
-RUN_CLEANUP=false
 REINSTALL_DEPS=false
-STOP_HEAVY=false
-SMART_AUTO_STATE_DIR="${REPO_DIR}/.cache/run-state"
-IMAGE_CHANGED=false
-RUNTIME_CHANGED=false
-
-IMAGE_INPUTS=(
-  "Dockerfile"
-  "docker-compose.yml"
-  "docker-compose.nvidia.yml"
-  "docker-compose.amd.yml"
-  "requirements.txt"
-  "pyproject.toml"
-  "remotion/package.json"
-  "remotion/package-lock.json"
-)
-
-RUNTIME_INPUTS=(
-  ".env"
-  "run.sh"
-  "installers/run.sh"
-  "src"
-  "configs"
-  "remotion/src"
-  "requirements.txt"
-  "pyproject.toml"
-  "remotion/package.json"
-  "remotion/package-lock.json"
-)
+DO_CLEANUP=false
 
 usage() {
-  echo "Usage: bash run.sh [--dashboard|--app-only|--full|--stop-heavy|--stop] [--cleanup] [--reinstall-deps] [--native-worker|--docker-worker]"
-  echo ""
-  echo "Mac default: full stack with native host worker, no prompt."
-  echo "Linux default: full stack with Docker worker."
-  echo ""
-  echo "Modes:"
-  echo "  --dashboard, --app-only  Start only the dashboard container."
-  echo "  --full                  Start dashboard + browser services + worker."
-  echo "  --stop-heavy            Stop worker/browser services and keep dashboard available."
-  echo "  --stop, --down          Stop all services (containers and native worker)."
-  echo ""
-  echo "Options:"
-  echo "  --cleanup               Prune Docker cache and local browser/public debug artifacts first."
-  echo "  --reinstall-deps        Reinstall native Python/Remotion dependencies."
-  echo "  --native-worker         Force native host worker on macOS."
-  echo "  --docker-worker         Force Docker worker."
+  cat <<EOF
+Usage: bash run.sh [--full|--dashboard|--stop|--shutdown] [--cleanup] [--reinstall-deps]
+
+  --full           Start dashboard + browser-worker + worker + Chromium (default)
+  --dashboard      Start only the dashboard (port 8000)
+  --stop, --down   Stop all native processes
+  --shutdown       Stop everything + prune caches (alias: --stop --cleanup)
+  --cleanup        Prune logs, __pycache__, old browser traces, npm/pip caches
+  --reinstall-deps Reinstall Python + Remotion deps
+EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --dashboard)
-      RUN_MODE="dashboard"
-      shift
-      ;;
-    --app-only)
-      RUN_MODE="dashboard"
-      shift
-      ;;
-    --full)
-      RUN_MODE="full"
-      shift
-      ;;
-    --stop-heavy)
-      STOP_HEAVY=true
-      RUN_MODE="dashboard"
-      shift
-      ;;
-    --stop|--down)
-      RUN_MODE="stop"
-      shift
-      ;;
-    --cleanup)
-      RUN_CLEANUP=true
-      shift
-      ;;
-    --reinstall-deps)
-      REINSTALL_DEPS=true
-      shift
-      ;;
-    --native-worker)
-      WORKER_MODE="native"
-      shift
-      ;;
-    --docker-worker)
-      WORKER_MODE="docker"
-      shift
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      echo -e "${RED}Unknown option: $1${NC}"
-      usage
-      exit 2
-      ;;
+    --full)         RUN_MODE="full"; shift ;;
+    --dashboard|--app-only) RUN_MODE="dashboard"; shift ;;
+    --stop|--down)  RUN_MODE="stop"; shift ;;
+    --shutdown)     RUN_MODE="stop"; DO_CLEANUP=true; shift ;;
+    --cleanup)      DO_CLEANUP=true; shift ;;
+    --reinstall-deps) REINSTALL_DEPS=true; shift ;;
+    -h|--help)      usage; exit 0 ;;
+    *) echo -e "${RED}Unknown option: $1${NC}"; usage; exit 2 ;;
   esac
 done
 
+cleanup_disk() {
+  echo -e "${CYAN}Pruning caches...${NC}"
+  # Python bytecode
+  find "${REPO_DIR}" -type d -name "__pycache__" -prune -exec rm -rf {} + 2>/dev/null || true
+  find "${REPO_DIR}" -type f -name "*.pyc" -delete 2>/dev/null || true
+  # Logs (truncate, not delete, so file handles survive)
+  if [[ -d "${REPO_DIR}/logs" ]]; then
+    find "${REPO_DIR}/logs" -type f -name "*.log" -exec sh -c ': > "$1"' _ {} \; 2>/dev/null || true
+  fi
+  # Browser worker traces older than retention window
+  if [[ -d "${REPO_DIR}/browser_trace" ]]; then
+    find "${REPO_DIR}/browser_trace" -type f -mtime +"${BROWSER_TRACE_RETENTION_DAYS:-3}" -delete 2>/dev/null || true
+  fi
+  # Chromium leftover crash dumps in profile
+  if [[ -d "${REPO_DIR}/browser_profiles/default" ]]; then
+    find "${REPO_DIR}/browser_profiles/default" -type d \
+      \( -name "Crash Reports" -o -name "ShaderCache" -o -name "GrShaderCache" -o -name "GPUCache" \) \
+      -exec rm -rf {} + 2>/dev/null || true
+  fi
+  # Remotion render temp + chrome-headless-shell tmpfiles
+  rm -rf "${REPO_DIR}/.remotion/tmp" 2>/dev/null || true
+  # pip + npm cache
+  if command -v npm >/dev/null 2>&1; then npm cache clean --force >/dev/null 2>&1 || true; fi
+  if [[ -d ".venv" ]]; then .venv/bin/python -m pip cache purge >/dev/null 2>&1 || true; fi
+  # macOS DS_Store + .Trashes inside repo
+  find "${REPO_DIR}" -name ".DS_Store" -delete 2>/dev/null || true
+  # Force flush filesystem buffers
+  sync
+  echo -e "${GREEN}✅ Cleanup done.${NC}"
+}
+
+mkdir -p logs
+
+PIDFILE_DIR="${REPO_DIR}/.run"
+mkdir -p "${PIDFILE_DIR}"
+
+stop_proc() {
+  local name="$1"
+  local pidfile="${PIDFILE_DIR}/${name}.pid"
+  if [[ -f "${pidfile}" ]]; then
+    local pid
+    pid="$(cat "${pidfile}")"
+    if kill -0 "${pid}" 2>/dev/null; then
+      kill "${pid}" 2>/dev/null || true
+      sleep 0.5
+      kill -9 "${pid}" 2>/dev/null || true
+      echo -e "${YELLOW}Stopped ${name} (pid ${pid})${NC}"
+    fi
+    rm -f "${pidfile}"
+  fi
+}
+
+stop_all() {
+  stop_proc dashboard
+  stop_proc browser-worker
+  stop_proc worker
+  stop_proc chromium
+  pkill -f "uvicorn video_agent.web.app:app" >/dev/null 2>&1 || true
+  pkill -f "uvicorn video_agent.browser_worker.app:app" >/dev/null 2>&1 || true
+  pkill -f "video_agent.cli worker --db-path jobs/queue.db" >/dev/null 2>&1 || true
+  # Kill the CDP-controlled browser by user-data-dir match so we don't
+  # touch the user's normal Brave/Chrome windows.
+  pkill -f -- "--user-data-dir=${REPO_DIR}/browser_profiles/default" >/dev/null 2>&1 || true
+  sleep 0.5
+  pkill -9 -f -- "--user-data-dir=${REPO_DIR}/browser_profiles/default" >/dev/null 2>&1 || true
+  # Release singleton lock so next launch starts clean.
+  rm -f "${REPO_DIR}/browser_profiles/default/SingletonLock" \
+        "${REPO_DIR}/browser_profiles/default/SingletonSocket" \
+        "${REPO_DIR}/browser_profiles/default/SingletonCookie" 2>/dev/null || true
+}
+
+if [[ "${RUN_MODE}" == "stop" ]]; then
+  echo -e "${CYAN}Stopping native services...${NC}"
+  stop_all
+  echo -e "${GREEN}✅ Stopped.${NC}"
+  if [[ "${DO_CLEANUP}" == "true" ]]; then
+    cleanup_disk
+  fi
+  exit 0
+fi
+
+if [[ "${DO_CLEANUP}" == "true" ]]; then
+  cleanup_disk
+fi
+
+if [[ ! -d ".venv" ]]; then
+  echo -e "${RED}.venv missing. Run: bash install.sh${NC}"
+  exit 1
+fi
+# shellcheck disable=SC1091
+source .venv/bin/activate
+
+if [[ "${REINSTALL_DEPS}" == "true" ]]; then
+  echo -e "${CYAN}Reinstalling Python deps...${NC}"
+  python -m pip install --upgrade pip wheel
+  python -m pip install -r requirements.txt
+  python -m pip install -e .
+  echo -e "${CYAN}Reinstalling Remotion...${NC}"
+  npm --prefix remotion ci
+fi
+
+if [[ ! -f ".env" && -f ".env.example" ]]; then
+  cp .env.example .env
+fi
+if [[ -f ".env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source ./.env
+  set +a
+fi
+
+export PYTHONPATH="${REPO_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}"
+export JOBS_DIR="${REPO_DIR}/jobs"
+export CHANNEL_CONFIG="${CHANNEL_CONFIG:-${REPO_DIR}/configs/vida-plena-45/channel.yaml}"
+export BROWSER_WORKER_URL="${BROWSER_WORKER_URL:-http://127.0.0.1:8001}"
+export CHROME_CDP_URL="${CHROME_CDP_URL:-http://127.0.0.1:9222}"
 export PUBLIC_JOBS_KEEP="${PUBLIC_JOBS_KEEP:-5}"
 export BROWSER_TRACE_RETENTION_DAYS="${BROWSER_TRACE_RETENTION_DAYS:-3}"
 export BROWSER_TRACE_MAX_MB="${BROWSER_TRACE_MAX_MB:-512}"
+export PYTORCH_ENABLE_MPS_FALLBACK="${PYTORCH_ENABLE_MPS_FALLBACK:-1}"
 
-# 1. Check Docker Daemon
-if [[ "$RUN_MODE" != "stop" ]]; then
-  echo -e "${CYAN}Checking Docker status...${NC}"
-  if ! docker info &>/dev/null; then
-    # Detect OS
-    OS="$(uname -s)"
-    if [[ "$OS" == "Darwin" ]]; then
-      echo -e "${YELLOW}Docker is not running. Launching Docker Desktop on macOS...${NC}"
-      open -a Docker
-    elif [[ "$OS" == "Linux" ]]; then
-      echo -e "${YELLOW}Docker is not running. Attempting to start service on Linux...${NC}"
-      sudo systemctl start docker
-    fi
+start_proc() {
+  local name="$1"
+  shift
+  local logfile="logs/${name}.log"
+  local pidfile="${PIDFILE_DIR}/${name}.pid"
 
-    echo -e "${BLUE}Waiting for Docker to start...${NC}"
-    count=0
-    until docker info &>/dev/null; do
-      echo -ne "."
-      sleep 3
-      count=$((count + 3))
-      if [[ $count -ge 60 ]]; then
-        echo ""
-        echo -e "${RED}❌ Docker took too long to start. Please start Docker manually and run this script again.${NC}"
-        exit 1
-      fi
-    done
-    echo ""
-  fi
-  echo -e "${GREEN}✅ Docker is active and running!${NC}\n"
-fi
-
-if [ "$RUN_CLEANUP" = true ]; then
-  echo -e "${CYAN}Running Docker/local artifact cleanup...${NC}"
-  bash scripts/docker_disk_cleanup.sh
-fi
-
-stop_native_worker() {
-  pkill -f "video_agent.cli worker --db-path jobs/queue.db" >/dev/null 2>&1 || true
-}
-
-native_worker_running() {
-  pgrep -f "video_agent.cli worker --db-path jobs/queue.db" >/dev/null 2>&1
-}
-
-stop_heavy_services() {
-  docker compose ${COMPOSE_ARGS:-"-f docker-compose.yml"} stop worker browser-worker browser-runtime >/dev/null 2>&1 || true
-  stop_native_worker
-}
-
-docker_build_services() {
-  local services=("$@")
-  if [[ ${#services[@]} -eq 0 ]]; then
+  if [[ -f "${pidfile}" ]] && kill -0 "$(cat "${pidfile}")" 2>/dev/null; then
+    echo -e "${GREEN}${name} already running (pid $(cat "${pidfile}"))${NC}"
     return 0
   fi
 
-  echo -e "${CYAN}Rebuilding Docker services: ${services[*]}${NC}"
-  docker compose ${COMPOSE_ARGS} build "${services[@]}"
-}
-
-docker_restart_services() {
-  local services=("$@")
-  if [[ ${#services[@]} -eq 0 ]]; then
-    return 0
-  fi
-
-  echo -e "${CYAN}Restarting services to load updated code: ${services[*]}${NC}"
-  docker compose ${COMPOSE_ARGS} restart "${services[@]}"
-}
-
-start_native_worker() {
-  mkdir -p logs
-  echo -e "${CYAN}Launching Native Worker on host Mac (3x speedup)...${NC}"
-  nohup env \
-    PYTHONPATH=src \
-    JOBS_DIR="${REPO_DIR}/jobs" \
-    CHANNEL_CONFIG="${REPO_DIR}/configs/vida-plena-45/channel.yaml" \
-    BROWSER_WORKER_URL="http://localhost:8001" \
-    PUBLIC_JOBS_KEEP="${PUBLIC_JOBS_KEEP}" \
-    BROWSER_TRACE_RETENTION_DAYS="${BROWSER_TRACE_RETENTION_DAYS}" \
-    BROWSER_TRACE_MAX_MB="${BROWSER_TRACE_MAX_MB}" \
-    python -m video_agent.cli worker --db-path jobs/queue.db > logs/native_worker.log 2>&1 &
-  echo -e "${GREEN}✅ Native Worker started in the background (PID: $!). Logs: logs/native_worker.log${NC}"
+  echo -e "${CYAN}Starting ${name}...${NC}"
+  nohup "$@" >>"${logfile}" 2>&1 &
+  echo $! > "${pidfile}"
+  echo -e "${GREEN}✅ ${name} pid $(cat "${pidfile}")  log: ${logfile}${NC}"
 }
 
 wait_for_url() {
-  local name="$1"
-  local url="$2"
-  local timeout_sec="${3:-60}"
-  local elapsed=0
-
-  if ! command -v curl &>/dev/null; then
-    echo -e "${YELLOW}curl is not available; skipping ${name} readiness check.${NC}"
-    return 0
-  fi
-
+  local name="$1" url="$2" timeout="${3:-60}" elapsed=0
   echo -ne "${CYAN}Waiting for ${name}...${NC}"
   until curl -fsS "${url}" >/dev/null 2>&1; do
-    sleep 2
-    elapsed=$((elapsed + 2))
+    sleep 1
+    elapsed=$((elapsed + 1))
     echo -ne "."
-    if [[ $elapsed -ge $timeout_sec ]]; then
+    if [[ $elapsed -ge $timeout ]]; then
       echo ""
-      echo -e "${RED}${name} did not become ready at ${url} within ${timeout_sec}s.${NC}"
+      echo -e "${YELLOW}${name} not ready at ${url} after ${timeout}s. Check log.${NC}"
       return 1
     fi
   done
   echo -e " ${GREEN}ready${NC}"
 }
 
-# 2. Check for .env file
-if [[ ! -f ".env" ]]; then
-  echo -e "${YELLOW}⚠️  .env file not found. Copying from .env.example...${NC}"
-  cp .env.example .env
-fi
+start_proc dashboard \
+  uvicorn video_agent.web.app:app --host 127.0.0.1 --port 8000
 
-# 3. Detect hardware and configure Docker Compose
-COMPOSE_ARGS="-f docker-compose.yml"
-HAS_GPU=false
-GPU_TYPE=""
-OS="$(uname -s)"
-
-if [[ "$OS" == "Linux" ]]; then
-  # Check for NVIDIA GPU
-  if command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null; then
-    HAS_GPU=true
-    GPU_TYPE="NVIDIA"
-    COMPOSE_ARGS="${COMPOSE_ARGS} -f docker-compose.nvidia.yml"
-  # Check for AMD GPU on Linux
-  elif [[ -e /dev/dri ]] && command -v lspci &>/dev/null && lspci | grep -qi "amd\|ati\|radeon"; then
-    HAS_GPU=true
-    GPU_TYPE="AMD"
-    COMPOSE_ARGS="${COMPOSE_ARGS} -f docker-compose.amd.yml"
-  fi
-fi
-
-# Print GPU status
-if [ "$HAS_GPU" = true ]; then
-  echo -e "${GREEN}✅ Detected ${GPU_TYPE} GPU! Configuring Docker for GPU acceleration...${NC}"
-elif [[ "$OS" == "Darwin" ]]; then
-  echo -e "${BLUE}ℹ️  macOS detected. Native host worker is preferred for render performance.${NC}"
-else
-  echo -e "${BLUE}ℹ️  No compatible Linux GPU detected. Running in standard CPU mode.${NC}"
-fi
-
-if [[ "$RUN_MODE" == "stop" ]]; then
-  echo -e "${CYAN}Stopping all services...${NC}"
-  if docker info &>/dev/null; then
-    docker compose ${COMPOSE_ARGS} --profile "*" down --remove-orphans
-  else
-    echo -e "${YELLOW}Docker is not running; skipping container shutdown.${NC}"
-  fi
-  stop_native_worker
-  echo -e "${GREEN}✅ All services stopped successfully.${NC}"
+if [[ "${RUN_MODE}" == "dashboard" ]]; then
+  wait_for_url "dashboard" "http://127.0.0.1:8000/health" 60 || true
+  echo -e "\n${GREEN}Dashboard:${NC} http://127.0.0.1:8000"
   exit 0
 fi
 
-# 4. Handle macOS Native Worker Speedup Option
-USE_NATIVE_WORKER=false
-if [[ "$OS" == "Darwin" ]]; then
-  echo -e "\n${BOLD}${YELLOW}================ macOS Performance Optimization =================${NC}"
-  echo -e "Docker on macOS runs inside a Linux VM and cannot use your Mac's hardware GPU/VideoToolbox."
-  echo -e "Running the Worker natively on your Mac provides a ${BOLD}3x+ render speedup${NC}."
-  if [[ "$RUN_MODE" == "dashboard" ]]; then
-    echo -e "${BLUE}Dashboard-only mode requested; worker/browser services will stay stopped.${NC}"
-  elif [[ "$WORKER_MODE" == "docker" ]]; then
-    echo -e "${BLUE}Docker worker requested via --docker-worker.${NC}"
-  elif [[ "$WORKER_MODE" == "native" ]]; then
-    echo -e "${GREEN}Native worker requested via --native-worker.${NC}"
-    USE_NATIVE_WORKER=true
-  else
-    echo -e "Mac-first mode: Webapp/Browser stay in Docker, Worker runs natively on host Mac."
-    USE_NATIVE_WORKER=true
-  fi
-  echo -e "${BOLD}${YELLOW}=================================================================${NC}\n"
-elif [[ "$WORKER_MODE" == "native" ]]; then
-  echo -e "${YELLOW}--native-worker is currently only supported on macOS. Falling back to Docker worker.${NC}"
+BROWSER="${BROWSER:-brave}"
+export BROWSER
+if [[ "${BROWSER}" == "playwright" ]] && ! python -c "from playwright.sync_api import sync_playwright; p=sync_playwright().start(); assert p.chromium.executable_path; p.stop()" 2>/dev/null; then
+  echo -e "${YELLOW}Playwright Chromium missing — installing...${NC}"
+  python -m playwright install chromium
 fi
+bash "${REPO_DIR}/scripts/launch_chromium_mac.sh" || \
+  echo -e "${YELLOW}Chromium launch returned non-zero (may already be running).${NC}"
 
-if [ "$STOP_HEAVY" = true ]; then
-  echo -e "${CYAN}Stopping worker/browser services and keeping dashboard mode...${NC}"
-  stop_heavy_services
-fi
+start_proc browser-worker \
+  uvicorn video_agent.browser_worker.app:app --host 127.0.0.1 --port 8001
 
-IMAGE_HASH_FILE="$(smart_auto_hash_file image)"
-RUNTIME_HASH_FILE="$(smart_auto_hash_file runtime)"
-CURRENT_IMAGE_HASH="$(compute_path_fingerprint "${IMAGE_INPUTS[@]}")"
-CURRENT_RUNTIME_HASH="$(compute_path_fingerprint "${RUNTIME_INPUTS[@]}")"
+start_proc worker \
+  python -m video_agent.cli worker --db-path jobs/queue.db
 
-if smart_auto_hash_changed "$CURRENT_IMAGE_HASH" "$IMAGE_HASH_FILE"; then
-  IMAGE_CHANGED=true
-  echo -e "${YELLOW}Detected Docker image/dependency changes. Containers will be rebuilt as needed.${NC}"
-fi
+wait_for_url "dashboard" "http://127.0.0.1:8000/health" 60 || true
+wait_for_url "browser-worker" "http://127.0.0.1:8001/health" 60 || true
 
-if smart_auto_hash_changed "$CURRENT_RUNTIME_HASH" "$RUNTIME_HASH_FILE"; then
-  RUNTIME_CHANGED=true
-  echo -e "${YELLOW}Detected runtime code/config changes. Running processes will be restarted as needed.${NC}"
-fi
-
-START_MODE="docker"
-if [[ "$RUN_MODE" == "dashboard" ]]; then
-  START_MODE="dashboard"
-elif [[ "$USE_NATIVE_WORKER" == "true" ]]; then
-  START_MODE="native"
-fi
-
-read -r -a START_SERVICES <<< "$(smart_auto_service_targets "$START_MODE")"
-
-if [[ "$IMAGE_CHANGED" == "true" ]]; then
-  docker_build_services "${START_SERVICES[@]}"
-fi
-
-if [[ "$RUN_MODE" == "dashboard" ]]; then
-  echo -e "${CYAN}Starting dashboard only in Docker...${NC}"
-  docker compose ${COMPOSE_ARGS} up -d app
-  if smart_auto_should_restart_services "$IMAGE_CHANGED" "$RUNTIME_CHANGED"; then
-    docker_restart_services app
-  fi
-  stop_heavy_services
-elif [ "$USE_NATIVE_WORKER" = true ]; then
-  # Find best python command (prefer homebrew python3.11/3.12/3.10 over older system python3)
-  PYTHON_CMD="python3"
-  if command -v python3.11 &>/dev/null; then
-    PYTHON_CMD="python3.11"
-  elif command -v python3.12 &>/dev/null; then
-    PYTHON_CMD="python3.12"
-  elif command -v python3.10 &>/dev/null; then
-    PYTHON_CMD="python3.10"
-  fi
-
-  echo -e "${CYAN}Using Python interpreter: ${PYTHON_CMD}${NC}"
-
-  if ! command -v node &>/dev/null || ! command -v npm &>/dev/null; then
-    echo -e "${RED}Native worker needs Node.js and npm on the host for Remotion render.${NC}"
-    echo -e "${YELLOW}Install Node.js 22+, or run with --docker-worker.${NC}"
-    exit 1
-  fi
-
-  # If .venv exists, verify its python version is >= 3.10
-  if [[ -d ".venv" ]]; then
-    IS_COMPATIBLE=$(.venv/bin/python -c "import sys; print(sys.version_info >= (3, 10))" 2>/dev/null || echo "False")
-    if [[ "$IS_COMPATIBLE" == "False" ]]; then
-      echo -e "${YELLOW}Existing .venv is using an incompatible Python version. Recreating...${NC}"
-      rm -rf .venv
-    fi
-  fi
-
-  echo -e "${CYAN}Checking native Python virtual environment on host Mac...${NC}"
-  if [[ ! -d ".venv" ]]; then
-    $PYTHON_CMD -m venv .venv
-  fi
-  source .venv/bin/activate
-  DEPS_MARKER=".venv/.requirements-installed"
-  if [ "$REINSTALL_DEPS" = true ] || [[ ! -f "$DEPS_MARKER" ]] || [[ "requirements.txt" -nt "$DEPS_MARKER" ]]; then
-    echo -e "${BLUE}Installing Python dependencies (this might take a minute)...${NC}"
-    python -m pip install --quiet --timeout 100 --retries 10 --upgrade pip
-    python -m pip install --quiet --timeout 100 --retries 10 -r requirements.txt
-    date -u +"%Y-%m-%dT%H:%M:%SZ" > "$DEPS_MARKER"
-  else
-    echo -e "${GREEN}Native Python dependencies are up to date.${NC}"
-  fi
-
-  echo -e "${CYAN}Checking Remotion dependencies on host Mac...${NC}"
-  REMOTION_MARKER="remotion/node_modules/.package-lock-installed"
-  if [ "$REINSTALL_DEPS" = true ] || [[ ! -x "remotion/node_modules/.bin/remotion" ]] || [[ "remotion/package-lock.json" -nt "$REMOTION_MARKER" ]]; then
-    echo -e "${BLUE}Installing Remotion dependencies in remotion/node_modules...${NC}"
-    npm --prefix remotion ci --quiet
-    date -u +"%Y-%m-%dT%H:%M:%SZ" > "$REMOTION_MARKER"
-  else
-    echo -e "${GREEN}Remotion dependencies are up to date.${NC}"
-  fi
-  if [[ ! -d ".remotion/chrome-headless-shell" ]]; then
-    echo -e "${BLUE}Ensuring Remotion browser is available...${NC}"
-    npx --prefix remotion remotion browser ensure
-  else
-    echo -e "${GREEN}Remotion browser is already available.${NC}"
-  fi
-  
-  # Start app and browser containers in Docker, but exclude the docker worker
-  echo -e "${CYAN}Starting App & Browser containers in Docker...${NC}"
-  docker compose ${COMPOSE_ARGS} up -d app browser-worker browser-runtime
-  if smart_auto_should_restart_services "$IMAGE_CHANGED" "$RUNTIME_CHANGED"; then
-    docker_restart_services app browser-worker browser-runtime
-  fi
-  
-  # Ensure the docker worker is stopped to prevent conflicts
-  docker compose ${COMPOSE_ARGS} stop worker &>/dev/null || true
-  
-  # Run the native worker in the background
-  NATIVE_WORKER_RUNNING=false
-  if native_worker_running; then
-    NATIVE_WORKER_RUNNING=true
-  fi
-
-  if smart_auto_should_restart_native_worker "$RUNTIME_CHANGED" "$NATIVE_WORKER_RUNNING"; then
-    if [[ "$NATIVE_WORKER_RUNNING" == "true" ]]; then
-      echo -e "${CYAN}Restarting native worker to load updated code/config...${NC}"
-      stop_native_worker
-      sleep 1
-    fi
-    start_native_worker
-  else
-    echo -e "${GREEN}Native worker is already current; no restart needed.${NC}"
-    echo -e "${YELLOW}Logs may still be in logs/native_worker.log.${NC}"
-  fi
-else
-  # Standard Docker startup
-  echo -e "${CYAN}Starting YouTube AI Agent services in Docker...${NC}"
-  docker compose ${COMPOSE_ARGS} up -d app worker browser-worker browser-runtime
-  if smart_auto_should_restart_services "$IMAGE_CHANGED" "$RUNTIME_CHANGED"; then
-    docker_restart_services app worker browser-worker browser-runtime
-  fi
-fi
-
-# 5. Check Health
-wait_for_url "web app" "http://localhost:8000/health" 90
-if [[ "$RUN_MODE" != "dashboard" ]]; then
-  wait_for_url "browser-worker" "http://localhost:8001/health" 90
-  wait_for_url "browser runtime CDP bridge" "http://localhost:8001/runtime" 120
-fi
-
-write_smart_auto_hash "$CURRENT_IMAGE_HASH" "$IMAGE_HASH_FILE"
-write_smart_auto_hash "$CURRENT_RUNTIME_HASH" "$RUNTIME_HASH_FILE"
-
-echo -e "\n${GREEN}✅ Services started successfully!${NC}"
-echo -e "${BOLD}${CYAN}=====================================================${NC}"
-echo -e "  - ${BOLD}Dashboard URL:${NC}      ${GREEN}http://localhost:8000${NC}"
-if [[ "$RUN_MODE" == "dashboard" ]]; then
-  echo -e "  - ${BOLD}Worker Status:${NC}      ${YELLOW}STOPPED (dashboard mode)${NC}"
-elif [ "$USE_NATIVE_WORKER" = true ]; then
-  echo -e "  - ${BOLD}VNC Browser URL:${NC}    ${GREEN}http://localhost:7900${NC} (Manual ChatGPT/Gemini Logins)"
-  echo -e "  - ${BOLD}Worker Status:${NC}      ${GREEN}NATIVE HOST (GPU Enabled)${NC}"
-else
-  echo -e "  - ${BOLD}VNC Browser URL:${NC}    ${GREEN}http://localhost:7900${NC} (Manual ChatGPT/Gemini Logins)"
-  echo -e "  - ${BOLD}Worker Status:${NC}      ${GREEN}DOCKER CONTAINER (CPU Mode)${NC}"
-fi
-echo -e "${BOLD}${CYAN}=====================================================${NC}"
 echo ""
-echo -e "To view web logs, run:"
-echo -e "  ${BOLD}docker compose logs -f app${NC}"
-if [[ "$RUN_MODE" == "dashboard" ]]; then
-  echo -e "Worker/browser services are stopped in dashboard mode."
-elif [ "$USE_NATIVE_WORKER" = true ]; then
-  echo -e "To view native worker logs, run:"
-  echo -e "  ${BOLD}tail -f logs/native_worker.log${NC}"
-else
-  echo -e "To view worker logs, run:"
-  echo -e "  ${BOLD}docker compose logs -f worker${NC}"
-fi
+echo -e "${BOLD}${GREEN}All services started.${NC}"
+echo -e "  Dashboard:       http://127.0.0.1:8000"
+echo -e "  Browser worker:  http://127.0.0.1:8001"
+echo -e "  Chromium CDP:    http://127.0.0.1:9222"
 echo ""
-echo -e "To stop all services, run:"
-echo -e "  ${BOLD}bash run.sh --stop${NC}"
-echo -e "${BOLD}${CYAN}=====================================================${NC}"
+echo -e "Logs:"
+echo -e "  tail -f logs/dashboard.log"
+echo -e "  tail -f logs/worker.log"
+echo -e "  tail -f logs/browser-worker.log"
+echo -e "  tail -f logs/chromium.log"
+echo ""
+echo -e "Stop all: ${BOLD}bash run.sh --stop${NC}"

@@ -9,13 +9,12 @@ async def main():
     # Let's query cookies via playwright CDP using the container's remote URL
     from playwright.async_api import async_playwright
     async with async_playwright() as pw:
-        # Inside container, chrome is at browser-runtime:9222
-        # Let's resolve the websocket first
+        # Native Chromium with CDP on localhost
         client = BrowserClient(base_url="http://localhost:8001") # not needed
-        
+
         from video_agent.browser_worker.app import _resolve_browser_ws
         try:
-            ws_url = await _resolve_browser_ws("http://browser-runtime:9222")
+            ws_url = await _resolve_browser_ws("http://127.0.0.1:9222")
             print("WS URL:", ws_url)
         except Exception as e:
             print("Failed to get WS URL:", e)

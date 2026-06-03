@@ -507,7 +507,7 @@ class ChatGPTDriver:
 
     The driver does **not** log the user in. If the dedicated profile is
     signed out it raises ``LoginRequiredError`` with the path to a debug
-    screenshot so the operator can sign in via KasmVNC.
+    screenshot so the operator can sign in via the native Chromium window.
     """
 
     def __init__(self, page: "Page") -> None:

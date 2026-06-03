@@ -129,13 +129,13 @@ def _driver_error_detail(
 
 
 def _cdp_url() -> str:
-    """CDP endpoint for the Browser Appliance runtime container.
+    """CDP endpoint for a native Chromium instance on the host Mac.
 
-    Defaults to ``http://browser-runtime:9222``; the runtime container
-    exposes CDP on the internal ``appliance_net`` Docker network only,
-    so this URL is reachable from the worker but never from the host.
+    Default ``http://127.0.0.1:9222`` expects a Chromium launched with
+    ``--remote-debugging-port=9222`` via ``scripts/launch_chromium_mac.sh``.
+    Override with ``CHROME_CDP_URL`` if Chromium runs elsewhere.
     """
-    return os.environ.get("CHROME_CDP_URL", "http://browser-runtime:9222")
+    return os.environ.get("CHROME_CDP_URL", "http://127.0.0.1:9222")
 
 
 def _is_logged_out_url(site: str, url: str) -> bool:
@@ -152,8 +152,8 @@ def _is_logged_out_url(site: str, url: str) -> bool:
 def _login_required_message(site: str) -> str:
     label = {"chatgpt": "ChatGPT", "gemini": "Gemini"}.get(site, site)
     return (
-        f"Login required for {label} in the browser-runtime profile. "
-        "Open http://localhost:7900 (KasmVNC), sign in once, then retry."
+        f"Login required for {label} in the native Chromium profile. "
+        "Bring the Chromium window forward, sign in once, then retry."
     )
 
 

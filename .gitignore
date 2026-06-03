@@ -38,3 +38,6 @@ jobs.db
 worker_logs.txt
 remotion/src/*.js
 
+
+# Native runtime pidfiles (installers/run.sh)
+.run/

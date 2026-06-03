@@ -934,12 +934,13 @@
   .shorts-header-info p { margin:5px 0 0; font-size:12px; color:var(--muted); }
   .shorts-actions { display:flex; gap:8px; flex-wrap:wrap; flex-shrink:0; }
   .render-card { border:1px solid var(--line); border-radius:8px; background:#fff; margin-bottom:12px; overflow:hidden; }
-  .render-card-head { display:grid; grid-template-columns:28px minmax(0,1fr) auto; gap:12px; align-items:center; padding:12px 14px; cursor:pointer; }
+  .render-card-head { display:flex; align-items:center; gap:12px; padding:12px 14px; cursor:pointer; }
   .render-card-head:hover { background:#fafafa; }
   .render-card .rc-num { width:28px; height:28px; border-radius:999px; display:grid; place-items:center; background:#f1f2f4; color:var(--muted); font-size:12px; font-weight:750; }
   .render-card.rendered .rc-num { background:var(--green); color:#fff; }
   .render-card.failed .rc-num { background:var(--red); color:#fff; }
   .render-card.in_progress .rc-num { background:var(--blue); color:#fff; }
+  .render-card .rc-label { flex:1; min-width:0; }
   .render-card .rc-label .name { font-size:13px; font-weight:700; }
   .render-card .rc-label .code { font-size:11px; color:var(--muted-2); margin-top:2px; }
   .render-card-body { display:none; padding:0 14px 14px 54px; }
@@ -1526,38 +1527,19 @@ function selectJob(jobId) {
 function updateVncPanel() {
   const panel = document.getElementById('vnc-sidebar-box');
   if (!panel) return;
-  const vncUrl = 'http://localhost:7900/vnc.html?autoconnect=1&resize=scale&view_only=false';
   const selected = SELECTED_ID ? JOBS_BY_ID[SELECTED_ID] : null;
   const selectedRunning = selected && Array.isArray(selected.stages) && selected.stages.some(isActuallyRunning);
   const runningFallback = Object.values(JOBS_BY_ID).find((job) => Array.isArray(job.stages) && job.stages.some(isActuallyRunning));
   const j = selectedRunning ? selected : runningFallback;
-  if (!j) {
-    if (VNC_MOUNTED_JOB_ID === VNC_IDLE_SENTINEL && panel.querySelector('iframe.vnc-frame')) {
-      return;
-    }
-    VNC_MOUNTED_JOB_ID = VNC_IDLE_SENTINEL;
-    panel.innerHTML = `
-      <div class="vnc-title">Live VNC</div>
-      <div class="vnc-note">Chưa có job chạy. Đang mở browser runtime mặc định.</div>
-      <iframe class="vnc-frame" src="${vncUrl}" title="VNC Runtime" allow="fullscreen" style="margin:0;"></iframe>
-    `;
-    return;
-  }
-  if (VNC_MOUNTED_JOB_ID === j.job_id && panel.querySelector('iframe.vnc-frame')) {
-    const note = panel.querySelector('.vnc-note');
-    if (note) note.innerHTML = `Đang theo dõi: <b>${escapeHtml(j.job_id)}</b>`;
-    return;
-  }
-  VNC_MOUNTED_JOB_ID = j.job_id;
+  const trackingNote = j
+    ? `Đang theo dõi: <b>${escapeHtml(j.job_id)}</b>`
+    : 'Chưa có job chạy.';
   panel.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-      <div>
-        <div class="vnc-title" style="margin:0;">Live VNC</div>
-        <div class="vnc-note" style="margin:2px 0 0;font-size:11px;">Đang theo dõi: <b>${escapeHtml(j.job_id)}</b></div>
-      </div>
-      <button class="action-btn" onclick="VNC_MOUNTED_JOB_ID=null;updateVncPanel()" style="height:22px;font-size:10px;padding:0 6px;line-height:1;">🔄 Reconnect</button>
+    <div class="vnc-title">Native Browser</div>
+    <div class="vnc-note">${trackingNote}</div>
+    <div class="vnc-note" style="margin-top:6px;">
+      Cửa sổ Brave chạy trực tiếp trên Desktop — bấm icon Brave dưới Dock để xem/điều khiển. Live VNC đã bỏ sau khi chuyển sang native (không còn Docker).
     </div>
-    <iframe class="vnc-frame" src="${vncUrl}" title="VNC Runtime" allow="fullscreen" style="margin:0;"></iframe>
   `;
 }
 
@@ -2208,7 +2190,7 @@ function renderShortPipelineCard(jobId, short) {
       </div>
       <div style="min-width:0">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
-          <div style="font-weight:800;font-size:16px">${escapeHtml(sid)} <span style="color:${statusColor}">· ${escapeHtml(short.status || '')}</span></div>
+          <div style="font-weight:800;font-size:16px">${escapeHtml(sid)}${short.title ? ` — ${escapeHtml(short.title)}` : ''} <span style="color:${statusColor}">· ${escapeHtml(short.status || '')}</span></div>
           <div style="font-size:12px;color:var(--muted)">QA: ${escapeHtml(short.qa_verdict || '-')}</div>
         </div>
         <div style="margin-top:4px;font-size:13px;color:var(--text);line-height:1.35">${escapeHtml(short.hook || '')}</div>
@@ -3516,7 +3498,7 @@ function renderShortsCards(jobId, data) {
           ${cover ? `<img src="${cover}" style="width:100%;height:100%;object-fit:cover">` : ''}
         </div>
         <div style="flex:1;min-width:0">
-          <div style="font-weight:600">${escapeHtml(sid)} · ${escapeHtml(s.format || '')}
+          <div style="font-weight:600">${escapeHtml(sid)}${s.title ? ` — ${escapeHtml(s.title)}` : ''} · ${escapeHtml(s.format || '')}
             <span style="color:${chipColor};font-weight:700">· ${escapeHtml(s.status || '')}</span></div>
           <div style="font-size:12px;margin:4px 0">${escapeHtml(s.hook || '')}</div>
 	          <div style="font-size:11px;color:var(--muted)">
@@ -3657,6 +3639,8 @@ let SHORTS_SELECTED_JOB = null;
 let SHORTS_ACTIVE_TAB = 'ideas';
 let SHORTS_JOBS_CACHE = [];
 let SHORTS_POLL_TIMER = null;
+let SHORTS_RENDER_PROGRESS = {};
+let SHORTS_RENDER_POLLERS = {};
 
 async function loadShortsPage() {
   try {
@@ -3667,7 +3651,7 @@ async function loadShortsPage() {
     renderShortsJobList(SHORTS_JOBS_CACHE);
     if (SHORTS_SELECTED_JOB) {
       const still = SHORTS_JOBS_CACHE.find(j => j.job_id === SHORTS_SELECTED_JOB);
-      if (still) selectShortsJob(SHORTS_SELECTED_JOB);
+      if (still) selectShortsJob(SHORTS_SELECTED_JOB, true);
       else { SHORTS_SELECTED_JOB = null; document.getElementById('shorts-detail-panel').innerHTML = '<div class="empty">Select a video on the left to manage its Shorts.</div>'; }
     }
   } catch (e) { console.error('loadShortsPage', e); }
@@ -3696,7 +3680,7 @@ function renderShortsJobList(jobs) {
   }).join('');
 }
 
-async function selectShortsJob(jobId) {
+async function selectShortsJob(jobId, isPollUpdate = false) {
   SHORTS_SELECTED_JOB = jobId;
   document.querySelectorAll('.shorts-job-card').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.shorts-job-card').forEach(el => {
@@ -3705,29 +3689,37 @@ async function selectShortsJob(jobId) {
   renderShortsJobList(SHORTS_JOBS_CACHE);
   const job = SHORTS_JOBS_CACHE.find(j => j.job_id === jobId);
   const panel = document.getElementById('shorts-detail-panel');
-  panel.innerHTML = `
-    <div class="shorts-header">
-      <div class="shorts-header-info">
-        <h3>${escapeHtml(job?.title || jobId)}</h3>
-        <p>${escapeHtml(jobId)} · ${escapeHtml(job?.shorts_status || 'none')}</p>
+  
+  if (isPollUpdate && panel && panel.querySelector('.shorts-header-info h3')) {
+    const titleEl = panel.querySelector('.shorts-header-info h3');
+    const metaEl = panel.querySelector('.shorts-header-info p');
+    if (titleEl) titleEl.textContent = job?.title || jobId;
+    if (metaEl) metaEl.textContent = jobId + ' · ' + (job?.shorts_status || 'none');
+  } else if (panel) {
+    panel.innerHTML = `
+      <div class="shorts-header">
+        <div class="shorts-header-info">
+          <h3>${escapeHtml(job?.title || jobId)}</h3>
+          <p>${escapeHtml(jobId)} · ${escapeHtml(job?.shorts_status || 'none')}</p>
+        </div>
+        <div class="shorts-actions">
+          <button class="action-btn" onclick="refreshShortsDetail()">↻ Refresh</button>
+          <button class="action-btn primary" id="sp-generate-btn" onclick="spGenerateIdeas()">Generate Ideas</button>
+          <button class="action-btn danger" id="sp-delete-btn" onclick="spDeleteIdeas()">🗑 Delete Ideas</button>
+        </div>
       </div>
-      <div class="shorts-actions">
-        <button class="action-btn" onclick="refreshShortsDetail()">↻ Refresh</button>
-        <button class="action-btn primary" id="sp-generate-btn" onclick="spGenerateIdeas()">Generate Ideas</button>
-        <button class="action-btn danger" id="sp-delete-btn" onclick="spDeleteIdeas()">🗑 Delete Ideas</button>
+      <div class="shorts-tabs">
+        <button class="shorts-tab-btn${SHORTS_ACTIVE_TAB === 'ideas' ? ' active' : ''}" onclick="switchShortsTab('ideas')">💡 Ideas</button>
+        <button class="shorts-tab-btn${SHORTS_ACTIVE_TAB === 'renders' ? ' active' : ''}" onclick="switchShortsTab('renders')">🎬 Renders</button>
       </div>
-    </div>
-    <div class="shorts-tabs">
-      <button class="shorts-tab-btn${SHORTS_ACTIVE_TAB === 'ideas' ? ' active' : ''}" onclick="switchShortsTab('ideas')">💡 Ideas</button>
-      <button class="shorts-tab-btn${SHORTS_ACTIVE_TAB === 'renders' ? ' active' : ''}" onclick="switchShortsTab('renders')">🎬 Renders</button>
-    </div>
-    <div id="shorts-tab-ideas" class="shorts-tab-content${SHORTS_ACTIVE_TAB === 'ideas' ? ' active' : ''}">
-      <div style="font-size:12px;color:var(--muted)">Loading ideas…</div>
-    </div>
-    <div id="shorts-tab-renders" class="shorts-tab-content${SHORTS_ACTIVE_TAB === 'renders' ? ' active' : ''}">
-      <div style="font-size:12px;color:var(--muted)">Loading renders…</div>
-    </div>
-  `;
+      <div id="shorts-tab-ideas" class="shorts-tab-content${SHORTS_ACTIVE_TAB === 'ideas' ? ' active' : ''}">
+        <div style="font-size:12px;color:var(--muted)">Loading ideas…</div>
+      </div>
+      <div id="shorts-tab-renders" class="shorts-tab-content${SHORTS_ACTIVE_TAB === 'renders' ? ' active' : ''}">
+        <div style="font-size:12px;color:var(--muted)">Loading renders…</div>
+      </div>
+    `;
+  }
   await Promise.all([loadShortsIdeasTab(jobId), loadShortsRendersTab(jobId)]);
   startShortsPolling();
 }
@@ -3863,8 +3855,60 @@ function renderShortStep(jobId, shortId, s, idx) {
   const inputsHtml = inputs.map(renderFileRow).join('') || '<div style="color:var(--muted-2);font-size:12px;padding:6px">No input</div>';
   const outputsHtml = outputs.map(renderFileRow).join('') || '<div style="color:var(--muted-2);font-size:12px;padding:6px">No output yet</div>';
 
+  const isRenderStage = s.name === 'render';
+  const isAudioStage = s.name === 'audio';
+  let renderProgressHtml = '';
+  if (isRenderStage && shownStatus === 'in_progress') {
+    const rp = SHORTS_RENDER_PROGRESS[shortId] || { percent: 0, eta: '', fps: 0, frame: 0, total_frames: 0 };
+    const pct = rp.percent || 0;
+    const etaText = rp.eta || 'Calculating…';
+    
+    const parts = [];
+    if (rp.frame && rp.total_frames) parts.push(rp.frame + '/' + rp.total_frames + ' frames');
+    if (rp.fps) parts.push(rp.fps.toFixed(1) + ' fps');
+    if (rp.eta) parts.push('ETA ' + rp.eta);
+    const metaStr = parts.join(' · ');
+
+    renderProgressHtml = `
+      <div class="short-render-progress-container" style="margin:12px 0 4px;padding:10px;border:1px solid var(--line);border-radius:8px;background:#fafafa">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
+          <span style="font-size:12px;color:var(--muted);font-weight:600">Rendering video & cover…</span>
+          <span class="short-render-progress-pct" style="font-size:13px;font-weight:700;color:var(--blue)">${Math.round(pct)}%</span>
+        </div>
+        <div style="height:6px;border-radius:4px;background:var(--line-strong);overflow:hidden">
+          <div class="short-render-progress-bar" style="height:100%;width:${pct}%;background:var(--blue);border-radius:4px;transition:width 1s linear"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;font-size:12px">
+          <span style="color:var(--muted);font-weight:500">⏰ Time remaining:</span>
+          <span class="short-render-progress-eta" style="font-weight:700;color:#f5841f">${etaText}</span>
+        </div>
+        <div class="short-render-progress-meta" style="margin-top:5px;font-size:11px;color:var(--muted-2)">${metaStr}</div>
+      </div>
+    `;
+  } else if (isAudioStage && shownStatus === 'in_progress') {
+    const rp = SHORTS_RENDER_PROGRESS[shortId] || { percent: 0, stage: 'Preparing' };
+    const pct = rp.percent || 0;
+    const currentStage = rp.stage || 'Synthesizing...';
+
+    renderProgressHtml = `
+      <div class="short-audio-progress-container" style="margin:12px 0 4px;padding:10px;border:1px solid var(--line);border-radius:8px;background:#fafafa">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
+          <span style="font-size:12px;color:var(--muted);font-weight:600">Synthesizing TTS & Mixing Audio…</span>
+          <span class="short-audio-progress-pct" style="font-size:13px;font-weight:700;color:var(--blue)">${Math.round(pct)}%</span>
+        </div>
+        <div style="height:6px;border-radius:4px;background:var(--line-strong);overflow:hidden">
+          <div class="short-audio-progress-bar" style="height:100%;width:${pct}%;background:var(--blue);border-radius:4px;transition:width 0.5s ease-in-out"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;font-size:12px">
+          <span style="color:var(--muted);font-weight:500">Stage:</span>
+          <span class="short-audio-progress-stage" style="font-weight:700;color:#f5841f">${escapeHtml(currentStage)}</span>
+        </div>
+      </div>
+    `;
+  }
+
   return `
-    <div class="step ${shownStatus}">
+    <div class="step ${shownStatus}${shownStatus === 'in_progress' ? ' open' : ''}">
       <div class="step-head" onclick="this.closest('.step').classList.toggle('open')">
         <span class="step-num"><span class="step-order">${String(idx + 1).padStart(2, '0')}</span><span class="step-check">${compactStepGlyph}</span></span>
         <span class="step-label"><span class="name">${escapeHtml(label)}</span><span class="code">${escapeHtml(s.name)}</span></span>
@@ -3883,6 +3927,7 @@ function renderShortStep(jobId, shortId, s, idx) {
             ${outputsHtml}
           </div>
         </div>
+        ${renderProgressHtml}
         <div class="preview-mount"></div>
       </div>
     </div>
@@ -3897,13 +3942,13 @@ function renderShortStepsTimeline(jobId, draft) {
     else if (s.cls === 'fail') statusVal = 'failed';
     
     let nameVal = '';
-    if (s.label === 'Script') nameVal = 'script';
+    if (s.label === 'Script' || s.label === 'Short Script') nameVal = 'script';
     else if (s.label === 'QA Script') nameVal = 'qa_script';
-    else if (s.label === 'Scenes') nameVal = 'scenes';
+    else if (s.label === 'Scenes' || s.label === 'Short Scenes') nameVal = 'scenes';
     else if (s.label === 'QA Scenes') nameVal = 'qa_scenes';
-    else if (s.label === 'SEO') nameVal = 'seo';
-    else if (s.label === 'Render') nameVal = 'render';
-
+    else if (s.label === 'SEO' || s.label === 'Short SEO') nameVal = 'seo';
+    else if (s.label === 'Audio' || s.label === 'Audio TTS & Mix') nameVal = 'audio';
+    else if (s.label === 'Render' || s.label === 'Video & Cover Render') nameVal = 'render';
     
     return {
       name: nameVal,
@@ -3920,6 +3965,152 @@ function renderShortStepsTimeline(jobId, draft) {
       ${activeStages.map((stage, idx) => renderShortStep(jobId, draft.short_id, stage, idx)).join('')}
     </div>
   `;
+}
+
+function startShortsRenderProgressPolling(jobId, shortId) {
+  if (SHORTS_RENDER_POLLERS[shortId]) return;
+  SHORTS_RENDER_POLLERS[shortId] = setInterval(async () => {
+    if (ACTIVE_PAGE !== 'shorts' || !SHORTS_SELECTED_JOB) {
+      clearInterval(SHORTS_RENDER_POLLERS[shortId]);
+      delete SHORTS_RENDER_POLLERS[shortId];
+      return;
+    }
+    try {
+      const d = (window.SHORTS_DRAFTS_CACHE || []).find(x => x.short_id === shortId);
+      if (!d) return;
+
+      const stagesList = d.stages || [];
+      const isRenderInProgress = stagesList.length > 0
+        ? stagesList.some(s => s.name === 'render' && s.status === 'in_progress')
+        : (d.status === 'rendering');
+      const isAudioInProgress = stagesList.length > 0
+        ? stagesList.some(s => s.name === 'audio' && s.status === 'in_progress')
+        : (d.status === 'generating' || d.status === 'in_progress');
+
+      let endpoint = '';
+      if (isRenderInProgress) {
+        endpoint = '/shorts-studio/jobs/' + encodeURIComponent(jobId) + '/shorts/' + encodeURIComponent(shortId) + '/render/progress';
+      } else if (isAudioInProgress) {
+        endpoint = '/shorts-studio/jobs/' + encodeURIComponent(jobId) + '/shorts/' + encodeURIComponent(shortId) + '/audio/progress';
+      } else {
+        clearInterval(SHORTS_RENDER_POLLERS[shortId]);
+        delete SHORTS_RENDER_POLLERS[shortId];
+        delete SHORTS_RENDER_PROGRESS[shortId];
+        return;
+      }
+
+      const r = await fetch(endpoint);
+      if (!r.ok) {
+        // Stage might have finished or failed; reload drafts to update UI
+        await loadShortsRendersTab(jobId);
+        return;
+      }
+      const p = await r.json();
+      SHORTS_RENDER_PROGRESS[shortId] = p;
+      if (p.percent >= 100 || p.stage === 'completed') {
+        await loadShortsRendersTab(jobId);
+        return;
+      }
+
+      const card = document.getElementById('rc-' + shortId);
+      if (card) {
+        let stages;
+        if (stagesList.length > 0) {
+          stages = stagesList.map(s => {
+            let cls = '';
+            if (s.status === 'completed') cls = 'done';
+            else if (s.status === 'in_progress') cls = 'active';
+            else if (s.status === 'failed') cls = 'fail';
+            
+            let label = s.label || s.name;
+            if (label === 'Short Script') label = 'Script';
+            else if (label === 'Short Scenes') label = 'Scenes';
+            else if (label === 'Short SEO') label = 'SEO';
+            else if (label === 'Audio TTS & Mix') label = 'Audio';
+            else if (label === 'Video & Cover Render') label = 'Render';
+            
+            return { label: label, cls: cls };
+          });
+        } else {
+          stages = inferRenderStages(d);
+        }
+        
+        let doneCount = 0;
+        let totalCount = 0;
+        if (stagesList.length > 0) {
+          totalCount = stagesList.length;
+          doneCount = stagesList.filter(s => s.status === 'completed').length;
+        } else {
+          totalCount = stages.length;
+          doneCount = stages.filter(s => s.cls === 'done').length;
+        }
+        let renderProgressPct = p.percent || 0;
+        let percent = totalCount > 0 ? (doneCount / totalCount) * 100 : 0;
+        percent = ((doneCount + (renderProgressPct / 100)) / totalCount) * 100;
+        percent = Math.min(100, Math.max(0, percent));
+
+        let etaText = '';
+        if (isRenderInProgress) {
+          etaText = 'Rendering…';
+          if (p.eta) {
+            etaText = 'Rendering: ETA ' + p.eta;
+            if (p.fps > 0) {
+              etaText += ' (' + p.fps.toFixed(1) + ' fps)';
+            }
+          }
+        } else if (isAudioInProgress) {
+          etaText = `Audio TTS & Mix: ${Math.round(renderProgressPct)}%${p.stage ? ' (' + p.stage + ')' : ''}`;
+        }
+
+        const pctEl = card.querySelector('.sum-pct');
+        const etaEl = card.querySelector('.sum-eta');
+        const barFillEl = card.querySelector('.sum-bar div');
+
+        if (pctEl) pctEl.innerHTML = Math.round(percent) + '<span class="pct-unit" style="font-size:11px;">%</span>';
+        if (etaEl) etaEl.innerHTML = etaText;
+        if (barFillEl) barFillEl.style.width = percent + '%';
+
+        // Also update sub-progress inside the timeline steps if expanded
+        if (isRenderInProgress) {
+          const frameEl = card.querySelector('.short-render-progress-meta');
+          const progressPctEl = card.querySelector('.short-render-progress-pct');
+          const progressBarEl = card.querySelector('.short-render-progress-bar');
+          const progressEtaEl = card.querySelector('.short-render-progress-eta');
+
+          const parts = [];
+          if (p.frame && p.total_frames) parts.push(p.frame + '/' + p.total_frames + ' frames');
+          if (p.fps) parts.push(p.fps.toFixed(1) + ' fps');
+          if (p.eta) parts.push('ETA ' + p.eta);
+          const metaStr = parts.join(' · ');
+
+          if (frameEl) frameEl.textContent = metaStr;
+          if (progressPctEl) progressPctEl.textContent = Math.round(renderProgressPct) + '%';
+          if (progressBarEl) progressBarEl.style.width = renderProgressPct + '%';
+          if (progressEtaEl) progressEtaEl.textContent = p.eta || 'Calculating…';
+        } else if (isAudioInProgress) {
+          const progressPctEl = card.querySelector('.short-audio-progress-pct');
+          const progressBarEl = card.querySelector('.short-audio-progress-bar');
+          const progressStageEl = card.querySelector('.short-audio-progress-stage');
+
+          if (progressPctEl) progressPctEl.textContent = Math.round(renderProgressPct) + '%';
+          if (progressBarEl) progressBarEl.style.width = renderProgressPct + '%';
+          if (progressStageEl) progressStageEl.textContent = p.stage || 'Synthesizing...';
+        }
+      }
+
+      // Stop polling when not running/rendering
+      const d2 = (window.SHORTS_DRAFTS_CACHE || []).find(x => x.short_id === shortId);
+      if (d2) {
+        const st = d2.status || '';
+        const isRunning = st === 'generating' || st === 'rendering' || st === 'in_progress';
+        if (!isRunning) {
+          clearInterval(SHORTS_RENDER_POLLERS[shortId]);
+          delete SHORTS_RENDER_POLLERS[shortId];
+          delete SHORTS_RENDER_PROGRESS[shortId];
+        }
+      }
+    } catch(e) {}
+  }, 2000);
 }
 
 async function loadShortsRendersTab(jobId) {
@@ -3945,24 +4136,148 @@ async function loadShortsRendersTab(jobId) {
       return activeStages.some(s => s.status === 'in_progress') || (d.status && d.status.includes('progress')) || d.status === 'rendering';
     });
     if (anyRunning) startStageDurationTicker();
+
+    // Start progress polling for active renders/audio
+    drafts.forEach(d => {
+      const stagesList = d.stages || [];
+      const isRenderInProgress = stagesList.length > 0
+        ? stagesList.some(s => s.name === 'render' && s.status === 'in_progress')
+        : (d.status === 'rendering');
+      const isAudioInProgress = stagesList.length > 0
+        ? stagesList.some(s => s.name === 'audio' && s.status === 'in_progress')
+        : (d.status === 'generating' || d.status === 'in_progress');
+      if (isRenderInProgress || isAudioInProgress) {
+        startShortsRenderProgressPolling(jobId, d.short_id);
+      }
+    });
     
     container.innerHTML = `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">${drafts.length} short(s)</div>` +
       drafts.map((d, idx) => {
         const st = d.status || 'pending';
-        const stClass = st === 'rendered' ? 'rendered' : st === 'failed' ? 'failed' : st.includes('progress') ? 'in_progress' : '';
         const isRunning = st === 'generating' || st === 'rendering' || st === 'in_progress';
+        const stClass = st === 'rendered' ? 'rendered' : st === 'failed' ? 'failed' : isRunning ? 'in_progress' : '';
         const isStoppedOrFailed = st === 'failed' || st === 'needs_review' || st === 'ready_for_render';
-        const stages = inferRenderStages(d);
+        
+        // Calculate stages
+        const stagesList = d.stages || [];
+        let stages;
+        if (stagesList.length > 0) {
+          stages = stagesList.map(s => {
+            let cls = '';
+            if (s.status === 'completed') cls = 'done';
+            else if (s.status === 'in_progress') cls = 'active';
+            else if (s.status === 'failed') cls = 'fail';
+            
+            let label = s.label || s.name;
+            if (label === 'Short Script') label = 'Script';
+            else if (label === 'Short Scenes') label = 'Scenes';
+            else if (label === 'Short SEO') label = 'SEO';
+            else if (label === 'Audio TTS & Mix') label = 'Audio';
+            else if (label === 'Video & Cover Render') label = 'Render';
+            
+            return { label: label, cls: cls };
+          });
+        } else {
+          stages = inferRenderStages(d);
+        }
+        
+        let doneCount = 0;
+        let totalCount = 0;
+        let isRenderInProgress = false;
+        let isAudioInProgress = false;
+        
+        if (stagesList.length > 0) {
+          totalCount = stagesList.length;
+          doneCount = stagesList.filter(s => s.status === 'completed').length;
+          isRenderInProgress = stagesList.some(s => s.name === 'render' && s.status === 'in_progress');
+          isAudioInProgress = stagesList.some(s => s.name === 'audio' && s.status === 'in_progress');
+        } else {
+          totalCount = stages.length;
+          doneCount = stages.filter(s => s.cls === 'done').length;
+          isRenderInProgress = stClass === 'in_progress' && stages[stages.length - 1].cls === 'active';
+          isAudioInProgress = stClass === 'in_progress' && stages[stages.length - 2].cls === 'active';
+        }
+        
+        // Retrieve render/audio progress from global cache if in progress
+        let renderProgressPct = 0;
+        let renderEta = '';
+        let renderFps = 0;
+        let audioStageText = '';
+        if ((isRenderInProgress || isAudioInProgress) && SHORTS_RENDER_PROGRESS[d.short_id]) {
+          const rp = SHORTS_RENDER_PROGRESS[d.short_id];
+          renderProgressPct = rp.percent || 0;
+          renderEta = rp.eta || '';
+          renderFps = rp.fps || 0;
+          audioStageText = rp.stage || '';
+        }
+        
+        // Calculate blended percentage
+        let percent = totalCount > 0 ? (doneCount / totalCount) * 100 : 0;
+        if ((isRenderInProgress || isAudioInProgress) && renderProgressPct > 0) {
+          percent = ((doneCount + (renderProgressPct / 100)) / totalCount) * 100;
+        }
+        percent = Math.min(100, Math.max(0, percent));
+        
+        // Calculate status / ETA text
+        const stopped = d.stop_requested || false;
+        const failed = stClass === 'failed';
+        const allDone = st === 'rendered' || percent >= 100;
+        const anyRunningShort = isRunning || stClass === 'in_progress';
+        
+        let etaText = '';
+        if (stopped) {
+          etaText = '<b style="color:var(--amber)">Stopped</b>';
+        } else if (failed) {
+          etaText = '<b style="color:var(--red)">Failed</b>';
+        } else if (allDone) {
+          etaText = '<b>Completed</b>';
+        } else if (isRenderInProgress) {
+          if (renderEta) {
+            etaText = `Rendering: ETA ${renderEta}`;
+            if (renderFps > 0) {
+              etaText += ` (${renderFps.toFixed(1)} fps)`;
+            }
+          } else {
+            etaText = 'Rendering…';
+          }
+        } else if (isAudioInProgress) {
+          etaText = `Audio TTS & Mix: ${Math.round(renderProgressPct)}%${audioStageText ? ' (' + audioStageText + ')' : ''}`;
+        } else if (anyRunningShort) {
+          let activeStageLabel = 'Running…';
+          const activeStage = stagesList.find(s => s.status === 'in_progress');
+          if (activeStage) {
+            activeStageLabel = activeStage.label || activeStage.name;
+          } else {
+            const activeInfer = stages.find(s => s.cls === 'active');
+            if (activeInfer) activeStageLabel = activeInfer.label;
+          }
+          etaText = `${activeStageLabel}…`;
+        } else {
+          etaText = 'Ready to start';
+        }
+        
+        const barClass = failed ? 'failed' : allDone ? 'completed' : '';
         const isOpen = (stClass === 'in_progress' || drafts.length === 1) ? ' open' : '';
         return `<div class="render-card ${stClass}${isOpen}" id="rc-${escapeHtml(d.short_id)}">
           <div class="render-card-head" onclick="toggleRenderCard('${escapeHtml(d.short_id)}')">
             <div class="rc-num">${idx + 1}</div>
             <div class="rc-label">
-              <div class="name">${escapeHtml(d.short_id)} ${d.idea_id ? '— ' + escapeHtml(d.idea_id) : ''}</div>
+              <div class="name">
+                ${escapeHtml(d.short_id)} ${d.idea_id ? '— ' + escapeHtml(d.idea_id) : ''}
+                ${d.title ? ` <span style="font-weight: normal; color: var(--muted-2); font-size: 13px; margin-left: 8px;">— ${escapeHtml(d.title)}</span>` : ''}
+              </div>
               <div class="code">${escapeHtml(d.format || '')} · ${escapeHtml(d.qa_verdict || '-')}</div>
+            </div>
+            <!-- Progress % and ETA like the long video -->
+            <div class="rc-progress" style="text-align: right; margin-right: 14px; min-width: 100px;">
+              <div class="sum-pct" style="font-size: 20px; font-weight: 800; line-height: 1;">${Math.round(percent)}<span class="pct-unit" style="font-size: 11px;">%</span></div>
+              <div class="sum-eta" style="margin-top: 4px; font-size: 11px;">${etaText}</div>
             </div>
             <span class="pill ${stClass}">${escapeHtml(st)}</span>
           </div>
+          <!-- Progress bar below header -->
+          <div class="sum-bar ${barClass}" style="margin: 0 14px 10px 54px; height: 5px;"><div style="width: ${percent}%;"></div></div>
+          
           <div class="render-card-body">
             <div class="render-stage-labels">
               ${stages.map(s => `<div class="render-stage-label ${s.cls}">${s.label}</div>`).join('')}
@@ -3976,8 +4291,8 @@ async function loadShortsRendersTab(jobId) {
             
             ${d.status === 'rendered' ? `
               <div class="render-output" style="margin-top: 18px;">
-                ${d.video_path ? `<video src="${escapeHtml(d.video_path)}" controls preload="metadata"></video>` : '<div style="font-size:12px;color:var(--muted)">No video</div>'}
-                ${d.cover_path ? `<img src="${escapeHtml(d.cover_path)}" alt="Cover">` : ''}
+                ${d.video_path ? `<video src="/jobs/${encodeURIComponent(jobId)}/artifact?path=${encodeURIComponent(d.video_path)}" controls preload="metadata"></video>` : '<div style="font-size:12px;color:var(--muted)">No video</div>'}
+                ${d.cover_path ? `<img src="/jobs/${encodeURIComponent(jobId)}/artifact?path=${encodeURIComponent(d.cover_path)}" alt="Cover">` : ''}
               </div>
             ` : ''}
             <div class="render-meta-grid" style="margin-top: 14px; border-top: 1px dashed var(--line); padding-top: 10px;">
@@ -4004,19 +4319,21 @@ function inferRenderStages(draft) {
   const st = draft.status || '';
   const qa = draft.qa_verdict || '';
   const hasVideo = !!draft.video_path;
+  const hasAudio = st === 'rendered' || hasVideo || (draft.stages && draft.stages.some(s => s.name === 'audio' && s.status === 'completed'));
   const stages = [
     { label: 'Script', cls: 'done' },
     { label: 'QA Script', cls: qa ? 'done' : '' },
     { label: 'Scenes', cls: 'done' },
     { label: 'QA Scenes', cls: qa ? 'done' : '' },
     { label: 'SEO', cls: 'done' },
+    { label: 'Audio', cls: hasAudio ? 'done' : '' },
     { label: 'Render', cls: hasVideo ? 'done' : '' },
   ];
 
   if (st === 'failed') {
     for (let i = stages.length - 1; i >= 0; i--) { if (!stages[i].cls) { stages[i].cls = 'fail'; break; } }
   }
-  if (st === 'rendering' || st === 'in_progress') {
+  if (st === 'rendering' || st === 'in_progress' || st === 'generating') {
     for (let i = 0; i < stages.length; i++) { if (!stages[i].cls) { stages[i].cls = 'active'; break; } }
   }
   if (st === 'rendered' || hasVideo) {

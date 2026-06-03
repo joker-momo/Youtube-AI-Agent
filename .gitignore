@@ -41,3 +41,5 @@ remotion/src/*.js
 
 # Native runtime pidfiles (installers/run.sh)
 .run/
+/.agent
+.worktrees/

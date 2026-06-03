@@ -274,6 +274,31 @@ def render_selected_short_ideas(
         )
         source_artifacts = _build_source_artifacts(idea, long_job_dir)
         attempted_render_count += 1
+
+        # ── Write a preliminary manifest entry BEFORE build_short so the
+        # ── Renders tab can display the progress card immediately. ──
+        active_entries = [e for e in active_entries if e.get("idea_id") != idea_id]
+        preliminary_entry = {
+            "short_id": short_id,
+            "idea_id": idea_id,
+            "idea_type": "synthesis",
+            "format": idea.get("format"),
+            "status": "in_progress",
+            "rendered": False,
+            "qa_verdict": None,
+            "source_scene_ids": list(idea.get("source_scene_ids") or []),
+            "video_path": None,
+            "cover_path": None,
+        }
+        active_entries.append(preliminary_entry)
+        manifest_doc.update({
+            "source_long_job_id": long_job_dir.name,
+            "status": "rendering",
+            "mode": "synthesis_ideas",
+            "shorts": active_entries,
+        })
+        manifest.write_manifest(long_job_dir, manifest_doc)
+
         try:
             result = _call_build_short_fn(
                 build_short_fn,

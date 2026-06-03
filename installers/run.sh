@@ -160,6 +160,8 @@ fi
 
 export PYTHONPATH="${REPO_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}"
 export JOBS_DIR="${REPO_DIR}/jobs"
+export WORKER_ASSETS_ROOT="${REPO_DIR}/jobs"
+export BROWSER_TRACE_DIR="${REPO_DIR}/browser_trace"
 export CHANNEL_CONFIG="${CHANNEL_CONFIG:-${REPO_DIR}/configs/vida-plena-45/channel.yaml}"
 export BROWSER_WORKER_URL="${BROWSER_WORKER_URL:-http://127.0.0.1:8001}"
 export CHROME_CDP_URL="${CHROME_CDP_URL:-http://127.0.0.1:9222}"

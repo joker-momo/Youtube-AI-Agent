@@ -64,6 +64,11 @@ def _default_cover_fn(short_dir: Path, channel_config: dict) -> Path:
     return render_short_cover(short_dir, channel_config)
 
 
+def _default_thumbnail_fn(long_job_dir: Path, short_id: str, channel_config: dict) -> Path | None:
+    """No-op default: skip thumbnail generation unless an image_fn is injected."""
+    return None
+
+
 def build_short(
     long_job_dir: Path,
     short_plan: dict,
@@ -75,6 +80,7 @@ def build_short(
     mix_fn: Callable[..., Path] = _default_mix_fn,
     render_fn: Callable[..., Path] = _default_render_fn,
     cover_fn: Callable[..., Path] = _default_cover_fn,
+    thumbnail_fn: Callable[..., Path | None] = _default_thumbnail_fn,
     long_video_url: str = "",
     require_render_confirmation: bool = False,
     source_artifacts: dict | None = None,
@@ -120,6 +126,7 @@ def build_short(
         {"name": "scenes", "label": "Short Scenes", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "qa_scenes", "label": "QA Scenes", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "seo", "label": "Short SEO", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
+        {"name": "thumbnail", "label": "Thumbnail", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "audio", "label": "Audio TTS & Mix", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "render", "label": "Video & Cover Render", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
     ]
@@ -350,6 +357,19 @@ def build_short(
     })
     write_short_status(long_job_dir, short_id, status)
 
+    # --- Stage 5b: Thumbnail (ChatGPT image gen, optional) ---
+    update_stage("thumbnail", "in_progress")
+    try:
+        check_stop()
+        thumb_result = thumbnail_fn(long_job_dir, short_id, channel_config)
+        if thumb_result:
+            update_stage("thumbnail", "completed")
+        else:
+            update_stage("thumbnail", "skipped")
+    except Exception as exc:
+        # Thumbnail failure is non-fatal: skip and continue
+        update_stage("thumbnail", "failed", error=str(exc))
+
     if require_render_confirmation:
         _write_render_props(sd, short_scenes, channel_config, music_track)
         update_stage("audio", "pending")
@@ -369,7 +389,7 @@ def build_short(
 
 
     # QA PASS & No confirmation required → produce audio, mix, render props, video, cover.
-    # --- Stage 5: Audio ---
+    # --- Stage 6: Audio ---
     update_stage("audio", "in_progress")
     try:
         check_stop()

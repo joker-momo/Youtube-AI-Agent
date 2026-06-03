@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Video Agent Dashboard</title>
+<title>Shorts Studio</title>
 <style>
   :root {
     --bg: #f6f7f9;
@@ -913,7 +913,7 @@
     .step-meta { grid-column: 2; }
   }
   /* ---- Shorts Studio Page ---- */
-  .shorts-page-wrap { display:none; }
+  .shorts-page-wrap { display:block; }
   .shorts-page-wrap.active { display:block; }
   .shorts-layout { display:grid; grid-template-columns:320px minmax(0,1fr); gap:12px; align-items:start; }
   .shorts-jobs-panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); min-height:560px; overflow:hidden; }
@@ -971,194 +971,35 @@
   <aside class="rail">
     <div class="logo" aria-label="Video Agent"></div>
     <nav class="rail-nav" aria-label="Dashboard sections">
-      <button type="button" class="rail-pill active" id="rail-jobs" onclick="switchPage('jobs')">Jobs</button>
-      <button type="button" class="rail-pill" id="rail-config" onclick="switchPage('config')">Config</button>
-      <a href="/shorts-studio" class="rail-pill" id="rail-shorts" style="text-decoration: none;">Shorts</a>
-      <div class="rail-pill">Files</div>
-      <button type="button" class="rail-pill" id="rail-logs" onclick="openLogsTabFromRail()">Logs</button>
+      <a href="/" class="rail-pill" id="rail-jobs" style="text-decoration: none;">Jobs</a>
+      <a href="/#config" class="rail-pill" id="rail-config" style="text-decoration: none;">Config</a>
+      <button type="button" class="rail-pill active" id="rail-shorts">Shorts</button>
     </nav>
   </aside>
   <div class="workspace">
     <header class="topbar">
       <div class="brand">
-        <h1>Video Agent</h1>
-        <p>Vida Plena 45+ production dashboard</p>
+        <h1>Shorts Studio</h1>
+        <p>Vida Plena 45+ Shorts Production</p>
       </div>
       <div class="top-meta">
-        <span><span class="ws-dot off" id="ws-dot"></span><span id="ws-label">disconnected</span></span>
-        <span id="job-count">0</span>
-        <button class="refresh-btn" id="refresh-btn" type="button">Refresh</button>
+        <button class="refresh-btn" id="refresh-btn" type="button" onclick="loadShortsPage()">Refresh</button>
       </div>
     </header>
     <main class="page">
-      <div class="page-head">
-        <div class="page-title">
-          <h2>Production Jobs</h2>
-          <p>Track generation, QA, render artifacts, and final YouTube metadata.</p>
-        </div>
-        <div style="display:flex;gap:10px;align-items:center">
-          <button class="primary-action" type="button" onclick="openIdeaTitleJobModal()">Create video from idea</button>
-          <button class="primary-action" type="button" onclick="openNewJobModal()">＋ New Job</button>
-          <button style="padding:0 14px;height:36px;border:1px solid var(--line);border-radius:8px;background:#fff;font-size:13px;cursor:pointer" type="button" onclick="fetchJobs()">Refresh</button>
-        </div>
-      </div>
-      <!-- Create idea from a title modal -->
-      <div class="modal-overlay hidden" id="idea-title-job-overlay" onclick="if(event.target===this)closeIdeaTitleJobModal()">
-        <div class="modal">
-          <div class="modal-title">Create video from idea</div>
-          <div class="modal-field">
-            <label>Title</label>
-            <textarea id="itj-title" placeholder="Sarcopenia después de los 60: 5 alimentos que ayudan a proteger tus músculos"></textarea>
-          </div>
-          <div class="modal-field">
-            <label>Channel</label>
-            <select id="itj-channel">
-              <option value="vida-plena-45">vida-plena-45</option>
-            </select>
-          </div>
-          <p style="font-size:12px;color:var(--muted);margin:2px 0 0">
-            ChatGPT expands the title into a full idea (topic, angle, key points, duration).
-            It appears as an idea card below — click <strong>Run Job</strong> there to create the video.
-          </p>
-          <div id="itj-status" style="font-size:12px;color:var(--muted);margin-top:8px;display:none"></div>
-          <div id="itj-error" style="font-size:12px;color:var(--red);margin-top:8px;display:none"></div>
-          <div class="modal-actions">
-            <button class="modal-cancel" onclick="closeIdeaTitleJobModal()">Cancel</button>
-            <button class="modal-submit" id="itj-submit" onclick="submitIdeaTitleJob()">Generate Idea</button>
-          </div>
-        </div>
-      </div>
-      <!-- New Job Modal -->
-      <div class="modal-overlay hidden" id="new-job-overlay" onclick="if(event.target===this)closeNewJobModal()">
-        <div class="modal">
-          <div class="modal-title">＋ New Job</div>
-          <div class="modal-field">
-            <label>Job ID</label>
-            <input type="text" id="nj-job-id" placeholder="auto-generated">
-          </div>
-          <div class="modal-field">
-            <label>Channel</label>
-            <select id="nj-channel" onchange="loadModalIdeas()">
-              <option value="vida-plena-45">vida-plena-45</option>
-            </select>
-          </div>
-          <div class="modal-field">
-            <label>Idea source</label>
-            <div class="modal-radio-row">
-              <label><input type="radio" name="nj-src" value="saved" checked onchange="njSourceChange()"> Saved idea</label>
-              <label><input type="radio" name="nj-src" value="paste" onchange="njSourceChange()"> Paste JSON</label>
-              <label><input type="radio" name="nj-src" value="none" onchange="njSourceChange()"> No idea yet</label>
+      <!-- Shorts Studio Page -->
+      <div id="shorts-page" class="shorts-page-wrap active">
+        <div class="shorts-layout">
+          <div class="shorts-jobs-panel">
+            <div class="panel-head">
+              <div class="panel-title">Source Videos</div>
+              <div class="panel-count" id="shorts-panel-count">0 jobs</div>
             </div>
+            <div class="shorts-jobs-list" id="shorts-jobs-list"></div>
           </div>
-          <div class="modal-field" id="nj-saved-wrap">
-            <label>Select idea</label>
-            <select id="nj-idea-select" style="max-width:100%">
-              <option value="">Loading…</option>
-            </select>
+          <div class="shorts-detail-panel" id="shorts-detail-panel">
+            <div class="empty">Select a video on the left to manage its Shorts.</div>
           </div>
-          <div class="modal-field hidden" id="nj-paste-wrap">
-            <label>Idea JSON</label>
-            <textarea id="nj-idea-json" placeholder='{"topic":"...","angle":"...","title_seed":"...","key_points":[],"target_duration_sec":1500}'></textarea>
-          </div>
-          <div id="nj-error" style="font-size:12px;color:var(--red);margin-top:-6px;display:none"></div>
-          <div class="modal-actions">
-            <button class="modal-cancel" onclick="closeNewJobModal()">Cancel</button>
-            <button class="modal-submit" id="nj-submit" onclick="submitNewJob()">Create Job</button>
-          </div>
-        </div>
-      </div>
-      <div id="jobs-page">
-      <section class="kpis" id="kpis"></section>
-      <section class="ideas-section" id="channel-videos-section">
-        <div class="panel-head" onclick="toggleChannelVideosPanel()">
-          <div class="panel-title">📺 Channel Videos</div>
-          <span style="font-size:12px;color:var(--muted)" id="channel-videos-caret">› expand</span>
-        </div>
-        <div class="ideas-body" id="channel-videos-body" style="display:none">
-          <div class="gen-form">
-            <label>Channel</label>
-            <select id="channel-videos-channel" onchange="loadChannelVideos()">
-              <option value="vida-plena-45">vida-plena-45</option>
-            </select>
-            <div class="gen-actions">
-              <button class="action-btn primary" id="channel-videos-sync-btn" onclick="syncAndLoadChannelVideos()" title="Fetch latest published videos from YouTube RSS and refresh the list">🔄 Sync from YouTube</button>
-              <button class="action-btn" onclick="loadChannelVideos()" title="Re-render from the local published_videos.json cache">📂 Load cached</button>
-              <a class="action-btn ghost" id="channel-videos-open-link" href="#" target="_blank" rel="noopener" style="display:none">↗ Open channel</a>
-            </div>
-          </div>
-          <div id="channel-videos-status" style="font-size:12px;color:var(--muted);margin-bottom:6px"></div>
-          <div id="channel-videos-list" style="display:flex;flex-direction:column;gap:6px"></div>
-        </div>
-      </section>
-      <section class="ideas-section" id="ideas-section">
-        <div class="panel-head" onclick="toggleIdeasPanel()">
-          <div class="panel-title">💡 Idea Generator</div>
-          <span style="font-size:12px;color:var(--muted)" id="ideas-caret">› expand</span>
-        </div>
-        <div class="ideas-body" id="ideas-body" style="display:none">
-          <div class="gen-form">
-            <label>Channel</label>
-            <select id="idea-channel" onchange="loadSavedIdeas()">
-              <option value="vida-plena-45">vida-plena-45</option>
-            </select>
-            <label>Count</label>
-            <input type="number" id="idea-count" value="5" min="1" max="20">
-            <label>Seed topics</label>
-            <textarea id="seed-topics" placeholder="One topic per line (optional)…" rows="1"></textarea>
-            <div class="gen-actions">
-              <button class="action-btn primary" id="gen-btn" onclick="generateAndScore()">✨ Generate + Score</button>
-              <button class="action-btn" onclick="loadSavedIdeas()">📂 Load saved</button>
-              <button class="action-btn danger" id="clear-saved-btn" onclick="clearSavedIdeas()" title="Delete every saved idea JSON for the selected channel">🗑 Clear saved</button>
-            </div>
-          </div>
-          <div id="ideas-status" style="font-size:12px;color:var(--muted);margin-bottom:6px"></div>
-          <div class="ideas-grid" id="ideas-grid"></div>
-        </div>
-      </section>
-      <section class="ideas-section" id="shorts-section">
-        <div class="panel-head" onclick="toggleShortsPanel()">
-          <div class="panel-title">🎬 Shorts Autopilot</div>
-          <span style="font-size:12px;color:var(--muted)" id="shorts-caret">› expand</span>
-        </div>
-        <div class="ideas-body" id="shorts-body" style="display:none">
-          <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
-            Select a completed long job below, then generate Shorts. Sequential, automatic — no setup needed.
-          </div>
-          <div class="gen-actions" style="margin-bottom:8px">
-            <button class="action-btn primary" id="gen-shorts-btn" onclick="genVideoShorts(false)">Gen Video Shorts</button>
-            <button class="action-btn" onclick="refreshShorts()">↻ Refresh</button>
-            <button class="action-btn" onclick="updateShortsSourceUrl()">Update long video URL</button>
-            <button class="action-btn danger" onclick="genVideoShorts(true)" title="Archive existing Shorts and regenerate">⟲ Force regenerate</button>
-          </div>
-          <div id="shorts-status" style="font-size:12px;color:var(--muted);margin-bottom:6px"></div>
-          <div class="ideas-grid" id="shorts-grid"></div>
-        </div>
-      </section>
-
-      <section class="content-grid">
-        <div class="panel jobs-panel">
-          <div class="panel-head">
-            <div class="panel-title">Job queue</div>
-            <div class="panel-count" id="panel-count">0 jobs</div>
-          </div>
-          <div id="jobs-list"></div>
-          <div id="vnc-sidebar-box" class="vnc-box"></div>
-        </div>
-        <div class="panel detail-panel" id="detail-panel">
-          <div class="empty">Chọn một job bên trái để xem timeline, artifact và output.</div>
-        </div>
-      </section>
-      </div>
-      <div id="config-page" class="config-wrap">
-          <div class="config-panel">
-          <div class="panel-title" style="margin-bottom:6px">Environment Config (.env)</div>
-          <div class="config-row">
-            <button class="cfg-btn warn" type="button" onclick="bootstrapEnvFromExample()">Initialize from .env.example</button>
-            <button class="cfg-btn" type="button" onclick="loadEnvConfig()">Reload</button>
-            <button class="cfg-btn primary" type="button" onclick="saveEnvConfig()">Save .env</button>
-          </div>
-          <div class="config-row" id="env-meta" style="font-size:12px;color:var(--muted)">Loading...</div>
-          <textarea id="env-editor" class="config-textarea" placeholder="KEY=value"></textarea>
         </div>
       </div>
     </main>
@@ -3113,21 +2954,10 @@ async function runStage(evt, jobId, stageName) {
   }
 }
 
-document.getElementById('refresh-btn').onclick = fetchJobs;
-fetchJobs();
-setInterval(fetchJobs, 4000);
-startTimelinePolling();
-
-window.addEventListener('hashchange', () => {
-  if (window.location.hash === '#config') {
-    switchPage('config');
-  } else {
-    switchPage('jobs');
-  }
-});
-if (window.location.hash === '#config') {
-  switchPage('config');
-}
+document.getElementById('refresh-btn').onclick = loadShortsPage;
+ACTIVE_PAGE = 'shorts';
+loadShortsPage();
+setInterval(loadShortsPage, 8000);
 
 // ---- Create Job from raw idea/title ----
 function openIdeaTitleJobModal() {
@@ -3612,6 +3442,9 @@ let SHORTS_JOBS_CACHE = [];
 let SHORTS_POLL_TIMER = null;
 let SHORTS_RENDER_PROGRESS = {};
 let SHORTS_RENDER_POLLERS = {};
+let LAST_SHORTS_JOBS_JSON = '';
+let LAST_IDEAS_JSON_BY_JOB = {};
+let LAST_RENDERS_JSON_BY_JOB = {};
 
 async function loadShortsPage() {
   try {
@@ -3619,7 +3452,13 @@ async function loadShortsPage() {
     if (!r.ok) return;
     const data = await r.json();
     SHORTS_JOBS_CACHE = (data.eligible_jobs || data.jobs || []).filter(j => j.eligible);
-    renderShortsJobList(SHORTS_JOBS_CACHE);
+    
+    const jobsJson = JSON.stringify(SHORTS_JOBS_CACHE);
+    if (jobsJson !== LAST_SHORTS_JOBS_JSON) {
+      LAST_SHORTS_JOBS_JSON = jobsJson;
+      renderShortsJobList(SHORTS_JOBS_CACHE);
+    }
+    
     if (SHORTS_SELECTED_JOB) {
       const still = SHORTS_JOBS_CACHE.find(j => j.job_id === SHORTS_SELECTED_JOB);
       if (still) selectShortsJob(SHORTS_SELECTED_JOB, true);
@@ -3653,11 +3492,16 @@ function renderShortsJobList(jobs) {
 
 async function selectShortsJob(jobId, isPollUpdate = false) {
   SHORTS_SELECTED_JOB = jobId;
-  document.querySelectorAll('.shorts-job-card').forEach(el => el.classList.remove('active'));
-  document.querySelectorAll('.shorts-job-card').forEach(el => {
-    if (el.onclick && el.onclick.toString().includes(jobId)) el.classList.add('active');
-  });
-  renderShortsJobList(SHORTS_JOBS_CACHE);
+  if (!isPollUpdate) {
+    delete LAST_IDEAS_JSON_BY_JOB[jobId];
+    delete LAST_RENDERS_JSON_BY_JOB[jobId];
+    renderShortsJobList(SHORTS_JOBS_CACHE);
+  } else {
+    document.querySelectorAll('.shorts-job-card').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.shorts-job-card').forEach(el => {
+      if (el.onclick && el.onclick.toString().includes(jobId)) el.classList.add('active');
+    });
+  }
   const job = SHORTS_JOBS_CACHE.find(j => j.job_id === jobId);
   const panel = document.getElementById('shorts-detail-panel');
   
@@ -3712,10 +3556,18 @@ async function loadShortsIdeasTab(jobId) {
     const r = await fetch('/shorts-studio/jobs/' + encodeURIComponent(jobId) + '/ideas');
     if (!r.ok) {
       container.innerHTML = '<div class="ideas-empty">No ideas yet. Click "Generate Ideas" to start.</div>';
+      delete LAST_IDEAS_JSON_BY_JOB[jobId];
       return;
     }
     const data = await r.json();
     const ideas = data.ideas || [];
+    
+    const ideasJson = JSON.stringify(ideas);
+    if (ideasJson === LAST_IDEAS_JSON_BY_JOB[jobId]) {
+      return;
+    }
+    LAST_IDEAS_JSON_BY_JOB[jobId] = ideasJson;
+    
     if (!ideas.length) {
       container.innerHTML = '<div class="ideas-empty">No ideas found. Click "Generate Ideas".</div>';
       return;
@@ -4101,6 +3953,234 @@ function startShortsRenderProgressPolling(jobId, shortId) {
   }, 2000);
 }
 
+function renderSingleCardHtml(jobId, d, idx, shortsSeoData, isOpen) {
+  const st = d.status || 'pending';
+  const isRunning = st === 'generating' || st === 'rendering' || st === 'in_progress';
+  const stClass = st === 'rendered' ? 'rendered' : st === 'failed' ? 'failed' : isRunning ? 'in_progress' : '';
+  const isStoppedOrFailed = st === 'failed' || st === 'needs_review' || st === 'ready_for_render';
+  
+  // Calculate stages
+  const stagesList = d.stages || [];
+  let stages;
+  if (stagesList.length > 0) {
+    stages = stagesList.map(s => {
+      let cls = '';
+      if (s.status === 'completed') cls = 'done';
+      else if (s.status === 'in_progress') cls = 'active';
+      else if (s.status === 'failed') cls = 'fail';
+      
+      let label = s.label || s.name;
+      if (label === 'Short Script') label = 'Script';
+      else if (label === 'Short Scenes') label = 'Scenes';
+      else if (label === 'Short SEO') label = 'SEO';
+      else if (label === 'Audio TTS & Mix') label = 'Audio';
+      else if (label === 'Video & Cover Render') label = 'Render';
+      
+      return { label: label, cls: cls };
+    });
+  } else {
+    stages = inferRenderStages(d);
+  }
+  
+  let doneCount = 0;
+  let totalCount = 0;
+  let isRenderInProgress = false;
+  let isAudioInProgress = false;
+  
+  if (stagesList.length > 0) {
+    totalCount = stagesList.length;
+    doneCount = stagesList.filter(s => s.status === 'completed').length;
+    isRenderInProgress = stagesList.some(s => s.name === 'render' && s.status === 'in_progress');
+    isAudioInProgress = stagesList.some(s => s.name === 'audio' && s.status === 'in_progress');
+  } else {
+    totalCount = stages.length;
+    doneCount = stages.filter(s => s.cls === 'done').length;
+    isRenderInProgress = stClass === 'in_progress' && stages[stages.length - 1].cls === 'active';
+    isAudioInProgress = stClass === 'in_progress' && stages[stages.length - 2].cls === 'active';
+  }
+  
+  // Retrieve render/audio progress from global cache if in progress
+  let renderProgressPct = 0;
+  let renderEta = '';
+  let renderFps = 0;
+  let audioStageText = '';
+  if ((isRenderInProgress || isAudioInProgress) && SHORTS_RENDER_PROGRESS[d.short_id]) {
+    const rp = SHORTS_RENDER_PROGRESS[d.short_id];
+    renderProgressPct = rp.percent || 0;
+    renderEta = rp.eta || '';
+    renderFps = rp.fps || 0;
+    audioStageText = rp.stage || '';
+  }
+  
+  // Calculate blended percentage
+  let percent = totalCount > 0 ? (doneCount / totalCount) * 100 : 0;
+  if ((isRenderInProgress || isAudioInProgress) && renderProgressPct > 0) {
+    percent = ((doneCount + (renderProgressPct / 100)) / totalCount) * 100;
+  }
+  percent = Math.min(100, Math.max(0, percent));
+  
+  // Calculate status / ETA text
+  const stopped = d.stop_requested || false;
+  const failed = stClass === 'failed';
+  const allDone = st === 'rendered' || percent >= 100;
+  const anyRunningShort = isRunning || stClass === 'in_progress';
+  
+  let etaText = '';
+  if (stopped) {
+    etaText = '<b style="color:var(--amber)">Stopped</b>';
+  } else if (failed) {
+    etaText = '<b style="color:var(--red)">Failed</b>';
+  } else if (allDone) {
+    etaText = '<b>Completed</b>';
+  } else if (isRenderInProgress) {
+    if (renderEta) {
+      etaText = `Rendering: ETA ${renderEta}`;
+      if (renderFps > 0) {
+        etaText += ` (${renderFps.toFixed(1)} fps)`;
+      }
+    } else {
+      etaText = 'Rendering…';
+    }
+  } else if (isAudioInProgress) {
+    etaText = `Audio TTS & Mix: ${Math.round(renderProgressPct)}%${audioStageText ? ' (' + audioStageText + ')' : ''}`;
+  } else if (anyRunningShort) {
+    let activeStageLabel = 'Running…';
+    const activeStage = stagesList.find(s => s.status === 'in_progress');
+    if (activeStage) {
+      activeStageLabel = activeStage.label || activeStage.name;
+    } else {
+      const activeInfer = stages.find(s => s.cls === 'active');
+      if (activeInfer) activeStageLabel = activeInfer.label;
+    }
+    etaText = `${activeStageLabel}…`;
+  } else {
+    etaText = 'Ready to start';
+  }
+  
+  const barClass = failed ? 'failed' : allDone ? 'completed' : '';
+  const openClass = isOpen ? ' open' : '';
+  
+  return `<div class="render-card ${stClass}${openClass}" id="rc-${escapeHtml(d.short_id)}">
+    <div class="render-card-head" onclick="toggleRenderCard('${escapeHtml(d.short_id)}')">
+      <div class="rc-num">${idx + 1}</div>
+      <div class="rc-label">
+        <div class="name">
+          ${escapeHtml(d.short_id)} ${d.idea_id ? '— ' + escapeHtml(d.idea_id) : ''}
+          ${d.title ? ` <span style="font-weight: normal; color: var(--muted-2); font-size: 13px; margin-left: 8px;">— ${escapeHtml(d.title)}</span>` : ''}
+        </div>
+        <div class="code">${escapeHtml(d.format || '')} · ${escapeHtml(d.qa_verdict || '-')}</div>
+      </div>
+      <!-- Progress % and ETA like the long video -->
+      <div class="rc-progress" style="text-align: right; margin-right: 14px; min-width: 100px;">
+        <div class="sum-pct" style="font-size: 20px; font-weight: 800; line-height: 1;">${Math.round(percent)}<span class="pct-unit" style="font-size: 11px;">%</span></div>
+        <div class="sum-eta" style="margin-top: 4px; font-size: 11px;">${etaText}</div>
+      </div>
+      <span class="pill ${stClass}">${escapeHtml(st)}</span>
+    </div>
+    <!-- Progress bar below header -->
+    <div class="sum-bar ${barClass}" style="margin: 0 14px 10px 54px; height: 5px;"><div style="width: ${percent}%;"></div></div>
+    
+    <div class="render-card-body">
+      <div class="render-stage-labels">
+        ${stages.map(s => `<div class="render-stage-label ${s.cls}">${s.label}</div>`).join('')}
+      </div>
+      <div class="render-stages">
+        ${stages.map(s => `<div class="render-stage ${s.cls}" title="${s.label}"></div>`).join('')}
+      </div>
+      
+      <div style="font-size:12px; font-weight:750; color:var(--muted); margin: 18px 0 8px; text-transform: uppercase; letter-spacing: 0.05em;">Pipeline Stages</div>
+      ${renderShortStepsTimeline(jobId, d)}
+      
+      ${d.status === 'rendered' ? (() => {
+        const shortVideoUrl = d.video_path ? ('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(d.video_path)) : '';
+        const shortSeo = shortsSeoData[d.short_id] || {};
+        const shortTitle = shortSeo.title || d.short_id;
+        const shortDesc = shortSeo.description || '';
+        const shortPinned = shortSeo.pinned_comment || shortSeo.suggested_pinned_comments || '';
+        const shortTagsList = shortSeo.hashtags || shortSeo.tags || [];
+        const shortTagsHtml = shortTagsList.map(tag => `<span class="tag-chip">${escapeHtml(tag)}</span>`).join('');
+        const shortLang = shortSeo.language || 'es-ES';
+        const shortAiDisclosure = shortSeo.ai_disclosure !== undefined ? shortSeo.ai_disclosure : true;
+        return `
+        <div style="margin-top: 18px; display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 20px; align-items: start;">
+          <!-- Left column: Video & Cover/Download -->
+          <div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+              <div>
+                ${d.video_path ? `<video src="${shortVideoUrl}" controls style="width: 100%; border-radius: 8px; background: #000; aspect-ratio: 9/16; object-fit: contain; box-shadow: 0 4px 12px rgba(0,0,0,0.1);"></video>` : '<div style="font-size:12px;color:var(--muted)">No video</div>'}
+                ${d.video_path ? `
+                  <a href="${shortVideoUrl}" download class="download-link" style="display: flex; justify-content: center; background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 6px; padding: 6px; text-decoration: none; font-size: 11px; color: #374151; font-weight: 600; margin-top: 8px; transition: all 0.2s; text-align: center;">
+                    ⬇ Video
+                  </a>
+                ` : ''}
+              </div>
+              <div>
+                ${d.cover_path ? `<img src="/jobs/${encodeURIComponent(jobId)}/artifact?path=${encodeURIComponent(d.cover_path)}" alt="Cover" style="width: 100%; border-radius: 8px; aspect-ratio: 9/16; object-fit: cover; box-shadow: 0 4px 12px rgba(0,0,0,0.1); border: 1px solid #e5e7eb;">` : '<div style="font-size:12px;color:var(--muted);text-align:center;padding-top:40px;">No cover</div>'}
+                ${d.cover_path ? `
+                  <a href="/jobs/${encodeURIComponent(jobId)}/artifact?path=${encodeURIComponent(d.cover_path)}" download class="download-link" style="display: flex; justify-content: center; background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 6px; padding: 6px; text-decoration: none; font-size: 11px; color: #374151; font-weight: 600; margin-top: 8px; transition: all 0.2s; text-align: center;">
+                    ⬇ Cover
+                  </a>
+                ` : ''}
+              </div>
+            </div>
+          </div>
+          <!-- Right column: SEO copy rows -->
+          <div style="display: flex; flex-direction: column; gap: 10px;">
+            <div class="copy-row" style="margin-bottom: 0;">
+              <div class="crh">
+                <div class="cr-label">Title <span class="count">${shortTitle.length} chars</span></div>
+                <button class="copy-btn" onclick="copyText(this, document.getElementById('seo-title-${d.short_id}').innerText)">copy</button>
+              </div>
+              <div class="copy-content" id="seo-title-${d.short_id}" style="font-weight: 700; font-size: 13px;">${escapeHtml(shortTitle)}</div>
+            </div>
+            
+            <div class="copy-row" style="margin-bottom: 0;">
+              <div class="crh">
+                <div class="cr-label">Description <span class="count">${shortDesc.length} chars</span></div>
+                <button class="copy-btn" onclick="copyText(this, document.getElementById('seo-desc-${d.short_id}').innerText)">copy</button>
+              </div>
+              <div class="copy-content scroll" id="seo-desc-${d.short_id}" style="max-height: 120px; overflow: auto;">${escapeHtml(shortDesc || '(missing)')}</div>
+            </div>
+            
+            <div class="copy-row" style="margin-bottom: 0;">
+              <div class="crh">
+                <div class="cr-label">Suggested Pinned Comment</div>
+                <button class="copy-btn" onclick="copyText(this, document.getElementById('pinned-${d.short_id}').innerText)">copy</button>
+              </div>
+              <div class="copy-content scroll" id="pinned-${d.short_id}" style="max-height: 100px; overflow: auto;">${escapeHtml(shortPinned || '(missing)')}</div>
+            </div>
+            
+            <div class="copy-row" style="margin-bottom: 0;">
+              <div class="crh">
+                <div class="cr-label">Tags <span class="count">${shortTagsList.length}</span></div>
+                <button class="copy-btn" data-clip="${escapeHtml(shortTagsList.join(', '))}" onclick="copyText(this, this.dataset.clip)">copy</button>
+              </div>
+              <div class="tag-chips">${shortTagsHtml || '<span class="tag-chip">(missing)</span>'}</div>
+            </div>
+            
+            <div class="copy-row" style="margin-bottom: 0;">
+              <div class="copy-content" style="padding: 8px 10px;">Language: ${escapeHtml(shortLang)} · AI disclosure: ${shortAiDisclosure ? 'yes' : 'no'}</div>
+            </div>
+          </div>
+        </div>
+        `;
+      })() : ''}
+      <div class="render-meta-grid" style="margin-top: 14px; border-top: 1px dashed var(--line); padding-top: 10px;">
+        <div><span class="rm-label">Status:</span> <span class="rm-value">${escapeHtml(st)}</span></div>
+        <div><span class="rm-label">QA:</span> <span class="rm-value">${escapeHtml(d.qa_verdict || '-')}</span></div>
+        <div><span class="rm-label">Scenes:</span> <span class="rm-value">${(d.source_scene_ids || []).length}</span></div>
+        <div><span class="rm-label">Format:</span> <span class="rm-value">${escapeHtml(d.format || '-')}</span></div>
+      </div>
+      
+      <div class="rc-actions" style="margin-top: 14px; display: flex; gap: 8px; border-top: 1px solid var(--border); padding-top: 12px; justify-content: flex-end;">
+        <button class="action-btn warn" onclick="spStopShort('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', this)" ${isRunning ? '' : 'disabled'}>Stop</button>
+        <button class="action-btn primary" onclick="spResumeShort('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', '${escapeHtml(st)}', this)" ${isStoppedOrFailed ? '' : 'disabled'}>Resume</button>
+        <button class="action-btn danger" onclick="spDeleteShort('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', this)" ${isRunning ? 'disabled' : ''}>Delete</button>
+      </div>
+    </div>
+  </div>`;
+}
+
 async function loadShortsRendersTab(jobId) {
   const container = document.getElementById('shorts-tab-renders');
   if (!container) return;
@@ -4108,6 +4188,7 @@ async function loadShortsRendersTab(jobId) {
     const r = await fetch('/shorts-studio/jobs/' + encodeURIComponent(jobId) + '/drafts');
     if (!r.ok) {
       container.innerHTML = '<div class="ideas-empty">No rendered shorts yet.</div>';
+      delete LAST_RENDERS_JSON_BY_JOB[jobId];
       return;
     }
     const data = await r.json();
@@ -4115,6 +4196,7 @@ async function loadShortsRendersTab(jobId) {
     window.SHORTS_DRAFTS_CACHE = drafts;
     if (!drafts.length) {
       container.innerHTML = '<div class="ideas-empty">No rendered shorts yet. Select an idea and click "Render Short".</div>';
+      delete LAST_RENDERS_JSON_BY_JOB[jobId];
       return;
     }
 
@@ -4137,7 +4219,13 @@ async function loadShortsRendersTab(jobId) {
         }
       }));
     }
-    
+
+    const stateKey = JSON.stringify({ drafts, seo: shortsSeoData, progress: SHORTS_RENDER_PROGRESS });
+    if (stateKey === LAST_RENDERS_JSON_BY_JOB[jobId]) {
+      return;
+    }
+    LAST_RENDERS_JSON_BY_JOB[jobId] = stateKey;
+
     // Check if any draft has active rendering to start duration ticker
     const anyRunning = drafts.some(d => {
       const activeStages = d.stages || [];
@@ -4179,233 +4267,48 @@ async function loadShortsRendersTab(jobId) {
       }
     });
     
-    container.innerHTML = `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">${drafts.length} short(s)</div>` +
-      drafts.map((d, idx) => {
-        const st = d.status || 'pending';
-        const isRunning = st === 'generating' || st === 'rendering' || st === 'in_progress';
-        const stClass = st === 'rendered' ? 'rendered' : st === 'failed' ? 'failed' : isRunning ? 'in_progress' : '';
-        const isStoppedOrFailed = st === 'failed' || st === 'needs_review' || st === 'ready_for_render';
+    // Keep manual expanded cards open:
+    const openShortIds = new Set();
+    container.querySelectorAll('.render-card.open').forEach(el => {
+      const shortId = el.id.replace('rc-', '');
+      openShortIds.add(shortId);
+    });
+
+    const existingCards = container.querySelectorAll('.render-card');
+    const existingIds = [...existingCards].map(el => el.id.replace('rc-', ''));
+    const newIds = drafts.map(d => d.short_id);
+    const listsMatch = existingIds.length === newIds.length && existingIds.every((id, idx) => id === newIds[idx]);
+
+    if (!listsMatch) {
+      container.innerHTML = `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">${drafts.length} short(s)</div>` +
+        drafts.map((d, idx) => renderSingleCardHtml(jobId, d, idx, shortsSeoData, openShortIds.has(d.short_id) || drafts.length === 1)).join('');
+    } else {
+      window.LAST_DRAFT_STATE_BY_ID = window.LAST_DRAFT_STATE_BY_ID || {};
+      drafts.forEach((d, idx) => {
+        const dStateKey = JSON.stringify({
+          status: d.status,
+          qa_verdict: d.qa_verdict,
+          stages: d.stages,
+          stop_requested: d.stop_requested,
+          progress: SHORTS_RENDER_PROGRESS[d.short_id],
+          seo: shortsSeoData[d.short_id]
+        });
         
-        // Calculate stages
-        const stagesList = d.stages || [];
-        let stages;
-        if (stagesList.length > 0) {
-          stages = stagesList.map(s => {
-            let cls = '';
-            if (s.status === 'completed') cls = 'done';
-            else if (s.status === 'in_progress') cls = 'active';
-            else if (s.status === 'failed') cls = 'fail';
-            
-            let label = s.label || s.name;
-            if (label === 'Short Script') label = 'Script';
-            else if (label === 'Short Scenes') label = 'Scenes';
-            else if (label === 'Short SEO') label = 'SEO';
-            else if (label === 'Audio TTS & Mix') label = 'Audio';
-            else if (label === 'Video & Cover Render') label = 'Render';
-            
-            return { label: label, cls: cls };
-          });
-        } else {
-          stages = inferRenderStages(d);
-        }
-        
-        let doneCount = 0;
-        let totalCount = 0;
-        let isRenderInProgress = false;
-        let isAudioInProgress = false;
-        
-        if (stagesList.length > 0) {
-          totalCount = stagesList.length;
-          doneCount = stagesList.filter(s => s.status === 'completed').length;
-          isRenderInProgress = stagesList.some(s => s.name === 'render' && s.status === 'in_progress');
-          isAudioInProgress = stagesList.some(s => s.name === 'audio' && s.status === 'in_progress');
-        } else {
-          totalCount = stages.length;
-          doneCount = stages.filter(s => s.cls === 'done').length;
-          isRenderInProgress = stClass === 'in_progress' && stages[stages.length - 1].cls === 'active';
-          isAudioInProgress = stClass === 'in_progress' && stages[stages.length - 2].cls === 'active';
-        }
-        
-        // Retrieve render/audio progress from global cache if in progress
-        let renderProgressPct = 0;
-        let renderEta = '';
-        let renderFps = 0;
-        let audioStageText = '';
-        if ((isRenderInProgress || isAudioInProgress) && SHORTS_RENDER_PROGRESS[d.short_id]) {
-          const rp = SHORTS_RENDER_PROGRESS[d.short_id];
-          renderProgressPct = rp.percent || 0;
-          renderEta = rp.eta || '';
-          renderFps = rp.fps || 0;
-          audioStageText = rp.stage || '';
-        }
-        
-        // Calculate blended percentage
-        let percent = totalCount > 0 ? (doneCount / totalCount) * 100 : 0;
-        if ((isRenderInProgress || isAudioInProgress) && renderProgressPct > 0) {
-          percent = ((doneCount + (renderProgressPct / 100)) / totalCount) * 100;
-        }
-        percent = Math.min(100, Math.max(0, percent));
-        
-        // Calculate status / ETA text
-        const stopped = d.stop_requested || false;
-        const failed = stClass === 'failed';
-        const allDone = st === 'rendered' || percent >= 100;
-        const anyRunningShort = isRunning || stClass === 'in_progress';
-        
-        let etaText = '';
-        if (stopped) {
-          etaText = '<b style="color:var(--amber)">Stopped</b>';
-        } else if (failed) {
-          etaText = '<b style="color:var(--red)">Failed</b>';
-        } else if (allDone) {
-          etaText = '<b>Completed</b>';
-        } else if (isRenderInProgress) {
-          if (renderEta) {
-            etaText = `Rendering: ETA ${renderEta}`;
-            if (renderFps > 0) {
-              etaText += ` (${renderFps.toFixed(1)} fps)`;
-            }
-          } else {
-            etaText = 'Rendering…';
+        const prevKey = window.LAST_DRAFT_STATE_BY_ID[d.short_id];
+        if (prevKey !== dStateKey) {
+          window.LAST_DRAFT_STATE_BY_ID[d.short_id] = dStateKey;
+          const cardEl = document.getElementById('rc-' + d.short_id);
+          if (cardEl) {
+            const isOpen = cardEl.classList.contains('open');
+            const newHtml = renderSingleCardHtml(jobId, d, idx, shortsSeoData, isOpen);
+            const temp = document.createElement('div');
+            temp.innerHTML = newHtml;
+            const newCardEl = temp.firstElementChild;
+            cardEl.replaceWith(newCardEl);
           }
-        } else if (isAudioInProgress) {
-          etaText = `Audio TTS & Mix: ${Math.round(renderProgressPct)}%${audioStageText ? ' (' + audioStageText + ')' : ''}`;
-        } else if (anyRunningShort) {
-          let activeStageLabel = 'Running…';
-          const activeStage = stagesList.find(s => s.status === 'in_progress');
-          if (activeStage) {
-            activeStageLabel = activeStage.label || activeStage.name;
-          } else {
-            const activeInfer = stages.find(s => s.cls === 'active');
-            if (activeInfer) activeStageLabel = activeInfer.label;
-          }
-          etaText = `${activeStageLabel}…`;
-        } else {
-          etaText = 'Ready to start';
         }
-        
-        const barClass = failed ? 'failed' : allDone ? 'completed' : '';
-        const isOpen = (stClass === 'in_progress' || drafts.length === 1) ? ' open' : '';
-        return `<div class="render-card ${stClass}${isOpen}" id="rc-${escapeHtml(d.short_id)}">
-          <div class="render-card-head" onclick="toggleRenderCard('${escapeHtml(d.short_id)}')">
-            <div class="rc-num">${idx + 1}</div>
-            <div class="rc-label">
-              <div class="name">
-                ${escapeHtml(d.short_id)} ${d.idea_id ? '— ' + escapeHtml(d.idea_id) : ''}
-                ${d.title ? ` <span style="font-weight: normal; color: var(--muted-2); font-size: 13px; margin-left: 8px;">— ${escapeHtml(d.title)}</span>` : ''}
-              </div>
-              <div class="code">${escapeHtml(d.format || '')} · ${escapeHtml(d.qa_verdict || '-')}</div>
-            </div>
-            <!-- Progress % and ETA like the long video -->
-            <div class="rc-progress" style="text-align: right; margin-right: 14px; min-width: 100px;">
-              <div class="sum-pct" style="font-size: 20px; font-weight: 800; line-height: 1;">${Math.round(percent)}<span class="pct-unit" style="font-size: 11px;">%</span></div>
-              <div class="sum-eta" style="margin-top: 4px; font-size: 11px;">${etaText}</div>
-            </div>
-            <span class="pill ${stClass}">${escapeHtml(st)}</span>
-          </div>
-          <!-- Progress bar below header -->
-          <div class="sum-bar ${barClass}" style="margin: 0 14px 10px 54px; height: 5px;"><div style="width: ${percent}%;"></div></div>
-          
-          <div class="render-card-body">
-            <div class="render-stage-labels">
-              ${stages.map(s => `<div class="render-stage-label ${s.cls}">${s.label}</div>`).join('')}
-            </div>
-            <div class="render-stages">
-              ${stages.map(s => `<div class="render-stage ${s.cls}" title="${s.label}"></div>`).join('')}
-            </div>
-            
-            <div style="font-size:12px; font-weight:750; color:var(--muted); margin: 18px 0 8px; text-transform: uppercase; letter-spacing: 0.05em;">Pipeline Stages</div>
-            ${renderShortStepsTimeline(jobId, d)}
-            
-            ${d.status === 'rendered' ? (() => {
-              const shortVideoUrl = d.video_path ? ('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(d.video_path)) : '';
-              const shortSeo = shortsSeoData[d.short_id] || {};
-              const shortTitle = shortSeo.title || d.short_id;
-              const shortDesc = shortSeo.description || '';
-              const shortPinned = shortSeo.pinned_comment || shortSeo.suggested_pinned_comments || '';
-              const shortTagsList = shortSeo.hashtags || shortSeo.tags || [];
-              const shortTagsHtml = shortTagsList.map(tag => `<span class="tag-chip">${escapeHtml(tag)}</span>`).join('');
-              const shortLang = shortSeo.language || 'es-ES';
-              const shortAiDisclosure = shortSeo.ai_disclosure !== undefined ? shortSeo.ai_disclosure : true;
-              return `
-              <div style="margin-top: 18px; display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 20px; align-items: start;">
-                <!-- Left column: Video & Cover/Download -->
-                <div>
-                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-                    <div>
-                      ${d.video_path ? `<video src="${shortVideoUrl}" controls style="width: 100%; border-radius: 8px; background: #000; aspect-ratio: 9/16; object-fit: contain; box-shadow: 0 4px 12px rgba(0,0,0,0.1);"></video>` : '<div style="font-size:12px;color:var(--muted)">No video</div>'}
-                      ${d.video_path ? `
-                        <a href="${shortVideoUrl}" download class="download-link" style="display: flex; justify-content: center; background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 6px; padding: 6px; text-decoration: none; font-size: 11px; color: #374151; font-weight: 600; margin-top: 8px; transition: all 0.2s; text-align: center;">
-                          ⬇ Video
-                        </a>
-                      ` : ''}
-                    </div>
-                    <div>
-                      ${d.cover_path ? `<img src="/jobs/${encodeURIComponent(jobId)}/artifact?path=${encodeURIComponent(d.cover_path)}" alt="Cover" style="width: 100%; border-radius: 8px; aspect-ratio: 9/16; object-fit: cover; box-shadow: 0 4px 12px rgba(0,0,0,0.1); border: 1px solid #e5e7eb;">` : '<div style="font-size:12px;color:var(--muted);text-align:center;padding-top:40px;">No cover</div>'}
-                      ${d.cover_path ? `
-                        <a href="/jobs/${encodeURIComponent(jobId)}/artifact?path=${encodeURIComponent(d.cover_path)}" download class="download-link" style="display: flex; justify-content: center; background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 6px; padding: 6px; text-decoration: none; font-size: 11px; color: #374151; font-weight: 600; margin-top: 8px; transition: all 0.2s; text-align: center;">
-                          ⬇ Cover
-                        </a>
-                      ` : ''}
-                    </div>
-                  </div>
-                </div>
-                <!-- Right column: SEO copy rows -->
-                <div style="display: flex; flex-direction: column; gap: 10px;">
-                  <div class="copy-row" style="margin-bottom: 0;">
-                    <div class="crh">
-                      <div class="cr-label">Title <span class="count">${shortTitle.length} chars</span></div>
-                      <button class="copy-btn" onclick="copyText(this, document.getElementById('seo-title-${d.short_id}').innerText)">copy</button>
-                    </div>
-                    <div class="copy-content" id="seo-title-${d.short_id}" style="font-weight: 700; font-size: 13px;">${escapeHtml(shortTitle)}</div>
-                  </div>
-                  
-                  <div class="copy-row" style="margin-bottom: 0;">
-                    <div class="crh">
-                      <div class="cr-label">Description <span class="count">${shortDesc.length} chars</span></div>
-                      <button class="copy-btn" onclick="copyText(this, document.getElementById('seo-desc-${d.short_id}').innerText)">copy</button>
-                    </div>
-                    <div class="copy-content scroll" id="seo-desc-${d.short_id}" style="max-height: 120px; overflow: auto;">${escapeHtml(shortDesc || '(missing)')}</div>
-                  </div>
-                  
-                  <div class="copy-row" style="margin-bottom: 0;">
-                    <div class="crh">
-                      <div class="cr-label">Suggested Pinned Comment</div>
-                      <button class="copy-btn" onclick="copyText(this, document.getElementById('pinned-${d.short_id}').innerText)">copy</button>
-                    </div>
-                    <div class="copy-content scroll" id="pinned-${d.short_id}" style="max-height: 100px; overflow: auto;">${escapeHtml(shortPinned || '(missing)')}</div>
-                  </div>
-                  
-                  <div class="copy-row" style="margin-bottom: 0;">
-                    <div class="crh">
-                      <div class="cr-label">Tags <span class="count">${shortTagsList.length}</span></div>
-                      <button class="copy-btn" data-clip="${escapeHtml(shortTagsList.join(', '))}" onclick="copyText(this, this.dataset.clip)">copy</button>
-                    </div>
-                    <div class="tag-chips">${shortTagsHtml || '<span class="tag-chip">(missing)</span>'}</div>
-                  </div>
-                  
-                  <div class="copy-row" style="margin-bottom: 0;">
-                    <div class="copy-content" style="padding: 8px 10px;">Language: ${escapeHtml(shortLang)} · AI disclosure: ${shortAiDisclosure ? 'yes' : 'no'}</div>
-                  </div>
-                </div>
-              </div>
-              `;
-            })() : ''}
-            <div class="render-meta-grid" style="margin-top: 14px; border-top: 1px dashed var(--line); padding-top: 10px;">
-              <div><span class="rm-label">Status:</span> <span class="rm-value">${escapeHtml(st)}</span></div>
-              <div><span class="rm-label">QA:</span> <span class="rm-value">${escapeHtml(d.qa_verdict || '-')}</span></div>
-              <div><span class="rm-label">Scenes:</span> <span class="rm-value">${(d.source_scene_ids || []).length}</span></div>
-              <div><span class="rm-label">Format:</span> <span class="rm-value">${escapeHtml(d.format || '-')}</span></div>
-            </div>
-            
-            <div class="rc-actions" style="margin-top: 14px; display: flex; gap: 8px; border-top: 1px solid var(--border); padding-top: 12px; justify-content: flex-end;">
-              <button class="action-btn warn" onclick="spStopShort('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', this)" ${isRunning ? '' : 'disabled'}>Stop</button>
-              <button class="action-btn primary" onclick="spResumeShort('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', '${escapeHtml(st)}', this)" ${isStoppedOrFailed ? '' : 'disabled'}>Resume</button>
-              <button class="action-btn danger" onclick="spDeleteShort('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', this)" ${isRunning ? 'disabled' : ''}>Delete</button>
-            </div>
-          </div>
-        </div>`;
-      }).join('');
+      });
+    }
   } catch (e) {
     container.innerHTML = '<div class="ideas-empty">Error loading renders.</div>';
   }
@@ -4416,12 +4319,14 @@ function inferRenderStages(draft) {
   const qa = draft.qa_verdict || '';
   const hasVideo = !!draft.video_path;
   const hasAudio = st === 'rendered' || hasVideo || (draft.stages && draft.stages.some(s => s.name === 'audio' && s.status === 'completed'));
+  const hasThumb = st === 'rendered' || hasVideo || (draft.stages && draft.stages.some(s => s.name === 'thumbnail' && (s.status === 'completed' || s.status === 'skipped')));
   const stages = [
     { label: 'Script', cls: 'done' },
     { label: 'QA Script', cls: qa ? 'done' : '' },
     { label: 'Scenes', cls: 'done' },
     { label: 'QA Scenes', cls: qa ? 'done' : '' },
     { label: 'SEO', cls: 'done' },
+    { label: 'Thumbnail', cls: hasThumb ? 'done' : '' },
     { label: 'Audio', cls: hasAudio ? 'done' : '' },
     { label: 'Render', cls: hasVideo ? 'done' : '' },
   ];

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from video_agent.orchestrator.stages import _VARIANT_STRATEGY, _build_thumbnail_prompt
+from video_agent.orchestrator.stages import _VARIANT_STRATEGY, _legacy_build_thumbnail_prompt as _build_thumbnail_prompt
 
 
 def _prompt(variant_index: int = 1, text: str = "DUERME MEJOR") -> str:

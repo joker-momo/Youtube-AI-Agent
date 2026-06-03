@@ -220,21 +220,41 @@ async def clear_browser_data_via_ui(context: "BrowserContext") -> None:
     """Clear history and cache directly using Chrome's settings UI."""
     try:
         page = await context.new_page()
-        # Navigate to settings page with wait_until="commit" to avoid hanging on chrome:// urls
-        await page.goto("chrome://settings/clearBrowserData", wait_until="commit")
+        # Navigate to settings page. Try brave:// settings first, fall back to chrome://
+        try:
+            await page.goto("brave://settings/clearBrowserData", wait_until="commit")
+        except Exception:
+            await page.goto("chrome://settings/clearBrowserData", wait_until="commit")
         
-        # Wait for the settings page elements to be loaded in the shadow DOM
+        # Wait for the settings page elements to be loaded in the shadow DOM (Chrome or Brave)
         found = False
         for _ in range(10):
             has_elements = await page.evaluate("""() => {
                 try {
                     const settingsUi = document.querySelector('settings-ui');
+                    if (!settingsUi) return false;
                     const settingsMain = settingsUi.shadowRoot.querySelector('settings-main');
-                    const basicPage = settingsMain.shadowRoot.querySelector('settings-basic-page');
-                    const privacyPage = basicPage.shadowRoot.querySelector('settings-section > settings-privacy-page');
-                    const dialog = privacyPage.shadowRoot.querySelector('settings-clear-browsing-data-dialog');
-                    const clearBtn = dialog.shadowRoot.querySelector('#clearButton');
-                    return !!clearBtn;
+                    if (!settingsMain) return false;
+                    
+                    // Check Chrome path
+                    try {
+                        const basicPage = settingsMain.shadowRoot.querySelector('settings-basic-page');
+                        const privacyPage = basicPage.shadowRoot.querySelector('settings-section > settings-privacy-page');
+                        const dialog = privacyPage.shadowRoot.querySelector('settings-clear-browsing-data-dialog');
+                        const clearBtn = dialog.shadowRoot.querySelector('#clearButton');
+                        if (clearBtn) return true;
+                    } catch (e) {}
+                    
+                    // Check Brave path
+                    try {
+                        const privacyIndex = settingsMain.shadowRoot.querySelector('settings-privacy-page-index');
+                        const privacyPage = privacyIndex.shadowRoot.querySelector('settings-privacy-page');
+                        const dialog = privacyPage.shadowRoot.querySelector('settings-clear-browsing-data-dialog-v2');
+                        const deleteBtn = dialog.shadowRoot.querySelector('#deleteButton');
+                        if (deleteBtn) return true;
+                    } catch (e) {}
+                    
+                    return false;
                 } catch (e) {
                     return false;
                 }
@@ -245,53 +265,94 @@ async def clear_browser_data_via_ui(context: "BrowserContext") -> None:
             await asyncio.sleep(1)
             
         if not found:
-            print("[browser] Warning: clearButton not found inside settings shadow DOM", flush=True)
+            print("[browser] Warning: clear data button not found inside settings shadow DOM", flush=True)
             await page.close()
             return
             
-        # Configure checkboxes and click the clear button
+        # Configure checkboxes (only for Chrome) and click the clear/delete button
         result = await page.evaluate("""() => {
             try {
                 const settingsUi = document.querySelector('settings-ui');
+                if (!settingsUi) return { success: false, error: "settings-ui not found" };
                 const settingsMain = settingsUi.shadowRoot.querySelector('settings-main');
-                const basicPage = settingsMain.shadowRoot.querySelector('settings-basic-page');
-                const privacyPage = basicPage.shadowRoot.querySelector('settings-section > settings-privacy-page');
-                const dialog = privacyPage.shadowRoot.querySelector('settings-clear-browsing-data-dialog');
-                const shadow = dialog.shadowRoot;
+                if (!settingsMain) return { success: false, error: "settings-main not found" };
                 
-                // Configure basic checkboxes: clear history and cache, but KEEP cookies unchecked
-                const browsingCheckboxBasic = shadow.querySelector('#browsingCheckboxBasic');
-                const cookiesCheckboxBasic = shadow.querySelector('#cookiesCheckboxBasic');
-                const cacheCheckboxBasic = shadow.querySelector('#cacheCheckboxBasic');
+                // 1. Try Chrome path
+                try {
+                    const basicPage = settingsMain.shadowRoot.querySelector('settings-basic-page');
+                    const privacyPage = basicPage.shadowRoot.querySelector('settings-section > settings-privacy-page');
+                    const dialog = privacyPage.shadowRoot.querySelector('settings-clear-browsing-data-dialog');
+                    
+                    if (dialog && dialog.shadowRoot) {
+                        const shadow = dialog.shadowRoot;
+                        const browsingCheckboxBasic = shadow.querySelector('#browsingCheckboxBasic');
+                        const cookiesCheckboxBasic = shadow.querySelector('#cookiesCheckboxBasic');
+                        const cacheCheckboxBasic = shadow.querySelector('#cacheCheckboxBasic');
+                        
+                        if (browsingCheckboxBasic) browsingCheckboxBasic.checked = true;
+                        if (cookiesCheckboxBasic) cookiesCheckboxBasic.checked = false; // preserve logins!
+                        if (cacheCheckboxBasic) cacheCheckboxBasic.checked = true;
+                        
+                        const browsingCheckbox = shadow.querySelector('#browsingCheckbox');
+                        const cookiesCheckbox = shadow.querySelector('#cookiesCheckbox');
+                        const cacheCheckbox = shadow.querySelector('#cacheCheckbox');
+                        
+                        if (browsingCheckbox) browsingCheckbox.checked = true;
+                        if (cookiesCheckbox) cookiesCheckbox.checked = false; // preserve logins!
+                        if (cacheCheckbox) cacheCheckbox.checked = true;
+                        
+                        const clearBtn = shadow.querySelector('#clearButton');
+                        if (clearBtn) {
+                            clearBtn.click();
+                            return { success: true, type: "chrome" };
+                        }
+                    }
+                } catch (e) {}
                 
-                if (browsingCheckboxBasic) browsingCheckboxBasic.checked = true;
-                if (cookiesCheckboxBasic) cookiesCheckboxBasic.checked = false; // preserve logins!
-                if (cacheCheckboxBasic) cacheCheckboxBasic.checked = true;
-                
-                // Configure advanced checkboxes if present (to be safe)
-                const browsingCheckbox = shadow.querySelector('#browsingCheckbox');
-                const cookiesCheckbox = shadow.querySelector('#cookiesCheckbox');
-                const cacheCheckbox = shadow.querySelector('#cacheCheckbox');
-                
-                if (browsingCheckbox) browsingCheckbox.checked = true;
-                if (cookiesCheckbox) cookiesCheckbox.checked = false; // preserve logins!
-                if (cacheCheckbox) cacheCheckbox.checked = true;
-                
-                // Click the clear button
-                const clearBtn = shadow.querySelector('#clearButton');
-                if (clearBtn) {
-                    clearBtn.click();
-                    return { success: true };
+                // 2. Try Brave path (configure checkboxes and click delete)
+                try {
+                    const privacyIndex = settingsMain.shadowRoot.querySelector('settings-privacy-page-index');
+                    const privacyPage = privacyIndex.shadowRoot.querySelector('settings-privacy-page');
+                    const dialog = privacyPage.shadowRoot.querySelector('settings-clear-browsing-data-dialog-v2');
+                    
+                    if (dialog && dialog.shadowRoot) {
+                        const shadow = dialog.shadowRoot;
+                        
+                        // Configure checkboxes to only delete history/cache and keep cookies
+                        const checkboxes = shadow.querySelectorAll('settings-checkbox');
+                        checkboxes.forEach((cb, index) => {
+                            const titleEl = cb.querySelector('.checkbox-title');
+                            const text = titleEl ? titleEl.innerText.trim().toLowerCase() : "";
+                            
+                            const isCookies = text.includes("cookie") || text.includes("đăng nhập") || text.includes("trang web") || (index === 1);
+                            const isHistoryOrCache = text.includes("history") || text.includes("lịch sử") || text.includes("cache") || text.includes("đệm") || text.includes("duyệt web") || (index === 0 || index === 2);
+                            
+                            if (isCookies) {
+                                cb.checked = false;
+                            } else if (isHistoryOrCache) {
+                                cb.checked = true;
+                            }
+                        });
+                        
+                        const deleteBtn = shadow.querySelector('#deleteButton');
+                        if (deleteBtn) {
+                            deleteBtn.click();
+                            return { success: true, type: "brave" };
+                        }
+                    }
+                } catch (e) {
+                    return { success: false, error: "Brave path error: " + String(e) };
                 }
-                return { success: false, error: "clearButton not found in click step" };
+                
+                return { success: false, error: "Neither Chrome nor Brave settings dialog was found or clicked" };
             } catch (e) {
                 return { success: false, error: String(e) };
             }
         }""")
         
         if result.get("success"):
-            print("[browser] Successfully cleared browsing history and cache via Chrome settings UI.", flush=True)
-            # Give Chrome 3 seconds to execute the deletion
+            print(f"[browser] Successfully cleared browsing history and cache via settings UI ({result.get('type')}).", flush=True)
+            # Give browser 3 seconds to execute the deletion
             await asyncio.sleep(3)
         else:
             print(f"[browser] Warning: Failed to trigger UI clear: {result.get('error')}", flush=True)

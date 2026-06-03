@@ -121,6 +121,16 @@ def render_short_video(short_dir: Path, channel_config: dict) -> Path:  # pragma
     from video_agent.pipeline import OperatorRenderOptions, render_operator_job
 
     materialize_short_job_aliases(short_dir, channel_config)
+
+    # Bypass Remotion thumbnail generation:
+    # If the ChatGPT-generated thumbnail.jpg exists, copy it to outputs/thumbnail_1.jpg
+    # so that render_with_remotion will see it and completely skip Remotion still rendering.
+    thumb = short_dir / paths.SHORT_THUMBNAIL_FILE
+    if thumb.exists():
+        outputs_dir = short_dir / "outputs"
+        outputs_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(thumb, outputs_dir / "thumbnail_1.jpg")
+
     render_operator_job(
         OperatorRenderOptions(
             channel_path=_channel_path(channel_config),
@@ -135,6 +145,10 @@ def render_short_video(short_dir: Path, channel_config: dict) -> Path:  # pragma
     out = short_dir / paths.SHORT_VIDEO_FILE
     if produced.exists() and produced != out:
         shutil.copyfile(produced, out)
+    try:
+        _save_friendly_copy(short_dir, out, ext=".mp4")
+    except Exception:
+        pass
     return out
 
 
@@ -151,56 +165,74 @@ def build_remotion_short_cover_command(
     ]
 
 
-def render_short_cover(short_dir: Path, channel_config: dict) -> Path:  # pragma: no cover - needs Remotion/ffmpeg
-    """Spec v6 §12 — primary cover renderer is the Remotion ShortCover comp.
-
-    ffmpeg frame extraction is the emergency fallback only, used when the
-    Remotion still render fails or when the worker container has no Node.
+def render_short_cover(short_dir: Path, channel_config: dict) -> Path:
+    """ChatGPT-generated thumbnail is the primary cover (from Stage 5b).
+    
+    Bypasses Remotion completely. If the ChatGPT thumbnail is missing,
+    falls back to extracting a frame from the rendered video using ffmpeg.
     """
-    from video_agent.contracts import repo_root
-
     out = short_dir / paths.SHORT_COVER_FILE
+    thumb = short_dir / paths.SHORT_THUMBNAIL_FILE
 
-    # Optional shortcut: reuse outputs/thumbnail.jpg ONLY if it's already
-    # portrait (rendered by the patched pipeline with composition=ShortCover).
-    # The long-form pipeline used to dump a 1280x720 ThumbnailStandard here,
-    # which would otherwise be blindly copied as the Short cover and break
-    # the 9:16 aspect.
-    produced_thumb = short_dir / "outputs" / "thumbnail.jpg"
-    if produced_thumb.exists() and _is_portrait_image(produced_thumb):
-        shutil.copyfile(produced_thumb, out)
-        return out
-
-    materialize_short_job_aliases(short_dir, channel_config)
-
-    remotion_root = repo_root() / "remotion"
-    entry = remotion_root / "src/index.ts"
-    # Short jobs persist render props as ``short_render_props.json``; the
-    # long-form ``render_props.json`` path is only created by
-    # ``materialize_short_job_aliases`` when present. Prefer the Short
-    # native props file so we can render the ShortCover composition even
-    # when the long-form alias has not been materialized yet.
-    render_props = short_dir / paths.SHORT_RENDER_PROPS_FILE
-    if not render_props.exists():
-        render_props = short_dir / "render_props.json"
-
-    # Primary: Remotion ShortCover still.
-    if render_props.exists():
+    if thumb.exists():
+        # Copy ChatGPT generated thumbnail as the cover image
+        shutil.copyfile(thumb, out)
         try:
-            cmd = build_remotion_short_cover_command(entry, render_props, out)
-            subprocess.run(cmd, check=True, capture_output=True, cwd=str(remotion_root))
-            if out.exists():
-                return out
+            _save_friendly_copy(short_dir, out, ext=".jpg")
         except Exception:
-            pass  # fall through to fallback
+            pass
+        return out
 
     # Fallback: ffmpeg frame extraction from the rendered video.
     cover_cfg = (channel_config.get("shorts") or {}).get("cover") or {}
     frame_sec = float(cover_cfg.get("cover_frame_sec", 0.3))
     video = short_dir / paths.SHORT_VIDEO_FILE
     if video.exists():
-        subprocess.run(
-            build_cover_extract_command(video, out, frame_sec),
-            check=True, capture_output=True,
-        )
+        try:
+            subprocess.run(
+                build_cover_extract_command(video, out, frame_sec),
+                check=True, capture_output=True,
+            )
+            _save_friendly_copy(short_dir, out, ext=".jpg")
+        except Exception:
+            pass
     return out
+
+
+def _save_friendly_copy(short_dir: Path, source_file: Path, ext: str) -> None:
+    import json
+    import re
+    import unicodedata
+    import datetime
+    import shutil
+    
+    idea_path = short_dir / "short_idea.json"
+    if not idea_path.exists():
+        return
+        
+    try:
+        idea_data = json.loads(idea_path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+        
+    idea_id = idea_data.get("idea_id") or "idea"
+    title = idea_data.get("title") or ""
+    if not title:
+        title = idea_data.get("hook_text") or "short"
+        
+    # Normalize/slugify title
+    title_slug = unicodedata.normalize('NFKD', title).encode('ascii', 'ignore').decode('utf-8')
+    title_slug = title_slug.lower()
+    title_slug = re.sub(r'[^a-z0-9\s-]', '', title_slug)
+    title_slug = re.sub(r'[\s-]+', '-', title_slug).strip('-')
+    
+    # Use localized timestamp
+    now = datetime.datetime.now()
+    timestamp = now.strftime("%Y%m%d_%H%M%S")
+    
+    short_id = short_dir.name
+    friendly_name = f"{short_id}_{idea_id}_{timestamp}_{title_slug}{ext}"
+    
+    dest = short_dir.parent / friendly_name
+    if source_file.exists():
+        shutil.copy2(source_file, dest)

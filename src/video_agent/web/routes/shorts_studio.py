@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from video_agent.orchestrator.queue import JobQueue
@@ -23,6 +24,14 @@ from video_agent.web.run_all_pipeline import is_run_locked
 router = APIRouter()
 
 _REQUIRED_LONG_ARTIFACTS = ("video.mp4", "script.json", "scenes.json", "seo.json")
+_SHORTS_STUDIO_HTML_PATH = Path(__file__).resolve().parents[1] / "shorts_studio.html"
+
+
+@router.get("/shorts-studio", response_class=HTMLResponse)
+def get_shorts_studio_page() -> HTMLResponse:
+    if not _SHORTS_STUDIO_HTML_PATH.exists():
+        raise HTTPException(status_code=404, detail="shorts_studio.html not found")
+    return HTMLResponse(content=_SHORTS_STUDIO_HTML_PATH.read_text(encoding="utf-8"))
 
 
 class PrepareDraftsRequest(BaseModel):
@@ -245,11 +254,13 @@ def get_shorts_studio_drafts(job_id: str, jobs_root: Path = Depends(get_jobs_roo
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
 
     manifest = _read_json(shorts_paths.manifest_path(job_dir))
+    manifest_short_ids: set[str] = set()
     drafts: list[dict[str, Any]] = []
     for entry in manifest.get("shorts") or []:
         short_id = entry.get("short_id")
         if not short_id:
             continue
+        manifest_short_ids.add(short_id)
         short_dir = shorts_paths.short_dir(job_dir, short_id)
         status_doc = _read_json(shorts_paths.short_status_path(job_dir, short_id))
         qa_doc = _read_json(short_dir / shorts_paths.SHORT_QA_FILE)
@@ -267,7 +278,77 @@ def get_shorts_studio_drafts(job_id: str, jobs_root: Path = Depends(get_jobs_roo
             or source_map.get("scene_ids")
             or []
         )
+        # Surface the full SEO doc so the dashboard can render the
+        # "post-render SEO" insight panel on the Short card without an
+        # extra artifact fetch round-trip.
+        if seo_doc:
+            merged["seo"] = {
+                "short_id": seo_doc.get("short_id") or short_id,
+                "title": seo_doc.get("title", ""),
+                "description": seo_doc.get("description", ""),
+                "hashtags": seo_doc.get("hashtags") or [],
+                "pinned_comment": seo_doc.get("pinned_comment", ""),
+                "long_video_url": seo_doc.get("long_video_url", ""),
+                "language": seo_doc.get("language", "es-ES"),
+                "ai_disclosure": bool(seo_doc.get("ai_disclosure", True)),
+            }
         drafts.append(merged)
+
+    # ── Discover in-flight shorts on disk that aren't in the manifest yet ──
+    # This handles the case where the worker is actively building a short
+    # but hasn't written the final manifest entry (e.g. old worker code or
+    # the preliminary manifest write hasn't happened yet).
+    shorts_root = shorts_paths.shorts_dir(job_dir)
+    if shorts_root.exists():
+        import re
+        _SHORT_DIR_RE = re.compile(r"^short-\d+$")
+        for child in sorted(shorts_root.iterdir()):
+            if not child.is_dir() or not _SHORT_DIR_RE.match(child.name):
+                continue
+            short_id = child.name
+            if short_id in manifest_short_ids:
+                continue
+            status_path = shorts_paths.short_status_path(job_dir, short_id)
+            status_doc = _read_json(status_path)
+            if not status_doc:
+                continue
+            # Build a draft entry from the on-disk status file
+            short_dir = shorts_paths.short_dir(job_dir, short_id)
+            qa_doc = _read_json(short_dir / shorts_paths.SHORT_QA_FILE)
+            source_map = _read_json(short_dir / shorts_paths.SHORT_SOURCE_MAP_FILE)
+            seo_doc = _read_json(short_dir / shorts_paths.SHORT_SEO_FILE)
+            merged = {
+                "short_id": short_id,
+                "idea_id": status_doc.get("idea_id"),
+                "idea_type": "synthesis",
+                "format": status_doc.get("format"),
+                "status": status_doc.get("status", "in_progress"),
+                "rendered": bool(status_doc.get("rendered")),
+                "qa_verdict": status_doc.get("qa_verdict") or (qa_doc.get("qa_verdict") if qa_doc else None),
+                "source_scene_ids": (
+                    status_doc.get("source_scene_ids")
+                    or (source_map.get("source_scene_ids") if source_map else None)
+                    or (source_map.get("scene_ids") if source_map else None)
+                    or []
+                ),
+                "video_path": status_doc.get("video_path"),
+                "cover_path": status_doc.get("cover_path"),
+            }
+            merged.update(status_doc)
+            merged["title"] = (seo_doc.get("title") if seo_doc else None) or status_doc.get("hook") or ""
+            if seo_doc:
+                merged["seo"] = {
+                    "short_id": seo_doc.get("short_id") or short_id,
+                    "title": seo_doc.get("title", ""),
+                    "description": seo_doc.get("description", ""),
+                    "hashtags": seo_doc.get("hashtags") or [],
+                    "pinned_comment": seo_doc.get("pinned_comment", ""),
+                    "long_video_url": seo_doc.get("long_video_url", ""),
+                    "language": seo_doc.get("language", "es-ES"),
+                    "ai_disclosure": bool(seo_doc.get("ai_disclosure", True)),
+                }
+            drafts.append(merged)
+
     return {"job_id": job_id, "drafts": drafts}
 
 
@@ -319,6 +400,47 @@ def get_shorts_studio_ideas(job_id: str, jobs_root: Path = Depends(get_jobs_root
     ideas = read_short_ideas(job_dir)
     if not ideas:
         raise HTTPException(status_code=404, detail={"error": "ideas_not_found"})
+
+    # Map idea_id to active short details to mark rendered ideas
+    idea_to_short = {}
+    manifest = _read_json(shorts_paths.manifest_path(job_dir))
+    for entry in manifest.get("shorts") or []:
+        idea_id = entry.get("idea_id")
+        if idea_id:
+            short_id = entry.get("short_id")
+            status_doc = _read_json(shorts_paths.short_status_path(job_dir, short_id))
+            idea_to_short[idea_id] = {
+                "short_id": short_id,
+                "status": status_doc.get("status") or entry.get("status") or "pending",
+                "rendered": bool(status_doc.get("rendered") or entry.get("rendered")),
+            }
+
+    shorts_root = shorts_paths.shorts_dir(job_dir)
+    if shorts_root.exists():
+        import re
+        _SHORT_DIR_RE = re.compile(r"^short-\d+$")
+        for child in sorted(shorts_root.iterdir()):
+            if not child.is_dir() or not _SHORT_DIR_RE.match(child.name):
+                continue
+            short_id = child.name
+            status_doc = _read_json(shorts_paths.short_status_path(job_dir, short_id))
+            idea_id = status_doc.get("idea_id")
+            if not idea_id:
+                idea_doc = _read_json(child / shorts_paths.SHORT_IDEA_FILE)
+                idea_id = idea_doc.get("idea_id")
+            if idea_id and idea_id not in idea_to_short:
+                idea_to_short[idea_id] = {
+                    "short_id": short_id,
+                    "status": status_doc.get("status") or "in_progress",
+                    "rendered": bool(status_doc.get("rendered")),
+                }
+
+    # Decorate ideas with active short info
+    for idea in ideas.get("ideas") or []:
+        idea_id = idea.get("idea_id")
+        if idea_id in idea_to_short:
+            idea["associated_short"] = idea_to_short[idea_id]
+
     return ideas
 
 
@@ -349,9 +471,34 @@ def get_short_detail(job_id: str, short_id: str, jobs_root: Path = Depends(get_j
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     short_dir_path = shorts_paths.short_dir(job_dir, short_id)
-    if not short_dir_path.exists():
+    
+    # Check if short is in manifest or folder exists
+    manifest_path = shorts_paths.manifest_path(job_dir)
+    has_short = short_dir_path.exists()
+    manifest_entry = {}
+    if not has_short and manifest_path.exists():
+        try:
+            manifest_doc = json.loads(manifest_path.read_text(encoding="utf-8"))
+            shorts_list = manifest_doc.get("shorts") or []
+            for s in shorts_list:
+                if s.get("short_id") == short_id:
+                    has_short = True
+                    manifest_entry = s
+                    break
+        except Exception:
+            pass
+            
+    if not has_short:
         raise HTTPException(status_code=404, detail=f"Unknown short: {short_id}")
+        
     status_doc = _read_json(shorts_paths.short_status_path(job_dir, short_id))
+    # Fallback to manifest status/hook if status_doc is empty
+    if not status_doc:
+        status_doc = {
+            "short_id": short_id,
+            "status": manifest_entry.get("status") or "pending",
+            "hook": manifest_entry.get("hook") or "",
+        }
     qa_doc = _read_json(short_dir_path / shorts_paths.SHORT_QA_FILE)
     qa_script_doc = _read_json(short_dir_path / shorts_paths.SHORT_SCRIPT_QA_FILE)
     qa_scenes_doc = _read_json(short_dir_path / shorts_paths.SHORT_SCENES_QA_FILE)
@@ -394,7 +541,20 @@ def delete_short(job_id: str, short_id: str, jobs_root: Path = Depends(get_jobs_
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     short_dir_path = shorts_paths.short_dir(job_dir, short_id)
-    if not short_dir_path.exists():
+    
+    # Check if short is in manifest or folder exists
+    manifest_path = shorts_paths.manifest_path(job_dir)
+    has_short = short_dir_path.exists()
+    if not has_short and manifest_path.exists():
+        try:
+            manifest_doc = json.loads(manifest_path.read_text(encoding="utf-8"))
+            shorts_list = manifest_doc.get("shorts") or []
+            if any(s.get("short_id") == short_id for s in shorts_list):
+                has_short = True
+        except Exception:
+            pass
+            
+    if not has_short:
         raise HTTPException(status_code=404, detail=f"Unknown short: {short_id}")
 
     # Check if currently active/running
@@ -495,6 +655,40 @@ def post_shorts_studio_render_ideas(
     invalid = [idea_id for idea_id in idea_ids if idea_id not in valid_ids]
     if invalid:
         raise HTTPException(status_code=400, detail={"error": "invalid_idea_ids", "idea_ids": invalid})
+
+    # Prevent rendering if already rendered (unless force=True, but we want to honor user request)
+    if not req.force:
+        manifest = _read_json(shorts_paths.manifest_path(job_dir))
+        active_idea_ids = set()
+        for entry in manifest.get("shorts") or []:
+            if entry.get("idea_id"):
+                active_idea_ids.add(entry.get("idea_id"))
+
+        shorts_root = shorts_paths.shorts_dir(job_dir)
+        if shorts_root.exists():
+            import re
+            _SHORT_DIR_RE = re.compile(r"^short-\d+$")
+            for child in sorted(shorts_root.iterdir()):
+                if not child.is_dir() or not _SHORT_DIR_RE.match(child.name):
+                    continue
+                status_doc = _read_json(shorts_paths.short_status_path(job_dir, child.name))
+                idea_id = status_doc.get("idea_id")
+                if not idea_id:
+                    idea_doc = _read_json(child / shorts_paths.SHORT_IDEA_FILE)
+                    idea_id = idea_doc.get("idea_id")
+                if idea_id:
+                    active_idea_ids.add(idea_id)
+
+        already_rendered = [idea_id for idea_id in idea_ids if idea_id in active_idea_ids]
+        if already_rendered:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "already_rendered",
+                    "message": f"Idea(s) {', '.join(already_rendered)} have already been rendered. Delete their existing shorts/jobs first.",
+                }
+            )
+
     _clear_stop_requested(job_dir)
     queue = JobQueue(jobs_root / "queue.db")
     queue.enqueue(

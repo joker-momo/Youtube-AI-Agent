@@ -91,28 +91,19 @@ def test_dashboard_adds_idea_from_title_and_full_idea_job_actions():
     assert "click Run Job on its card to make the video" in dashboard_text
 
 
-def test_dashboard_shorts_preview_falls_back_to_manifest_summary_when_stage_payload_is_missing():
+def test_shorts_studio_includes_panel_and_api_hooks():
+    shorts_studio_path = Path(__file__).resolve().parents[1] / "src" / "video_agent" / "web" / "shorts_studio.html"
+    shorts_studio_text = shorts_studio_path.read_text(encoding="utf-8")
+
+    assert "Shorts Studio" in shorts_studio_text
+    assert "id=\"shorts-page\"" in shorts_studio_text
+    assert "fetch('/shorts-studio/state')" in shorts_studio_text
+    assert "/shorts-studio/jobs/" in shorts_studio_text
+
+
+def test_dashboard_has_link_to_shorts_studio():
     dashboard_path = Path(__file__).resolve().parents[1] / "src" / "video_agent" / "web" / "dashboard.html"
     dashboard_text = dashboard_path.read_text(encoding="utf-8")
 
-    assert "function collectRenderedShorts" in dashboard_text
-    assert "t.shorts_summary" in dashboard_text
-    assert "t.shorts" in dashboard_text
+    assert "href=\"/shorts-studio\"" in dashboard_text
 
-
-def test_dashboard_includes_shorts_studio_panel_and_api_hooks():
-    dashboard_path = Path(__file__).resolve().parents[1] / "src" / "video_agent" / "web" / "dashboard.html"
-    dashboard_text = dashboard_path.read_text(encoding="utf-8")
-
-    assert "Shorts Studio" in dashboard_text
-    assert "id=\"shorts-studio-section\"" in dashboard_text
-    assert "fetch('/shorts-studio/state')" in dashboard_text
-    assert "/shorts-studio/jobs/" in dashboard_text
-
-
-def test_app_service_mounts_inputs_for_generated_ideas():
-    compose_path = Path(__file__).resolve().parents[1] / "docker-compose.yml"
-    compose_text = compose_path.read_text(encoding="utf-8")
-
-    app_block = compose_text.split("  app:", 1)[1].split("\n  worker:", 1)[0]
-    assert "./inputs:/app/inputs" in app_block

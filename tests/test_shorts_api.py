@@ -317,7 +317,7 @@ def test_short_render_job_updates_draft_ready_manifest_and_run(tmp_path: Path, m
     job = _make_job(tmp_path, with_shorts=False)
     sdir = job / "shorts" / "short-01"
     sdir.mkdir(parents=True, exist_ok=True)
-    for name in ("short_script.json", "short_scenes.json", "short_seo.json", "short_qa.json", "short_render_props.json"):
+    for name in ("short_script.json", "short_scenes.json", "short_seo.json", "short_script_qa.json", "short_scenes_qa.json", "short_render_props.json"):
         (sdir / name).write_text("{}", encoding="utf-8")
     (job / "shorts" / "shorts_manifest.json").write_text(
         json.dumps(

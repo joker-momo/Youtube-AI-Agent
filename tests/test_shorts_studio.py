@@ -321,3 +321,65 @@ def test_shorts_studio_render_selected_enqueues_new_command(client: TestClient, 
     row = JobQueue(tmp_path / "queue.db").get_job("job-1")
     assert row is not None
     assert row["command"] == "shorts_render_selected_ideas"
+
+
+def test_shorts_studio_get_ideas_returns_associated_short(client: TestClient, tmp_path: Path):
+    job_dir = _write_job(tmp_path, "job-1")
+    shorts_dir = job_dir / "shorts"
+    shorts_dir.mkdir(parents=True, exist_ok=True)
+    (shorts_dir / "short_ideas.json").write_text(
+        json.dumps({"generation_id": "ideas-1", "ideas": [{"idea_id": "idea-01"}]}),
+        encoding="utf-8",
+    )
+    (shorts_dir / "shorts_manifest.json").write_text(
+        json.dumps({
+            "shorts": [
+                {
+                    "short_id": "short-01",
+                    "idea_id": "idea-01",
+                    "status": "completed",
+                    "rendered": True,
+                }
+            ]
+        }),
+        encoding="utf-8",
+    )
+
+    response = client.get("/shorts-studio/jobs/job-1/ideas")
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["ideas"][0]["associated_short"]["short_id"] == "short-01"
+    assert data["ideas"][0]["associated_short"]["status"] == "completed"
+    assert data["ideas"][0]["associated_short"]["rendered"] is True
+
+
+def test_shorts_studio_render_selected_rejects_already_rendered(client: TestClient, tmp_path: Path):
+    job_dir = _write_job(tmp_path, "job-1")
+    shorts_dir = job_dir / "shorts"
+    shorts_dir.mkdir(parents=True, exist_ok=True)
+    (shorts_dir / "short_ideas.json").write_text(
+        json.dumps({"generation_id": "ideas-1", "ideas": [{"idea_id": "idea-01"}]}),
+        encoding="utf-8",
+    )
+    (shorts_dir / "shorts_manifest.json").write_text(
+        json.dumps({
+            "shorts": [
+                {
+                    "short_id": "short-01",
+                    "idea_id": "idea-01",
+                    "status": "completed",
+                    "rendered": True,
+                }
+            ]
+        }),
+        encoding="utf-8",
+    )
+
+    # Render without force should be rejected with 400
+    response = client.post("/shorts-studio/jobs/job-1/ideas/render", json={"idea_ids": ["idea-01"], "force": False})
+    assert response.status_code == 400
+    assert "already_rendered" in response.json()["detail"]["error"]
+
+    # Render with force=True should still be accepted
+    response = client.post("/shorts-studio/jobs/job-1/ideas/render", json={"idea_ids": ["idea-01"], "force": True})
+    assert response.status_code == 202

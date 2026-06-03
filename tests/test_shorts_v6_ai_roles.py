@@ -289,14 +289,14 @@ def test_legacy_short_layouts_map_to_short_layouts_with_warning():
 
 
 # ---------------------------------------------------------------------------
-# §12 ShortCover primary via Remotion, ffmpeg fallback only
+# §12 Cover primary = ChatGPT-generated thumbnail; ffmpeg frame fallback only
 # ---------------------------------------------------------------------------
 
-def test_short_cover_uses_remotion_composition_not_ffmpeg_primary():
-    """renderer.render_short_cover must call the Remotion ShortCover comp
-    first; ffmpeg frame extract is fallback only."""
+def test_short_cover_uses_chatgpt_thumbnail_primary_ffmpeg_fallback():
+    """renderer.render_short_cover must reuse the ChatGPT-generated
+    thumbnail.jpg as primary cover; ffmpeg frame extract is fallback only."""
     import inspect
-    from video_agent.shorts import renderer
+    from video_agent.shorts import renderer, paths
     src = inspect.getsource(renderer.render_short_cover)
-    assert "ShortCover" in src, "primary cover renderer must reference ShortCover composition"
-    assert "fallback" in src.lower() or "except" in src, "ffmpeg path must be fallback only"
+    assert "SHORT_THUMBNAIL_FILE" in src, "primary cover must reuse ChatGPT thumbnail.jpg"
+    assert "fallback" in src.lower() or "ffmpeg" in src.lower(), "ffmpeg path must be fallback only"

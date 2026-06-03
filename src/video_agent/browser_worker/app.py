@@ -14,7 +14,15 @@ from pydantic import BaseModel
 
 def _assets_root() -> Path:
     """Root directory the worker is allowed to write generated assets into."""
-    return Path(os.environ.get("WORKER_ASSETS_ROOT", "/app/jobs")).resolve()
+    val = os.environ.get("WORKER_ASSETS_ROOT")
+    if val:
+        return Path(val).resolve()
+    # Try finding repo jobs directory relative to this file
+    repo_jobs = Path(__file__).resolve().parents[3] / "jobs"
+    if repo_jobs.exists():
+        return repo_jobs.resolve()
+    return Path("/app/jobs").resolve()
+
 
 
 def _safe_asset_path(out_path: str) -> Path:
@@ -625,6 +633,7 @@ class ImagePromptRequest(BaseModel):
     project_name: str
     out_path: str  # path relative to WORKER_ASSETS_ROOT, or absolute path inside it
     response_timeout_ms: int = 240_000
+    aspect_ratio: str = "16:9"
 
 
 @app.post("/chatgpt/image")
@@ -669,6 +678,7 @@ async def chatgpt_image(payload: ImagePromptRequest) -> dict:
                     project_name=payload.project_name,
                     out_path=safe_out,
                     response_timeout_ms=payload.response_timeout_ms,
+                    aspect_ratio=payload.aspect_ratio,
                 )
                 return result
             except LoginRequiredError as exc:
@@ -694,6 +704,7 @@ async def chatgpt_image(payload: ImagePromptRequest) -> dict:
                         project_name=payload.project_name,
                         out_path=safe_out,
                         response_timeout_ms=payload.response_timeout_ms,
+                        aspect_ratio=payload.aspect_ratio,
                     )
                     return result
                 except Exception as retry_exc:
@@ -730,6 +741,7 @@ class BatchImagePromptRequest(BaseModel):
     project_name: str
     out_paths: list[str]
     response_timeout_ms: int = 240_000
+    aspect_ratio: str = "16:9"
 
 
 @app.post("/chatgpt/image/batch")
@@ -769,6 +781,7 @@ async def chatgpt_image_batch(payload: BatchImagePromptRequest) -> dict:
                     project_name=payload.project_name,
                     out_paths=safe_out_paths,
                     response_timeout_ms=payload.response_timeout_ms,
+                    aspect_ratio=payload.aspect_ratio,
                 )
                 return {"ok": True, "results": results}
             except LoginRequiredError as exc:
@@ -794,6 +807,7 @@ async def chatgpt_image_batch(payload: BatchImagePromptRequest) -> dict:
                         project_name=payload.project_name,
                         out_paths=safe_out_paths,
                         response_timeout_ms=payload.response_timeout_ms,
+                        aspect_ratio=payload.aspect_ratio,
                     )
                     return {"ok": True, "results": results}
                 except Exception as retry_exc:

@@ -182,9 +182,9 @@ _GOOD_SCRIPT = {
 _GOOD_SCENES = {
     "channel_id": "vida-plena-45", "short_id": "short-01", "total_duration_sec": 32,
     "scenes": [
-        {"id": "s1", "duration_sec": 2.5, "on_screen_text": "Mente encendida", "caption": "c", "layout": "short_hook", "visual_prompt": "v vertical"},
-        {"id": "s2", "duration_sec": 4.0, "on_screen_text": "Hora de cierre", "caption": "c", "layout": "short_tip", "visual_prompt": "v vertical"},
-        {"id": "s3", "duration_sec": 4.0, "on_screen_text": "Apaga pantalla", "caption": "c", "layout": "short_cta", "visual_prompt": "v vertical"},
+        {"id": "s1", "duration_sec": 6.0, "on_screen_text": "Mente encendida", "caption": "c", "layout": "short_hook", "visual_prompt": "v vertical"},
+        {"id": "s2", "duration_sec": 20.0, "on_screen_text": "Hora de cierre", "caption": "c", "layout": "short_tip", "visual_prompt": "v vertical"},
+        {"id": "s3", "duration_sec": 6.0, "on_screen_text": "Apaga pantalla", "caption": "c", "layout": "short_cta", "visual_prompt": "v vertical"},
     ],
     "qa": {"verdict": "PENDING_SHORTS_QA"},
 }
@@ -227,7 +227,7 @@ def test_build_short_pass_renders_and_writes_artifacts(tmp_path: Path):
     assert res["status"] == "rendered"
     assert res["qa_verdict"] == "PASS"
     sd = paths.short_dir(job, "short-01")
-    for f in ("short_script.json", "short_scenes.json", "short_source_map.json", "short_seo.json", "short_qa.json", "short.mp4", "short_cover.jpg"):
+    for f in ("short_script.json", "short_scenes.json", "short_source_map.json", "short_seo.json", "short_script_qa.json", "short_scenes_qa.json", "short.mp4", "short_cover.jpg"):
         assert (sd / f).exists(), f
     assert calls == ["tts", "mix", "render", "cover"]
     assert res["music_track"] == "shorts_sleep_stress"
@@ -306,7 +306,12 @@ def test_build_short_passes_source_artifacts_to_script_builder(tmp_path: Path, m
     monkeypatch.setattr(short_builder.short_script_builder, "build_short_script", fake_build_short_script)
     monkeypatch.setattr(
         short_builder.qa,
-        "run_short_qa",
+        "run_short_script_qa",
+        lambda *args, **kwargs: {"verdict": "PASS", "issues": [], "required_changes": [], "warnings": []},
+    )
+    monkeypatch.setattr(
+        short_builder.qa,
+        "run_short_scenes_qa",
         lambda *args, **kwargs: {"verdict": "PASS", "issues": [], "required_changes": [], "warnings": []},
     )
 

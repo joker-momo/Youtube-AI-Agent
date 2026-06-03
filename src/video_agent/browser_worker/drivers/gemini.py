@@ -77,9 +77,9 @@ async def _try_click(page: "Page", selectors: tuple[str, ...], timeout_ms: int =
     for selector in selectors:
         locator = page.locator(selector).first
         try:
-            if await locator.is_visible(timeout=timeout_ms):
-                await human_click(locator, click_timeout_ms=3_000)
-                return True
+            await locator.wait_for(state="visible", timeout=timeout_ms)
+            await human_click(locator, click_timeout_ms=3_000)
+            return True
         except Exception:
             continue
     return False

@@ -122,6 +122,22 @@ def _render_gl(render_props_path: Path) -> str | None:
     return value
 
 
+def _get_thumbnail_composition(props: dict) -> str:
+    render_cfg = props.get("render", {}) or {}
+    comp = render_cfg.get("thumbnail_composition") or render_cfg.get("cover_composition")
+    if comp:
+        return comp
+    resolution = render_cfg.get("resolution") or ""
+    if "x" in str(resolution):
+        try:
+            w, h = str(resolution).lower().split("x", 1)
+            if int(h) > int(w):
+                return "ShortCover"
+        except ValueError:
+            pass
+    return "ThumbnailStandard"
+
+
 def build_remotion_commands(render_props_path: Path, video_path: Path, thumbnail_path: Path) -> RemotionCommands:
     remotion_root = repo_root() / "remotion"
     entry = remotion_root / "src/index.ts"
@@ -133,9 +149,7 @@ def build_remotion_commands(render_props_path: Path, video_path: Path, thumbnail
     base = ["npx", "--prefix", str(remotion_root), "remotion"]
     props = read_json(render_props_path)
     composition = props.get("render", {}).get("composition", "ChannelVideoStandard")
-    thumbnail_composition = props.get("render", {}).get(
-        "thumbnail_composition", "ThumbnailStandard"
-    )
+    thumbnail_composition = _get_thumbnail_composition(props)
     video_cmd = [
         *base,
         "render",
@@ -189,9 +203,7 @@ def build_thumbnail_commands(render_props_path: Path, out_dir: Path) -> list[lis
     props_base = read_json(render_props_path)
     props_base["_render_props_path"] = str(render_props_path)
     gl_backend = _render_gl(render_props_path)
-    thumbnail_composition = props_base.get("render", {}).get(
-        "thumbnail_composition", "ThumbnailStandard"
-    )
+    thumbnail_composition = _get_thumbnail_composition(props_base)
 
     variants = (props_base.get("seo") or {}).get("title_variants") or []
     if not variants:

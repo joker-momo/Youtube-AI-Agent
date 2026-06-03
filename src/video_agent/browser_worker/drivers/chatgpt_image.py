@@ -32,10 +32,19 @@ IMAGE_GEN_INSTRUCTION = (
     "no borders, no padding, no commentary, no text overlays, no watermark."
 )
 
+IMAGE_GEN_INSTRUCTION_PORTRAIT = (
+    "Generate one photorealistic image at exactly 1080x1920 pixels "
+    "(Full HD, 9:16 portrait orientation). Fill the entire 1080x1920 frame — "
+    "no borders, no padding, no commentary, no text overlays, no watermark."
+)
 
-def build_image_gen_prompt(prompt: str) -> str:
-    """Prepend the 1920x1080 image-gen instruction to a user prompt, with automated contradiction checks."""
-    instruction = IMAGE_GEN_INSTRUCTION
+
+def build_image_gen_prompt(prompt: str, aspect_ratio: str = "16:9") -> str:
+    """Prepend the image-gen instruction to a user prompt, with automated contradiction checks."""
+    if aspect_ratio == "9:16":
+        instruction = IMAGE_GEN_INSTRUCTION_PORTRAIT
+    else:
+        instruction = IMAGE_GEN_INSTRUCTION
     
     prompt_lower = prompt.lower()
     
@@ -58,7 +67,7 @@ def build_image_gen_prompt(prompt: str) -> str:
     
     # Print the full prompt for transparency and debugging
     print(f"\n==================================================")
-    print(f"[ChatGPTImageDriver] FINAL FULL IMAGE GENERATION PROMPT:")
+    print(f"[ChatGPTImageDriver] FINAL FULL IMAGE GENERATION PROMPT ({aspect_ratio}):")
     print(f"--------------------------------------------------")
     print(full_prompt)
     print(f"==================================================\n")
@@ -116,6 +125,14 @@ ASPECT_RATIO_16_9_SELECTORS = (
     "button:has-text('Landscape')",
     "[role='menuitem']:has-text('Landscape')",
     "[role='option']:has-text('Landscape')",
+)
+ASPECT_RATIO_9_16_SELECTORS = (
+    "button:has-text('9:16')",
+    "[role='menuitem']:has-text('9:16')",
+    "[role='option']:has-text('9:16')",
+    "button:has-text('Portrait')",
+    "[role='menuitem']:has-text('Portrait')",
+    "[role='option']:has-text('Portrait')",
 )
 
 
@@ -395,8 +412,8 @@ class ChatGPTImageDriver:
                 continue
         return False
 
-    async def _select_create_image_mode_and_aspect_ratio(self) -> None:
-        """Select ChatGPT's image tool and 16:9 aspect ratio before prompting.
+    async def _select_create_image_mode_and_aspect_ratio(self, aspect_ratio: str = "16:9") -> None:
+        """Select ChatGPT's image tool and aspect ratio before prompting.
 
         ChatGPT's current UI no longer reliably infers image generation from
         text alone. If these controls move again, fail with a diagnostic
@@ -421,22 +438,33 @@ class ChatGPTImageDriver:
                 screenshot_path=shot,
             )
 
+        if aspect_ratio == "9:16":
+            ratio_selectors = ASPECT_RATIO_9_16_SELECTORS
+            exact_texts = ("9:16", "Portrait")
+            error_prefix = "chatgpt-image-no-9-16-aspect"
+            error_msg = "ChatGPT image UI changed: 9:16 aspect ratio control not found."
+        else:
+            ratio_selectors = ASPECT_RATIO_16_9_SELECTORS
+            exact_texts = ("16:9", "Landscape")
+            error_prefix = "chatgpt-image-no-16-9-aspect"
+            error_msg = "ChatGPT image UI changed: 16:9 aspect ratio control not found."
+
         clicked_aspect_ratio = await self._click_first_visible(
-            ASPECT_RATIO_16_9_SELECTORS
-        ) or await self._click_text_exact(("16:9", "Landscape"))
+            ratio_selectors
+        ) or await self._click_text_exact(exact_texts)
         if not clicked_aspect_ratio:
             opened_aspect_menu = await self._click_first_visible(ASPECT_RATIO_TRIGGER_SELECTORS)
             if opened_aspect_menu:
                 clicked_aspect_ratio = await self._click_first_visible(
-                    ASPECT_RATIO_16_9_SELECTORS, timeout_ms=3_000
+                    ratio_selectors, timeout_ms=3_000
                 ) or await self._click_text_exact(
-                    ("16:9", "Landscape"), timeout_ms=3_000
+                    exact_texts, timeout_ms=3_000
                 )
 
         if not clicked_aspect_ratio:
-            shot = await save_trace_screenshot(self.page, prefix="chatgpt-image-no-16-9-aspect")
+            shot = await save_trace_screenshot(self.page, prefix=error_prefix)
             raise BrowserDriverError(
-                "ChatGPT image UI changed: 16:9 aspect ratio control not found.",
+                error_msg,
                 screenshot_path=shot,
             )
 
@@ -526,6 +554,7 @@ class ChatGPTImageDriver:
         project_name: str,
         out_path: Path,
         response_timeout_ms: int = 240_000,
+        aspect_ratio: str = "16:9",
     ) -> dict:
         """End-to-end: create project, send prompt, save image to ``out_path``.
 
@@ -538,9 +567,12 @@ class ChatGPTImageDriver:
 
         try:
             await self._create_project(project_name)
-            await self._select_create_image_mode_and_aspect_ratio()
+            if aspect_ratio != "16:9":
+                await self._select_create_image_mode_and_aspect_ratio(aspect_ratio=aspect_ratio)
+            else:
+                await self._select_create_image_mode_and_aspect_ratio()
             composer = await self._focus_composer()
-            full_prompt = build_image_gen_prompt(prompt)
+            full_prompt = build_image_gen_prompt(prompt, aspect_ratio=aspect_ratio)
             await self._fill_composer_robust(composer, full_prompt)
             await human_pause(self.page, min_ms=500, max_ms=1200)
             await self._click_send()
@@ -577,6 +609,7 @@ class ChatGPTImageDriver:
         project_name: str,
         out_paths: list[Path],
         response_timeout_ms: int = 240_000,
+        aspect_ratio: str = "16:9",
     ) -> list[dict]:
         """Generate multiple photorealistic images sequentially in the same ChatGPT project chat session."""
         if not self._opened:
@@ -595,9 +628,12 @@ class ChatGPTImageDriver:
                 if not prompt.strip():
                     raise BrowserDriverError(f"Empty prompt at index {i}")
 
-                await self._select_create_image_mode_and_aspect_ratio()
+                if aspect_ratio != "16:9":
+                    await self._select_create_image_mode_and_aspect_ratio(aspect_ratio=aspect_ratio)
+                else:
+                    await self._select_create_image_mode_and_aspect_ratio()
                 composer = await self._focus_composer()
-                full_prompt = build_image_gen_prompt(prompt)
+                full_prompt = build_image_gen_prompt(prompt, aspect_ratio=aspect_ratio)
                 await self._fill_composer_robust(composer, full_prompt)
                 await human_pause(self.page, min_ms=500, max_ms=1200)
                 await self._click_send()

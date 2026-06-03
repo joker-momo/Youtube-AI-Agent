@@ -125,8 +125,22 @@ async def post_regenerate(
     cfg = _channel_config(job_dir)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
-    if not paths.short_dir(job_dir, short_id).exists():
+    
+    # Check if short is in manifest or folder exists
+    manifest_path = paths.manifest_path(job_dir)
+    has_short = paths.short_dir(job_dir, short_id).exists()
+    if not has_short and manifest_path.exists():
+        try:
+            manifest_doc = json.loads(manifest_path.read_text(encoding="utf-8"))
+            shorts_list = manifest_doc.get("shorts") or []
+            if any(s.get("short_id") == short_id for s in shorts_list):
+                has_short = True
+        except Exception:
+            pass
+            
+    if not has_short:
         raise HTTPException(status_code=404, detail=f"Unknown short: {short_id}")
+
     legacy_cleanup.archive_short_dir(job_dir, short_id)
     stop_file = job_dir / ".stop_requested"
     if stop_file.exists():
@@ -146,8 +160,22 @@ async def post_render(
     cfg = _channel_config(job_dir)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
-    if not paths.short_dir(job_dir, short_id).exists():
+    
+    # Check if short is in manifest or folder exists
+    manifest_path = paths.manifest_path(job_dir)
+    has_short = paths.short_dir(job_dir, short_id).exists()
+    if not has_short and manifest_path.exists():
+        try:
+            manifest_doc = json.loads(manifest_path.read_text(encoding="utf-8"))
+            shorts_list = manifest_doc.get("shorts") or []
+            if any(s.get("short_id") == short_id for s in shorts_list):
+                has_short = True
+        except Exception:
+            pass
+            
+    if not has_short:
         raise HTTPException(status_code=404, detail=f"Unknown short: {short_id}")
+
     stop_file = job_dir / ".stop_requested"
     if stop_file.exists():
         stop_file.unlink(missing_ok=True)

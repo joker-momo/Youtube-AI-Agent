@@ -133,6 +133,9 @@ def build_remotion_commands(render_props_path: Path, video_path: Path, thumbnail
     base = ["npx", "--prefix", str(remotion_root), "remotion"]
     props = read_json(render_props_path)
     composition = props.get("render", {}).get("composition", "ChannelVideoStandard")
+    thumbnail_composition = props.get("render", {}).get(
+        "thumbnail_composition", "ThumbnailStandard"
+    )
     video_cmd = [
         *base,
         "render",
@@ -158,7 +161,7 @@ def build_remotion_commands(render_props_path: Path, video_path: Path, thumbnail
         *base,
         "still",
         str(entry),
-        "ThumbnailStandard",
+        thumbnail_composition,
         str(thumbnail_path),
         "--props",
         input_props,
@@ -186,6 +189,9 @@ def build_thumbnail_commands(render_props_path: Path, out_dir: Path) -> list[lis
     props_base = read_json(render_props_path)
     props_base["_render_props_path"] = str(render_props_path)
     gl_backend = _render_gl(render_props_path)
+    thumbnail_composition = props_base.get("render", {}).get(
+        "thumbnail_composition", "ThumbnailStandard"
+    )
 
     variants = (props_base.get("seo") or {}).get("title_variants") or []
     if not variants:
@@ -204,7 +210,7 @@ def build_thumbnail_commands(render_props_path: Path, out_dir: Path) -> list[lis
         }
         out_path = out_dir / f"thumbnail_{i + 1}.jpg"
         cmd = [
-            *base, "still", str(entry), "ThumbnailStandard", str(out_path),
+            *base, "still", str(entry), thumbnail_composition, str(out_path),
             "--props", json.dumps(props, ensure_ascii=False),
             "--public-dir", str(public_dir),
             "--hardware-acceleration", "if-possible",
@@ -421,7 +427,7 @@ def render_with_remotion(
     notify_telegram: bool = True,
 ) -> None:
     job_dir = render_props_path.parent
-    if not (job_dir / "job.json").exists() and (job_dir.parent / "job.json").exists():
+    if job_dir.name == "json":
         job_dir = job_dir.parent
 
     commands = build_remotion_commands(render_props_path, video_path, thumbnail_path)

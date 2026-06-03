@@ -73,6 +73,31 @@ def materialize_short_job_aliases(short_dir: Path, channel_config: dict | None =
         })
 
 
+def _is_portrait_image(image_path: Path) -> bool:
+    """Best-effort aspect check using ffprobe. Returns True only when we can
+    confirm height > width. Errors → False so the caller falls back to a
+    fresh Remotion render instead of trusting a possibly wrong asset."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=width,height",
+                "-of", "csv=p=0",
+                str(image_path),
+            ],
+            check=True, capture_output=True, text=True,
+        )
+        parts = result.stdout.strip().split(",")
+        if len(parts) >= 2:
+            w = int(parts[0])
+            h = int(parts[1])
+            return h > w
+    except (subprocess.SubprocessError, ValueError):
+        pass
+    return False
+
+
 def build_cover_extract_command(video_path: Path, out_path: Path, frame_sec: float) -> list[str]:
     return [
         "ffmpeg",
@@ -104,7 +129,9 @@ def render_short_video(short_dir: Path, channel_config: dict) -> Path:  # pragma
             require_operator_qa=False,
         )
     )
-    produced = short_dir / "video.mp4"
+    produced = short_dir / "outputs" / "video.mp4"
+    if not produced.exists():
+        produced = short_dir / "video.mp4"
     out = short_dir / paths.SHORT_VIDEO_FILE
     if produced.exists() and produced != out:
         shutil.copyfile(produced, out)
@@ -133,11 +160,29 @@ def render_short_cover(short_dir: Path, channel_config: dict) -> Path:  # pragma
     from video_agent.contracts import repo_root
 
     out = short_dir / paths.SHORT_COVER_FILE
+
+    # Optional shortcut: reuse outputs/thumbnail.jpg ONLY if it's already
+    # portrait (rendered by the patched pipeline with composition=ShortCover).
+    # The long-form pipeline used to dump a 1280x720 ThumbnailStandard here,
+    # which would otherwise be blindly copied as the Short cover and break
+    # the 9:16 aspect.
+    produced_thumb = short_dir / "outputs" / "thumbnail.jpg"
+    if produced_thumb.exists() and _is_portrait_image(produced_thumb):
+        shutil.copyfile(produced_thumb, out)
+        return out
+
     materialize_short_job_aliases(short_dir, channel_config)
 
     remotion_root = repo_root() / "remotion"
     entry = remotion_root / "src/index.ts"
-    render_props = short_dir / "render_props.json"
+    # Short jobs persist render props as ``short_render_props.json``; the
+    # long-form ``render_props.json`` path is only created by
+    # ``materialize_short_job_aliases`` when present. Prefer the Short
+    # native props file so we can render the ShortCover composition even
+    # when the long-form alias has not been materialized yet.
+    render_props = short_dir / paths.SHORT_RENDER_PROPS_FILE
+    if not render_props.exists():
+        render_props = short_dir / "render_props.json"
 
     # Primary: Remotion ShortCover still.
     if render_props.exists():

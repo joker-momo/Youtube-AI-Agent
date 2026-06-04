@@ -818,6 +818,7 @@ def test_post_generate_ideas_attaches_rejected_keyword_scores(
         return ideas, keyword_result, "trend"
 
     monkeypatch.setattr(legacy_routes, "generate_ideas", fake_generate_ideas)
+    monkeypatch.setattr(legacy_routes, "load_published_videos", lambda *a, **k: [])
     fake = FakeBrowserClient(response=_make_raw(ideas))
     app.dependency_overrides[get_browser_client] = lambda: fake
     try:

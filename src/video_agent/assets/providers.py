@@ -310,29 +310,64 @@ class StockPhotoClient:
         api_key = os.environ.get("PIXABAY_API_KEY")
         if not api_key:
             raise RuntimeError("PIXABAY_API_KEY is required for provider=pixabay_video")
-        params = urlencode(
-            {
-                "key": api_key,
-                "q": keywordize_query(query),  # Pixabay rejects q>100 chars (HTTP 400)
-                "video_type": "film",
-                "safesearch": "true",
-                "per_page": max(3, int(filters.get("per_page", 10))),
-            }
-        )
-        return _read_json(f"https://pixabay.com/api/videos/?{params}")
+        page_size = max(3, int(filters.get("per_page", 10)))
+        
+        last_exception = None
+        for terms_count in (4, 3, 2, 1):
+            kw_query = keywordize_query(query, max_terms=terms_count)
+            params = urlencode(
+                {
+                    "key": api_key,
+                    "q": kw_query,
+                    "video_type": "film",
+                    "safesearch": "true",
+                    "per_page": page_size,
+                }
+            )
+            try:
+                response = _read_json(f"https://pixabay.com/api/videos/?{params}")
+                if response.get("hits"):
+                    return response
+            except Exception as e:
+                last_exception = e
+                if hasattr(e, "code") and e.code in (403, 429):
+                    break
+        
+        if last_exception:
+            raise last_exception
+        return response
 
     def _search_coverr_video(self, query: str, filters: dict[str, Any]) -> dict[str, Any]:
         api_key = os.environ.get("COVERR_API_KEY")
         if not api_key:
             raise RuntimeError("COVERR_API_KEY is required for provider=coverr_video")
-        params_dict = {
-            "query": keywordize_query(query),  # Coverr keyword/tag search needs short queries
-            "page_size": max(3, int(filters.get("per_page", 10))),
-            "urls": "true",
-            "api_key": api_key,
-        }
-        # Coverr exposes a vertical filter; request portrait footage for Shorts.
+        
         orientation = filters.get("orientation")
-        if orientation in ("portrait", "vertical"):
-            params_dict["orientation"] = "vertical"
-        return _read_json(f"https://api.coverr.co/videos?{urlencode(params_dict)}")
+        page_size = max(3, int(filters.get("per_page", 10)))
+        
+        last_exception = None
+        for terms_count in (3, 2, 1):
+            kw_query = keywordize_query(query, max_terms=terms_count)
+            params_dict = {
+                "query": kw_query,
+                "page_size": page_size,
+                "urls": "true",
+                "api_key": api_key,
+            }
+            if orientation in ("portrait", "vertical"):
+                params_dict["orientation"] = "vertical"
+            
+            try:
+                response = _read_json(f"https://api.coverr.co/videos?{urlencode(params_dict)}")
+                if response.get("hits"):
+                    return response
+            except Exception as e:
+                last_exception = e
+                if hasattr(e, "code") and e.code == 403:
+                    break
+                if "Exceeded query limit" in str(e):
+                    break
+        
+        if last_exception:
+            raise last_exception
+        return response

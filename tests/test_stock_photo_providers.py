@@ -67,3 +67,22 @@ def test_keywordize_query_splits_hyphens_and_removes_verbs():
     assert "closing" not in res
     assert res == "adult hands laptop"
 
+
+from unittest.mock import patch
+from video_agent.assets.providers import StockPhotoClient
+
+@patch("video_agent.assets.providers._read_json")
+def test_coverr_video_search_retry_fallback(mock_read_json):
+    # Mocking first call to return 0 hits, and second call to return 1 hit
+    mock_read_json.side_effect = [
+        {"hits": []},
+        {"hits": [{"id": "v1", "urls": {"mp4": "http://example.com/v1.mp4"}}]}
+    ]
+    client = StockPhotoClient()
+    with patch.dict("os.environ", {"COVERR_API_KEY": "dummy_key"}):
+        res = client.search("coverr_video", "bedroom night woman", {"orientation": "portrait"})
+    assert len(res["hits"]) == 1
+    # Check that it called _read_json twice (first with max_terms=3, then max_terms=2)
+    assert mock_read_json.call_count == 2
+
+

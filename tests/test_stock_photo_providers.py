@@ -57,3 +57,13 @@ def test_normalize_pixabay_response_preserves_credit_and_download_url():
     assert result[0]["photographer_url"] == "https://pixabay.com/users/planet_fox-4691618/"
     assert result[0]["attribution"] == "Image by planet_fox from Pixabay"
     assert result[0]["tags"] == ["sleep", "wellness", "rest"]
+
+
+def test_keywordize_query_splits_hyphens_and_removes_verbs():
+    from video_agent.assets.providers import keywordize_query
+    q = "Vertical 9:16 sequence-style scene with adult hands closing a laptop"
+    res = keywordize_query(q, max_terms=3)
+    assert "sequencestyle" not in res
+    assert "closing" not in res
+    assert res == "adult hands laptop"
+

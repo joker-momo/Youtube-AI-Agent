@@ -34,6 +34,9 @@ SUPPORTED_GRAPHIC_LAYOUTS = (
     "graphic_plate_ratio",
     "graphic_checklist",
     "graphic_step_list",
+    "graphic_label_callout",
+    "graphic_comparison",
+    "graphic_routine_split",
 )
 
 # Backward-compat adapter (spec v6 §10). Legacy long-form layout names map to

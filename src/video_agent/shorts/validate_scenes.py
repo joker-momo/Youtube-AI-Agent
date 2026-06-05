@@ -13,6 +13,9 @@ SUPPORTED_GRAPHIC_LAYOUTS = {
     "graphic_plate_ratio",
     "graphic_checklist",
     "graphic_step_list",
+    "graphic_label_callout",
+    "graphic_comparison",
+    "graphic_routine_split",
 }
 
 PLATE_RATIO_TOTAL = 100.0
@@ -26,6 +29,26 @@ _PLATE_LABEL_MAX = 48
 _CHECKLIST_ITEM_MAX = 48
 _STEP_TEXT_MAX = 56
 _FOOTER_MAX = 72
+_TITLE_MAX_PHASE15 = 60
+_LABEL_CALLOUT_PRODUCT_MAX = 36
+_LABEL_CALLOUT_LABEL_MAX = 22
+_LABEL_CALLOUT_VALUE_MAX = 26
+_LABEL_CALLOUT_NOTE_MAX = 48
+_COMPARISON_HEADING_MAX = 24
+_COMPARISON_TEXT_MAX = 68
+_COMPARISON_BADGE_MAX = 28
+_ROUTINE_TOTAL_MAX = 16
+_ROUTINE_TIME_MAX = 16
+_ROUTINE_TEXT_MAX = 52
+
+FORBIDDEN_HEALTH_MARKETING_WORDS = (
+    "veneno",
+    "prohibido",
+    "nunca",
+    "milagro",
+    "cura",
+    "doctores no quieren",
+)
 
 
 def validate_short_graphic_scenes(scenes: list[dict[str, Any]]) -> list[str]:
@@ -56,14 +79,18 @@ def validate_short_graphic_scenes(scenes: list[dict[str, Any]]) -> list[str]:
         if layout not in SUPPORTED_GRAPHIC_LAYOUTS:
             raise ValueError(
                 f"Scene {sid} uses unsupported graphic layout {layout}. "
-                f"Supported MVP layouts: {', '.join(sorted(SUPPORTED_GRAPHIC_LAYOUTS))}."
+                f"Supported graphic layouts: {', '.join(sorted(SUPPORTED_GRAPHIC_LAYOUTS))}."
             )
 
         # Compatibility stubs for the existing rich Scene type.
         scene.setdefault("visual_type", "graphic")
-        scene.setdefault("on_screen_text", "")
+        if not str(scene.get("on_screen_text") or "").strip():
+            scene["on_screen_text"] = _title_from_payload(scene.get("layout_payload", {}))
         scene.setdefault("caption", "")
         scene.setdefault("motion", "none")
+        scene.setdefault("asset_refs", {})
+        if isinstance(scene.get("asset_refs"), dict):
+            scene["asset_refs"].setdefault("background", "")
 
         payload = scene.get("layout_payload")
         if not isinstance(payload, dict):
@@ -78,6 +105,12 @@ def validate_short_graphic_scenes(scenes: list[dict[str, Any]]) -> list[str]:
             _validate_checklist(payload, sid, warnings)
         elif layout == "graphic_step_list":
             _validate_step_list(payload, sid, warnings)
+        elif layout == "graphic_label_callout":
+            _validate_label_callout(payload, sid, warnings)
+        elif layout == "graphic_comparison":
+            _validate_comparison(payload, sid)
+        elif layout == "graphic_routine_split":
+            _validate_routine_split(payload, sid, warnings)
 
         dur = float(scene.get("duration_sec") or 0)
         if not (GRAPHIC_MIN_DURATION_SEC <= dur <= GRAPHIC_MAX_DURATION_SEC):
@@ -99,8 +132,13 @@ def _validate_title(payload: dict, sid: Any, layout: str) -> None:
     title = payload.get("title")
     if not isinstance(title, str) or not title.strip():
         raise ValueError(f"Graphic scene {sid} ({layout}) requires a non-empty title.")
-    if len(title) > 48:
-        raise ValueError(f"Graphic scene {sid} title exceeds 48 chars: {len(title)}.")
+    max_len = _TITLE_MAX_PHASE15 if layout in {
+        "graphic_label_callout",
+        "graphic_comparison",
+        "graphic_routine_split",
+    } else 48
+    if len(title) > max_len:
+        raise ValueError(f"Graphic scene {sid} title exceeds {max_len} chars: {len(title)}.")
 
 
 def _validate_footer(payload: dict, sid: Any, layout: str, warnings: list[str]) -> None:
@@ -153,3 +191,80 @@ def _validate_step_list(payload: dict, sid: Any, warnings: list[str]) -> None:
             raise ValueError(f"graphic_step_list scene {sid} has a step with empty text.")
         if len(text) > _STEP_TEXT_MAX:
             warnings.append(f"Scene {sid} step text exceeds {_STEP_TEXT_MAX} chars: '{text}'.")
+
+
+def _title_from_payload(payload: dict) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    return str(payload.get("title") or payload.get("productLabel") or "").strip()
+
+
+def _warn_if_long(value: Any, max_len: int, label: str, sid: Any, warnings: list[str]) -> None:
+    if isinstance(value, str) and len(value) > max_len:
+        warnings.append(f"Scene {sid} {label} exceeds {max_len} chars: '{value}'.")
+
+
+def _require_short_string(value: Any, max_len: int, label: str, sid: Any) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Graphic scene {sid} requires non-empty {label}.")
+    if len(value) > max_len:
+        raise ValueError(f"Graphic scene {sid} {label} exceeds {max_len} chars: {len(value)}.")
+    return value
+
+
+def _validate_label_callout(payload: dict, sid: Any, warnings: list[str]) -> None:
+    product_label = payload.get("productLabel")
+    _warn_if_long(product_label, _LABEL_CALLOUT_PRODUCT_MAX, "productLabel", sid, warnings)
+    callouts = payload.get("callouts")
+    if not isinstance(callouts, list) or not (2 <= len(callouts) <= 4):
+        got = len(callouts) if isinstance(callouts, list) else "missing"
+        raise ValueError(f"graphic_label_callout scene {sid} callouts must contain 2-4 items, got {got}.")
+    for callout in callouts:
+        if not isinstance(callout, dict):
+            raise ValueError(f"graphic_label_callout scene {sid} has a non-object callout.")
+        _require_short_string(callout.get("label"), _LABEL_CALLOUT_LABEL_MAX, "callout.label", sid)
+        _require_short_string(callout.get("value"), _LABEL_CALLOUT_VALUE_MAX, "callout.value", sid)
+        note = callout.get("note")
+        _warn_if_long(note, _LABEL_CALLOUT_NOTE_MAX, "callout.note", sid, warnings)
+
+
+def _check_forbidden_language(value: Any, sid: Any, field: str) -> None:
+    if not isinstance(value, str):
+        return
+    lower = value.lower()
+    for word in FORBIDDEN_HEALTH_MARKETING_WORDS:
+        if word in lower:
+            raise ValueError(
+                f"graphic_comparison scene {sid} contains forbidden health-marketing word "
+                f"'{word}' in {field}."
+            )
+
+
+def _validate_comparison(payload: dict, sid: Any) -> None:
+    _check_forbidden_language(payload.get("title"), sid, "title")
+    _check_forbidden_language(payload.get("footer"), sid, "footer")
+    for side_name in ("left", "right"):
+        side = payload.get(side_name)
+        if not isinstance(side, dict):
+            raise ValueError(f"graphic_comparison scene {sid} requires object '{side_name}'.")
+        _require_short_string(side.get("heading"), _COMPARISON_HEADING_MAX, f"{side_name}.heading", sid)
+        _require_short_string(side.get("text"), _COMPARISON_TEXT_MAX, f"{side_name}.text", sid)
+        badge = side.get("badge")
+        if badge is not None:
+            _require_short_string(badge, _COMPARISON_BADGE_MAX, f"{side_name}.badge", sid)
+        for field in ("heading", "text", "badge"):
+            _check_forbidden_language(side.get(field), sid, f"{side_name}.{field}")
+
+
+def _validate_routine_split(payload: dict, sid: Any, warnings: list[str]) -> None:
+    total_label = payload.get("totalLabel")
+    _warn_if_long(total_label, _ROUTINE_TOTAL_MAX, "totalLabel", sid, warnings)
+    blocks = payload.get("blocks")
+    if not isinstance(blocks, list) or not (2 <= len(blocks) <= 4):
+        got = len(blocks) if isinstance(blocks, list) else "missing"
+        raise ValueError(f"graphic_routine_split scene {sid} blocks must contain 2-4 items, got {got}.")
+    for block in blocks:
+        if not isinstance(block, dict):
+            raise ValueError(f"graphic_routine_split scene {sid} has a non-object block.")
+        _require_short_string(block.get("time"), _ROUTINE_TIME_MAX, "block.time", sid)
+        _require_short_string(block.get("text"), _ROUTINE_TEXT_MAX, "block.text", sid)

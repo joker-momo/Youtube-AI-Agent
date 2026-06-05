@@ -54,6 +54,35 @@ def test_short_scene_prompt_requires_vertical_and_layouts():
     assert "short_hook" in low
 
 
+def test_phase15_graphic_layouts_are_in_scene_and_qa_prompts():
+    from video_agent.shorts import prompts
+
+    scene_prompt = prompts.short_scene_prompt_v6(
+        _cfg(),
+        {"short_id": "short-01"},
+        {
+            "narration": (
+                "Mira la etiqueta del pan: fibra, azúcares y sal por 100 g. "
+                "Compara mejor y cuidado. Divide la rutina en 10 min + 10 min."
+            )
+        },
+        feedback="",
+    ).lower()
+    qa_prompt = prompts.gemini_scenes_qa_prompt(
+        _cfg(),
+        {"narration": "Mira la etiqueta y compara opciones."},
+        {"scenes": []},
+    ).lower()
+
+    for layout in ("graphic_label_callout", "graphic_comparison", "graphic_routine_split"):
+        assert layout in scene_prompt
+        assert layout in qa_prompt
+
+    assert "productlabel" in scene_prompt
+    assert "callouts" in scene_prompt
+    assert "six allowed graphic" in qa_prompt
+
+
 def test_short_seo_prompt_prefers_broad_nutrition_tags_over_nutricion45():
     from video_agent.shorts import prompts
 
@@ -129,6 +158,100 @@ def test_build_short_seo_rewrites_description_with_spaced_normalized_hashtags(tm
     assert seo["hashtags"] == ["#nutricion", "#pan", "#platosaludable"]
     assert seo["description"].endswith("#nutricion #pan #platosaludable")
     assert "#nutricion45#pan" not in seo["description"]
+
+
+def test_phase15_graphic_layouts_preserved_by_scene_normalizer():
+    from video_agent.shorts.short_scene_builder import normalize_short_scenes
+
+    doc = {
+        "scenes": [
+            {"scene_id": "s1", "layout": "graphic_label_callout", "narration": "Mira la etiqueta."},
+            {"scene_id": "s2", "layout": "graphic_comparison", "narration": "Compara dos opciones."},
+            {"scene_id": "s3", "layout": "graphic_routine_split", "narration": "Divide la rutina."},
+        ]
+    }
+
+    out = normalize_short_scenes(doc, {"narration": "Mira. Compara. Divide."})
+
+    assert [s["layout"] for s in out["scenes"]] == [
+        "graphic_label_callout",
+        "graphic_comparison",
+        "graphic_routine_split",
+    ]
+    assert all(s["visual_type"] == "graphic" for s in out["scenes"])
+
+
+def test_phase15_graphic_validator_accepts_new_layouts_and_stubs_blank_fields():
+    from video_agent.shorts.validate_scenes import validate_short_graphic_scenes
+
+    scenes = [
+        {
+            "id": "s1",
+            "layout": "graphic_label_callout",
+            "duration_sec": 4,
+            "on_screen_text": "",
+            "layout_payload": {
+                "title": "MIRA PRIMERO",
+                "productLabel": "Pan integral",
+                "callouts": [
+                    {"label": "Fibra", "value": "6 g", "note": "mejor saciedad"},
+                    {"label": "Azúcares", "value": "3 g", "note": "por 100 g"},
+                ],
+            },
+        },
+        {
+            "id": "s2",
+            "layout": "graphic_comparison",
+            "duration_sec": 4,
+            "layout_payload": {
+                "title": "EN EL SÚPER",
+                "left": {"heading": "MEJOR", "text": "Integral con buena fibra"},
+                "right": {"heading": "CUIDADO", "text": "Oscuro, pero sin grano integral"},
+            },
+        },
+        {
+            "id": "s3",
+            "layout": "graphic_routine_split",
+            "duration_sec": 4,
+            "layout_payload": {
+                "title": "RUTINA 30 MINUTOS",
+                "totalLabel": "30 min",
+                "blocks": [
+                    {"time": "10 min", "text": "Cerrar el día"},
+                    {"time": "10 min", "text": "Preparar dormitorio"},
+                    {"time": "10 min", "text": "Respirar"},
+                ],
+            },
+        },
+    ]
+
+    warnings = validate_short_graphic_scenes(scenes)
+
+    assert warnings  # three graphics is allowed for preview but warned for normal Shorts.
+    assert scenes[0]["on_screen_text"] == "MIRA PRIMERO"
+    assert scenes[0]["asset_refs"]["background"] == ""
+
+
+def test_phase15_graphic_validator_rejects_forbidden_comparison_words():
+    from video_agent.shorts.validate_scenes import validate_short_graphic_scenes
+
+    scene = {
+        "id": "s1",
+        "layout": "graphic_comparison",
+        "duration_sec": 4,
+        "layout_payload": {
+            "title": "EN EL SÚPER",
+            "left": {"heading": "MEJOR", "text": "Integral con fibra"},
+            "right": {"heading": "CUIDADO", "text": "Esto es veneno"},
+        },
+    }
+
+    try:
+        validate_short_graphic_scenes([scene])
+    except ValueError as exc:
+        assert "veneno" in str(exc).lower()
+    else:
+        raise AssertionError("expected forbidden comparison language to fail validation")
 
 
 # --------------------------------------------------------------------------

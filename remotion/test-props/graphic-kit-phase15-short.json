@@ -1,0 +1,102 @@
+{
+  "channel": {
+    "id": "vida-plena-45",
+    "name": "Vida Plena 45+",
+    "description": "Salud y bienestar práctico para personas de más de 45 años en España."
+  },
+  "style": {
+    "palette": {
+      "background": "#F4E8D8",
+      "primary": "#8C7355",
+      "secondary": "#D4A574",
+      "accent": "#E6A23C",
+      "text": "#2F2A24"
+    }
+  },
+  "render": {
+    "fps": 30,
+    "duration_sec": 12,
+    "resolution": "1080x1920"
+  },
+  "audio": {
+    "narration": null,
+    "music": null
+  },
+  "seo": {
+    "title": "Graphic Kit Phase 1.5 Preview",
+    "description": "",
+    "thumbnail_path": ""
+  },
+  "scenes": [
+    {
+      "id": "phase15-label",
+      "duration_sec": 4,
+      "narration": "Mira primero la etiqueta: fibra, azúcares y el primer ingrediente.",
+      "visual_type": "graphic",
+      "visual_prompt": "generic supermarket bread label, warm background",
+      "on_screen_text": "",
+      "caption": "",
+      "motion": "gentle_reveal",
+      "layout": "graphic_label_callout",
+      "layout_payload": {
+        "title": "MIRA PRIMERO",
+        "productLabel": "Pan integral",
+        "callouts": [
+          {"label": "Fibra", "value": "6 g", "note": "mejor saciedad"},
+          {"label": "Azúcares", "value": "3 g", "note": "por 100 g"},
+          {"label": "Ingrediente", "value": "harina integral"}
+        ],
+        "footer": "El color no basta. Mira la etiqueta."
+      },
+      "asset_refs": {"background": ""}
+    },
+    {
+      "id": "phase15-comparison",
+      "duration_sec": 4,
+      "narration": "En el súper, compara una opción integral con una que solo parece oscura.",
+      "visual_type": "graphic",
+      "visual_prompt": "two bread choices in a Spanish supermarket, warm background",
+      "on_screen_text": "",
+      "caption": "",
+      "motion": "gentle_reveal",
+      "layout": "graphic_comparison",
+      "layout_payload": {
+        "title": "EN EL SÚPER",
+        "left": {
+          "heading": "MEJOR",
+          "text": "Integral con buena fibra",
+          "badge": "Más saciante"
+        },
+        "right": {
+          "heading": "CUIDADO",
+          "text": "Oscuro, pero sin grano integral",
+          "badge": "Lee etiqueta"
+        },
+        "footer": "No te quedes solo con el color."
+      },
+      "asset_refs": {"background": ""}
+    },
+    {
+      "id": "phase15-routine",
+      "duration_sec": 4,
+      "narration": "Divide la rutina de noche en tres bloques de diez minutos.",
+      "visual_type": "graphic",
+      "visual_prompt": "calm night routine, warm bedroom background",
+      "on_screen_text": "",
+      "caption": "",
+      "motion": "gentle_reveal",
+      "layout": "graphic_routine_split",
+      "layout_payload": {
+        "title": "RUTINA 30 MINUTOS",
+        "totalLabel": "30 min",
+        "blocks": [
+          {"time": "10 min", "text": "Cerrar el día"},
+          {"time": "10 min", "text": "Preparar dormitorio"},
+          {"time": "10 min", "text": "Respirar y bajar ritmo"}
+        ],
+        "footer": "No hace falta hacerlo perfecto."
+      },
+      "asset_refs": {"background": ""}
+    }
+  ]
+}

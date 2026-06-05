@@ -39,11 +39,51 @@ export type GraphicPlateRatioPayload = {
   footer?: string;
 };
 
+export type GraphicLabelCalloutPayload = {
+  title: string;
+  productLabel?: string;
+  callouts: Array<{
+    label: string;
+    value: string;
+    note?: string;
+  }>;
+  footer?: string;
+};
+
+export type GraphicComparisonPayload = {
+  title: string;
+  left: {
+    heading: string;
+    text: string;
+    badge?: string;
+  };
+  right: {
+    heading: string;
+    text: string;
+    badge?: string;
+  };
+  footer?: string;
+};
+
+export type GraphicRoutineSplitPayload = {
+  title: string;
+  totalLabel?: string;
+  blocks: Array<{
+    time: string;
+    text: string;
+    icon?: string;
+  }>;
+  footer?: string;
+};
+
 /** Union of every supported graphic payload. */
 export type GraphicAnyPayload =
   | GraphicChecklistPayload
   | GraphicStepListPayload
-  | GraphicPlateRatioPayload;
+  | GraphicPlateRatioPayload
+  | GraphicLabelCalloutPayload
+  | GraphicComparisonPayload
+  | GraphicRoutineSplitPayload;
 
 // --- Zod schemas -----------------------------------------------------------
 
@@ -92,12 +132,74 @@ export const GraphicPlateRatioPayloadSchema = z
     }
   });
 
+export const GraphicLabelCalloutPayloadSchema = z.object({
+  title: z.string().min(1).max(60),
+  productLabel: z.string().max(36).optional(),
+  callouts: z
+    .array(
+      z.object({
+        label: z.string().min(1).max(22),
+        value: z.string().min(1).max(26),
+        note: z.string().max(48).optional(),
+      }),
+    )
+    .min(2)
+    .max(4),
+  footer: z.string().max(90).optional(),
+});
+
+const comparisonText = (max: number, min = 0) =>
+  z.string().min(min).max(max).superRefine((value, ctx) => {
+    const forbidden = ['veneno', 'prohibido', 'nunca', 'milagro', 'cura', 'doctores no quieren'];
+    const lower = value.toLowerCase();
+    for (const word of forbidden) {
+      if (lower.includes(word)) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `Comparison text contains forbidden health-marketing word: ${word}`,
+        });
+      }
+    }
+  });
+
+const GraphicComparisonSideSchema = z.object({
+  heading: comparisonText(24, 1),
+  text: comparisonText(68, 1),
+  badge: comparisonText(28).optional(),
+});
+
+export const GraphicComparisonPayloadSchema = z.object({
+  title: comparisonText(60, 1),
+  left: GraphicComparisonSideSchema,
+  right: GraphicComparisonSideSchema,
+  footer: comparisonText(90).optional(),
+});
+
+export const GraphicRoutineSplitPayloadSchema = z.object({
+  title: z.string().min(1).max(60),
+  totalLabel: z.string().max(16).optional(),
+  blocks: z
+    .array(
+      z.object({
+        time: z.string().min(1).max(16),
+        text: z.string().min(1).max(52),
+        icon: z.string().max(24).optional(),
+      }),
+    )
+    .min(2)
+    .max(4),
+  footer: z.string().max(90).optional(),
+});
+
 // --- Parser ----------------------------------------------------------------
 
 export const SUPPORTED_GRAPHIC_LAYOUTS = [
   'graphic_checklist',
   'graphic_step_list',
   'graphic_plate_ratio',
+  'graphic_label_callout',
+  'graphic_comparison',
+  'graphic_routine_split',
 ] as const;
 
 /**
@@ -113,9 +215,15 @@ export function parseGraphicPayload(layout: string, payload: unknown): GraphicAn
       return GraphicStepListPayloadSchema.parse(payload);
     case 'graphic_plate_ratio':
       return GraphicPlateRatioPayloadSchema.parse(payload);
+    case 'graphic_label_callout':
+      return GraphicLabelCalloutPayloadSchema.parse(payload);
+    case 'graphic_comparison':
+      return GraphicComparisonPayloadSchema.parse(payload);
+    case 'graphic_routine_split':
+      return GraphicRoutineSplitPayloadSchema.parse(payload);
     default:
       throw new Error(
-        `Unsupported graphic layout: ${layout}. Supported MVP layouts: ${SUPPORTED_GRAPHIC_LAYOUTS.join(', ')}.`,
+        `Unsupported graphic layout: ${layout}. Supported layouts: ${SUPPORTED_GRAPHIC_LAYOUTS.join(', ')}.`,
       );
   }
 }

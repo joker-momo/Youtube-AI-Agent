@@ -3,5 +3,8 @@ export {GraphicBackground} from './GraphicBackground';
 export {GraphicChecklist} from './GraphicChecklist';
 export {GraphicStepList} from './GraphicStepList';
 export {GraphicPlateRatio} from './GraphicPlateRatio';
+export {LabelCalloutGraphic} from './LabelCalloutGraphic';
+export {ComparisonGraphic} from './ComparisonGraphic';
+export {RoutineSplitGraphic} from './RoutineSplitGraphic';
 export {graphicTheme} from './graphic-theme';
 export * from './graphic-payloads';

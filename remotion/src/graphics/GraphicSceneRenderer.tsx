@@ -10,6 +10,9 @@ import {GraphicBackground} from './GraphicBackground';
 import {GraphicChecklist} from './GraphicChecklist';
 import {GraphicStepList} from './GraphicStepList';
 import {GraphicPlateRatio} from './GraphicPlateRatio';
+import {LabelCalloutGraphic} from './LabelCalloutGraphic';
+import {ComparisonGraphic} from './ComparisonGraphic';
+import {RoutineSplitGraphic} from './RoutineSplitGraphic';
 
 export function GraphicSceneRenderer({
   scene,
@@ -42,6 +45,15 @@ export function GraphicSceneRenderer({
       )}
       {layout === 'graphic_plate_ratio' && (
         <GraphicPlateRatio payload={payload as never} durationInFrames={durationInFrames} fps={fps} />
+      )}
+      {layout === 'graphic_label_callout' && (
+        <LabelCalloutGraphic payload={payload as never} durationInFrames={durationInFrames} fps={fps} />
+      )}
+      {layout === 'graphic_comparison' && (
+        <ComparisonGraphic payload={payload as never} durationInFrames={durationInFrames} fps={fps} />
+      )}
+      {layout === 'graphic_routine_split' && (
+        <RoutineSplitGraphic payload={payload as never} durationInFrames={durationInFrames} fps={fps} />
       )}
     </GraphicBackground>
   );

@@ -1,0 +1,341 @@
+schema_version: "3.0-mvp"
+channel:
+  id: "vida-plena-45-t-coverr"
+  name: "Vida Plena 45+"
+  youtube_channel_id: "UCKUswqsAaLsEkcsgzTuKAmw"
+  description: "Salud y bienestar práctico para personas de más de 45 años en España. Consejos sencillos sobre alimentación, descanso, movimiento suave y hábitos diarios, sin dietas extremas ni promesas milagro."
+branding:
+  # Opening retention rule: skip the logo intro and outro by default. YouTube
+  # viewers decide whether to keep watching in the first 5-15 seconds; the
+  # video must start on the narration hook, not on a branded card. Set
+  # enable_intro_outro: true only for a one-off ceremonial cut.
+  enable_intro_outro: false
+  # Channel-name label in the top-left corner. Hidden by default to keep the
+  # opening frame clean. Flip to true when a special cut needs the brand
+  # text visible on every scene.
+  show_channel_name_overlay: false
+audience:
+  language: "es-ES"
+  age_range: [45, 75]
+  primary_markets: ["ES"]
+  secondary_markets: ["MX", "CO", "AR", "CL", "PE"]
+locale_style:
+  target_locale: "Spain"
+  language_code: "es-ES"
+  timezone: "Europe/Madrid"
+  lexical_preferences:
+    prefer:
+      - "móvil"
+      - "ordenador"
+      - "por la tarde"
+      - "de madrugada"
+      - "hábitos sencillos"
+      - "personas de más de 45 años"
+    avoid:
+      - "celular"
+      - "computadora"
+      - "LatAm"
+      - "adultos mayores"
+      - "tercera edad"
+      - "ancianos"
+      - "abuelitos"
+niche:
+  category: "health_wellness"
+  sub_niches:
+    - "nutrition_45plus"
+    - "exercise_low_impact"
+    - "sleep_quality"
+  avoid_topics:
+    - "specific_medical_diagnoses"
+    - "supplement_promotion"
+    - "miracle_cures"
+keyword_research:
+  # Spain-first, 45+ concrete seeds used when Google Trends has no niche match.
+  # Falls back to generic sub_niche keywords only if this list is absent.
+  fallback_seeds:
+    - "dormir mejor después de los 45"
+    - "ejercicio suave después de los 45"
+    - "cena ligera después de los 45"
+    - "mente acelerada después de los 45"
+    - "despertar cansado después de los 45"
+    - "movimiento suave después de los 45"
+    - "cansancio después de los 45"
+    - "calma mental después de los 45"
+brand_voice_path: "configs/vida-plena-45/brand-voice.md"
+style_dna:
+  path: "configs/vida-plena-45/style-dna.json"
+  current_version: "mvp-v1"
+personas:
+  - id: "maria"
+    profile_path: "configs/vida-plena-45/personas/maria.md"
+    weight: 1.0
+  - id: "carlos"
+    profile_path: "configs/vida-plena-45/personas/carlos.md"
+    weight: 1.0
+  - id: "rosa"
+    profile_path: "configs/vida-plena-45/personas/rosa.md"
+    weight: 1.0
+content_format:
+  type: "long_form"
+  target_duration_sec: 840        # 14 min sweet spot — top Spanish health channel benchmark
+  duration_sec_min: 720           # 12 min hard floor
+  duration_sec_max: 900           # 15 min hard ceiling
+  scenes_count_min: 40            # 40-55 scenes × 15-20s = 10-18 min, high visual variety
+  scenes_count_max: 55
+  publish_schedule:
+    cadence: "3 per week"
+    days: ["Monday", "Wednesday", "Friday"]
+    time_local: "20:00"
+    timezone: "Europe/Madrid"
+
+qa_rules:
+  script_path: "configs/vida-plena-45/qa-rules/script.yaml"
+  scene_path: "configs/vida-plena-45/qa-rules/scene.yaml"
+  asset_path: "configs/vida-plena-45/qa-rules/asset.yaml"
+  thresholds:
+    max_retry_per_qa: 3
+    max_average_sentence_words: 20
+    max_thumbnail_words: 6
+positioning:
+  forbidden_phrases:
+    - "adultos mayores"
+    - "tercera edad"
+    - "ancianos"
+    - "personas mayores"
+    - "abuelos"
+    - "abuelitos"
+  preferred_phrases:
+    - "personas de más de 45 años"
+    - "adultos 45+"
+    - "mediana edad"
+    - "bienestar práctico"
+research_gate:
+  # keyword scoring free tier scores Spanish long-tail phrases lower than English.
+  # Calibrated to 20 after observing that "insomnio" (short keyword) = 63
+  # while "Insomnio despues de los 45..." (long phrase) = 26.
+  # Topics with best_score >= 20 have real search presence; null scores
+  # (not enough data) are allowed through (verdict=pass).
+  min_score: 20
+  max_competition: "High"
+  min_tag_score: 20
+
+seo:
+  language: "es-ES"
+  min_tags: 5
+  max_tags: 8
+domain_plugins:
+  - name: "medical_safety_checker"
+    enabled: true
+models:
+  default: "mock-local"
+tts:
+  provider: "kokoro"
+  voice_id: "ef_dora"
+  lang_code: "e"
+  speed: 1.03
+  sample_rate: 24000
+  pace_wpm: 120
+  scene_lead_in_sec: 0.45
+  humanize:
+    enabled: true
+    pause_comma_ms: 230
+    pause_semicolon_ms: 340
+    pause_sentence_ms: 500
+    pause_paragraph_ms: 700
+    speed_jitter_pct: 3.5
+visuals:
+  strategy: "auto"
+  source_dir: "asset_library/source"
+  providers: ["coverr_video"]
+  fallback_providers: []
+  query_cache_ttl_hours: 24
+  # Long-form videos are 16:9 → request landscape from Pexels.
+  # Shorts override this to "portrait" automatically (see shorts.source.prefer_vertical_assets
+  # and the auto-detect in pipeline.render_operator_job).
+  orientation: "landscape"
+  per_page: 10
+  scene_count_target: 5
+music:
+  source: "asset_library"
+  preferred_track: "No.6 In My Dreams - Esther Abrami.mp3"
+  voice_gain_db: -4.5
+  level_db: -24
+  duck_db: 8
+  target_lufs: -15
+  target_tp_dbtp: -1.5
+  target_lra: 7
+  sample_rate: 48000
+  bitrate: "192k"
+  stereo: true
+render:
+  composition: "ChannelVideoStandard"
+  resolution: "1920x1080"
+  fps: 30
+  codec: "h264"
+  # Bitrate-based encoding lets VideoToolbox HW encoder kick in (CRF mode forces software libx264).
+  video_bitrate: "12M"
+  # Use Metal-backed ANGLE so Chromium WebGL composites on GPU instead of CPU.
+  gl: "angle"
+  concurrency: "auto"
+  subtitles:
+    enabled: true
+    mode: "word_highlight"
+    words_per_page: 10
+    max_lines: 2
+    position: "bottom"
+    offset_sec: 0
+    font_size: 54
+    active_scale: 1.08
+    background_opacity: 0.58
+  audio_loudness:
+    enabled: true
+    integrated_lufs: -14
+    true_peak_dbtp: -1
+    lra: 11
+upload:
+  ai_disclosure: true
+  default_privacy: "manual_upload_only"
+budget:
+  max_cost_per_video_usd: 0
+shorts:
+  enabled: true
+  studio:
+    enabled: true
+    job_list_policy: "all_with_disabled_ineligible"
+  autopilot:
+    enabled: true
+    trigger: "after_review_passed"
+    execution_mode: "sequential"
+    run_after_long_review_pass: true
+    allow_manual_button_for_existing_jobs: true
+    manual_button_label: "Gen Video Shorts"
+    require_user_choices: false
+    require_user_review_before_render: false
+    render_automatically: true
+    render_only_if_qa_pass: true
+    max_regeneration_attempts: 2
+    skip_if_shorts_already_exist: true
+    continue_if_one_short_fails: true
+    archive_on_force_regenerate: true
+    detect_legacy_shorts_artifacts: true
+    concurrency:
+      enabled: false
+      llm_generation: 1
+      qa: 1
+      tts: 1
+      audio_mix: 1
+      remotion_render: 1
+      manifest_write: 1
+    retries:
+      llm_generation: 2
+      qa_regeneration: 2
+      tts: 2
+      audio_mix: 1
+      render: 1
+  llm:
+    # Spec v6 §2 — AI role contract. Every call uses a fresh temporary chat.
+    use_temporary_conversations: true
+    planner_provider: "chatgpt"
+    script_provider: "chatgpt"
+    scenes_provider: "chatgpt"
+    qa_provider: "gemini"
+  auto_generate:
+    enabled: true
+    default_count: 3
+    max_count: 5
+    allow_fewer_if_candidates_are_weak: true
+    require_user_choices: false
+  duration:
+    min_sec: 20
+    target_min_sec: 25
+    target_max_sec: 45
+    hard_max_sec: 60
+  render:
+    format: "short"
+    composition: "ShortVideoStandard"
+    cover_composition: "ShortCover"
+    resolution: "1080x1920"
+    fps: 30
+  source:
+    require_long_job: true
+    require_source_map: true
+    use_whisper_timestamps: true
+    allow_visual_reuse_from_long: true
+    prefer_vertical_assets: true
+  content:
+    default_formats_per_long:
+      - "pain_to_tip"
+      - "mistake_to_avoid"
+      - "mini_checklist"
+    fallback_formats:
+      - "myth_or_contradiction"
+  tts:
+    provider: "kokoro"
+    voice_id: "ef_dora"
+    speed: 1.07
+    pace_wpm: 130
+    humanize:
+      enabled: true
+      pause_comma_ms: 160
+      pause_semicolon_ms: 240
+      pause_sentence_ms: 360
+      pause_paragraph_ms: 500
+      speed_jitter_pct: 3.0
+  music:
+    enabled: true
+    source: "youtube_studio_audio_library"
+    auto_select: true
+    volume_db_below_voice: 20
+    ducking_enabled: true
+    fade_in_ms: 120
+    fade_out_ms: 450
+    require_license_metadata: true
+    allow_render_without_license_metadata: true
+  cover:
+    enabled: true
+    export_cover_jpg: true
+    cover_frame_sec: 0.3
+    text_max_words: 5
+    use_first_scene_as_cover: true
+  funnel:
+    cta_to_long_video: true
+    cta_max_words: 8
+    default_cta_without_url: "Vídeo completo en el canal."
+    default_cta_with_url: "Mira la guía completa aquí."
+    pinned_comment_template: |
+      Si quieres ver la guía completa paso a paso, mira el vídeo largo del canal 👇
+      {long_video_url}
+music_library:
+  tracks:
+    shorts_movement:
+      file: "assets/music/blue_skies_silent_partner.mp3"
+      title: "Blue Skies"
+      artist: "Silent Partner"
+      source: "YouTube Studio Audio Library"
+      mood: "soft_upbeat"
+      use_for: ["movement", "exercise", "routine"]
+      default_volume_db_below_voice: 20
+    shorts_daily_habit:
+      file: "assets/music/sunset_dream_cheel.mp3"
+      title: "Sunset Dream"
+      artist: "Cheel"
+      source: "YouTube Studio Audio Library"
+      mood: "warm_lifestyle"
+      use_for: ["food", "daily_habits", "routine", "movement_light"]
+      default_volume_db_below_voice: 22
+    shorts_sleep_stress:
+      file: "assets/music/nimbus_eveningland.mp3"
+      title: "Nimbus"
+      artist: "Eveningland"
+      source: "YouTube Studio Audio Library"
+      mood: "calm_wellness"
+      use_for: ["sleep", "stress", "calm", "mental_load"]
+      default_volume_db_below_voice: 22
+    shorts_deep_calm:
+      file: "assets/music/no6_in_my_dreams_esther_abrami.mp3"
+      title: "No.6 In My Dreams"
+      artist: "Esther Abrami"
+      source: "YouTube Studio Audio Library"
+      mood: "reflective_sleep"
+      use_for: ["sleep_deep", "reflective", "night"]
+      default_volume_db_below_voice: 18

@@ -86,3 +86,25 @@ def test_coverr_video_search_retry_fallback(mock_read_json):
     assert mock_read_json.call_count == 2
 
 
+@patch("video_agent.assets.providers._read_json")
+def test_coverr_video_search_exclude_ids_fallback(mock_read_json):
+    # First query (terms=3) returns excluded v1, second query (terms=2) returns v2
+    mock_read_json.side_effect = [
+        {"hits": [{"id": "v1", "urls": {"mp4": "http://example.com/v1.mp4"}}]},
+        {"hits": [{"id": "v2", "urls": {"mp4": "http://example.com/v2.mp4"}}]}
+    ]
+    client = StockPhotoClient()
+    with patch.dict("os.environ", {"COVERR_API_KEY": "dummy_key"}):
+        res = client.search(
+            "coverr_video",
+            "bedroom night woman",
+            {"orientation": "portrait"},
+            exclude_ids={"v1"}
+        )
+    assert len(res["hits"]) == 1
+    assert res["hits"][0]["id"] == "v2"
+    # Check that it called _read_json twice to fall back since the hit on the first call was excluded
+    assert mock_read_json.call_count == 2
+
+
+

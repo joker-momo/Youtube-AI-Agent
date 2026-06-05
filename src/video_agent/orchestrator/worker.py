@@ -183,7 +183,9 @@ def _run_shorts_autopilot_job(job: dict, *, job_dir: Path, channel_path: Path, c
         return build_short(
             long_job_dir, short_plan, cfg,
             llm_fn=chatgpt_fn, gemini_fn=gemini_fn,
-            thumbnail_fn=thumbnail_fn,
+            # TEMP: thumbnail (AI image-gen) skipped — omit thumbnail_fn so
+            # build_short uses the no-op default (stage marked "skipped").
+            # Re-enable by restoring: thumbnail_fn=thumbnail_fn,
         )
 
     run_shorts_autopilot(
@@ -244,7 +246,9 @@ def _run_shorts_prepare_drafts_job(job: dict, *, job_dir: Path, channel_path: Pa
         return build_short(
             long_job_dir, short_plan, cfg,
             llm_fn=chatgpt_fn, gemini_fn=gemini_fn,
-            thumbnail_fn=thumbnail_fn,
+            # TEMP: thumbnail (AI image-gen) skipped — omit thumbnail_fn so
+            # build_short uses the no-op default (stage marked "skipped").
+            # Re-enable by restoring: thumbnail_fn=thumbnail_fn,
             **kwargs,
         )
 
@@ -327,7 +331,9 @@ def _run_shorts_render_selected_ideas_job(job: dict, *, job_dir: Path, channel_p
             cfg,
             llm_fn=chatgpt_fn,
             gemini_fn=gemini_fn,
-            thumbnail_fn=thumbnail_fn,
+            # TEMP: thumbnail (AI image-gen) skipped — omit thumbnail_fn so
+            # build_short uses the no-op default (stage marked "skipped").
+            # Re-enable by restoring: thumbnail_fn=thumbnail_fn,
             **kwargs,
         )
 

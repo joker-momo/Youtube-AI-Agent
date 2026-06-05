@@ -3428,10 +3428,19 @@ async function rerenderShort(jobId, shortId) {
 	}
 
 	async function copyShortSeo(jobId, shortId) {
-	  const url = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent('shorts/' + shortId + '/short_seo.json');
-	  const r = await fetch(url);
-	  if (!r.ok) { alert('SEO artifact not found'); return; }
-	  const text = await r.text();
+	  // SEO lives under json/ in the canonical layout; older shorts kept it at root.
+	  const candidates = [
+	    'shorts/' + shortId + '/json/short_seo.json',
+	    'shorts/' + shortId + '/json/seo.json',
+	    'shorts/' + shortId + '/short_seo.json',
+	    'shorts/' + shortId + '/seo.json',
+	  ];
+	  let text = null;
+	  for (const path of candidates) {
+	    const r = await fetch('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(path));
+	    if (r.ok) { text = await r.text(); break; }
+	  }
+	  if (text === null) { alert('SEO artifact not found'); return; }
 	  await navigator.clipboard.writeText(text);
 	  showToast('Short SEO copied');
 	}
@@ -3659,35 +3668,41 @@ function renderShortStep(jobId, shortId, s, idx) {
   let inputs = [];
   let outputs = [];
   
-  const shortPrefix = `shorts/${shortId}/`;
+  // short_*.json artifacts live under shorts/<sid>/json/, deliverables under
+  // shorts/<sid>/outputs/, audio under shorts/<sid>/audio/. (bug-260: stage
+  // timeline was pointing the json links at the short root → 404.) The backend
+  // artifact endpoint also falls back across these subdirs for older shorts.
+  const jsonPrefix = `shorts/${shortId}/json/`;
+  const outPrefix = `shorts/${shortId}/outputs/`;
+  const audioPrefix = `shorts/${shortId}/audio/`;
   if (s.name === 'script') {
     inputs = [{path: `short_ideas.json`, name: 'short_ideas.json'}];
-    outputs = [{path: `${shortPrefix}short_script.json`, name: 'short_script.json'}];
+    outputs = [{path: `${jsonPrefix}short_script.json`, name: 'short_script.json'}];
   } else if (s.name === 'qa_script') {
-    inputs = [{path: `${shortPrefix}short_script.json`, name: 'short_script.json'}];
-    outputs = [{path: `${shortPrefix}short_script_qa.json`, name: 'short_script_qa.json'}];
+    inputs = [{path: `${jsonPrefix}short_script.json`, name: 'short_script.json'}];
+    outputs = [{path: `${jsonPrefix}short_script_qa.json`, name: 'short_script_qa.json'}];
   } else if (s.name === 'scenes') {
-    inputs = [{path: `${shortPrefix}short_script.json`, name: 'short_script.json'}];
-    outputs = [{path: `${shortPrefix}short_scenes.json`, name: 'short_scenes.json'}];
+    inputs = [{path: `${jsonPrefix}short_script.json`, name: 'short_script.json'}];
+    outputs = [{path: `${jsonPrefix}short_scenes.json`, name: 'short_scenes.json'}];
   } else if (s.name === 'qa_scenes') {
-    inputs = [{path: `${shortPrefix}short_scenes.json`, name: 'short_scenes.json'}];
-    outputs = [{path: `${shortPrefix}short_scenes_qa.json`, name: 'short_scenes_qa.json'}];
+    inputs = [{path: `${jsonPrefix}short_scenes.json`, name: 'short_scenes.json'}];
+    outputs = [{path: `${jsonPrefix}short_scenes_qa.json`, name: 'short_scenes_qa.json'}];
   } else if (s.name === 'seo') {
-    inputs = [{path: `${shortPrefix}short_script.json`, name: 'short_script.json'}];
+    inputs = [{path: `${jsonPrefix}short_script.json`, name: 'short_script.json'}];
     outputs = [
-      {path: `${shortPrefix}short_seo.json`, name: 'short_seo.json'},
-      {path: `${shortPrefix}short_source_map.json`, name: 'short_source_map.json'}
+      {path: `${jsonPrefix}short_seo.json`, name: 'short_seo.json'},
+      {path: `${jsonPrefix}short_source_map.json`, name: 'short_source_map.json'}
     ];
   }
  else if (s.name === 'audio') {
 
-    inputs = [{path: `${shortPrefix}short_scenes.json`, name: 'short_scenes.json'}];
-    outputs = [{path: `${shortPrefix}audio/short_mix.m4a`, name: 'short_mix.m4a'}];
+    inputs = [{path: `${jsonPrefix}short_scenes.json`, name: 'short_scenes.json'}];
+    outputs = [{path: `${audioPrefix}short_mix.m4a`, name: 'short_mix.m4a'}];
   } else if (s.name === 'render') {
-    inputs = [{path: `${shortPrefix}short_render_props.json`, name: 'short_render_props.json'}];
+    inputs = [{path: `${jsonPrefix}short_render_props.json`, name: 'short_render_props.json'}];
     outputs = [
-      {path: `${shortPrefix}short.mp4`, name: 'short.mp4'},
-      {path: `${shortPrefix}short_cover.jpg`, name: 'short_cover.jpg'}
+      {path: `${outPrefix}short.mp4`, name: 'short.mp4'},
+      {path: `${outPrefix}short_cover.jpg`, name: 'short_cover.jpg'}
     ];
   }
 
@@ -4215,13 +4230,21 @@ async function loadShortsRendersTab(jobId) {
     if (renderedDrafts.length > 0) {
       await Promise.all(renderedDrafts.map(async d => {
         const sid = d.short_id;
+        // Canonical layout writes SEO under shorts/<sid>/json/; older shorts kept
+        // it at the short root. Try json/ first, then fall back to root.
+        const seoCandidates = [
+          'shorts/' + sid + '/json/seo.json',
+          'shorts/' + sid + '/json/short_seo.json',
+          'shorts/' + sid + '/seo.json',
+          'shorts/' + sid + '/short_seo.json',
+        ];
         try {
-          let sr = await fetch('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent('shorts/' + sid + '/seo.json'));
-          if (!sr.ok) {
-            sr = await fetch('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent('shorts/' + sid + '/short_seo.json'));
-          }
-          if (sr.ok) {
-            shortsSeoData[sid] = await sr.json();
+          for (const path of seoCandidates) {
+            const sr = await fetch('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(path));
+            if (sr.ok) {
+              shortsSeoData[sid] = await sr.json();
+              break;
+            }
           }
         } catch (e) {
           console.warn("Failed to fetch SEO for short " + sid, e);

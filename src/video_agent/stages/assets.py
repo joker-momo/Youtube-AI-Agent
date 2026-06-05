@@ -233,7 +233,12 @@ def prepare_assets(
 ) -> dict[str, Any]:
     assets_dir = job_dir / "assets"
     assets_dir.mkdir(parents=True, exist_ok=True)
-    public_assets_dir = prepare_public_job_dir(repo_root(), job_dir.name) / "assets"
+    workspace_root = job_dir.parent
+    for parent in job_dir.parents:
+        if (parent / "remotion").is_dir():
+            workspace_root = parent
+            break
+    public_assets_dir = prepare_public_job_dir(workspace_root, job_dir.name) / "assets"
     public_assets_dir.mkdir(parents=True, exist_ok=True)
     palette = style_dna["palette"]
     colors = [_hex_to_rgb(palette["background"]), _hex_to_rgb(palette["primary"]), _hex_to_rgb(palette["secondary"])]

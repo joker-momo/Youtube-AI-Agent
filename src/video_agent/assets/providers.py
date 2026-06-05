@@ -233,7 +233,7 @@ def normalize_coverr_video_response(response: dict[str, Any]) -> list[dict[str, 
 
 
 class StockPhotoClient:
-    def search(self, provider: str, query: str, filters: dict[str, Any]) -> dict[str, Any]:
+    def search(self, provider: str, query: str, filters: dict[str, Any], exclude_ids: set[str] | None = None) -> dict[str, Any]:
         if provider == "pexels":
             return self._search_pexels(query, filters)
         if provider == "pexels_video":
@@ -241,9 +241,9 @@ class StockPhotoClient:
         if provider == "pixabay":
             return self._search_pixabay(query, filters)
         if provider == "pixabay_video":
-            return self._search_pixabay_video(query, filters)
+            return self._search_pixabay_video(query, filters, exclude_ids=exclude_ids)
         if provider == "coverr_video":
-            return self._search_coverr_video(query, filters)
+            return self._search_coverr_video(query, filters, exclude_ids=exclude_ids)
         raise ValueError(f"Unsupported stock photo provider: {provider}")
 
     def normalize(self, provider: str, response: dict[str, Any]) -> list[dict[str, Any]]:
@@ -306,7 +306,7 @@ class StockPhotoClient:
         )
         return _read_json(f"https://pixabay.com/api/?{params}")
 
-    def _search_pixabay_video(self, query: str, filters: dict[str, Any]) -> dict[str, Any]:
+    def _search_pixabay_video(self, query: str, filters: dict[str, Any], exclude_ids: set[str] | None = None) -> dict[str, Any]:
         api_key = os.environ.get("PIXABAY_API_KEY")
         if not api_key:
             raise RuntimeError("PIXABAY_API_KEY is required for provider=pixabay_video")
@@ -326,7 +326,12 @@ class StockPhotoClient:
             )
             try:
                 response = _read_json(f"https://pixabay.com/api/videos/?{params}")
-                if response.get("hits"):
+                hits = response.get("hits") or []
+                if hits:
+                    if exclude_ids:
+                        non_excluded = [h for h in hits if str(h.get("id")) not in exclude_ids]
+                        if not non_excluded:
+                            continue
                     return response
             except Exception as e:
                 last_exception = e
@@ -337,7 +342,7 @@ class StockPhotoClient:
             raise last_exception
         return response
 
-    def _search_coverr_video(self, query: str, filters: dict[str, Any]) -> dict[str, Any]:
+    def _search_coverr_video(self, query: str, filters: dict[str, Any], exclude_ids: set[str] | None = None) -> dict[str, Any]:
         api_key = os.environ.get("COVERR_API_KEY")
         if not api_key:
             raise RuntimeError("COVERR_API_KEY is required for provider=coverr_video")
@@ -359,7 +364,15 @@ class StockPhotoClient:
             
             try:
                 response = _read_json(f"https://api.coverr.co/videos?{urlencode(params_dict)}")
-                if response.get("hits"):
+                hits = response.get("hits") or []
+                if hits:
+                    if exclude_ids:
+                        non_excluded = [
+                            h for h in hits
+                            if str(h.get("id") or h.get("video_id")) not in exclude_ids
+                        ]
+                        if not non_excluded:
+                            continue
                     return response
             except Exception as e:
                 last_exception = e

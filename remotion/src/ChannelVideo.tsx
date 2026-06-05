@@ -339,8 +339,9 @@ const BridgeFade: React.FC<{mode: 'out' | 'in'}> = ({mode}) => {
 const FontLoader: React.FC = () => (
   <style>
     {`
-      @import url('https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,600;0,800;0,900;1,600;1,800;1,900&family=Manrope:wght@600;800;900&display=swap');
-      
+      /* Fonts (Montserrat + Manrope) are preloaded via ./shorts/loadFonts,
+         imported in Root.tsx — no @import here so the render pipeline never
+         races against webfont CSS / falls back to Arial on first frames. */
       .premium-subtitle-span {
         font-family: 'Montserrat', 'Manrope', "Helvetica Neue", sans-serif;
         letter-spacing: 0.5px;

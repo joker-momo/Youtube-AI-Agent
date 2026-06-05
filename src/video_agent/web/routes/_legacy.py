@@ -553,17 +553,27 @@ def job_artifact(
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     target = resolve_inside(job_dir, path)
     if target is None or not target.exists() or not target.is_file():
-        # Fallback check for backward compatibility:
-        # If the requested path is a top-level filename, try json/ or outputs/
-        if "/" not in path and "\\" not in path:
-            if path.endswith(".json") or path.endswith(".jsonl"):
-                fallback = resolve_inside(job_dir, f"json/{path}")
-                if fallback and fallback.exists() and fallback.is_file():
-                    target = fallback
-            else:
-                fallback = resolve_inside(job_dir, f"outputs/{path}")
-                if fallback and fallback.exists() and fallback.is_file():
-                    target = fallback
+        # Backward/forward-compat fallback: data files (.json/.jsonl) live under a
+        # ``json/`` subdir and deliverables under ``outputs/``, but older jobs (and
+        # older shorts) stored them at the parent root. Try inserting the expected
+        # subdir before the filename, and the reverse (stripping it). Works for both
+        # top-level paths and nested ones like ``shorts/<sid>/short_script.json``
+        # (bug-260 — the shorts stage timeline pointed json links at the short root).
+        rel = path.replace("\\", "/")
+        name = rel.rsplit("/", 1)[-1]
+        parent = rel[: len(rel) - len(name)].rstrip("/")
+        sub = "json" if (name.endswith(".json") or name.endswith(".jsonl")) else "outputs"
+        segs = parent.split("/") if parent else []
+        candidates = []
+        if not segs or segs[-1] != sub:
+            candidates.append("/".join([*segs, sub, name]))
+        if segs and segs[-1] in ("json", "outputs"):
+            candidates.append("/".join([*segs[:-1], name]))
+        for cand in candidates:
+            fallback = resolve_inside(job_dir, cand)
+            if fallback and fallback.exists() and fallback.is_file():
+                target = fallback
+                break
 
     if target is None or not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail=f"Artifact not found: {path}")

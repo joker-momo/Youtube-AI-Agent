@@ -58,7 +58,6 @@ export const HookTitle: React.FC<{children: React.ReactNode; fontSize?: number; 
         color: '#FFFFFF',
         textShadow:
           '0 6px 18px rgba(0,0,0,0.55), 0 2px 4px rgba(0,0,0,0.55), 0 0 2px rgba(0,0,0,0.6)',
-        WebkitTextStroke: '0.6px rgba(0,0,0,0.55)',
         textAlign: 'center',
       }}
     >
@@ -85,7 +84,6 @@ export const BodyText: React.FC<{children: React.ReactNode; fontSize?: number; a
         color: '#FFFFFF',
         textShadow:
           '0 4px 14px rgba(0,0,0,0.55), 0 1px 3px rgba(0,0,0,0.5), 0 0 2px rgba(0,0,0,0.55)',
-        WebkitTextStroke: '0.4px rgba(0,0,0,0.5)',
         textAlign: 'center',
       }}
     >
@@ -111,7 +109,6 @@ export const CaptionText: React.FC<{children: React.ReactNode; fontSize?: number
         color: '#F7F7F2',
         textShadow:
           '0 3px 12px rgba(0,0,0,0.6), 0 1px 2px rgba(0,0,0,0.5), 0 0 2px rgba(0,0,0,0.55)',
-        WebkitTextStroke: '0.4px rgba(0,0,0,0.5)',
         textAlign: 'center',
       }}
     >
@@ -185,7 +182,6 @@ export const CtaText: React.FC<{children: React.ReactNode; fontSize?: number; ac
         color: '#FFFFFF',
         textShadow:
           '0 5px 16px rgba(0,0,0,0.55), 0 1px 3px rgba(0,0,0,0.5), 0 0 2px rgba(0,0,0,0.55)',
-        WebkitTextStroke: '0.5px rgba(0,0,0,0.55)',
         textAlign: 'center',
         textTransform: 'uppercase',
         letterSpacing: 0,

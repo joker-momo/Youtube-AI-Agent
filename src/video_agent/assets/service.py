@@ -489,9 +489,25 @@ class StockAssetService:
         ranked_candidates: list[dict[str, Any]] = []
         for provider_order, provider in enumerate(providers, start=1):
             try:
+                exclude_ids = {asset_id for prov, asset_id in self.used_provider_ids if prov == provider}
                 response = self.cache.get(provider, query, filters)
+                if response is not None:
+                    normalized = self.stock_client.normalize(provider, response)
+                    unused_normalized = [
+                        c for c in normalized
+                        if str(c.get("provider_asset_id")) not in exclude_ids
+                    ]
+                    if not unused_normalized:
+                        response = None
+                
                 if response is None:
-                    response = self.stock_client.search(provider, query, filters)
+                    try:
+                        response = self.stock_client.search(provider, query, filters, exclude_ids=exclude_ids)
+                    except TypeError as e:
+                        if "unexpected keyword argument 'exclude_ids'" in str(e):
+                            response = self.stock_client.search(provider, query, filters)
+                        else:
+                            raise
                     self.cache.set(provider, query, filters, response, ttl_hours=ttl_hours)
                 candidates = self._rank_candidates(
                     query,
@@ -528,7 +544,11 @@ class StockAssetService:
             matched = item.get("matched_terms") or []
             return ("strong_scene_term_match" in reasons or len(matched) >= 2)
 
-        any_strict = any(_passes_strict_gate(item) for item in ranked_candidates)
+        unused_ranked_candidates = [
+            item for item in ranked_candidates
+            if (item["candidate"]["provider"], str(item["candidate"]["provider_asset_id"])) not in self.used_provider_ids
+        ]
+        any_strict = any(_passes_strict_gate(item) for item in unused_ranked_candidates)
         # Two-tier selection: prefer candidates that satisfy the strict semantic
         # gate (score + tag overlap). If none qualify (low-resolution mock data,
         # niche queries with sparse Pexels coverage, etc.) fall back to the

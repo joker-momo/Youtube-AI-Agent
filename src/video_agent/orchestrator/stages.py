@@ -2485,7 +2485,12 @@ async def auto_thumbnail_image_stage(
 
     # Copy all generated thumbnails to remotion/public/ so Remotion Studio
     # and the Thumbnail.tsx preview component can load them via staticFile().
-    public_job_dir = prepare_public_job_dir(repo_root(), job_dir.name)
+    workspace_root = job_dir.parent
+    for parent in job_dir.parents:
+        if (parent / "remotion").is_dir():
+            workspace_root = parent
+            break
+    public_job_dir = prepare_public_job_dir(workspace_root, job_dir.name)
     public_outputs_dir = public_job_dir / "outputs"
     public_outputs_dir.mkdir(exist_ok=True)
     for jpg in generated:

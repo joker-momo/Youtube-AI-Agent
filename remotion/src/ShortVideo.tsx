@@ -16,6 +16,7 @@ import {RenderProps, Scene} from './render-props';
 import {ShortBackground} from './shorts/ShortBackground';
 import {pickShortLayout} from './shorts/ShortLayouts';
 import {ShortProgress} from './shorts/ShortProgress';
+import {GraphicSceneRenderer, isGraphicScene} from './graphics/GraphicSceneRenderer';
 
 function pickOverlayKey(scene: Scene): 'default' | 'dark' | 'bright' {
   const text = `${scene.visual_prompt || ''} ${scene.narration || ''}`.toLowerCase();
@@ -49,8 +50,21 @@ export const ShortVideo: React.FC<RenderProps> = (props) => {
         const durFrames = Math.max(1, Math.round((scene.duration_sec || 1) * fps));
         const from = cursor;
         cursor += durFrames;
-        const Layout = pickShortLayout(scene.layout);
         const bg = (scene as any).asset_refs?.background as string | undefined;
+
+        // Graphic scenes (layout: "graphic_*") route to the graphic renderer,
+        // which validates the payload and throws for unsupported layouts.
+        // This branch MUST come before pickShortLayout, whose unknown-layout
+        // fallback would otherwise silently render a graphic scene as stock.
+        if (isGraphicScene(scene)) {
+          return (
+            <Sequence key={scene.id || i} from={from} durationInFrames={durFrames} name={scene.id || `scene-${i + 1}`}>
+              <GraphicSceneRenderer scene={scene} durationInFrames={durFrames} fps={fps} />
+            </Sequence>
+          );
+        }
+
+        const Layout = pickShortLayout(scene.layout);
         return (
           <Sequence key={scene.id || i} from={from} durationInFrames={durFrames} name={scene.id || `scene-${i + 1}`}>
             <AbsoluteFill>
@@ -58,7 +72,7 @@ export const ShortVideo: React.FC<RenderProps> = (props) => {
               <Layout
                 on_screen_text={scene.on_screen_text}
                 caption={scene.caption}
-                layout_payload={scene.layout_payload}
+                layout_payload={scene.layout_payload as any}
                 accentColor={accentColor}
               />
             </AbsoluteFill>

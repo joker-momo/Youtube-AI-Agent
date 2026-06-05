@@ -1,6 +1,8 @@
 # Youtube AI Agent Project Status
 
-Last updated: 2026-05-30 (Shorts Autopilot v5 landed: sequential Shorts derived from long videos — legacy removed, planner/QA/audio-mix/vertical-render/manifest/API/UI, auto-trigger after long Review PASS)
+Last updated: 2026-06-05 (Shorts Graphic Kit MVP v7 landed: 3 motion-graphic layouts — graphic_checklist/graphic_step_list/graphic_plate_ratio — with Zod payload validation, Python pre-render validator, planner+QA prompt rules, GraphicMvpPreview composition; rendered + visually verified)
+
+Previously: 2026-05-30 (Shorts Autopilot v5 landed: sequential Shorts derived from long videos — legacy removed, planner/QA/audio-mix/vertical-render/manifest/API/UI, auto-trigger after long Review PASS)
 
 This file is the living project tracker. Update it whenever a meaningful system capability is added, changed, verified, or deferred so a new reader can quickly understand what the system does, what is being built now, and what remains.
 

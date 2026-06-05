@@ -1,6 +1,6 @@
 import React from 'react';
 import {AbsoluteFill, Audio, Img, interpolate, OffthreadVideo, Sequence, useCurrentFrame, useVideoConfig} from 'remotion';
-import {SceneLayout, SubtitleConfig, WordSegment} from './render-props';
+import {LayoutPayload, SceneLayout, SubtitleConfig, WordSegment} from './render-props';
 import {mediaSrc, RenderProps, Scene} from './render-props';
 import {fitHeadline, fullFrame} from './styles';
 
@@ -248,7 +248,8 @@ const RetentionOverlay: React.FC<{
   captionOpacity: number;
 }> = ({scene, palette, opacity, isLast, line, activeIndex, fallbackText, subtitles, captionOpacity}) => {
   const layout = scene.layout ?? 'subtitle';
-  const payload = scene.layout_payload ?? {};
+  // Long-form scenes only ever carry the stock LayoutPayload.
+  const payload = (scene.layout_payload ?? {}) as LayoutPayload;
   const title = payload.title || scene.on_screen_text || scene.caption;
   const body = payload.body || scene.caption || scene.narration;
   const bullets = (payload.bullets ?? []).slice(0, 4);

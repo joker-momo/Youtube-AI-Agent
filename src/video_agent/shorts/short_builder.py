@@ -17,6 +17,7 @@ from video_agent.shorts import (
     short_script_builder,
     short_seo_builder,
     source_map,
+    validate_scenes,
 )
 from video_agent.shorts.manifest import write_short_status
 from video_agent.storage.atomic import atomic_write_json
@@ -327,6 +328,22 @@ def build_short(
         })
         write_short_status(long_job_dir, short_id, status)
         return status
+
+    # --- Pre-render graphic validation (spec v7 §18) ---
+    # Runs after scene build + scene QA pass, before any render-props write or
+    # Remotion invocation. Hard-fails on unsupported graphic layouts / bad
+    # payloads so they never reach the renderer.
+    try:
+        graphic_warnings = validate_scenes.validate_short_graphic_scenes(
+            short_scenes.get("scenes") or []
+        )
+        if graphic_warnings:
+            status["graphic_warnings"] = graphic_warnings
+    except ValueError as exc:
+        update_stage("render", "failed", error=str(exc))
+        status["status"] = "failed"
+        write_short_status(long_job_dir, short_id, status)
+        raise
 
     # --- Stage 5: SEO ---
     update_stage("seo", "in_progress")

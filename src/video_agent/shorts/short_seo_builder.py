@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Any, Callable
 
 from video_agent.shorts import paths, prompts
@@ -20,6 +21,11 @@ _FORBIDDEN_HASHTAGS = {
 }
 
 _DEFAULT_FALLBACK_HASHTAGS = ["#bienestar", "#vida45plus", "#saludable", "#shorts"]
+
+_HASHTAG_ALIASES = {
+    "#nutricion45": "#nutricion",
+    "#nutrición45": "#nutricion",
+}
 
 
 def _parse(raw: str) -> dict:
@@ -45,20 +51,38 @@ def _normalize_hashtags(raw_tags: Any) -> list[str]:
     for entry in raw_tags:
         if not isinstance(entry, str):
             continue
-        tag = entry.strip().lower()
-        if not tag:
+        raw = entry.strip().lower()
+        if not raw:
             continue
-        if not tag.startswith("#"):
-            tag = "#" + tag.lstrip("#")
-        # Strip whitespace inside (LLM sometimes emits "# salud mental").
-        tag = "#" + "".join(tag[1:].split())
-        if tag in _FORBIDDEN_HASHTAGS:
-            continue
-        if tag in seen:
-            continue
-        seen.add(tag)
-        cleaned.append(tag)
+        raw_parts = re.findall(r"#[^#\s]+", raw) if raw.count("#") > 1 else [raw]
+        for raw_part in raw_parts:
+            tag = raw_part.strip().lower()
+            if not tag:
+                continue
+            if not tag.startswith("#"):
+                tag = "#" + tag.lstrip("#")
+            # Strip whitespace inside (LLM sometimes emits "# salud mental") and
+            # punctuation around the token, while preserving Spanish letters.
+            tag = "#" + re.sub(r"[^\wáéíóúüñ]+", "", "".join(tag[1:].split()), flags=re.IGNORECASE)
+            tag = _HASHTAG_ALIASES.get(tag, tag)
+            if not tag or tag == "#":
+                continue
+            if tag in _FORBIDDEN_HASHTAGS:
+                continue
+            if tag in seen:
+                continue
+            seen.add(tag)
+            cleaned.append(tag)
     return cleaned
+
+
+def _description_with_spaced_hashtags(description: str, hashtags: list[str]) -> str:
+    """Ensure visible YouTube hashtags are separated and match normalized tags."""
+    base = re.sub(r"(?:\s*#[^#\s]+)+\s*$", "", description.strip()).strip()
+    tag_text = " ".join(hashtags)
+    if not tag_text:
+        return base
+    return f"{base} {tag_text}".strip() if base else tag_text
 
 
 def build_short_seo(
@@ -85,10 +109,11 @@ def build_short_seo(
     title = (parsed.get("title") or short_script.get("hook", "")).strip()
     if len(title) > 60:
         title = title[:60].rstrip() + "…"
+    description = _description_with_spaced_hashtags((parsed.get("description") or "").strip(), hashtags)
     seo = {
         "short_id": short_id,
         "title": title,
-        "description": (parsed.get("description") or "").strip(),
+        "description": description,
         "hashtags": hashtags,
         "pinned_comment": (pinned or "").strip(),
         "long_video_url": long_video_url,

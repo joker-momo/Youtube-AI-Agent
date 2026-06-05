@@ -28,6 +28,14 @@ SHORT_LAYOUTS = (
     "short_myth", "short_quote", "short_cta",
 )
 
+# MVP graphic layouts (spec v7 §4). Routed by Remotion's GraphicSceneRenderer.
+# Must be preserved verbatim through normalization — never remapped to short_*.
+SUPPORTED_GRAPHIC_LAYOUTS = (
+    "graphic_plate_ratio",
+    "graphic_checklist",
+    "graphic_step_list",
+)
+
 # Backward-compat adapter (spec v6 §10). Legacy long-form layout names map to
 # their nearest short_* equivalent ONLY for legacy artifacts. New
 # short_scene_builder output must already use short_* directly.
@@ -49,6 +57,10 @@ def _map_layout(layout: str) -> str:
     Unknown → ``short_tip`` (safest neutral)."""
     raw = str(layout or "").strip().lower()
     if raw in SHORT_LAYOUTS:
+        return raw
+    # Preserve supported graphic layouts verbatim — they are routed by the
+    # Remotion GraphicSceneRenderer, not the short_* registry.
+    if raw in SUPPORTED_GRAPHIC_LAYOUTS:
         return raw
     if raw in _LEGACY_TO_SHORT:
         return _LEGACY_TO_SHORT[raw]
@@ -94,6 +106,12 @@ def normalize_short_scenes(scenes_doc: dict, short_script: dict) -> dict[str, An
         sc.setdefault("caption", sc.get("on_screen_text", ""))
         sc.setdefault("visual_prompt", sc.get("caption", ""))
         sc["layout"] = _map_layout(sc.get("layout"))
+        # Graphic scenes carry a "graphic" visual_type so downstream tooling
+        # can distinguish them; stock scenes keep the placeholder type.
+        sc.setdefault(
+            "visual_type",
+            "graphic" if str(sc.get("layout") or "").startswith("graphic_") else "generated_placeholder",
+        )
         sc.setdefault("layout_payload", {})
         sc.setdefault("layout_reason", "short")
         sc.setdefault("motion", "none")

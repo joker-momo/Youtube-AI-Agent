@@ -127,7 +127,11 @@ def _channel_path(channel_config: dict) -> Path:
     return repo_root() / "configs" / channel_id / "channel.yaml"
 
 
-def render_short_video(short_dir: Path, channel_config: dict) -> Path:  # pragma: no cover - needs Remotion
+def render_short_video(
+    short_dir: Path,
+    channel_config: dict,
+    stop_request_path: Path | None = None,
+) -> Path:  # pragma: no cover - needs Remotion
     from video_agent.pipeline import OperatorRenderOptions, render_operator_job
 
     materialize_short_job_aliases(short_dir, channel_config)
@@ -150,6 +154,9 @@ def render_short_video(short_dir: Path, channel_config: dict) -> Path:  # pragma
             job_dir=short_dir,
             render=True,
             require_operator_qa=False,
+            # Let the operator press Stop mid-render: render_with_remotion polls
+            # this path and SIGTERMs the Remotion subprocess when it appears.
+            stop_request_path=stop_request_path,
         )
     )
     produced = outputs_dir / "video.mp4"  # render_operator_job puts it here

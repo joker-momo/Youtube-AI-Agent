@@ -755,11 +755,33 @@ def stop_job(
     task = _RUN_ALL_TASKS.get(job_id)
     if task is not None and not task.done():
         cancelled = task.cancel("stop requested by operator")
+
+    # If a synchronous Short build is orphaned (no live worker owns it), the
+    # .stop_requested flag has no consumer — its check_stop only aborts an
+    # in-process build. Force any ownerless active short to a terminal status so
+    # the UI releases it instead of showing a Short stuck at "generating".
+    recovered_shorts: list[str] = []
+    try:
+        from video_agent.orchestrator.queue import JobQueue
+        from video_agent.shorts import status as shorts_status
+
+        try:
+            queue = JobQueue(jobs_root / "queue.db")
+        except Exception:
+            queue = None
+        owner_alive = shorts_status.short_owner_is_alive(job_dir, queue=queue)
+        recovered_shorts = shorts_status.force_terminate_orphaned_shorts(
+            job_dir, owner_alive=owner_alive
+        )
+    except Exception:
+        pass
+
     return {
         "job_id": job_id,
         "stop_requested": True,
         "cancelled": bool(cancelled),
         "killed_pids": killed_pids,
+        "recovered_shorts": recovered_shorts,
     }
 
 

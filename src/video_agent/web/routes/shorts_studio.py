@@ -253,6 +253,14 @@ def get_shorts_studio_drafts(job_id: str, jobs_root: Path = Depends(get_jobs_roo
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
 
+    # Liveness probe (lock + queue heartbeat) computed once per request so we can
+    # recover orphaned "generating" shorts whose owning worker died on restart.
+    try:
+        _queue = JobQueue(jobs_root / "queue.db")
+    except Exception:
+        _queue = None
+    owner_alive = shorts_status.short_owner_is_alive(job_dir, queue=_queue)
+
     manifest = _read_json(shorts_paths.manifest_path(job_dir))
     manifest_short_ids: set[str] = set()
     drafts: list[dict[str, Any]] = []
@@ -263,6 +271,11 @@ def get_shorts_studio_drafts(job_id: str, jobs_root: Path = Depends(get_jobs_roo
         manifest_short_ids.add(short_id)
         short_dir = shorts_paths.short_dir(job_dir, short_id)
         status_doc = _read_json(shorts_paths.short_status_path(job_dir, short_id))
+        _recovered = shorts_status.recover_stale_short(
+            job_dir, short_id, status_doc, owner_alive=owner_alive
+        )
+        if _recovered is not None:
+            status_doc = _recovered
         qa_doc = _read_json(short_dir / shorts_paths.SHORT_QA_FILE)
         source_map = _read_json(short_dir / shorts_paths.SHORT_SOURCE_MAP_FILE)
         seo_doc = _read_json(short_dir / shorts_paths.SHORT_SEO_FILE)
@@ -312,6 +325,11 @@ def get_shorts_studio_drafts(job_id: str, jobs_root: Path = Depends(get_jobs_roo
             status_doc = _read_json(status_path)
             if not status_doc:
                 continue
+            _recovered = shorts_status.recover_stale_short(
+                job_dir, short_id, status_doc, owner_alive=owner_alive
+            )
+            if _recovered is not None:
+                status_doc = _recovered
             # Build a draft entry from the on-disk status file
             short_dir = shorts_paths.short_dir(job_dir, short_id)
             qa_doc = _read_json(short_dir / shorts_paths.SHORT_QA_FILE)

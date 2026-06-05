@@ -53,10 +53,10 @@ def _default_mix_fn(short_dir: Path, narration_wav: Path, music_track: str, chan
     return mix_short_audio(short_dir, narration_wav, music_track, channel_config, duration_sec)
 
 
-def _default_render_fn(short_dir: Path, channel_config: dict) -> Path:
+def _default_render_fn(short_dir: Path, channel_config: dict, stop_request_path: Path | None = None) -> Path:
     from video_agent.shorts.renderer import render_short_video
 
-    return render_short_video(short_dir, channel_config)
+    return render_short_video(short_dir, channel_config, stop_request_path=stop_request_path)
 
 
 def _default_cover_fn(short_dir: Path, channel_config: dict) -> Path:
@@ -145,6 +145,9 @@ def build_short(
         "stages": stages,
         "created_at": started_at,
         "updated_at": started_at,
+        # Liveness signal consumed by shorts.status orphan recovery: refreshed on
+        # every update_stage so a build that dies mid-stage goes stale.
+        "heartbeat_at": started_at,
     }
 
     def update_stage(stage_name: str, new_status: str, **kwargs):
@@ -169,6 +172,7 @@ def build_short(
                     s[k] = v
                 break
         status["updated_at"] = now_str
+        status["heartbeat_at"] = now_str
         write_short_status(long_job_dir, short_id, status)
 
     def check_stop():
@@ -429,7 +433,15 @@ def build_short(
     update_stage("render", "in_progress")
     try:
         check_stop()
-        video_path = render_fn(sd, channel_config)
+        # Pass the stop-request file so the Remotion render subprocess can be
+        # SIGTERMed mid-render when the operator presses Stop. ``check_stop``
+        # only fires between stages; without this the long render keeps running.
+        stop_file = long_job_dir / ".stop_requested"
+        try:
+            video_path = render_fn(sd, channel_config, stop_request_path=stop_file)
+        except TypeError:
+            # Injected render_fn without the kwarg (back-compat).
+            video_path = render_fn(sd, channel_config)
         check_stop()
         cover_path = cover_fn(sd, channel_config)
         update_stage("render", "completed")

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from video_agent.contracts import repo_root
@@ -94,6 +95,33 @@ def list_shorts(job_id: str, jobs_root: Path = Depends(get_jobs_root)) -> dict:
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
     return {"job_id": job_id, **status.summarize_shorts(job_dir)}
+
+
+@router.get("/jobs/{job_id}/shorts/{short_id}/llm-history")
+def get_short_llm_history(
+    job_id: str,
+    short_id: str,
+    format: str = "md",
+    jobs_root: Path = Depends(get_jobs_root),
+):
+    """All ChatGPT + Gemini prompts/responses for one Short (incl. failed attempts).
+
+    ``?format=md`` (default) returns a human-readable Markdown transcript;
+    ``?format=json`` returns the raw ordered JSONL records as a JSON array.
+    """
+    from video_agent.shorts import llm_history
+
+    job_dir = _safe_job_dir(jobs_root, job_id)
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    hist_path = paths.short_json_dir(job_dir, short_id) / paths.SHORT_LLM_HISTORY_FILE
+    history = llm_history.read_history(hist_path)
+    if not history:
+        raise HTTPException(status_code=404, detail=f"No LLM history for short: {short_id}")
+    if format == "json":
+        return {"job_id": job_id, "short_id": short_id, "count": len(history), "calls": history}
+    md = llm_history.render_markdown(history, short_id=short_id)
+    return PlainTextResponse(md, media_type="text/markdown; charset=utf-8")
 
 
 @router.post("/jobs/{job_id}/shorts/autopilot", status_code=202)

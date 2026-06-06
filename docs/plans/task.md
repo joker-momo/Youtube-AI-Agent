@@ -25,10 +25,10 @@
 | Task 23: Build Control Flow & Exact Audio-Fit Gate in short_builder.py | [x] | Move exact audio-fit check before SEO and implement the repair loop |
 | Task 24: Add Regression Tests | [x] | Add tests for graphic preference warning, total_duration_sec, and audio-fit repair |
 | Task 25: Verify all tests passing | [x] | Run the full test suite to verify no regressions |
-| Task 26: Recompute total_duration_sec and normalize it | [ ] | Normalize total_duration_sec and warning rename |
-| Task 27: Auto-extend scene duration within layout cap | [ ] | Implement repair_scene_duration_if_possible |
-| Task 28: Implement action-specific scene repair hints | [ ] | Update build_scene_repair_plan instructions |
-| Task 29: Update scene and QA prompt templates | [ ] | Add word caps and product_scores to prompts.py |
-| Task 30: Implement defensive product scores parsing | [ ] | Add defensive parsing and thresholds check in qa.py |
-| Task 31: Control flow script escalation and fallback score checks | [ ] | Implement escalation loop and fallback scores check in short_builder.py |
-| Task 32: Add regression tests and verify all passing | [ ] | Verify full test suite passes with new changes |
+| Task 26: Recompute total_duration_sec and normalize it | [x] | Normalize total_duration_sec and warning rename |
+| Task 27: Auto-extend scene duration within layout cap | [x] | Implement repair_scene_duration_if_possible |
+| Task 28: Implement action-specific scene repair hints | [x] | Update build_scene_repair_plan instructions |
+| Task 29: Update scene and QA prompt templates | [x] | Add word caps and product_scores to prompts.py |
+| Task 30: Implement defensive product scores parsing | [x] | Add defensive parsing and thresholds check in qa.py |
+| Task 31: Control flow script escalation and fallback score checks | [x] | Implement escalation loop and fallback scores check in short_builder.py |
+| Task 32: Add regression tests and verify all passing | [x] | Verify full test suite passes with new changes |

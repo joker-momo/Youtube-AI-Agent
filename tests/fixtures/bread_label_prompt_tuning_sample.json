@@ -1,0 +1,87 @@
+{
+  "scenes": [
+    {
+      "id": "S01",
+      "layout": "short_hook",
+      "duration_sec": 2.4,
+      "on_screen_text": "MARRÓN NO BASTA",
+      "narration": "El pan marrón no basta.",
+      "visual_prompt": "Spanish supermarket bread aisle, hand comparing a dark brown bread package with a visible ingredient label, realistic warm light",
+      "visual_type": "stock",
+      "layout_payload": {}
+    },
+    {
+      "id": "S02",
+      "layout": "short_myth",
+      "duration_sec": 2.6,
+      "on_screen_text": "MITO: SI ES MARRÓN",
+      "narration": "Mito: si es marrón, es integral.",
+      "visual_prompt": "close-up of brown bread slices next to a package label, realistic home kitchen",
+      "visual_type": "stock",
+      "layout_payload": {}
+    },
+    {
+      "id": "S03",
+      "layout": "graphic_checklist",
+      "duration_sec": 3.8,
+      "on_screen_text": "BUSCA INTEGRAL",
+      "narration": "",
+      "visual_prompt": "",
+      "visual_type": "graphic",
+      "layout_payload": {
+        "variant": "warm_olive",
+        "background_mode": "paper",
+        "surface_style": "soft_card",
+        "title": "BUSCA INTEGRAL",
+        "items": [
+          "Harina integral de trigo",
+          "Centeno integral",
+          "Espelta integral"
+        ],
+        "footer": "Primero en ingredientes"
+      }
+    },
+    {
+      "id": "S04",
+      "layout": "short_tip",
+      "duration_sec": 2.8,
+      "on_screen_text": "COMPRA PANES",
+      "narration": "Compra panes, no promesas.",
+      "visual_prompt": "adult in Spain choosing bread in a supermarket, label visible, calm realistic lifestyle footage",
+      "visual_type": "stock",
+      "layout_payload": {}
+    },
+    {
+      "id": "S05",
+      "layout": "graphic_label_callout",
+      "duration_sec": 4.2,
+      "on_screen_text": "MIRA LA ETIQUETA",
+      "narration": "",
+      "visual_prompt": "",
+      "visual_type": "graphic",
+      "layout_payload": {
+        "variant": "cream_focus",
+        "background_mode": "paper",
+        "surface_style": "soft_card",
+        "title": "MIRA LA ETIQUETA",
+        "productLabel": "Pan integral",
+        "callouts": [
+          {"label": "Azúcar", "value": "Revisar"},
+          {"label": "Jarabes", "value": "Revisar"},
+          {"label": "Lista larga", "value": "Comparar"}
+        ],
+        "footer": "Menos promesas. Más etiqueta."
+      }
+    },
+    {
+      "id": "S06",
+      "layout": "short_cta",
+      "duration_sec": 2.2,
+      "on_screen_text": "GUÁRDALO PARA LA COMPRA",
+      "narration": "Guárdalo para la compra.",
+      "visual_prompt": "shopping basket with bread and a visible label, warm Spanish supermarket aisle",
+      "visual_type": "stock",
+      "layout_payload": {}
+    }
+  ]
+}

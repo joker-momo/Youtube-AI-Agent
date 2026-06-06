@@ -134,28 +134,6 @@ def normalize_short_scenes(scenes_doc: dict, short_script: dict) -> dict[str, An
         for s in norm_scenes
     )
     if script_cta and not has_cta_scene:
-        # Merge scenes from the end if adding the CTA would exceed the maximum of 7 scenes.
-        while len(norm_scenes) >= 7 and len(norm_scenes) >= 2:
-            s1 = norm_scenes[-2]
-            s2 = norm_scenes[-1]
-            merged_scene = {
-                "id": s1["id"],
-                "duration_sec": s1.get("duration_sec", 3.0) + s2.get("duration_sec", 3.0),
-                "layout": s1.get("layout", "short_tip"),
-                "narration": (str(s1.get("narration") or "").strip() + " " + str(s2.get("narration") or "").strip()).strip(),
-                "caption": s1.get("caption") or s2.get("caption") or "",
-                "on_screen_text": s1.get("on_screen_text") or s2.get("on_screen_text") or "",
-                "visual_prompt": s1.get("visual_prompt") or s2.get("visual_prompt") or "",
-                "motion": s1.get("motion") or s2.get("motion") or "none",
-                "layout_payload": {**s1.get("layout_payload", {}), **s2.get("layout_payload", {})},
-                "layout_reason": "merged_to_fit_cta",
-                "asset_refs": {**s1.get("asset_refs", {}), **s2.get("asset_refs", {})},
-                "word_segments": [],
-                "planner_warnings": [],
-                "audio_offset_sec": 0.0,
-            }
-            norm_scenes = norm_scenes[:-2] + [merged_scene]
-
         cta_idx = len(norm_scenes) + 1
         use_zero = any(re.match(r"^s\d{2}$", str(s.get("id") or "")) for s in norm_scenes)
         cta_id = f"s{cta_idx:02d}" if use_zero else f"s{cta_idx}"
@@ -175,7 +153,7 @@ def normalize_short_scenes(scenes_doc: dict, short_script: dict) -> dict[str, An
             "word_segments": [],
             "planner_warnings": [],
             "audio_offset_sec": 0.0,
-            "duration_sec": 3.5,
+            "duration_sec": 2.4,
         })
 
     out["scenes"] = norm_scenes

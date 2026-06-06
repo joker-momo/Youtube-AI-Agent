@@ -30,7 +30,11 @@ SHORT_SEO_FILE = "short_seo.json"
 SHORT_QA_FILE = "short_qa.json"
 SHORT_SCRIPT_QA_FILE = "short_script_qa.json"
 SHORT_SCENES_QA_FILE = "short_scenes_qa.json"
+SHORT_SCENE_STRUCTURE_FILE = "short_scene_structure.json"
+SHORT_SCENE_REPAIR_FILE = "short_scene_repair.json"
+SHORT_FAILURE_REPORT_FILE = "short_failure_report.json"
 SHORT_RENDER_PROPS_FILE = "short_render_props.json"
+SHORT_LLM_HISTORY_FILE = "llm_history.jsonl"  # all ChatGPT + Gemini prompts/responses
 SHORT_COVER_FILE = "short_cover.jpg"
 SHORT_THUMBNAIL_FILE = "thumbnail.jpg"
 SHORT_VIDEO_FILE = "short.mp4"
@@ -147,4 +151,3 @@ def slugify(text: str) -> str:
     slug = re.sub(r'[^a-z0-9\s-]', '', slug)
     slug = re.sub(r'[\s-]+', '-', slug).strip('-')
     return slug[:20].strip('-') or "short"
-

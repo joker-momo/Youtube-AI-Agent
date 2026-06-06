@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from video_agent.shorts import (
+    llm_history,
     paths,
     qa,
     short_scene_builder,
@@ -96,6 +97,13 @@ def build_short(
     _jd.mkdir(parents=True, exist_ok=True)
     _od = paths.short_outputs_dir(long_job_dir, short_id)
     _od.mkdir(parents=True, exist_ok=True)
+
+    # Record every ChatGPT + Gemini prompt/response for this Short — including
+    # failed QA verdicts and every regeneration retry — to one JSONL file.
+    _recorder = llm_history.LLMHistoryRecorder(_jd / paths.SHORT_LLM_HISTORY_FILE)
+    llm_fn = _recorder.wrap(llm_fn, "chatgpt")
+    if gemini_fn is not None:
+        gemini_fn = _recorder.wrap(gemini_fn, "gemini", default_kind="qa")
 
     ap = (channel_config.get("shorts") or {}).get("autopilot") or {}
     max_regen = int(ap.get("max_regeneration_attempts", 2))
@@ -190,14 +198,24 @@ def build_short(
     short_script: dict[str, Any] = {}
     script_feedback = ""
     script_attempts = 0
+    scenes_attempts = 0
+    total_regeneration_attempts = 0
 
     plan_for_prompt = {**short_plan, "source_long_job_id": long_job_dir.name}
+    scenes_qa_result: dict[str, Any] = {"verdict": "FAIL", "issues": ["not_generated"]}
+    short_scenes: dict[str, Any] = {}
+    scenes_feedback = ""
+    best_scene_candidate = None
+    best_scene_candidate_qa = None
 
-    # --- Loop 1: Script + QA Script ---
-    for attempt in range(max_regen + 1):
-        check_stop()
-        script_attempts = attempt + 1
-        
+    narration_wav = None
+    duration_sec = 0.0
+
+    # We use a while loop for script generation, allowing loop back on audio_fit failure
+    while script_attempts < max_regen + 1:
+        script_attempts += 1
+        total_regeneration_attempts = (script_attempts - 1) + max(0, scenes_attempts - 1)
+
         # --- Stage 1: Script ---
         update_stage("script", "in_progress")
         try:
@@ -242,84 +260,379 @@ def build_short(
             write_short_status(long_job_dir, short_id, status)
             raise exc
 
-        if script_qa_result["verdict"] == "PASS":
+        if script_qa_result["verdict"] != "PASS":
+            script_feedback = "; ".join(script_qa_result.get("required_changes") or script_qa_result.get("issues") or [])
+            continue
+
+        # Script passed! Reset and run the Scenes loop
+        scenes_attempts = 0
+        scene_fit_failures = 0
+        scenes_qa_result = {"verdict": "FAIL", "issues": ["not_generated"]}
+        short_scenes = {}
+        scenes_feedback = ""
+        best_scene_candidate = None
+        best_scene_candidate_qa = None
+
+        scenes_passed = False
+        escalate_to_script = False
+        while scenes_attempts < max_regen + 1:
+            scenes_attempts += 1
+            total_regeneration_attempts = (script_attempts - 1) + (scenes_attempts - 1)
+
+            # --- Stage 3: Scenes ---
+            update_stage("scenes", "in_progress")
+            try:
+                check_stop()
+                short_scenes = short_scene_builder.build_short_scenes(
+                    long_job_dir, plan_for_prompt, short_script, channel_config, llm_fn,
+                    feedback=scenes_feedback, attempt=scenes_attempts,
+                )
+                update_stage("scenes", "completed")
+            except Exception as exc:
+                update_stage("scenes", "failed")
+                status["status"] = "failed"
+                write_short_status(long_job_dir, short_id, status)
+                raise exc
+
+            scenes = short_scenes.get("scenes") or []
+            for scene in scenes:
+                validate_scenes.repair_scene_duration_if_possible(scene)
+
+            structure_issues = validate_scenes.validate_scene_structure(
+                scenes,
+                scenes_doc=short_scenes,
+                script=short_script,
+            )
+
+            # Check for scene_narration_fit failures
+            has_fit_failure = any(
+                issue.type == "scene_narration_fit" and issue.severity in ("blocking_error", "repairable_error")
+                for issue in structure_issues
+            )
+            if has_fit_failure:
+                scene_fit_failures += 1
+
+            structure_doc = {
+                "attempt": scenes_attempts,
+                "verdict": "FAIL" if validate_scenes.has_blocking_or_repairable(structure_issues) else "PASS",
+                "issues": validate_scenes.issues_to_dicts(structure_issues),
+            }
+            atomic_write_json(_jd / paths.SHORT_SCENE_STRUCTURE_FILE, structure_doc)
+            _recorder.record_event(
+                "deterministic",
+                "scene_validation",
+                structure_doc,
+                ok=structure_doc["verdict"] == "PASS",
+            )
+
+            if validate_scenes.has_blocking_or_repairable(structure_issues):
+                repair_plan = validate_scenes.build_scene_repair_plan(
+                    scenes,
+                    structure_issues,
+                    script=short_script,
+                )
+                atomic_write_json(_jd / paths.SHORT_SCENE_REPAIR_FILE, {
+                    "attempt": scenes_attempts,
+                    **repair_plan,
+                })
+                _recorder.record_event(
+                    "deterministic",
+                    "scene_repair_plan",
+                    {"attempt": scenes_attempts, **repair_plan},
+                )
+                scenes_qa_result = {
+                    "verdict": "FAIL",
+                    "issues": validate_scenes.issues_to_dicts(structure_issues),
+                    "required_changes": repair_plan["instructions"],
+                    "warnings": [
+                        issue.detail for issue in structure_issues
+                        if issue.severity == "warning"
+                    ],
+                    "provider": "deterministic",
+                    "repair_plan": repair_plan,
+                }
+                atomic_write_json(_jd / paths.SHORT_SCENES_QA_FILE, scenes_qa_result)
+                update_stage("qa_scenes", "failed", qa_verdict="FAIL")
+
+                if scene_fit_failures >= 2:
+                    escalate_to_script = True
+                    break
+
+                scenes_feedback = "\n".join(repair_plan["instructions"])
+                continue
+
+            # --- Stage 4: QA Scenes ---
+            update_stage("qa_scenes", "in_progress")
+            try:
+                check_stop()
+                scenes_qa_result = qa.run_short_scenes_qa(
+                    long_job_dir, short_id, channel_config,
+                    gemini_fn=gemini_fn, attempt=scenes_attempts,
+                )
+                atomic_write_json(_jd / paths.SHORT_SCENES_QA_FILE, scenes_qa_result)
+                verdict = scenes_qa_result.get("verdict", "FAIL")
+                update_stage("qa_scenes", "completed" if verdict == "PASS" else "failed", qa_verdict=verdict)
+            except Exception as exc:
+                update_stage("qa_scenes", "failed")
+                status["status"] = "failed"
+                write_short_status(long_job_dir, short_id, status)
+                raise exc
+
+            if scenes_qa_result["verdict"] == "PASS":
+                best_scene_candidate = dict(short_scenes)
+                best_scene_candidate_qa = dict(scenes_qa_result)
+                scenes_passed = True
+                break
+            if not validate_scenes.has_blocking_or_repairable(structure_issues):
+                best_scene_candidate = dict(short_scenes)
+                best_scene_candidate_qa = dict(scenes_qa_result)
+            scenes_feedback = "; ".join(scenes_qa_result.get("required_changes") or scenes_qa_result.get("issues") or [])
+
+        if escalate_to_script:
+            script_feedback = (
+                "SCRIPT COMPRESSION REQUIRED:\n"
+                "- Scene-level narration fit failed after 2 attempts.\n"
+                "- Compress hook to 4–6 words.\n"
+                '- Compress ingredient narration to "Busca harina integral al principio."\n'
+                '- Compress final line to "La etiqueta ayuda a elegir."\n'
+                "- Move examples to on-screen text / graphic payload.\n"
+                "- Keep 3 spoken checklist points max."
+            )
+            atomic_write_json(_jd / paths.SHORT_FAILURE_REPORT_FILE, {
+                "stage": "scenes",
+                "attempt": scenes_attempts,
+                "detail": "Escalating to script compression due to repeated scene_narration_fit failures.",
+                "feedback": script_feedback,
+            })
+            continue
+
+        # Fallback handling
+        if not scenes_passed and scenes_qa_result["verdict"] != "PASS":
+            if best_scene_candidate is not None and best_scene_candidate_qa is not None:
+                candidate_issues = validate_scenes.validate_scene_structure(
+                    best_scene_candidate.get("scenes") or [],
+                    scenes_doc=best_scene_candidate,
+                    script=short_script,
+                )
+                llm_issue_text = json.dumps(best_scene_candidate_qa.get("issues") or [], ensure_ascii=False).lower()
+                unsafe_llm_issue = any(
+                    token in llm_issue_text
+                    for token in ("source_fidelity", "safety", "medical", "overclaim", "unreadable", "off-topic", "off topic")
+                )
+                
+                # Check product scores if gemini_fn is not None
+                if gemini_fn is not None:
+                    scores = best_scene_candidate_qa.get("product_scores") or {}
+                    values = []
+                    for key in qa.PRODUCT_SCORE_KEYS:
+                        try:
+                            values.append(float(scores.get(key, 0)))
+                        except (TypeError, ValueError):
+                            values.append(0.0)
+                    average_score = sum(values) / len(values) if values else 0.0
+                    has_low_score = any(val < qa.MIN_PRODUCT_SCORE for val in values)
+                    avg_too_low = average_score < qa.MIN_AVERAGE_PRODUCT_SCORE
+                    missing_scores = len(values) != len(qa.PRODUCT_SCORE_KEYS)
+                    product_score_ok = (not missing_scores) and (not has_low_score) and (not avg_too_low)
+                else:
+                    product_score_ok = True
+
+                if not validate_scenes.has_blocking_or_repairable(candidate_issues) and not unsafe_llm_issue and product_score_ok:
+                    short_scenes = best_scene_candidate
+                    scenes_qa_result = {
+                        **best_scene_candidate_qa,
+                        "verdict": "PASS",
+                        "warnings": list(best_scene_candidate_qa.get("warnings") or []) + [
+                            "best_candidate_fallback_used_after_llm_qa_warnings"
+                        ],
+                        "provider": "best_candidate_fallback",
+                    }
+                    atomic_write_json(_jd / paths.SHORT_SCENES_QA_FILE, scenes_qa_result)
+                    scenes_passed = True
+                else:
+                    atomic_write_json(_jd / paths.SHORT_FAILURE_REPORT_FILE, {
+                        "stage": "qa_scenes",
+                        "best_candidate_available": True,
+                        "deterministic_issues": validate_scenes.issues_to_dicts(candidate_issues),
+                        "llm_qa": best_scene_candidate_qa,
+                    })
+
+        if not scenes_passed:
             break
-        script_feedback = "; ".join(script_qa_result.get("required_changes") or script_qa_result.get("issues") or [])
 
-    if script_qa_result["verdict"] != "PASS":
-        update_stage("scenes", "skipped")
-        update_stage("qa_scenes", "skipped")
-        update_stage("seo", "skipped")
-        update_stage("audio", "skipped")
-        update_stage("render", "skipped")
-        status.update({
-            "status": "needs_review",
-            "rendered": False,
-            "uploaded": False,
-            "youtube_url": "",
-            "requires_user_review": True,
-            "qa_verdict": "FAIL",
-            "regeneration_attempts": script_attempts - 1,
-        })
-        write_short_status(long_job_dir, short_id, status)
-        return status
+        # Scenes passed! Run graphic validator
+        try:
+            graphic_warnings = validate_scenes.validate_short_graphic_scenes(
+                short_scenes.get("scenes") or []
+            )
+            if graphic_warnings:
+                status["graphic_warnings"] = graphic_warnings
+        except ValueError as exc:
+            update_stage("render", "failed", error=str(exc))
+            status["status"] = "failed"
+            write_short_status(long_job_dir, short_id, status)
+            raise
 
-    # --- Loop 2: Scenes + QA Scenes ---
-    scenes_qa_result: dict[str, Any] = {"verdict": "FAIL", "issues": ["not_generated"]}
-    short_scenes: dict[str, Any] = {}
-    scenes_feedback = ""
-    scenes_attempts = 0
-
-    for attempt in range(max_regen + 1):
-        check_stop()
-        scenes_attempts = attempt + 1
-
-        # --- Stage 3: Scenes ---
-        update_stage("scenes", "in_progress")
+        # Stage 6: Audio TTS & exact audio_fit check
+        update_stage("audio", "in_progress")
         try:
             check_stop()
-            short_scenes = short_scene_builder.build_short_scenes(
-                long_job_dir, plan_for_prompt, short_script, channel_config, llm_fn,
-                feedback=scenes_feedback, attempt=scenes_attempts,
+            narration_wav = tts_fn(sd, short_scenes, channel_config)
+            duration_sec = float(
+                sum(float(s.get("duration_sec") or 0.0) for s in (short_scenes.get("scenes") or []))
+                or short_scenes.get("total_duration_sec")
+                or 0.0
             )
-            update_stage("scenes", "completed")
+            short_scenes["total_duration_sec"] = round(duration_sec, 1)
+            narration_audio_sec = validate_scenes.probe_audio_duration_sec(narration_wav)
+            
+            audio_fit_passed = True
+            audio_issue = None
+            if narration_audio_sec is not None:
+                audio_issue = validate_scenes.validate_audio_fit(duration_sec, narration_audio_sec)
+                if audio_issue:
+                    audio_fit_passed = False
+
+            if not audio_fit_passed:
+                if script_attempts < max_regen + 1:
+                    repair_plan = validate_scenes.build_scene_repair_plan(
+                        short_scenes.get("scenes") or [],
+                        [audio_issue],
+                        script=short_script,
+                    )
+                    atomic_write_json(_jd / paths.SHORT_FAILURE_REPORT_FILE, {
+                        "stage": "audio",
+                        "issues": [audio_issue.to_dict()],
+                        "render_duration_sec": duration_sec,
+                        "narration_audio_sec": round(narration_audio_sec, 3),
+                        "repair_plan": repair_plan,
+                    })
+                    _recorder.record_event(
+                        "deterministic",
+                        "audio_fit",
+                        {
+                            "verdict": "FAIL",
+                            "issue": audio_issue.to_dict(),
+                            "render_duration_sec": duration_sec,
+                            "narration_audio_sec": round(narration_audio_sec, 3),
+                        },
+                        ok=False,
+                    )
+                    script_feedback = "\n".join(repair_plan["instructions"])
+                    update_stage("audio", "failed", error=audio_issue.detail)
+                    continue
+                else:
+                    update_stage("audio", "failed", error=audio_issue.detail)
+                    atomic_write_json(_jd / paths.SHORT_FAILURE_REPORT_FILE, {
+                        "stage": "audio",
+                        "issues": [audio_issue.to_dict()],
+                        "render_duration_sec": duration_sec,
+                        "narration_audio_sec": round(narration_audio_sec, 3),
+                    })
+                    status.update({
+                        "status": "needs_review",
+                        "rendered": False,
+                        "uploaded": False,
+                        "youtube_url": "",
+                        "requires_user_review": True,
+                        "qa_verdict": "FAIL",
+                        "duration_sec": round(duration_sec, 1),
+                        "audio_fit_issue": audio_issue.to_dict(),
+                        "regeneration_attempts": total_regeneration_attempts,
+                    })
+                    write_short_status(long_job_dir, short_id, status)
+                    return status
+            else:
+                audio_fit_passed = True
         except Exception as exc:
-            update_stage("scenes", "failed")
+            update_stage("audio", "failed")
             status["status"] = "failed"
             write_short_status(long_job_dir, short_id, status)
             raise exc
 
-        # --- Stage 4: QA Scenes ---
-        update_stage("qa_scenes", "in_progress")
+        # Stage 5: SEO (Only runs after audio_fit passes!)
+        update_stage("seo", "in_progress")
         try:
             check_stop()
-            scenes_qa_result = qa.run_short_scenes_qa(
-                long_job_dir, short_id, channel_config,
-                gemini_fn=gemini_fn, attempt=scenes_attempts,
+            short_seo_builder.build_short_seo(
+                long_job_dir, short_id, plan_for_prompt, short_script, channel_config, llm_fn, long_video_url
             )
-            atomic_write_json(_jd / paths.SHORT_SCENES_QA_FILE, scenes_qa_result)
-            verdict = scenes_qa_result.get("verdict", "FAIL")
-            update_stage("qa_scenes", "completed" if verdict == "PASS" else "failed", qa_verdict=verdict)
+            update_stage("seo", "completed")
         except Exception as exc:
-            update_stage("qa_scenes", "failed")
+            update_stage("seo", "failed")
             status["status"] = "failed"
             write_short_status(long_job_dir, short_id, status)
             raise exc
 
-        if scenes_qa_result["verdict"] == "PASS":
-            break
-        scenes_feedback = "; ".join(scenes_qa_result.get("required_changes") or scenes_qa_result.get("issues") or [])
-
-    if scenes_qa_result["verdict"] != "PASS":
-        update_stage("seo", "skipped")
-        update_stage("audio", "skipped")
-        update_stage("render", "skipped")
+        hook = str(short_script.get("hook") or "")
+        cover_text = _cover_text(hook, cover_words)
         duration_sec = float(
             short_scenes.get("total_duration_sec")
-            or sum(float(s.get("duration_sec") or 0) for s in (short_scenes.get("scenes") or []))
+            or sum(float(s.get("duration_sec") or 0.0) for s in (short_scenes.get("scenes") or []))
             or short_script.get("target_duration_sec")
-            or 0
+            or 0.0
         )
+
+        # Save finalized metadata to status
+        status.update({
+            "hook": hook,
+            "cover_text": cover_text,
+            "duration_sec": round(duration_sec, 1),
+            "qa_verdict": "PASS",
+            "regeneration_attempts": total_regeneration_attempts,
+        })
+        write_short_status(long_job_dir, short_id, status)
+
+        # Stage 5b: Thumbnail
+        update_stage("thumbnail", "in_progress")
+        try:
+            check_stop()
+            thumb_result = thumbnail_fn(long_job_dir, short_id, channel_config)
+            if thumb_result:
+                update_stage("thumbnail", "completed")
+            else:
+                update_stage("thumbnail", "skipped")
+        except Exception as exc:
+            update_stage("thumbnail", "failed", error=str(exc))
+
+        if require_render_confirmation:
+            _write_render_props(sd, short_scenes, channel_config, music_track)
+            update_stage("audio", "pending")
+            update_stage("render", "pending")
+            status.update({
+                "status": "ready_for_render",
+                "rendered": False,
+                "uploaded": False,
+                "youtube_url": "",
+                "requires_user_review": False,
+                "requires_render_confirmation": True,
+                "video_path": None,
+                "cover_path": None,
+            })
+            write_short_status(long_job_dir, short_id, status)
+            return status
+
+        # Mix and finalize audio
+        try:
+            check_stop()
+            mix_fn(sd, narration_wav, music_track, channel_config, duration_sec)
+            _write_render_props(sd, short_scenes, channel_config, music_track)
+            update_stage("audio", "completed")
+        except Exception as exc:
+            update_stage("audio", "failed")
+            status["status"] = "failed"
+            write_short_status(long_job_dir, short_id, status)
+            raise exc
+
+        # All stages completed successfully! Break out of outer loop.
+        break
+
+    # If loops finished but script/scene QA didn't pass, handle review status
+    if script_qa_result["verdict"] != "PASS" or scenes_qa_result["verdict"] != "PASS":
+        # Mark remaining pending stages as skipped
+        for s in status["stages"]:
+            if s["status"] == "pending":
+                s["status"] = "skipped"
         status.update({
             "status": "needs_review",
             "rendered": False,
@@ -328,106 +641,10 @@ def build_short(
             "requires_user_review": True,
             "qa_verdict": "FAIL",
             "duration_sec": round(duration_sec, 1),
-            "regeneration_attempts": (script_attempts - 1) + (scenes_attempts - 1),
+            "regeneration_attempts": total_regeneration_attempts,
         })
         write_short_status(long_job_dir, short_id, status)
         return status
-
-    # --- Pre-render graphic validation (spec v7 §18) ---
-    # Runs after scene build + scene QA pass, before any render-props write or
-    # Remotion invocation. Hard-fails on unsupported graphic layouts / bad
-    # payloads so they never reach the renderer.
-    try:
-        graphic_warnings = validate_scenes.validate_short_graphic_scenes(
-            short_scenes.get("scenes") or []
-        )
-        if graphic_warnings:
-            status["graphic_warnings"] = graphic_warnings
-    except ValueError as exc:
-        update_stage("render", "failed", error=str(exc))
-        status["status"] = "failed"
-        write_short_status(long_job_dir, short_id, status)
-        raise
-
-    # --- Stage 5: SEO ---
-    update_stage("seo", "in_progress")
-    try:
-        check_stop()
-        short_seo_builder.build_short_seo(
-            long_job_dir, short_id, plan_for_prompt, short_script, channel_config, llm_fn, long_video_url
-        )
-        update_stage("seo", "completed")
-    except Exception as exc:
-        update_stage("seo", "failed")
-        status["status"] = "failed"
-        write_short_status(long_job_dir, short_id, status)
-        raise exc
-
-    hook = str(short_script.get("hook") or "")
-    cover_text = _cover_text(hook, cover_words)
-    duration_sec = float(
-        short_scenes.get("total_duration_sec")
-        or sum(float(s.get("duration_sec") or 0) for s in (short_scenes.get("scenes") or []))
-        or short_script.get("target_duration_sec")
-        or 0
-    )
-
-    # Save finalized metadata to status
-    status.update({
-        "hook": hook,
-        "cover_text": cover_text,
-        "duration_sec": round(duration_sec, 1),
-        "qa_verdict": "PASS",
-        "regeneration_attempts": (script_attempts - 1) + (scenes_attempts - 1),
-    })
-    write_short_status(long_job_dir, short_id, status)
-
-    # --- Stage 5b: Thumbnail (ChatGPT image gen, optional) ---
-    update_stage("thumbnail", "in_progress")
-    try:
-        check_stop()
-        thumb_result = thumbnail_fn(long_job_dir, short_id, channel_config)
-        if thumb_result:
-            update_stage("thumbnail", "completed")
-        else:
-            update_stage("thumbnail", "skipped")
-    except Exception as exc:
-        # Thumbnail failure is non-fatal: skip and continue
-        update_stage("thumbnail", "failed", error=str(exc))
-
-    if require_render_confirmation:
-        _write_render_props(sd, short_scenes, channel_config, music_track)
-        update_stage("audio", "pending")
-        update_stage("render", "pending")
-        status.update({
-            "status": "ready_for_render",
-            "rendered": False,
-            "uploaded": False,
-            "youtube_url": "",
-            "requires_user_review": False,
-            "requires_render_confirmation": True,
-            "video_path": None,
-            "cover_path": None,
-        })
-        write_short_status(long_job_dir, short_id, status)
-        return status
-
-
-    # QA PASS & No confirmation required → produce audio, mix, render props, video, cover.
-    # --- Stage 6: Audio ---
-    update_stage("audio", "in_progress")
-    try:
-        check_stop()
-        narration_wav = tts_fn(sd, short_scenes, channel_config)
-        check_stop()
-        mix_fn(sd, narration_wav, music_track, channel_config, duration_sec)
-        _write_render_props(sd, short_scenes, channel_config, music_track)
-        update_stage("audio", "completed")
-    except Exception as exc:
-        update_stage("audio", "failed")
-        status["status"] = "failed"
-        write_short_status(long_job_dir, short_id, status)
-        raise exc
 
     # --- Stage 6: Render ---
     update_stage("render", "in_progress")

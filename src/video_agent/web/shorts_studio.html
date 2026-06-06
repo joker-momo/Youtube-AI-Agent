@@ -4198,6 +4198,7 @@ function renderSingleCardHtml(jobId, d, idx, shortsSeoData, isOpen) {
       <div class="rc-actions" style="margin-top:14px;display:flex;gap:8px;border-top:1px solid var(--line);padding-top:12px;align-items:center">
         <button class="action-btn warn" onclick="spStopShort('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', this)" ${isRunning ? '' : 'disabled'}>Stop</button>
         <button class="action-btn" onclick="spResumeShort('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', '${escapeHtml(st)}', this)" ${isStoppedOrFailed ? '' : 'disabled'}>Resume</button>
+        <button class="action-btn" onclick="spViewPromptHistory('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', this)">📜 Prompt history</button>
         <div style="flex:1"></div>
         <button class="action-btn danger" onclick="spDeleteShort('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', this)" ${isRunning ? 'disabled' : ''}>Delete</button>
       </div>
@@ -4540,6 +4541,61 @@ async function spDeleteShort(jobId, shortId, btn) {
     showToast('Network error');
     btn.disabled = false; btn.textContent = orig;
   }
+}
+
+async function spViewPromptHistory(jobId, shortId, btn) {
+  if (!jobId || !shortId) return;
+  const mdUrl = '/jobs/' + encodeURIComponent(jobId) + '/shorts/' + encodeURIComponent(shortId) + '/llm-history?format=md';
+  const orig = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Loading…'; }
+  let md = '';
+  try {
+    const r = await fetch(mdUrl);
+    if (r.status === 404) { showToast('No prompt history for this Short yet.'); return; }
+    if (!r.ok) { showToast('Failed to load prompt history (' + r.status + ')'); return; }
+    md = await r.text();
+  } catch (e) {
+    showToast('Network error loading prompt history');
+    return;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = orig; }
+  }
+
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:24px';
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', (ev) => { if (ev.target === overlay) close(); });
+  const onKey = (ev) => { if (ev.key === 'Escape') { close(); document.removeEventListener('keydown', onKey); } };
+  document.addEventListener('keydown', onKey);
+
+  const box = document.createElement('div');
+  box.style.cssText = 'background:#fff;border-radius:10px;max-width:920px;width:100%;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.35);overflow:hidden';
+  const head = document.createElement('div');
+  head.style.cssText = 'display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line)';
+  head.innerHTML = `<div style="font-weight:750;font-size:14px;flex:1">📜 Prompt history — ${escapeHtml(shortId)}</div>`;
+
+  const openRaw = document.createElement('a');
+  openRaw.href = mdUrl; openRaw.target = '_blank'; openRaw.className = 'action-btn'; openRaw.textContent = 'Open raw';
+  const dl = document.createElement('button');
+  dl.className = 'action-btn'; dl.textContent = '⬇ .md';
+  dl.onclick = () => {
+    const blob = new Blob([md], {type: 'text/markdown'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = shortId + '_llm_history.md';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'action-btn'; closeBtn.textContent = '✕'; closeBtn.onclick = close;
+  head.appendChild(openRaw); head.appendChild(dl); head.appendChild(closeBtn);
+
+  const body = document.createElement('pre');
+  body.style.cssText = 'margin:0;padding:16px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.5;font-family:ui-monospace,SFMono-Regular,Menlo,monospace';
+  body.textContent = md;
+
+  box.appendChild(head); box.appendChild(body); overlay.appendChild(box);
+  document.body.appendChild(overlay);
 }
 
 async function refreshShortsDetail() {

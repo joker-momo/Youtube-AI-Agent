@@ -1055,7 +1055,16 @@ def test_qa_response_normalization_graphic_preference():
             "convert s05 to graphic_comparison"
         ],
         "warnings": [],
-        "scores": {}
+        "scores": {},
+        "product_scores": {
+            "audience_fit_45_plus": 8,
+            "hook_strength": 8,
+            "visual_specificity": 8,
+            "clarity": 8,
+            "retention_pacing": 8,
+            "natural_spanish": 8,
+            "saveability": 8
+        }
     }
     normalized = normalize_gemini_scenes_qa(parsed_input)
     assert normalized["verdict"] == "PASS"
@@ -1157,7 +1166,20 @@ def test_audio_fit_repair_loop_trigger(tmp_path: Path):
             plan,
             cfg,
             llm_fn=llm_fn,
-            gemini_fn=lambda p: json.dumps({"verdict": "PASS", "issues": [], "required_changes": []}),
+            gemini_fn=lambda p: json.dumps({
+                "verdict": "PASS",
+                "issues": [],
+                "required_changes": [],
+                "product_scores": {
+                    "audience_fit_45_plus": 8,
+                    "hook_strength": 8,
+                    "visual_specificity": 8,
+                    "clarity": 8,
+                    "retention_pacing": 8,
+                    "natural_spanish": 8,
+                    "saveability": 8
+                }
+            }),
             **io,
         )
 
@@ -1281,4 +1303,95 @@ def test_defensive_product_scores_validation():
     res_low_avg = normalize_gemini_scenes_qa(parsed_low_avg)
     assert res_low_avg["verdict"] == "FAIL"
     assert any(i["type"] == "product_quality_average_low" for i in res_low_avg["issues"])
+
+
+def test_script_escalation_after_repeated_scene_failures(tmp_path: Path):
+    from unittest.mock import patch
+    from video_agent.shorts import short_builder
+
+    job = _long_job(tmp_path)
+    calls: list[str] = []
+    
+    script_attempts = {"n": 0, "feedbacks": []}
+    
+    def llm_fn(kind, prompt):
+        if kind == "script":
+            script_attempts["n"] += 1
+            return json.dumps(_GOOD_SCRIPT)
+        if kind == "scenes":
+            # Hook duration 1.0s, but narration has 15 words -> requires 7.0s (exceeds 3.0s cap)
+            bad_scenes = {
+                "channel_id": "vida-plena-45",
+                "short_id": "short-escalate",
+                "total_duration_sec": 1.0,
+                "scenes": [
+                    {"id": "s1", "duration_sec": 1.0, "layout": "short_hook", "narration": "Abre fuerte y mira esta increible etiqueta ahora mismo con mucho cuidado y atencion.", "on_screen_text": "x", "caption": "c"}
+                ]
+            }
+            return json.dumps(bad_scenes)
+        return "{}"
+
+    original_build_script = short_builder.short_script_builder.build_short_script
+    def captured_build_script(*args, **kwargs):
+        script_attempts["feedbacks"].append(kwargs.get("feedback", ""))
+        return original_build_script(*args, **kwargs)
+
+    with patch("video_agent.shorts.short_script_builder.build_short_script", captured_build_script):
+        io = _stub_io(calls)
+        cfg = _cfg()
+        cfg["shorts"]["autopilot"]["max_regeneration_attempts"] = 2
+
+        plan = {"short_id": "short-escalate", "format": "pain_to_tip", "scene_ids": ["scene-09"], "music_track": "shorts_sleep_stress"}
+        res = short_builder.build_short(
+            job,
+            plan,
+            cfg,
+            llm_fn=llm_fn,
+            gemini_fn=lambda p: json.dumps({"verdict": "PASS", "issues": [], "required_changes": []}),
+            **io,
+        )
+
+        assert script_attempts["n"] >= 2
+        assert any("SCRIPT COMPRESSION REQUIRED" in f for f in script_attempts["feedbacks"])
+        assert res["status"] == "needs_review"
+
+
+def test_best_candidate_fallback_blocked_by_low_scores(tmp_path: Path):
+    from video_agent.shorts import short_builder
+
+    job = _long_job(tmp_path)
+    calls: list[str] = []
+    
+    def gemini_fn(prompt):
+        return json.dumps({
+            "verdict": "PASS",
+            "issues": [],
+            "required_changes": [],
+            "product_scores": {
+                "audience_fit_45_plus": 8,
+                "hook_strength": 8,
+                "visual_specificity": 8,
+                "clarity": 5, # low score!
+                "retention_pacing": 8,
+                "natural_spanish": 8,
+                "saveability": 8
+            }
+        })
+
+    io = _stub_io(calls)
+    cfg = _cfg()
+    cfg["shorts"]["autopilot"]["max_regeneration_attempts"] = 0
+
+    plan = {"short_id": "short-low-scores", "format": "pain_to_tip", "scene_ids": ["scene-09"], "music_track": "shorts_sleep_stress"}
+    res = short_builder.build_short(
+        job,
+        plan,
+        cfg,
+        llm_fn=_llm_fn_factory(),
+        gemini_fn=gemini_fn,
+        **io,
+    )
+
+    assert res["status"] == "needs_review"
+    assert res["qa_verdict"] == "FAIL"
 

@@ -134,6 +134,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     worker_parser.add_argument("--db-path", default=Path("jobs/queue.db"), type=Path)
 
+    llm_history_parser = subparsers.add_parser(
+        "shorts-llm-history",
+        help="Export a Short's ChatGPT+Gemini prompt history (incl. fails) as Markdown.",
+    )
+    llm_history_parser.add_argument("--job-dir", required=True, type=Path, help="Long job dir under jobs/.")
+    llm_history_parser.add_argument("--short-id", required=True, help="Short id (folder name under shorts/).")
+    llm_history_parser.add_argument(
+        "--output", type=Path,
+        help="Write Markdown to this file. Default: print to stdout.",
+    )
+    llm_history_parser.add_argument(
+        "--json", action="store_true",
+        help="Emit raw JSON array instead of Markdown.",
+    )
+
     return parser
 
 
@@ -264,6 +279,27 @@ def _dispatch(args: argparse.Namespace) -> int:
     if args.command == "worker":
         from video_agent.orchestrator.worker import run_worker_loop
         run_worker_loop(args.db_path)
+        return 0
+    if args.command == "shorts-llm-history":
+        import json as _json
+
+        from video_agent.shorts import llm_history, paths
+
+        hist_path = paths.short_json_dir(args.job_dir, args.short_id) / paths.SHORT_LLM_HISTORY_FILE
+        history = llm_history.read_history(hist_path)
+        if not history:
+            print(f"No LLM history at {hist_path}", file=sys.stderr)
+            return 1
+        if args.json:
+            out = _json.dumps(history, ensure_ascii=False, indent=2)
+        else:
+            out = llm_history.render_markdown(history, short_id=args.short_id)
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(out, encoding="utf-8")
+            print(f"Wrote {len(history)} calls -> {args.output}")
+        else:
+            print(out)
         return 0
     raise ValueError(f"Unknown command: {args.command}")
 

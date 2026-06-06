@@ -46,6 +46,28 @@ def test_short_script_prompt_has_retention_and_language_rules():
     assert "pending_shorts_qa" in low
 
 
+def test_v13_script_prompt_uses_calibrated_word_budget_without_old_rule():
+    from video_agent.shorts import prompts
+
+    p = prompts.short_script_prompt(
+        _cfg(),
+        {
+            "short_id": "short-01",
+            "format": "checklist",
+            "narration_seed": "Revisa cinco cosas antes de comprar pan.",
+        },
+        {},
+    ).lower()
+
+    assert "80–105" not in p
+    assert "80-105" not in p
+    assert "60–70 spoken spanish words" in p or "60-70 spoken spanish words" in p
+    assert "2.25" in p
+    assert "3 spoken checklist points" in p
+    assert "4 spoken checklist points" in p
+    assert "5 spoken checklist points" in p
+
+
 def test_short_scene_prompt_requires_vertical_and_layouts():
     from video_agent.shorts import prompts
     p = prompts.short_scene_prompt(_cfg(), {"short_id": "short-01"}, {"narration": "x"})
@@ -81,6 +103,64 @@ def test_phase15_graphic_layouts_are_in_scene_and_qa_prompts():
     assert "productlabel" in scene_prompt
     assert "callouts" in scene_prompt
     assert "six allowed graphic" in qa_prompt
+
+
+def test_graphic_prompt_tuning_rules_are_in_scene_and_qa_prompts():
+    from video_agent.shorts import prompts
+
+    scene_prompt = prompts.short_scene_prompt_v6(
+        _cfg(),
+        {"short_id": "short-01"},
+        {"narration": "El pan marrón no basta. Mira la etiqueta antes de comprar."},
+        feedback="",
+    ).lower()
+    qa_prompt = prompts.gemini_scenes_qa_prompt(
+        _cfg(),
+        {"narration": "El pan marrón no basta. Mira la etiqueta antes de comprar."},
+        {"scenes": []},
+    ).lower()
+
+    assert "explanatory bursts" in scene_prompt
+    assert "graphic_checklist: target 3.0" in scene_prompt
+    assert "graphic_label_callout: target 3.5" in scene_prompt
+    assert "0.5 sec" in scene_prompt
+    assert "bread package" in scene_prompt
+    assert "guárdalo para la compra" in scene_prompt
+    assert "use visual variants deliberately" in scene_prompt
+    assert "mito rápido" in scene_prompt
+
+    assert "longer than 5.0 sec" in qa_prompt
+    assert "graphic_checklist or graphic_step_list" in qa_prompt
+    assert "12–15%" in qa_prompt
+    assert "generic hook visual" in qa_prompt
+    assert "checklist guardada" in qa_prompt
+
+
+def test_v13_scene_and_qa_prompts_supersede_old_scene_count_and_numeric_authority():
+    from video_agent.shorts import prompts
+
+    scene_prompt = prompts.short_scene_prompt_v6(
+        _cfg(),
+        {"short_id": "short-01", "format": "checklist"},
+        {"target_duration_sec": 35, "narration": "Mira la etiqueta del pan antes de comprar."},
+        feedback="",
+    ).lower()
+    qa_prompt = prompts.gemini_scenes_qa_prompt(
+        _cfg(),
+        {"target_duration_sec": 35, "narration": "Mira la etiqueta del pan."},
+        {"scenes": []},
+    ).lower()
+
+    assert "create 4–7 scenes" not in scene_prompt
+    assert "create 4-7 scenes" not in scene_prompt
+    assert "5–8 scenes" in scene_prompt or "5-8 scenes" in scene_prompt
+    assert "6–9 scenes" in scene_prompt or "6-9 scenes" in scene_prompt
+    assert "soft planning target" in scene_prompt
+    assert "never create a 7–12 sec scene" in scene_prompt or "never create a 7-12 sec scene" in scene_prompt
+    assert "deterministic validator is authoritative" in qa_prompt
+    assert "do not fail solely for a numeric threshold" in qa_prompt
+    assert "audience_fit" in qa_prompt
+    assert "audio_fit_risk" in qa_prompt
 
 
 def test_short_seo_prompt_prefers_broad_nutrition_tags_over_nutricion45():
@@ -254,6 +334,234 @@ def test_phase15_graphic_validator_rejects_forbidden_comparison_words():
         raise AssertionError("expected forbidden comparison language to fail validation")
 
 
+def test_graphic_validator_rejects_slow_graphic_bursts():
+    from video_agent.shorts.validate_scenes import validate_short_graphic_scenes
+
+    scene = {
+        "id": "slow",
+        "layout": "graphic_label_callout",
+        "duration_sec": 5.2,
+        "layout_payload": {
+            "title": "MIRA ETIQUETA",
+            "productLabel": "Pan integral",
+            "callouts": [
+                {"label": "Fibra", "value": "6 g"},
+                {"label": "Azúcar", "value": "3 g"},
+            ],
+        },
+    }
+
+    try:
+        validate_short_graphic_scenes([scene])
+    except ValueError as exc:
+        assert "exceeds hard max 5.0s" in str(exc)
+        assert "explanatory bursts" in str(exc)
+    else:
+        raise AssertionError("expected >5s graphic to fail validation")
+
+
+def test_graphic_validator_rejects_checklist_over_layout_cap():
+    from video_agent.shorts.validate_scenes import validate_short_graphic_scenes
+
+    scene = {
+        "id": "slow-checklist",
+        "layout": "graphic_checklist",
+        "duration_sec": 4.8,
+        "layout_payload": {
+            "title": "BUSCA INTEGRAL",
+            "items": ["Harina integral", "Centeno integral"],
+        },
+    }
+
+    try:
+        validate_short_graphic_scenes([scene])
+    except ValueError as exc:
+        assert "hard max 4.5s" in str(exc)
+    else:
+        raise AssertionError("expected checklist >4.5s to fail validation")
+
+
+def test_graphic_validator_warns_passive_cta_and_generic_bread_hook():
+    from video_agent.shorts.validate_scenes import validate_short_graphic_scenes
+
+    scenes = [
+        {
+            "id": "hook",
+            "layout": "short_hook",
+            "duration_sec": 2.4,
+            "on_screen_text": "MARRÓN NO BASTA",
+            "narration": "El pan marrón no basta.",
+            "visual_prompt": "abstract close-up of food texture",
+            "layout_payload": {},
+        },
+        {
+            "id": "graphic",
+            "layout": "graphic_label_callout",
+            "duration_sec": 4.0,
+            "layout_payload": {
+                "title": "MIRA ETIQUETA",
+                "productLabel": "Pan integral",
+                "callouts": [
+                    {"label": "Fibra", "value": "6 g"},
+                    {"label": "Azúcar", "value": "3 g"},
+                ],
+            },
+        },
+        {
+            "id": "cta",
+            "layout": "short_cta",
+            "duration_sec": 2.2,
+            "on_screen_text": "CHECKLIST GUARDADA",
+            "visual_prompt": "shopping basket with bread",
+            "layout_payload": {},
+        },
+    ]
+
+    warnings = validate_short_graphic_scenes(scenes)
+
+    assert any("bread/label hook visual is too generic" in w for w in warnings)
+    assert any("passive/status-like" in w for w in warnings)
+
+
+def test_bread_label_prompt_tuning_sample_validates_cleanly():
+    from video_agent.shorts.validate_scenes import validate_short_graphic_scenes
+
+    sample_path = Path(__file__).parent / "fixtures" / "bread_label_prompt_tuning_sample.json"
+    sample = json.loads(sample_path.read_text(encoding="utf-8"))
+
+    warnings = validate_short_graphic_scenes(sample["scenes"])
+
+    assert warnings == []
+    assert sample["scenes"][0]["duration_sec"] <= 2.8
+    assert "bread" in sample["scenes"][0]["visual_prompt"].lower()
+    assert sample["scenes"][-1]["on_screen_text"] == "GUÁRDALO PARA LA COMPRA"
+
+
+def test_scene_structure_validator_flags_long_scene_with_repair_plan():
+    from video_agent.shorts.validate_scenes import (
+        build_scene_repair_plan,
+        validate_scene_structure,
+    )
+
+    scenes_doc = {
+        "total_duration_sec": 35.0,
+        "scenes": [
+            {
+                "id": "s01",
+                "layout": "short_hook",
+                "duration_sec": 2.5,
+                "on_screen_text": "MARRÓN NO BASTA",
+                "visual_prompt": "vertical supermarket bread shelf with ingredient label",
+                "narration": "El pan marrón no basta.",
+            },
+            {
+                "id": "s06",
+                "layout": "short_checklist",
+                "duration_sec": 11.3,
+                "on_screen_text": "COMPÁRALO CON OTRO",
+                "visual_prompt": "vertical shot of hands comparing two bread packages",
+                "narration": "Si la lista es larguísima, compara con otro pan antes de comprar.",
+            },
+            {
+                "id": "s07",
+                "layout": "short_cta",
+                "duration_sec": 2.4,
+                "on_screen_text": "GUARDA ESTA LISTA",
+                "visual_prompt": "vertical warm supermarket shopping basket",
+                "narration": "Guarda esta lista para la compra.",
+            },
+        ],
+    }
+
+    issues = validate_scene_structure(scenes_doc["scenes"], scenes_doc=scenes_doc)
+
+    assert any(
+        issue.type == "duration_cap"
+        and issue.scene_id == "s06"
+        and issue.severity == "repairable_error"
+        for issue in issues
+    )
+    repair = build_scene_repair_plan(scenes_doc["scenes"], issues)
+    repair_text = "\n".join(repair["instructions"])
+    assert "No scene may exceed 5.0 sec" in repair_text
+    assert "s06" in repair_text
+    assert "split" in repair_text.lower() or "regenerate" in repair_text.lower()
+
+
+def test_scene_structure_accepts_soft_target_when_audio_estimate_fits():
+    from video_agent.shorts.validate_scenes import validate_scene_structure
+
+    scenes = [
+        {"id": "s01", "layout": "short_hook", "duration_sec": 2.5, "on_screen_text": "MARRÓN NO BASTA", "visual_prompt": "vertical bread package label", "narration": "El pan marrón no basta."},
+        {"id": "s02", "layout": "short_myth", "duration_sec": 3.0, "on_screen_text": "REVISA ANTES", "visual_prompt": "vertical supermarket shelf", "narration": "Antes de comprar, mira la etiqueta."},
+        {"id": "s03", "layout": "graphic_checklist", "duration_sec": 4.2, "on_screen_text": "BUSCA INTEGRAL", "visual_prompt": "vertical label graphic", "narration": "Busca harina integral como primer ingrediente.", "layout_payload": {"title": "BUSCA INTEGRAL", "items": ["Harina integral", "Buena fibra"]}},
+        {"id": "s04", "layout": "graphic_label_callout", "duration_sec": 5.0, "on_screen_text": "MIRA ETIQUETA", "visual_prompt": "vertical nutrition label close-up", "narration": "Compara fibra y azúcares por cien gramos.", "layout_payload": {"title": "MIRA ETIQUETA", "productLabel": "Pan integral", "callouts": [{"label": "Fibra", "value": "6 g"}, {"label": "Azúcar", "value": "3 g"}]}},
+        {"id": "s05", "layout": "short_tip", "duration_sec": 4.5, "on_screen_text": "COMPARA FIBRA", "visual_prompt": "vertical hands comparing bread labels", "narration": "Si dudas, compara dos panes y elige el más claro."},
+        {"id": "s06", "layout": "short_tip", "duration_sec": 4.3, "on_screen_text": "COMPARA CON OTRO", "visual_prompt": "vertical supermarket basket with bread", "narration": "No hace falta que sea perfecto, solo mejor elegido."},
+        {"id": "s07", "layout": "short_cta", "duration_sec": 2.4, "on_screen_text": "GUARDA ESTA LISTA", "visual_prompt": "vertical calm person shopping", "narration": "Guárdalo para la compra."},
+    ]
+
+    issues = validate_scene_structure(
+        scenes,
+        scenes_doc={"total_duration_sec": 25.9, "scenes": scenes},
+        script={"target_duration_sec": 35, "narration": " ".join(s["narration"] for s in scenes)},
+    )
+
+    assert not [issue for issue in issues if issue.severity != "warning"], issues
+    assert not any("target" in issue.type for issue in issues)
+
+
+def test_missing_graphic_is_warning_only_when_two_graphics_exist():
+    from video_agent.shorts.validate_scenes import validate_scene_structure
+
+    scenes = [
+        {"id": "s01", "layout": "short_hook", "duration_sec": 2.5, "on_screen_text": "MARRÓN NO BASTA", "visual_prompt": "vertical bread package label", "narration": "El pan marrón no basta."},
+        {"id": "s02", "layout": "graphic_checklist", "duration_sec": 4.0, "on_screen_text": "BUSCA INTEGRAL", "visual_prompt": "vertical label graphic", "narration": "Busca harina integral.", "layout_payload": {"title": "BUSCA INTEGRAL", "items": ["Harina integral", "Buena fibra"]}},
+        {"id": "s03", "layout": "graphic_label_callout", "duration_sec": 4.5, "on_screen_text": "MIRA ETIQUETA", "visual_prompt": "vertical nutrition label close-up", "narration": "Mira la etiqueta.", "layout_payload": {"title": "MIRA ETIQUETA", "productLabel": "Pan", "callouts": [{"label": "Fibra", "value": "6 g"}, {"label": "Azúcar", "value": "3 g"}]}},
+        {"id": "s04", "layout": "short_tip", "duration_sec": 4.0, "on_screen_text": "POR 100 G", "visual_prompt": "vertical hands comparing labels", "narration": "Compara fibra y azúcares por 100 g antes de elegir."},
+        {"id": "s05", "layout": "short_cta", "duration_sec": 2.4, "on_screen_text": "GUARDA ESTA LISTA", "visual_prompt": "vertical shopping basket", "narration": "Guarda esta lista."},
+    ]
+
+    issues = validate_scene_structure(scenes, scenes_doc={"total_duration_sec": 17.4, "scenes": scenes})
+
+    assert any(issue.type == "missing_graphic_warning" and issue.severity == "warning" for issue in issues)
+    assert not any(issue.type == "missing_graphic_warning" and issue.severity != "warning" for issue in issues)
+
+
+def test_audio_fit_blocks_when_narration_audio_exceeds_video_duration():
+    from video_agent.shorts.validate_scenes import validate_audio_fit
+
+    issue = validate_audio_fit(render_duration_sec=32.0, narration_audio_sec=41.5)
+
+    assert issue is not None
+    assert issue.type == "audio_fit"
+    assert issue.severity == "blocking_error"
+    assert "Condense narration" in (issue.repair_hint or "")
+
+
+def test_rendered_short_audio_fit_regression_blocks_35s_video_with_40s_audio():
+    from video_agent.shorts.validate_scenes import validate_audio_fit
+
+    issue = validate_audio_fit(render_duration_sec=35.0, narration_audio_sec=40.3)
+
+    assert issue is not None
+    assert issue.severity == "blocking_error"
+    assert "40.3s" in issue.detail
+    assert "35.0s" in issue.detail
+
+
+def test_v13_spanish_narration_estimate_uses_calibrated_wps():
+    from video_agent.shorts.validate_scenes import (
+        DEFAULT_SPANISH_WPS,
+        estimate_spanish_narration_sec,
+    )
+
+    text = " ".join(["palabra"] * 90)
+
+    assert DEFAULT_SPANISH_WPS == 2.25
+    assert 39.5 <= estimate_spanish_narration_sec(text) <= 41.0
+
+
 # --------------------------------------------------------------------------
 # source map
 # --------------------------------------------------------------------------
@@ -313,11 +621,14 @@ def _good_short_dir(tmp_path: Path) -> Path:
         "cta": "Vídeo completo en el canal.", "target_duration_sec": 32,
     }), encoding="utf-8")
     (sd / "short_scenes.json").write_text(json.dumps({
-        "short_id": "short-01", "total_duration_sec": 32,
+        "short_id": "short-01", "total_duration_sec": 21.0,
         "scenes": [
             {"id": "s1", "duration_sec": 2.5, "on_screen_text": "Mente encendida", "caption": "c", "layout": "short_hook", "visual_prompt": "v vertical"},
-            {"id": "s2", "duration_sec": 4.0, "on_screen_text": "Hora de cierre", "caption": "c", "layout": "short_tip", "visual_prompt": "v vertical"},
-            {"id": "s3", "duration_sec": 4.0, "on_screen_text": "Apaga pantalla", "caption": "c", "layout": "short_cta", "visual_prompt": "v vertical"},
+            {"id": "s2", "duration_sec": 4.2, "on_screen_text": "Hora de cierre", "caption": "c", "layout": "short_tip", "visual_prompt": "v vertical"},
+            {"id": "s3", "duration_sec": 4.2, "on_screen_text": "Apaga pantalla", "caption": "c", "layout": "short_tip", "visual_prompt": "v vertical"},
+            {"id": "s4", "duration_sec": 4.2, "on_screen_text": "Respira despacio", "caption": "c", "layout": "short_tip", "visual_prompt": "v vertical"},
+            {"id": "s5", "duration_sec": 3.5, "on_screen_text": "Baja el ritmo", "caption": "c", "layout": "short_tip", "visual_prompt": "v vertical"},
+            {"id": "s6", "duration_sec": 2.4, "on_screen_text": "Guarda esta idea", "caption": "c", "layout": "short_cta", "visual_prompt": "v vertical"},
         ],
     }), encoding="utf-8")
     (sd / "short_source_map.json").write_text(json.dumps({"used_source_scenes": [{"scene_id": "scene-09"}]}), encoding="utf-8")
@@ -369,6 +680,49 @@ def test_qa_rejects_medical_overclaim(tmp_path: Path):
     assert any("overclaim" in i or "medical" in i for i in out["issues"])
 
 
+def test_script_rule_qa_rejects_over_word_budget_before_scenes(tmp_path: Path):
+    from video_agent.shorts import qa, paths
+
+    job = _good_short_dir(tmp_path)
+    sd = paths.short_dir(job, "short-01")
+    long_narration = " ".join(["palabra"] * 115)
+    (sd / "short_script.json").write_text(json.dumps({
+        "short_id": "short-01",
+        "hook": "Mira esto antes de comprar pan",
+        "narration": long_narration,
+        "cta": "Guarda esta lista",
+        "target_duration_sec": 35,
+    }), encoding="utf-8")
+
+    out = qa.run_short_script_qa(job, "short-01", _cfg(), music_track="shorts_sleep_stress")
+
+    assert out["verdict"] == "FAIL"
+    assert any("word_budget" in str(issue) or "spoken_duration" in str(issue) for issue in out["issues"])
+
+
+def test_script_rule_qa_rejects_too_many_spoken_checklist_points(tmp_path: Path):
+    from video_agent.shorts import qa, paths
+
+    job = _good_short_dir(tmp_path)
+    sd = paths.short_dir(job, "short-01")
+    (sd / "short_script.json").write_text(json.dumps({
+        "short_id": "short-01",
+        "short_format": "checklist",
+        "hook": "Mira esto antes de comprar pan",
+        "narration": (
+            "Revisa cinco cosas. Uno: mira el ingrediente. Dos: compara la fibra. "
+            "Tres: revisa el azúcar. Cuatro: mira la sal. Cinco: compara con otro pan."
+        ),
+        "cta": "Guarda esta lista",
+        "target_duration_sec": 35,
+    }), encoding="utf-8")
+
+    out = qa.run_short_script_qa(job, "short-01", _cfg(), music_track="shorts_sleep_stress")
+
+    assert out["verdict"] == "FAIL"
+    assert "script_checklist_point_cap" in out["issues"]
+
+
 # --------------------------------------------------------------------------
 # build_short orchestration (injected LLM/tts/mix/render)
 # --------------------------------------------------------------------------
@@ -380,11 +734,14 @@ _GOOD_SCRIPT = {
     "beats": ["pain", "tip"], "cta": "Vídeo completo en el canal.", "qa": {"verdict": "PENDING_SHORTS_QA"},
 }
 _GOOD_SCENES = {
-    "channel_id": "vida-plena-45", "short_id": "short-01", "total_duration_sec": 32,
+    "channel_id": "vida-plena-45", "short_id": "short-01", "total_duration_sec": 21.0,
     "scenes": [
-        {"id": "s1", "duration_sec": 6.0, "on_screen_text": "Mente encendida", "caption": "c", "layout": "short_hook", "visual_prompt": "v vertical"},
-        {"id": "s2", "duration_sec": 20.0, "on_screen_text": "Hora de cierre", "caption": "c", "layout": "short_tip", "visual_prompt": "v vertical"},
-        {"id": "s3", "duration_sec": 6.0, "on_screen_text": "Apaga pantalla", "caption": "c", "layout": "short_cta", "visual_prompt": "v vertical"},
+        {"id": "s1", "duration_sec": 2.5, "on_screen_text": "MENTE ENCENDIDA", "caption": "c", "layout": "short_hook", "visual_prompt": "v vertical", "narration": "¿Duermes pero te levantas cansado?"},
+        {"id": "s2", "duration_sec": 4.2, "on_screen_text": "HORA DE CIERRE", "caption": "c", "layout": "short_tip", "visual_prompt": "v vertical", "narration": "Marca una hora de cierre."},
+        {"id": "s3", "duration_sec": 4.2, "on_screen_text": "APAGA PANTALLA", "caption": "c", "layout": "short_tip", "visual_prompt": "v vertical", "narration": "Apaga la pantalla."},
+        {"id": "s4", "duration_sec": 4.2, "on_screen_text": "RESPIRA DESPACIO", "caption": "c", "layout": "short_tip", "visual_prompt": "v vertical", "narration": "Respira despacio."},
+        {"id": "s5", "duration_sec": 3.5, "on_screen_text": "BAJA EL RITMO", "caption": "c", "layout": "short_tip", "visual_prompt": "v vertical", "narration": "Baja el ritmo antes de dormir."},
+        {"id": "s6", "duration_sec": 2.4, "on_screen_text": "GUARDA ESTA IDEA", "caption": "c", "layout": "short_cta", "visual_prompt": "v vertical", "narration": "Guarda esta idea."},
     ],
     "qa": {"verdict": "PENDING_SHORTS_QA"},
 }
@@ -486,7 +843,64 @@ def test_build_short_prepare_mode_stops_before_render(tmp_path: Path):
     assert res["status"] == "ready_for_render"
     assert res["rendered"] is False
     assert res["requires_render_confirmation"] is True
-    assert calls == []
+    assert calls == ["tts"]
+
+
+def test_audio_fit_guard_runs_after_tts_before_mix_and_render(tmp_path: Path):
+    import wave
+
+    from video_agent.shorts import short_builder
+
+    job = _long_job(tmp_path)
+    calls: list[str] = []
+    plan = {"short_id": "short-audio-fit", "format": "pain_to_tip", "scene_ids": ["scene-09"],
+            "source_start_sec": 183.0, "source_end_sec": 199.0, "music_track": "shorts_sleep_stress",
+            "narration_seed": "Marca una hora de cierre."}
+    valid_scenes = {
+        "channel_id": "vida-plena-45",
+        "short_id": "short-audio-fit",
+        "total_duration_sec": 21.0,
+        "scenes": [
+            {"id": "s1", "duration_sec": 2.5, "on_screen_text": "MENTE ENCENDIDA", "caption": "c", "layout": "short_hook", "visual_prompt": "vertical bedroom", "narration": "Abre fuerte."},
+            {"id": "s2", "duration_sec": 4.2, "on_screen_text": "HORA DE CIERRE", "caption": "c", "layout": "short_tip", "visual_prompt": "vertical clock", "narration": "Marca una hora de cierre."},
+            {"id": "s3", "duration_sec": 4.2, "on_screen_text": "APAGA PANTALLA", "caption": "c", "layout": "short_tip", "visual_prompt": "vertical phone", "narration": "Apaga la pantalla."},
+            {"id": "s4", "duration_sec": 4.2, "on_screen_text": "RESPIRA DESPACIO", "caption": "c", "layout": "short_tip", "visual_prompt": "vertical calm person", "narration": "Respira despacio."},
+            {"id": "s5", "duration_sec": 3.5, "on_screen_text": "BAJA EL RITMO", "caption": "c", "layout": "short_tip", "visual_prompt": "vertical calm room", "narration": "Baja el ritmo."},
+            {"id": "s6", "duration_sec": 2.4, "on_screen_text": "GUARDA ESTA IDEA", "caption": "c", "layout": "short_cta", "visual_prompt": "vertical calm person", "narration": "Guarda esta idea."},
+        ],
+        "qa": {"verdict": "PENDING_SCENES_QA"},
+    }
+
+    def tts_fn(short_dir, short_scenes, channel_config):
+        calls.append("tts")
+        audio_dir = short_dir / "audio"
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        wav_path = audio_dir / "short_narration.wav"
+        with wave.open(str(wav_path), "w") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(8000)
+            handle.writeframes(b"\0\0" * int(30.0 * 8000))
+        return wav_path
+
+    io = _stub_io(calls)
+    io["tts_fn"] = tts_fn
+
+    cfg = _cfg()
+    cfg["shorts"]["autopilot"]["max_regeneration_attempts"] = 0
+
+    res = short_builder.build_short(
+        job,
+        plan,
+        cfg,
+        llm_fn=_llm_fn_factory(scenes=valid_scenes),
+        **io,
+    )
+
+    assert res["status"] == "needs_review"
+    assert res["qa_verdict"] == "FAIL"
+    assert calls == ["tts"]
+    assert "audio_fit" in json.dumps(res).lower()
 
 
 def test_build_short_passes_source_artifacts_to_script_builder(tmp_path: Path, monkeypatch):
@@ -616,3 +1030,138 @@ def test_normalize_short_scenes_maps_legacy_long_form_layouts():
     )
     layouts = [s["layout"] for s in out["scenes"]]
     assert layouts == ["short_hook", "short_tip", "short_pain", "short_cta"]
+
+
+def test_qa_response_normalization_graphic_preference():
+    from video_agent.shorts.qa import normalize_gemini_scenes_qa
+    parsed_input = {
+        "verdict": "FAIL",
+        "issues": [
+            {
+                "type": "layout",
+                "scene_id": "s03",
+                "severity": "major",
+                "detail": "s03 should be graphic_label_callout"
+            },
+            {
+                "type": "layout",
+                "scene_id": "s05",
+                "severity": "major",
+                "detail": "s05 could be graphic_comparison"
+            }
+        ],
+        "required_changes": [
+            "convert s03 to graphic_label_callout",
+            "convert s05 to graphic_comparison"
+        ],
+        "warnings": [],
+        "scores": {}
+    }
+    normalized = normalize_gemini_scenes_qa(parsed_input)
+    assert normalized["verdict"] == "PASS"
+    assert len(normalized["issues"]) == 0
+    assert len(normalized["required_changes"]) == 0
+    assert any("Downgraded Gemini issue: s03 should be" in w for w in normalized["warnings"])
+    assert any("layout_optimization_downgraded_to_warning" in w for w in normalized["warnings"])
+
+
+def test_missing_graphic_warning_only():
+    from video_agent.shorts.validate_scenes import validate_scene_structure
+    scenes = [
+        {"id": "s01", "layout": "short_hook", "duration_sec": 2.5, "on_screen_text": "MARRÓN NO BASTA", "visual_prompt": "vertical bread package label", "narration": "El pan marrón no basta."},
+        {"id": "s02", "layout": "graphic_checklist", "duration_sec": 4.0, "on_screen_text": "BUSCA INTEGRAL", "visual_prompt": "vertical label graphic", "narration": "Busca harina integral.", "layout_payload": {"title": "BUSCA INTEGRAL", "items": ["Harina integral", "Buena fibra"]}},
+        {"id": "s03", "layout": "graphic_label_callout", "duration_sec": 4.5, "on_screen_text": "MIRA ETIQUETA", "visual_prompt": "vertical nutrition label close-up", "narration": "Mira la etiqueta.", "layout_payload": {"title": "MIRA ETIQUETA", "productLabel": "Pan", "callouts": [{"label": "Fibra", "value": "6 g"}, {"label": "Azúcar", "value": "3 g"}]}},
+        {"id": "s04", "layout": "short_tip", "duration_sec": 4.0, "on_screen_text": "POR 100 G", "visual_prompt": "vertical hands comparing labels", "narration": "Compara fibra y azúcares por 100 g antes de elegir."},
+        {"id": "s05", "layout": "short_cta", "duration_sec": 2.4, "on_screen_text": "GUARDA ESTA LISTA", "visual_prompt": "vertical shopping basket", "narration": "Guarda esta lista."},
+    ]
+    
+    issues = validate_scene_structure(
+        scenes, 
+        scenes_doc={"total_duration_sec": 17.4, "scenes": scenes},
+        script={"narration": " ".join(s["narration"] for s in scenes)}
+    )
+    
+    warnings = [i for i in issues if i.severity == "warning"]
+    blocking = [i for i in issues if i.severity in ("blocking_error", "repairable_error")]
+    
+    assert any(i.type == "missing_graphic_warning" for i in warnings)
+    assert not any("graphic" in i.type for i in blocking)
+
+
+def test_total_duration_sec_normalization():
+    from video_agent.shorts.validate_scenes import validate_scene_structure
+    scenes = [
+        {"id": "s01", "layout": "short_hook", "duration_sec": 2.6},
+        {"id": "s02", "layout": "short_tip", "duration_sec": 2.8},
+        {"id": "s03", "layout": "short_cta", "duration_sec": 4.4},
+    ]
+    scenes_doc = {
+        "total_duration_sec": 34.2,
+        "scenes": scenes
+    }
+    issues = validate_scene_structure(scenes, scenes_doc=scenes_doc)
+    assert scenes_doc["total_duration_sec"] == 9.8
+    warnings = [i for i in issues if i.severity == "warning"]
+    blocking = [i for i in issues if i.severity in ("blocking_error", "repairable_error")]
+    assert any(i.type == "total_duration_normalized" for i in warnings)
+    assert not any(i.type == "duration_sum" for i in blocking)
+
+
+def test_audio_fit_repair_loop_trigger(tmp_path: Path):
+    import wave
+    from unittest.mock import patch
+    from video_agent.shorts import short_builder
+
+    job = _long_job(tmp_path)
+    calls: list[str] = []
+    
+    script_attempts = {"n": 0, "feedbacks": []}
+    
+    def llm_fn(kind, prompt):
+        if kind == "script":
+            script_attempts["n"] += 1
+            return json.dumps(_GOOD_SCRIPT)
+        if kind == "scenes":
+            return json.dumps(_GOOD_SCENES)
+        if kind == "seo":
+            return json.dumps({"title": "t", "description": "d", "hashtags": [], "pinned_comment": "p"})
+        return "{}"
+
+    original_build_script = short_builder.short_script_builder.build_short_script
+    def captured_build_script(*args, **kwargs):
+        script_attempts["feedbacks"].append(kwargs.get("feedback", ""))
+        return original_build_script(*args, **kwargs)
+
+    with patch("video_agent.shorts.short_script_builder.build_short_script", captured_build_script):
+        def tts_fn(short_dir, short_scenes, channel_config):
+            calls.append("tts")
+            audio_dir = short_dir / "audio"
+            audio_dir.mkdir(parents=True, exist_ok=True)
+            wav_path = audio_dir / "short_narration.wav"
+            with wave.open(str(wav_path), "w") as handle:
+                handle.setnchannels(1)
+                handle.setsampwidth(2)
+                handle.setframerate(8000)
+                handle.writeframes(b"\0\0" * int(30.0 * 8000))
+            return wav_path
+
+        io = _stub_io(calls)
+        io["tts_fn"] = tts_fn
+
+        cfg = _cfg()
+        cfg["shorts"]["autopilot"]["max_regeneration_attempts"] = 1
+
+        plan = {"short_id": "short-audio-fit-retry", "format": "pain_to_tip", "scene_ids": ["scene-09"], "music_track": "shorts_sleep_stress"}
+        res = short_builder.build_short(
+            job,
+            plan,
+            cfg,
+            llm_fn=llm_fn,
+            gemini_fn=lambda p: json.dumps({"verdict": "PASS", "issues": [], "required_changes": []}),
+            **io,
+        )
+
+        assert script_attempts["n"] == 2
+        assert any("AUDIO-FIT" in f or "narration audio exceeds" in f for f in script_attempts["feedbacks"])
+        assert res["status"] == "needs_review"
+

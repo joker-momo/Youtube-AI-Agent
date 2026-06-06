@@ -7,7 +7,20 @@ renderer. Mirrors the Zod checks in ``remotion/src/graphics/graphic-payloads.ts`
 """
 from __future__ import annotations
 
+from dataclasses import asdict, dataclass
+import math
+import re
+import wave
+from pathlib import Path
 from typing import Any
+
+DEFAULT_SPANISH_WPS = 2.25
+AUDIO_TAIL_MARGIN_SEC = 0.6
+MIN_SHORT_DURATION_SEC = 20.0
+MAX_SHORT_DURATION_SEC = 45.0
+IDEAL_MIN_SHORT_DURATION_SEC = 28.0
+IDEAL_MAX_SHORT_DURATION_SEC = 38.0
+GLOBAL_SCENE_MAX_SEC = 5.5
 
 SUPPORTED_GRAPHIC_LAYOUTS = {
     "graphic_plate_ratio",
@@ -17,6 +30,479 @@ SUPPORTED_GRAPHIC_LAYOUTS = {
     "graphic_comparison",
     "graphic_routine_split",
 }
+
+SUPPORTED_SHORT_LAYOUTS = {
+    "short_hook",
+    "short_pain",
+    "short_tip",
+    "short_checklist",
+    "short_myth",
+    "short_quote",
+    "short_cta",
+}
+
+SUPPORTED_SCENE_LAYOUTS = SUPPORTED_SHORT_LAYOUTS | SUPPORTED_GRAPHIC_LAYOUTS
+
+LAYOUT_DURATION_TARGETS = {
+    "short_hook": (1.8, 2.8, 3.0),
+    "short_myth": (2.0, 3.0, 3.2),
+    "short_tip": (2.2, 4.2, 5.0),
+    "short_checklist": (3.0, 4.5, 5.0),
+    "short_pain": (2.0, 3.8, 4.5),
+    "short_cta": (1.8, 2.6, 2.8),
+    "graphic_checklist": (3.0, 4.0, 4.5),
+    "graphic_step_list": (3.0, 4.0, 4.5),
+    "graphic_label_callout": (3.5, 5.0, 5.0),
+    "graphic_comparison": (3.5, 5.0, 5.0),
+    "graphic_plate_ratio": (3.0, 4.5, 5.0),
+    "graphic_routine_split": (3.5, 5.0, 5.0),
+}
+
+
+@dataclass
+class SceneValidationIssue:
+    type: str
+    scene_id: str | None
+    severity: str  # "blocking_error" | "repairable_error" | "warning"
+    detail: str
+    repair_hint: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def issues_to_dicts(issues: list[SceneValidationIssue]) -> list[dict[str, Any]]:
+    return [issue.to_dict() for issue in issues]
+
+
+def has_blocking_or_repairable(issues: list[SceneValidationIssue]) -> bool:
+    return any(issue.severity in {"blocking_error", "repairable_error"} for issue in issues)
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9]+(?:['’][A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9]+)?", str(text or ""))
+
+
+def count_spoken_words(text: str) -> int:
+    return len(_words(text))
+
+
+def count_sentences(text: str) -> int:
+    parts = [p for p in re.split(r"[.!?¡¿]+|\n+", str(text or "")) if p.strip()]
+    return len(parts)
+
+
+def estimate_spanish_narration_sec(text: str, wps: float = DEFAULT_SPANISH_WPS) -> float:
+    words = count_spoken_words(text)
+    if words == 0:
+        return 0.0
+    sentence_pause = 0.18 * count_sentences(text)
+    return (words / float(wps or DEFAULT_SPANISH_WPS)) + sentence_pause
+
+
+def max_spoken_words_for_duration(target_video_sec: float, wps: float = DEFAULT_SPANISH_WPS) -> int:
+    return int(math.floor(float(target_video_sec or 35.0) * float(wps or DEFAULT_SPANISH_WPS) * 0.88))
+
+
+def validate_script_word_budget(script: dict[str, Any], *, wps: float = DEFAULT_SPANISH_WPS) -> SceneValidationIssue | None:
+    narration = str((script or {}).get("narration") or "")
+    target = float((script or {}).get("target_duration_sec") or 35.0)
+    words = count_spoken_words(narration)
+    estimated = estimate_spanish_narration_sec(narration, wps=wps)
+    max_words = max_spoken_words_for_duration(target, wps=wps)
+    if estimated > target * 1.05 or estimated > 38.0 or words > max_words:
+        return SceneValidationIssue(
+            type="script_word_budget",
+            scene_id=None,
+            severity="repairable_error",
+            detail=(
+                f"Script narration has {words} spoken words; estimated_spoken_duration "
+                f"is {estimated:.1f}s at {wps:.2f} wps for target {target:.1f}s "
+                f"(recommended max about {max_words} words)."
+            ),
+            repair_hint=(
+                "Condense narration before scene generation. For 35s Shorts use about "
+                "60-70 spoken Spanish words; speak at most 3-4 checklist points."
+            ),
+        )
+    return None
+
+
+def estimate_spoken_checklist_points(script: dict[str, Any]) -> int:
+    text = str((script or {}).get("narration") or "")
+    lower = text.lower()
+    numbered_words = re.findall(r"\b(uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve)\s*:", lower)
+    numeric_markers = re.findall(r"(?:^|[\s\n])(?:\d+)[\).:]", text)
+    if numbered_words or numeric_markers:
+        return len(numbered_words) + len(numeric_markers)
+    if "cinco cosas" in lower or "cinco puntos" in lower or "cinco pasos" in lower:
+        return 5
+    if "cuatro cosas" in lower or "cuatro puntos" in lower or "cuatro pasos" in lower:
+        return 4
+    return 0
+
+
+def validate_script_checklist_point_cap(script: dict[str, Any]) -> SceneValidationIssue | None:
+    text = " ".join(
+        str((script or {}).get(key) or "")
+        for key in ("short_format", "format", "narration", "hook")
+    ).lower()
+    if not any(term in text for term in ("checklist", "lista", "revisa", "paso", "punto")):
+        return None
+    points = estimate_spoken_checklist_points(script)
+    if points > 4:
+        return SceneValidationIssue(
+            type="script_checklist_point_cap",
+            scene_id=None,
+            severity="repairable_error",
+            detail=f"Checklist/explainer narration appears to speak {points} points; normal 30-38s Shorts should speak at most 3-4.",
+            repair_hint="Speak the top 3-4 points and move remaining details to on-screen text or a graphic payload.",
+        )
+    return None
+
+
+def validate_audio_fit(
+    render_duration_sec: float,
+    narration_audio_sec: float,
+    *,
+    margin_sec: float = AUDIO_TAIL_MARGIN_SEC,
+) -> SceneValidationIssue | None:
+    if float(narration_audio_sec or 0) + margin_sec > float(render_duration_sec or 0):
+        return SceneValidationIssue(
+            type="audio_fit",
+            scene_id=None,
+            severity="blocking_error",
+            detail=(
+                f"Narration audio ({float(narration_audio_sec):.1f}s) exceeds video duration "
+                f"({float(render_duration_sec):.1f}s) with margin {margin_sec:.1f}s."
+            ),
+            repair_hint="Condense narration or increase valid scene durations without exceeding scene caps.",
+        )
+    return None
+
+
+def probe_audio_duration_sec(path: Path) -> float | None:
+    try:
+        with wave.open(str(path), "rb") as handle:
+            rate = handle.getframerate()
+            if rate <= 0:
+                return None
+            return handle.getnframes() / float(rate)
+    except Exception:
+        return None
+
+
+def _scene_id(scene: dict[str, Any], index: int) -> str:
+    return str(scene.get("id") or scene.get("scene_id") or f"s{index + 1:02d}")
+
+
+def _duration(scene: dict[str, Any]) -> float:
+    try:
+        return float(scene.get("duration_sec") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _looks_like_checklist_or_explainer(script: dict[str, Any] | None, scenes: list[dict[str, Any]]) -> bool:
+    text = " ".join(
+        [
+            str((script or {}).get("short_format") or ""),
+            str((script or {}).get("format") or ""),
+            str((script or {}).get("narration") or ""),
+            " ".join(_joined_scene_text(scene) for scene in scenes),
+        ]
+    ).lower()
+    return any(term in text for term in ("checklist", "lista", "paso", "revisa", "etiqueta", "por 100 g", "ingrediente"))
+
+
+def _missing_graphic_candidate(scene: dict[str, Any]) -> bool:
+    if str(scene.get("layout") or "").startswith("graphic_"):
+        return False
+    text = _joined_scene_text(scene).lower()
+    label_terms = ("etiqueta", "fibra", "azúcar", "azucar", "azúcares", "azucares", "sal", "proteína", "proteina", "por 100 g")
+    comparison_terms = ("mejor", "cuidado", "opción a", "opcion a", "opción b", "opcion b")
+    structured_terms = ("1/2", "1/4", "50%", "25%", "paso 1", "paso 2")
+    return (
+        sum(1 for term in label_terms if term in text) >= 2
+        or any(term in text for term in comparison_terms) and (" vs " in text or "opción" in text or "opcion" in text)
+        or any(term in text for term in structured_terms)
+    )
+
+
+def validate_scene_structure(
+    scenes: list[dict[str, Any]],
+    *,
+    scenes_doc: dict[str, Any] | None = None,
+    script: dict[str, Any] | None = None,
+    audio_duration_sec: float | None = None,
+) -> list[SceneValidationIssue]:
+    """Deterministic pre-QA validation for Shorts scene structure.
+
+    This is the numeric/layout authority for spec v1.3. LLM QA can comment on
+    product quality, but duration caps and arithmetic are decided here.
+    """
+    issues: list[SceneValidationIssue] = []
+    scenes_doc = scenes_doc or {}
+    scenes = list(scenes or [])
+    scene_count = len(scenes)
+    is_checklist = _looks_like_checklist_or_explainer(script, scenes)
+
+    min_count = 6 if is_checklist else 4
+    max_count = 9 if is_checklist else 8
+    if scene_count < min_count or scene_count > max_count:
+        issues.append(SceneValidationIssue(
+            type="scene_count",
+            scene_id=None,
+            severity="repairable_error",
+            detail=f"Scene count {scene_count} is outside recommended range {min_count}-{max_count}.",
+            repair_hint="Use 5-8 scenes by default, 6-9 for checklist/explainer, 4-6 for simple hook-tip-CTA.",
+        ))
+
+    if scenes:
+        first_layout = str(scenes[0].get("layout") or "")
+        if first_layout != "short_hook":
+            issues.append(SceneValidationIssue(
+                type="first_scene_layout",
+                scene_id=_scene_id(scenes[0], 0),
+                severity="blocking_error",
+                detail=f"First scene layout is {first_layout!r}; expected short_hook.",
+                repair_hint="Regenerate with the first scene as short_hook.",
+            ))
+        cta_text = str((script or {}).get("cta") or "").strip()
+        has_cta = bool(cta_text) or any(str(scene.get("layout") or "") == "short_cta" for scene in scenes)
+        if has_cta and str(scenes[-1].get("layout") or "") != "short_cta":
+            issues.append(SceneValidationIssue(
+                type="last_scene_cta",
+                scene_id=_scene_id(scenes[-1], scene_count - 1),
+                severity="blocking_error",
+                detail="CTA exists but the last scene is not short_cta.",
+                repair_hint="Append or regenerate a final short_cta scene.",
+            ))
+
+    scene_sum = round(sum(_duration(scene) for scene in scenes), 3)
+    computed_total = round(sum(_duration(scene) for scene in scenes), 1)
+    original_declared = scenes_doc.get("total_duration_sec") if scenes_doc is not None else None
+    if original_declared is not None:
+        try:
+            declared_float = float(original_declared)
+            if abs(declared_float - computed_total) > 0.11:
+                issues.append(SceneValidationIssue(
+                    type="total_duration_normalized",
+                    scene_id=None,
+                    severity="warning",
+                    detail=f"total_duration_sec normalized from {original_declared} to {computed_total}.",
+                    repair_hint=None,
+                ))
+        except (TypeError, ValueError):
+            issues.append(SceneValidationIssue(
+                type="total_duration_normalized",
+                scene_id=None,
+                severity="warning",
+                detail=f"total_duration_sec normalized from {original_declared!r} to {computed_total}.",
+                repair_hint=None,
+            ))
+    if scenes_doc is not None:
+        scenes_doc["total_duration_sec"] = computed_total
+    declared = computed_total
+
+    total_for_range = float(declared or scene_sum or 0.0)
+    if total_for_range and not (MIN_SHORT_DURATION_SEC <= total_for_range <= MAX_SHORT_DURATION_SEC):
+        issues.append(SceneValidationIssue(
+            type="duration_range",
+            scene_id=None,
+            severity="repairable_error",
+            detail=f"Total duration {total_for_range:.1f}s is outside hard range 20-45s.",
+            repair_hint="Keep final duration within 20-45s; do not stretch individual scenes.",
+        ))
+    elif total_for_range and not (IDEAL_MIN_SHORT_DURATION_SEC <= total_for_range <= IDEAL_MAX_SHORT_DURATION_SEC):
+        issues.append(SceneValidationIssue(
+            type="duration_ideal",
+            scene_id=None,
+            severity="warning",
+            detail=f"Total duration {total_for_range:.1f}s is outside ideal 28-38s but within hard range.",
+            repair_hint="Render is allowed if pacing and audio-fit are strong.",
+        ))
+
+    graphic_count = 0
+    missing_graphic_candidates = 0
+    for index, scene in enumerate(scenes):
+        sid = _scene_id(scene, index)
+        layout = str(scene.get("layout") or "")
+        dur = _duration(scene)
+
+        if layout not in SUPPORTED_SCENE_LAYOUTS:
+            issues.append(SceneValidationIssue(
+                type="layout",
+                scene_id=sid,
+                severity="blocking_error",
+                detail=f"Unsupported scene layout {layout!r}.",
+                repair_hint="Use only supported short_* or graphic_* layouts.",
+            ))
+            continue
+
+        if layout.startswith("graphic_"):
+            graphic_count += 1
+
+        if dur > GLOBAL_SCENE_MAX_SEC:
+            issues.append(SceneValidationIssue(
+                type="duration_cap",
+                scene_id=sid,
+                severity="repairable_error",
+                detail=f"Scene {sid} duration {dur:.1f}s exceeds global hard max {GLOBAL_SCENE_MAX_SEC:.1f}s.",
+                repair_hint=f"No scene may exceed 5.0 sec in a normal Short. Split or regenerate {sid}.",
+            ))
+        target = LAYOUT_DURATION_TARGETS.get(layout)
+        if target:
+            target_min, target_max, hard_max = target
+            if dur > hard_max:
+                issues.append(SceneValidationIssue(
+                    type="duration_cap",
+                    scene_id=sid,
+                    severity="repairable_error",
+                    detail=f"Scene {sid} ({layout}) duration {dur:.1f}s exceeds hard max {hard_max:.1f}s.",
+                    repair_hint=f"No scene may exceed {hard_max:.1f} sec for layout {layout}. Split or regenerate {sid}.",
+                ))
+            elif dur and not (target_min <= dur <= target_max):
+                issues.append(SceneValidationIssue(
+                    type="duration_pacing",
+                    scene_id=sid,
+                    severity="warning",
+                    detail=f"Scene {sid} ({layout}) duration {dur:.1f}s is outside target {target_min:.1f}-{target_max:.1f}s.",
+                    repair_hint="Allowed if pacing remains strong and hard caps are respected.",
+                ))
+
+        narration = str(scene.get("narration") or "")
+        estimated_scene_audio = estimate_spanish_narration_sec(narration)
+        if narration.strip() and estimated_scene_audio > dur + 0.3:
+            issues.append(SceneValidationIssue(
+                type="scene_narration_fit",
+                scene_id=sid,
+                severity="repairable_error",
+                detail=f"Scene {sid} narration estimates {estimated_scene_audio:.1f}s for {dur:.1f}s scene (exceeds 0.3s tolerance).",
+                repair_hint="Condense narration or increase scene duration within layout cap. Do not exceed hard cap.",
+            ))
+        elif narration.strip() and estimated_scene_audio > dur:
+            issues.append(SceneValidationIssue(
+                type="scene_narration_fit",
+                scene_id=sid,
+                severity="warning",
+                detail=f"Scene {sid} narration estimates {estimated_scene_audio:.1f}s for {dur:.1f}s scene.",
+                repair_hint="Consider condensing narration slightly or adjusting duration.",
+            ))
+
+        on_screen_text = str(scene.get("on_screen_text") or "").strip().upper()
+        if on_screen_text in PASSIVE_CTA_TEXTS:
+            issues.append(SceneValidationIssue(
+                type="passive_cta",
+                scene_id=sid,
+                severity="repairable_error",
+                detail=f"Scene {sid} CTA text '{on_screen_text}' is passive/status-like.",
+                repair_hint="Use GUARDA ESTA LISTA, GUÁRDALO PARA LA COMPRA, MÍRALO ANTES DE COMPRAR PAN, or ÚSALO EN EL SÚPER.",
+            ))
+
+        if _missing_graphic_candidate(scene):
+            missing_graphic_candidates += 1
+
+    if graphic_count == 3:
+        issues.append(SceneValidationIssue(
+            type="graphic_count",
+            scene_id=None,
+            severity="warning",
+            detail=f"Short has 3 graphic scenes; normal Shorts should use 1-2 unless intentionally graphic-led.",
+            repair_hint="Verify if 3 graphics are intentionally needed, otherwise reduce to 1-2.",
+        ))
+    elif graphic_count >= 4:
+        issues.append(SceneValidationIssue(
+            type="graphic_count",
+            scene_id=None,
+            severity="repairable_error",
+            detail=f"Short has {graphic_count} graphic scenes; normal Shorts should use 1-2.",
+            repair_hint="Keep the two highest-value graphics and convert extras to stock short_tip/short_checklist scenes.",
+        ))
+
+    if missing_graphic_candidates and graphic_count >= MAX_GRAPHIC_SCENES_PER_SHORT:
+        issues.append(SceneValidationIssue(
+            type="missing_graphic_warning",
+            scene_id=None,
+            severity="warning",
+            detail="A stock scene contains visualizable label/checklist structure, but the Short already has 2 graphics.",
+            repair_hint="Do not add a third graphic; improve the stock visual_prompt instead.",
+        ))
+
+    if audio_duration_sec is not None:
+        issue = validate_audio_fit(total_for_range or scene_sum, audio_duration_sec)
+        if issue:
+            issues.append(issue)
+
+    return issues
+
+
+def build_scene_repair_plan(
+    scenes: list[dict[str, Any]],
+    issues: list[SceneValidationIssue],
+    script: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    repair_modes: list[str] = []
+    instructions: list[str] = [
+        "REPAIR PLAN:",
+        "- You must fix the listed scene IDs and not reintroduce the same violation.",
+        "- target_duration_sec is a soft planning target; do not stretch scenes to reach 35 sec.",
+        "- Final total may be 28-34 sec, or any 20-45 sec duration, if pacing and audio-fit are strong.",
+    ]
+    suggested_scene_plan: list[dict[str, Any]] = []
+
+    for issue in issues:
+        if issue.severity == "warning":
+            continue
+        if issue.type in {"duration_cap", "scene_narration_fit"} and issue.scene_id:
+            repair_modes.append("split_long_scene")
+            instructions.append(f"- Fix {issue.scene_id}: {issue.detail}")
+            instructions.append("- No scene may exceed 5.0 sec in a normal Short; split, shorten, or regenerate the scene.")
+            original = next((scene for scene in scenes if _scene_id(scene, -1) == issue.scene_id), {})
+            suggested_scene_plan.append({
+                "id": f"{issue.scene_id}a",
+                "duration_sec": 3.4,
+                "layout": "short_tip",
+                "on_screen_text": str(original.get("on_screen_text") or "COMPARA CON OTRO")[:32],
+            })
+            suggested_scene_plan.append({
+                "id": f"{issue.scene_id}b",
+                "duration_sec": 3.2,
+                "layout": "short_tip",
+                "on_screen_text": "ETIQUETA CLARA",
+            })
+        elif issue.type == "graphic_count":
+            repair_modes.append("reduce_graphics")
+            instructions.append("- Keep exactly 2 graphic scenes, chosen for the highest-value knowledge moments.")
+            instructions.append("- Convert extra graphic/checklist-heavy scenes to stock short_tip or short_checklist scenes.")
+        elif issue.type == "passive_cta":
+            repair_modes.append("cta_rewrite")
+            instructions.append("- Rewrite passive CTA text to an action CTA such as GUARDA ESTA LISTA or GUÁRDALO PARA LA COMPRA.")
+        elif issue.type == "audio_fit":
+            repair_modes.append("audio_fit")
+            instructions.extend([
+                "AUDIO-FIT REPAIR PLAN:",
+                "- Actual narration audio exceeds video duration.",
+                "- Condense narration; do not stretch scenes above caps.",
+                "- Keep 3 spoken checklist points max.",
+                "- Move supporting detail to on_screen_text or graphic payload.",
+                "- Regenerate scenes after script compression."
+            ])
+        elif issue.type == "script_word_budget":
+            repair_modes.append("script_condense")
+            instructions.append("- Compress narration to about 60-70 spoken Spanish words for a 35s Short.")
+            instructions.append("- For checklist/explainer Shorts, speak only the top 3-4 checklist points.")
+        else:
+            instructions.append(f"- Fix {issue.type}: {issue.detail}")
+            if issue.repair_hint:
+                instructions.append(f"- {issue.repair_hint}")
+
+    mode = " | ".join(sorted(set(repair_modes))) if repair_modes else "warnings_only"
+    return {
+        "repair_mode": mode,
+        "instructions": instructions,
+        "suggested_scene_plan": suggested_scene_plan,
+    }
 
 ALLOWED_GRAPHIC_VARIANTS = {
     "brand_default",
@@ -52,7 +538,41 @@ PLATE_RATIO_TOTAL = 100.0
 PLATE_RATIO_EPSILON = 0.01
 MAX_GRAPHIC_SCENES_PER_SHORT = 2
 GRAPHIC_MIN_DURATION_SEC = 2.5
-GRAPHIC_MAX_DURATION_SEC = 4.0
+GRAPHIC_MAX_DURATION_SEC = 5.0
+GRAPHIC_LAYOUT_DURATION_TARGETS = {
+    "graphic_checklist": (3.0, 4.0, 4.5),
+    "graphic_step_list": (3.0, 4.0, 4.5),
+    "graphic_plate_ratio": (3.0, 4.5, 5.0),
+    "graphic_label_callout": (3.5, 5.0, 5.0),
+    "graphic_comparison": (3.5, 4.5, 5.0),
+    "graphic_routine_split": (3.5, 5.0, 5.0),
+}
+PASSIVE_CTA_TEXTS = {
+    "CHECKLIST GUARDADA",
+    "LISTA COMPLETA",
+    "FIN",
+    "CONSEJO FINAL",
+}
+BREAD_LABEL_TOPIC_TERMS = (
+    "pan",
+    "marrón",
+    "marron",
+    "integral",
+    "etiqueta",
+    "ingrediente",
+    "fibra",
+)
+BREAD_LABEL_HOOK_VISUAL_TERMS = (
+    "bread",
+    "pan",
+    "package",
+    "packaging",
+    "label",
+    "ingredient",
+    "supermarket",
+    "shelf",
+    "basket",
+)
 
 # Text-density limits (keep in sync with the TypeScript Zod schemas).
 _PLATE_LABEL_MAX = 48
@@ -90,10 +610,13 @@ def validate_short_graphic_scenes(scenes: list[dict[str, Any]]) -> list[str]:
     """
     warnings: list[str] = []
     graphic_count = 0
+    is_bread_label_topic = _looks_like_bread_label_topic(scenes)
 
     for index, scene in enumerate(scenes):
         sid = scene.get("id", index)
         layout = scene.get("layout")
+
+        _validate_non_graphic_scene_tuning(scene, sid, layout, index, is_bread_label_topic, warnings)
 
         if "scene_id" in scene and "id" not in scene:
             raise ValueError(
@@ -143,12 +666,7 @@ def validate_short_graphic_scenes(scenes: list[dict[str, Any]]) -> list[str]:
         elif layout == "graphic_routine_split":
             _validate_routine_split(payload, sid, warnings)
 
-        dur = float(scene.get("duration_sec") or 0)
-        if not (GRAPHIC_MIN_DURATION_SEC <= dur <= GRAPHIC_MAX_DURATION_SEC):
-            warnings.append(
-                f"Scene {sid} graphic duration {dur}s is outside the recommended "
-                f"{GRAPHIC_MIN_DURATION_SEC}-{GRAPHIC_MAX_DURATION_SEC}s range."
-            )
+        _validate_graphic_duration(scene, sid, layout, warnings)
 
     if graphic_count > MAX_GRAPHIC_SCENES_PER_SHORT:
         warnings.append(
@@ -157,6 +675,72 @@ def validate_short_graphic_scenes(scenes: list[dict[str, Any]]) -> list[str]:
         )
 
     return warnings
+
+
+def _joined_scene_text(scene: dict[str, Any]) -> str:
+    payload = scene.get("layout_payload")
+    payload_text = ""
+    if isinstance(payload, dict):
+        payload_text = " ".join(str(v) for v in payload.values() if isinstance(v, (str, int, float)))
+    return " ".join(
+        str(scene.get(key) or "")
+        for key in ("narration", "on_screen_text", "caption", "visual_prompt")
+    ) + " " + payload_text
+
+
+def _looks_like_bread_label_topic(scenes: list[dict[str, Any]]) -> bool:
+    text = " ".join(_joined_scene_text(scene).lower() for scene in scenes)
+    return any(term in text for term in BREAD_LABEL_TOPIC_TERMS)
+
+
+def _validate_non_graphic_scene_tuning(
+    scene: dict[str, Any],
+    sid: Any,
+    layout: Any,
+    index: int,
+    is_bread_label_topic: bool,
+    warnings: list[str],
+) -> None:
+    on_screen_text = str(scene.get("on_screen_text") or "").strip().upper()
+    if on_screen_text in PASSIVE_CTA_TEXTS:
+        warnings.append(
+            f"Scene {sid} CTA text '{on_screen_text}' is passive/status-like; prefer "
+            "GUARDA ESTA LISTA or GUÁRDALO PARA LA COMPRA."
+        )
+
+    if layout == "short_myth" and float(scene.get("duration_sec") or 0) > 3.0:
+        warnings.append(f"Scene {sid} myth/setup duration exceeds 3.0s; keep myth beats short.")
+
+    if on_screen_text == "MITO RÁPIDO" and float(scene.get("duration_sec") or 0) > 3.0:
+        warnings.append(f"Scene {sid} keeps generic MITO RÁPIDO too long; use a specific myth statement.")
+
+    if index == 0 and layout == "short_hook" and is_bread_label_topic:
+        visual_prompt = str(scene.get("visual_prompt") or "").lower()
+        if not any(term in visual_prompt for term in BREAD_LABEL_HOOK_VISUAL_TERMS):
+            warnings.append(
+                f"Scene {sid} bread/label hook visual is too generic; include bread, package, label, "
+                "supermarket shelf, or shopping basket imagery."
+            )
+
+
+def _validate_graphic_duration(scene: dict[str, Any], sid: Any, layout: str, warnings: list[str]) -> None:
+    dur = float(scene.get("duration_sec") or 0)
+    target_min, target_max, hard_max = GRAPHIC_LAYOUT_DURATION_TARGETS.get(
+        layout,
+        (GRAPHIC_MIN_DURATION_SEC, GRAPHIC_MAX_DURATION_SEC, GRAPHIC_MAX_DURATION_SEC),
+    )
+
+    if dur > hard_max:
+        raise ValueError(
+            f"Graphic scene {sid} ({layout}) duration {dur}s exceeds hard max {hard_max}s; "
+            "graphics must be fast explanatory bursts, not slides."
+        )
+
+    if not (target_min <= dur <= target_max):
+        warnings.append(
+            f"Scene {sid} ({layout}) graphic duration {dur}s is outside the target "
+            f"{target_min}-{target_max}s range."
+        )
 
 
 def _validate_optional_choice(

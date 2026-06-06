@@ -135,6 +135,40 @@ def _make_long_job(tmp_path: Path) -> Path:
     return job
 
 
+def _make_long_job_subdir_layout(tmp_path: Path) -> Path:
+    """Real job layout: JSON artifacts under ``json/`` and video under ``outputs/``."""
+    job = tmp_path / "long-job-subdir"
+    (job / "json").mkdir(parents=True)
+    (job / "outputs").mkdir(parents=True)
+    (job / "json" / "script.json").write_text(json.dumps({"sections": []}), encoding="utf-8")
+    (job / "json" / "scenes.json").write_text(json.dumps({"scenes": []}), encoding="utf-8")
+    (job / "json" / "seo.json").write_text(json.dumps({"title": "t"}), encoding="utf-8")
+    (job / "outputs" / "video.mp4").write_bytes(b"x")
+    return job
+
+
+def test_autopilot_source_validation_accepts_subdir_layout(tmp_path: Path):
+    """Regression: source artifacts live under json/ + outputs/, not job root.
+
+    Previously the validation checked ``long_job_dir / name`` (flat) and reported
+    "Missing source artifact: script.json/..." which silently failed every
+    regenerate/resume for new-layout jobs.
+    """
+    from video_agent.shorts import autopilot
+    job = _make_long_job_subdir_layout(tmp_path)
+
+    def fake_plan(long_job_dir, channel_config, requested_count=None):
+        return {"selected_shorts": [{"short_id": "short-01"}], "warnings": []}
+
+    def fake_build(long_job_dir, short_plan, channel_config):
+        return {"short_id": short_plan["short_id"], "status": "rendered", "qa_verdict": "PASS"}
+
+    cfg = {"shorts": {"autopilot": {}}}
+    result = autopilot.run_shorts_autopilot(job, cfg, plan_fn=fake_plan, build_short_fn=fake_build)
+    assert result["status"] != "failed", result
+    assert not any("Missing source artifact" in e for e in result.get("errors", []))
+
+
 def test_autopilot_skips_when_manifest_exists(tmp_path: Path):
     from video_agent.shorts import autopilot, manifest
     job = _make_long_job(tmp_path)

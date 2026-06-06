@@ -38,7 +38,9 @@
             "enum": [
               "hook", "subtitle", "checklist", "warning", "quote", "cta",
               "short_hook", "short_pain", "short_tip", "short_checklist",
-              "short_myth", "short_quote", "short_cta"
+              "short_myth", "short_quote", "short_cta",
+              "graphic_plate_ratio", "graphic_checklist", "graphic_step_list",
+              "graphic_label_callout", "graphic_comparison", "graphic_routine_split"
             ]
           },
           "layout_payload": {

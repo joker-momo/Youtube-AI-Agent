@@ -4379,7 +4379,7 @@ async function loadShortsRendersTab(jobId) {
                   <div class="copy-row" style="margin-bottom: 0;">
                     <div class="crh">
                       <div class="cr-label">Tags <span class="count">${shortTagsList.length}</span></div>
-                      <button class="copy-btn" data-clip="${escapeHtml(shortTagsList.join(', '))}" onclick="copyText(this, this.dataset.clip)">copy</button>
+                      <button class="copy-btn" data-clip="${escapeHtml(shortTagsList.join(','))}" onclick="copyText(this, this.dataset.clip)">copy</button>
                     </div>
                     <div class="tag-chips">${shortTagsHtml || '<span class="tag-chip">(missing)</span>'}</div>
                   </div>

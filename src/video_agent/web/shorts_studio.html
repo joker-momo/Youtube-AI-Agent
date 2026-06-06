@@ -4165,7 +4165,7 @@ function renderSingleCardHtml(jobId, d, idx, shortsSeoData, isOpen) {
             <div class="copy-row" style="margin-bottom:0">
               <div class="crh">
                 <div class="cr-label">Hashtags <span class="count">${shortTagsList.length}</span></div>
-                <button class="copy-btn" data-clip="${escapeHtml(shortTagsList.join(' '))}" onclick="copyText(this, this.dataset.clip)">copy</button>
+                <button class="copy-btn" data-clip="${escapeHtml(shortTagsList.join(','))}" onclick="copyText(this, this.dataset.clip)">copy</button>
               </div>
               <div class="tag-chips">${shortTagsHtml || '<span style="font-size:12px;color:var(--muted)">(missing)</span>'}</div>
             </div>

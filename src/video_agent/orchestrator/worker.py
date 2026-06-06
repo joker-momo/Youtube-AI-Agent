@@ -435,19 +435,19 @@ def _run_short_render_job(job: dict, *, job_dir: Path, channel_path: Path) -> No
     # Ensure pre-render files exist
     missing_files = []
     for s in status.get("stages") or []:
-        if s["name"] == "script" and not (short_dir / paths.SHORT_SCRIPT_FILE).exists():
+        if s["name"] == "script" and not paths.resolve_short_json(short_dir, paths.SHORT_SCRIPT_FILE).exists():
             s["status"] = "failed"
             missing_files.append("Short Script")
-        elif s["name"] == "qa_script" and not (short_dir / paths.SHORT_SCRIPT_QA_FILE).exists():
+        elif s["name"] == "qa_script" and not paths.resolve_short_json(short_dir, paths.SHORT_SCRIPT_QA_FILE).exists():
             s["status"] = "failed"
             missing_files.append("QA Script")
-        elif s["name"] == "scenes" and not (short_dir / paths.SHORT_SCENES_FILE).exists():
+        elif s["name"] == "scenes" and not paths.resolve_short_json(short_dir, paths.SHORT_SCENES_FILE).exists():
             s["status"] = "failed"
             missing_files.append("Short Scenes")
-        elif s["name"] == "qa_scenes" and not (short_dir / paths.SHORT_SCENES_QA_FILE).exists():
+        elif s["name"] == "qa_scenes" and not paths.resolve_short_json(short_dir, paths.SHORT_SCENES_QA_FILE).exists():
             s["status"] = "failed"
             missing_files.append("QA Scenes")
-        elif s["name"] == "seo" and not (short_dir / paths.SHORT_SEO_FILE).exists():
+        elif s["name"] == "seo" and not paths.resolve_short_json(short_dir, paths.SHORT_SEO_FILE).exists():
             s["status"] = "failed"
             missing_files.append("Short SEO")
 
@@ -518,6 +518,7 @@ def _run_short_render_job(job: dict, *, job_dir: Path, channel_path: Path) -> No
             if entry.get("short_id") == short_id:
                 entry["status"] = "rendered"
                 entry["rendered"] = True
+                entry["qa_verdict"] = status.get("qa_verdict", "PASS")
                 entry["requires_render_confirmation"] = False
                 entry["video_path"] = f"shorts/{short_id}/{paths.SHORT_VIDEO_FILE}"
                 entry["cover_path"] = f"shorts/{short_id}/{paths.SHORT_COVER_FILE}"

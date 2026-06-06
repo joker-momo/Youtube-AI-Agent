@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from video_agent.shorts import legacy_cleanup, manifest, paths
+from video_agent.shorts.idea_generator import resolve_long_job_artifact
 
 REQUIRED_SOURCE_FILES = ("script.json", "scenes.json", "seo.json", "video.mp4")
 
@@ -94,8 +95,9 @@ def _write_source_snapshot(long_job_dir: Path) -> None:
 
     snap: dict[str, Any] = {"captured_at": _now(), "files": {}}
     for name in REQUIRED_SOURCE_FILES:
-        p = long_job_dir / name
-        snap["files"][name] = {"exists": p.exists(), "size": p.stat().st_size if p.exists() else 0}
+        p = resolve_long_job_artifact(long_job_dir, name)
+        exists = p is not None
+        snap["files"][name] = {"exists": exists, "size": p.stat().st_size if exists else 0}
     atomic_write_json(paths.source_snapshot_path(long_job_dir), snap)
 
 
@@ -165,7 +167,7 @@ def run_shorts_autopilot(
             # Force-regenerate of an existing new-structure run: archive first.
             legacy_cleanup.archive_legacy_shorts(long_job_dir)
         # 4. Validate source artifacts.
-        missing = [f for f in REQUIRED_SOURCE_FILES if not (long_job_dir / f).exists()]
+        missing = [f for f in REQUIRED_SOURCE_FILES if resolve_long_job_artifact(long_job_dir, f) is None]
         if missing:
             run = {
                 "source_long_job_id": long_job_dir.name,
@@ -346,8 +348,8 @@ def _prior_status(long_job_dir: Path, short_id: str) -> dict | None:
 
 
 def _source_title(long_job_dir: Path) -> str:
-    seo = long_job_dir / "seo.json"
-    if seo.exists():
+    seo = resolve_long_job_artifact(long_job_dir, "seo.json")
+    if seo is not None:
         try:
             return str(json.loads(seo.read_text(encoding="utf-8")).get("title", ""))
         except Exception:

@@ -68,6 +68,15 @@ def test_job_queue_active_jobs_returns_pending_and_running(tmp_path: Path):
     }
 
 
+@pytest.mark.parametrize("html_name", ["dashboard.html", "shorts_studio.html"])
+def test_rendered_shorts_copy_hashtags_with_commas(html_name: str):
+    html = (Path(__file__).parents[1] / "src" / "video_agent" / "web" / html_name).read_text(encoding="utf-8")
+
+    assert "shortTagsList.join(',')" in html
+    assert "shortTagsList.join(', ')" not in html
+    assert "shortTagsList.join(' ')" not in html
+
+
 def test_shorts_studio_state_uses_busy_guard_for_queue_jobs(client: TestClient, tmp_path: Path):
     _write_job(tmp_path, "job-1")
     queue = JobQueue(tmp_path / "queue.db")

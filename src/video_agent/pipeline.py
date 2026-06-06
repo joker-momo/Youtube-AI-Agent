@@ -574,23 +574,20 @@ def _sync_scene_durations_from_audio(job_dir: Path, scene_doc: dict) -> None:
             log.warning("Duration sync strategy A failed: %s", exc)
 
     # ── Strategy B: proportional split from total audio duration ─────────────────
-    narration_path = None
-    for fname in ("narration_mixed.m4a", "narration.wav"):
+    total_audio = None
+    for fname in ("narration.wav", "narration_mixed.m4a"):
         p = job_dir / "assets" / fname
         if p.exists() and p.stat().st_size > 0:
-            narration_path = p
-            break
+            try:
+                import soundfile as sf
+                info = sf.info(str(p))
+                total_audio = float(info.duration)
+                break
+            except Exception as exc:
+                log.warning("Duration sync strategy B: cannot read audio %s (%s)", fname, exc)
 
-    if narration_path is None:
+    if total_audio is None:
         return  # nothing to measure — let existing values stand
-
-    try:
-        import soundfile as sf
-        info = sf.info(str(narration_path))
-        total_audio = float(info.duration)
-    except Exception as exc:
-        log.warning("Duration sync strategy B: cannot read audio (%s)", exc)
-        return
 
     original_total = sum(float(s.get("duration_sec") or 1) for s in scenes)
     if original_total <= 0:

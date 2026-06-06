@@ -1207,3 +1207,78 @@ def test_action_specific_repair_hints():
     assert "CTA narration is too long" in inst
     assert "Condense narration or increase scene duration" in inst
 
+
+def test_defensive_product_scores_validation():
+    from video_agent.shorts.qa import normalize_gemini_scenes_qa
+    
+    # 1. All scores good (average >= 8, min >= 7)
+    parsed_good = {
+        "verdict": "FAIL", # should get updated to PASS if only warnings/scores were failing (but wait, no issues are present here)
+        "issues": [],
+        "required_changes": [],
+        "product_scores": {
+            "audience_fit_45_plus": "8/10",
+            "hook_strength": 9,
+            "visual_specificity": 8.0,
+            "clarity": "8",
+            "retention_pacing": 8,
+            "natural_spanish": "8",
+            "saveability": 8
+        }
+    }
+    res_good = normalize_gemini_scenes_qa(parsed_good)
+    assert res_good["verdict"] == "PASS" # since parsed verdict was FAIL but no issues exist and scores are perfect
+    assert not any(i["type"] == "product_quality_score_low" for i in res_good["issues"])
+
+    # 2. Missing score key
+    parsed_missing = {
+        "verdict": "PASS",
+        "issues": [],
+        "required_changes": [],
+        "product_scores": {
+            "audience_fit_45_plus": 8,
+            "hook_strength": 8,
+        }
+    }
+    res_missing = normalize_gemini_scenes_qa(parsed_missing)
+    assert res_missing["verdict"] == "FAIL"
+    assert any(i["type"] == "product_quality_scores_missing" for i in res_missing["issues"])
+
+    # 3. Individual score too low (< 7)
+    parsed_low = {
+        "verdict": "PASS",
+        "issues": [],
+        "required_changes": [],
+        "product_scores": {
+            "audience_fit_45_plus": 8,
+            "hook_strength": 6, # < 7
+            "visual_specificity": 8,
+            "clarity": 8,
+            "retention_pacing": 8,
+            "natural_spanish": 8,
+            "saveability": 8
+        }
+    }
+    res_low = normalize_gemini_scenes_qa(parsed_low)
+    assert res_low["verdict"] == "FAIL"
+    assert any(i["type"] == "product_quality_score_low" for i in res_low["issues"])
+
+    # 4. Average score too low (< 8)
+    parsed_low_avg = {
+        "verdict": "PASS",
+        "issues": [],
+        "required_changes": [],
+        "product_scores": {
+            "audience_fit_45_plus": 7,
+            "hook_strength": 7,
+            "visual_specificity": 7,
+            "clarity": 7,
+            "retention_pacing": 7,
+            "natural_spanish": 7,
+            "saveability": 7 # all 7s -> avg 7 < 8
+        }
+    }
+    res_low_avg = normalize_gemini_scenes_qa(parsed_low_avg)
+    assert res_low_avg["verdict"] == "FAIL"
+    assert any(i["type"] == "product_quality_average_low" for i in res_low_avg["issues"])
+

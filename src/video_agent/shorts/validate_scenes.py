@@ -908,3 +908,29 @@ def _validate_routine_split(payload: dict, sid: Any, warnings: list[str]) -> Non
             raise ValueError(f"graphic_routine_split scene {sid} has a non-object block.")
         _require_short_string(block.get("time"), _ROUTINE_TIME_MAX, "block.time", sid)
         _require_short_string(block.get("text"), _ROUTINE_TEXT_MAX, "block.text", sid)
+
+
+def repair_scene_duration_if_possible(scene: dict[str, Any]) -> str:
+    layout = scene.get("layout") or ""
+    narration = scene.get("narration") or ""
+    est = estimate_spanish_narration_sec(narration, 2.25)
+    required = round(est + 0.3, 1)
+
+    cap = GLOBAL_SCENE_MAX_SEC
+    target = LAYOUT_DURATION_TARGETS.get(layout)
+    if target:
+        cap = target[2]
+
+    try:
+        dur = float(scene.get("duration_sec") or 0.0)
+    except (TypeError, ValueError):
+        dur = 0.0
+
+    if required <= cap and dur < required:
+        scene["duration_sec"] = required
+        return "auto_extended"
+
+    if required > cap:
+        return "must_split_or_compress"
+
+    return "ok"

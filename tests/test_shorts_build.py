@@ -1165,3 +1165,19 @@ def test_audio_fit_repair_loop_trigger(tmp_path: Path):
         assert any("AUDIO-FIT" in f or "narration audio exceeds" in f for f in script_attempts["feedbacks"])
         assert res["status"] == "needs_review"
 
+
+def test_repair_scene_duration_if_possible():
+    from video_agent.shorts.validate_scenes import repair_scene_duration_if_possible
+    
+    # Fits within cap (hook cap is 3.0s, required is 1.4s)
+    s1 = {"duration_sec": 1.0, "layout": "short_hook", "narration": "Abre fuerte."}
+    res1 = repair_scene_duration_if_possible(s1)
+    assert res1 == "auto_extended"
+    assert s1["duration_sec"] == 1.4
+
+    # Exceeds cap (hook cap is 3.0s, narration has 8 words -> required is 4.0s)
+    s2 = {"duration_sec": 1.0, "layout": "short_hook", "narration": "Abre fuerte y mira esta increible etiqueta ahora mismo."}
+    res2 = repair_scene_duration_if_possible(s2)
+    assert res2 == "must_split_or_compress"
+    assert s2["duration_sec"] == 1.0
+

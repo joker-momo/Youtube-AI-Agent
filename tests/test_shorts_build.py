@@ -1181,3 +1181,29 @@ def test_repair_scene_duration_if_possible():
     assert res2 == "must_split_or_compress"
     assert s2["duration_sec"] == 1.0
 
+
+def test_action_specific_repair_hints():
+    from video_agent.shorts.validate_scenes import build_scene_repair_plan, SceneValidationIssue
+
+    scenes = [
+        {"id": "s01", "layout": "short_hook", "narration": "a"},
+        {"id": "s06", "layout": "graphic_label_callout", "narration": "b"},
+        {"id": "s09", "layout": "short_quote", "narration": "c"},
+        {"id": "s10", "layout": "short_cta", "narration": "d"},
+        {"id": "s02", "layout": "short_tip", "narration": "e"},
+    ]
+    issues = [
+        SceneValidationIssue(type="scene_narration_fit", scene_id="s01", severity="repairable_error", detail="x"),
+        SceneValidationIssue(type="scene_narration_fit", scene_id="s06", severity="repairable_error", detail="x"),
+        SceneValidationIssue(type="scene_narration_fit", scene_id="s09", severity="repairable_error", detail="x"),
+        SceneValidationIssue(type="scene_narration_fit", scene_id="s10", severity="repairable_error", detail="x"),
+        SceneValidationIssue(type="scene_narration_fit", scene_id="s02", severity="repairable_error", detail="x"),
+    ]
+    plan = build_scene_repair_plan(scenes, issues)
+    inst = "\n".join(plan["instructions"])
+    assert "Hook narration is too long" in inst
+    assert "Current narration is too long for a single graphic_label_callout" in inst
+    assert "Quote narration is too long" in inst
+    assert "CTA narration is too long" in inst
+    assert "Condense narration or increase scene duration" in inst
+

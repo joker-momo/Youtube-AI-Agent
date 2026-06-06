@@ -456,9 +456,46 @@ def build_scene_repair_plan(
             continue
         if issue.type in {"duration_cap", "scene_narration_fit"} and issue.scene_id:
             repair_modes.append("split_long_scene")
-            instructions.append(f"- Fix {issue.scene_id}: {issue.detail}")
-            instructions.append("- No scene may exceed 5.0 sec in a normal Short; split, shorten, or regenerate the scene.")
             original = next((scene for scene in scenes if _scene_id(scene, -1) == issue.scene_id), {})
+            layout = original.get("layout") or ""
+            if issue.type == "scene_narration_fit":
+                if layout == "short_hook":
+                    instructions.extend([
+                        f"- Fix {issue.scene_id}:",
+                        "  - Hook narration is too long for 3.0 sec.",
+                        '  - Replace with: "¿Pan marrón? No basta."',
+                        "  - Keep the longer idea in on_screen_text or next scene."
+                    ])
+                elif layout == "graphic_label_callout":
+                    instructions.extend([
+                        f"- Fix {issue.scene_id}:",
+                        "  - Current narration is too long for a single graphic_label_callout scene.",
+                        "  - Do not exceed 5.0 sec.",
+                        '  - Shorten narration to: "Busca harina integral al principio."',
+                        '  - Move "trigo, centeno, espelta" examples into layout_payload callouts.',
+                        "  - Or split into:",
+                        '    s06a short_tip 3.2s: "Mira el primer ingrediente."',
+                        '    s06b graphic_label_callout 4.2s: "Busca harina integral al principio."'
+                    ])
+                elif layout == "short_quote":
+                    instructions.extend([
+                        f"- Fix {issue.scene_id}:",
+                        "  - Quote narration is too long.",
+                        '  - Shorten to: "La etiqueta ayuda a elegir."',
+                        '  - Keep "No busca perfección" as on_screen_text or remove it.'
+                    ])
+                elif layout == "short_cta":
+                    instructions.extend([
+                        f"- Fix {issue.scene_id}:",
+                        "  - CTA narration is too long.",
+                        '  - Shorten to: "Guárdalo para la compra." or "Úsalo en el súper."'
+                    ])
+                else:
+                    instructions.append(f"- Fix {issue.scene_id}: {issue.detail}")
+                    instructions.append("- Condense narration or increase scene duration within layout cap. Do not exceed hard cap.")
+            else:
+                instructions.append(f"- Fix {issue.scene_id}: {issue.detail}")
+                instructions.append("- No scene may exceed 5.0 sec in a normal Short; split, shorten, or regenerate the scene.")
             suggested_scene_plan.append({
                 "id": f"{issue.scene_id}a",
                 "duration_sec": 3.4,

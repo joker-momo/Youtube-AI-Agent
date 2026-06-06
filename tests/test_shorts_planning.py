@@ -161,3 +161,11 @@ def test_planner_assigns_distinct_formats_in_order(tmp_path: Path):
     plan = planner.plan_shorts_from_long_video(job, _cfg())
     formats = [s["format"] for s in plan["selected_shorts"]]
     assert formats[: len(formats)] == ["pain_to_tip", "mistake_to_avoid", "mini_checklist"][: len(formats)]
+
+
+def test_prompt_updates():
+    from video_agent.shorts import prompts
+    p_scene = prompts.short_scene_prompt_v6({}, {}, {})
+    assert "SCENE NARRATION WORD CAPS" in p_scene
+    p_qa = prompts.gemini_scenes_qa_prompt({}, {}, {})
+    assert "product_scores" in p_qa

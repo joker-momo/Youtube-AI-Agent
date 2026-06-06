@@ -3,13 +3,18 @@
  * number badge, revealed sequentially. Subtle motion, not bouncy.
  */
 import React from 'react';
-import {graphicTheme} from './graphic-theme';
+import {getGraphicColors, graphicTheme, type GraphicColorRoles} from './graphic-theme';
 import {GraphicStepListPayload} from './graphic-payloads';
 import {GraphicFrame, useReveal} from './GraphicFrame';
 
-const {colors, font, fontSize, radius} = graphicTheme;
+const {font, fontSize, radius} = graphicTheme;
 
-const StepRow: React.FC<{label: string; text: string; delaySec: number}> = ({label, text, delaySec}) => {
+const StepRow: React.FC<{
+  label: string;
+  text: string;
+  colors: GraphicColorRoles;
+  delaySec: number;
+}> = ({label, text, colors, delaySec}) => {
   const reveal = useReveal(delaySec);
   return (
     <div
@@ -63,12 +68,18 @@ export const GraphicStepList: React.FC<{
   durationInFrames: number;
   fps: number;
 }> = ({payload}) => {
+  const colors = getGraphicColors(payload.variant);
   const steps = payload.steps.slice(0, 4);
   return (
-    <GraphicFrame title={payload.title} footer={payload.footer}>
+    <GraphicFrame
+      title={payload.title}
+      footer={payload.footer}
+      variant={payload.variant}
+      surfaceStyle={payload.surface_style}
+    >
       <div style={{display: 'flex', flexDirection: 'column', gap: 26, width: '100%'}}>
         {steps.map((step, i) => (
-          <StepRow key={i} label={step.label} text={step.text} delaySec={0.4 + i * 0.45} />
+          <StepRow key={i} label={step.label} text={step.text} colors={colors} delaySec={0.4 + i * 0.45} />
         ))}
       </div>
     </GraphicFrame>

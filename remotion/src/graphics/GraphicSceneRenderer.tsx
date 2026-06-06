@@ -6,6 +6,12 @@
 import React from 'react';
 import type {Scene} from '../render-props';
 import {parseGraphicPayload} from './graphic-payloads';
+import {
+  defaultBackgroundByLayout,
+  defaultSurfaceByLayout,
+  defaultVariantByLayout,
+  pickGraphicVariant,
+} from './graphic-theme';
 import {GraphicBackground} from './GraphicBackground';
 import {GraphicChecklist} from './GraphicChecklist';
 import {GraphicStepList} from './GraphicStepList';
@@ -34,26 +40,36 @@ export function GraphicSceneRenderer({
 
   // Throws (Zod / Error) for malformed payloads or unsupported layouts.
   const payload = parseGraphicPayload(layout, scene.layout_payload);
+  const variant = pickGraphicVariant({
+    layout,
+    sceneId: scene.id,
+    explicitVariant: payload.variant,
+    visualTone: payload.visual_tone,
+    layoutDefault: defaultVariantByLayout[layout] ?? 'brand_default',
+  });
+  const backgroundMode = payload.background_mode ?? defaultBackgroundByLayout[layout] ?? 'radial';
+  const surfaceStyle = payload.surface_style ?? defaultSurfaceByLayout[layout] ?? 'soft_card';
+  const visualPayload = {...payload, variant, surface_style: surfaceStyle};
 
   return (
-    <GraphicBackground src={backgroundSrc}>
+    <GraphicBackground variant={variant} backgroundMode={backgroundMode} backgroundSrc={backgroundSrc}>
       {layout === 'graphic_checklist' && (
-        <GraphicChecklist payload={payload as never} durationInFrames={durationInFrames} fps={fps} />
+        <GraphicChecklist payload={visualPayload as never} durationInFrames={durationInFrames} fps={fps} />
       )}
       {layout === 'graphic_step_list' && (
-        <GraphicStepList payload={payload as never} durationInFrames={durationInFrames} fps={fps} />
+        <GraphicStepList payload={visualPayload as never} durationInFrames={durationInFrames} fps={fps} />
       )}
       {layout === 'graphic_plate_ratio' && (
-        <GraphicPlateRatio payload={payload as never} durationInFrames={durationInFrames} fps={fps} />
+        <GraphicPlateRatio payload={visualPayload as never} durationInFrames={durationInFrames} fps={fps} />
       )}
       {layout === 'graphic_label_callout' && (
-        <LabelCalloutGraphic payload={payload as never} durationInFrames={durationInFrames} fps={fps} />
+        <LabelCalloutGraphic payload={visualPayload as never} durationInFrames={durationInFrames} fps={fps} />
       )}
       {layout === 'graphic_comparison' && (
-        <ComparisonGraphic payload={payload as never} durationInFrames={durationInFrames} fps={fps} />
+        <ComparisonGraphic payload={visualPayload as never} durationInFrames={durationInFrames} fps={fps} />
       )}
       {layout === 'graphic_routine_split' && (
-        <RoutineSplitGraphic payload={payload as never} durationInFrames={durationInFrames} fps={fps} />
+        <RoutineSplitGraphic payload={visualPayload as never} durationInFrames={durationInFrames} fps={fps} />
       )}
     </GraphicBackground>
   );

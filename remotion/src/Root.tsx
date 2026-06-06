@@ -7,12 +7,14 @@ import {ShortCover} from './ShortCover';
 import {defaultRenderProps, RenderProps} from './render-props';
 import graphicMvpShortPropsJson from '../test-props/graphic-mvp-short.json';
 import graphicKitPhase15PropsJson from '../test-props/graphic-kit-phase15-short.json';
+import graphicThemePreviewPropsJson from '../test-props/graphic-theme-preview-short.json';
 // Side-effect import: registers webfonts via delayRender so Shorts
 // compositions render with the correct typeface from frame 0.
 import './shorts/loadFonts';
 
 const graphicMvpShortProps = graphicMvpShortPropsJson as unknown as RenderProps;
 const graphicKitPhase15Props = graphicKitPhase15PropsJson as unknown as RenderProps;
+const graphicThemePreviewProps = graphicThemePreviewPropsJson as unknown as RenderProps;
 
 const calculateVideoMetadata = ({props}: {props: RenderProps}) => {
   const fps = props.render?.fps ?? defaultRenderProps.render.fps;
@@ -96,6 +98,18 @@ export const Root: React.FC = () => {
         width={1080}
         height={1920}
         defaultProps={graphicKitPhase15Props}
+        calculateMetadata={calculateVideoMetadata}
+      />
+      <Composition
+        id="GraphicThemePreview"
+        component={ShortVideo}
+        durationInFrames={Math.round(
+          graphicThemePreviewProps.render.duration_sec * graphicThemePreviewProps.render.fps,
+        )}
+        fps={graphicThemePreviewProps.render.fps}
+        width={1080}
+        height={1920}
+        defaultProps={graphicThemePreviewProps}
         calculateMetadata={calculateVideoMetadata}
       />
     </>

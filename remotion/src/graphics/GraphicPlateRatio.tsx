@@ -5,13 +5,11 @@
  */
 import React from 'react';
 import {interpolate, spring, useCurrentFrame, useVideoConfig} from 'remotion';
-import {graphicTheme} from './graphic-theme';
+import {getGraphicColors, graphicTheme, type GraphicColorRoles} from './graphic-theme';
 import {GraphicPlateRatioPayload} from './graphic-payloads';
 import {GraphicFrame, useReveal} from './GraphicFrame';
 
-const {colors, font, fontSize, radius} = graphicTheme;
-
-const SEGMENT_COLORS = [colors.vegetables, colors.protein, colors.carbs, colors.softTerracotta];
+const {font, fontSize, radius} = graphicTheme;
 
 const CX = 270;
 const CY = 270;
@@ -29,7 +27,12 @@ function wedgePath(startDeg: number, endDeg: number): string {
   return `M ${CX} ${CY} L ${x0} ${y0} A ${R} ${R} 0 ${largeArc} 1 ${x1} ${y1} Z`;
 }
 
-const Wedge: React.FC<{d: string; fill: string; delaySec: number}> = ({d, fill, delaySec}) => {
+const Wedge: React.FC<{
+  d: string;
+  fill: string;
+  colors: GraphicColorRoles;
+  delaySec: number;
+}> = ({d, fill, colors, delaySec}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
   const progress = spring({
@@ -42,7 +45,12 @@ const Wedge: React.FC<{d: string; fill: string; delaySec: number}> = ({d, fill, 
   return <path d={d} fill={fill} opacity={opacity} stroke={colors.paper} strokeWidth={6} />;
 };
 
-const Chip: React.FC<{label: string; color: string; delaySec: number}> = ({label, color, delaySec}) => {
+const Chip: React.FC<{
+  label: string;
+  color: string;
+  colors: GraphicColorRoles;
+  delaySec: number;
+}> = ({label, color, colors, delaySec}) => {
   const reveal = useReveal(delaySec);
   return (
     <div
@@ -78,6 +86,8 @@ export const GraphicPlateRatio: React.FC<{
   durationInFrames: number;
   fps: number;
 }> = ({payload}) => {
+  const colors = getGraphicColors(payload.variant);
+  const segmentColors = [colors.vegetables, colors.protein, colors.carbs, colors.softTerracotta];
   const total = payload.segments.reduce((sum, s) => sum + s.value, 0) || 100;
 
   let cursor = 0;
@@ -87,26 +97,31 @@ export const GraphicPlateRatio: React.FC<{
     const end = (cursor / total) * 360;
     return {
       d: wedgePath(start, end),
-      color: SEGMENT_COLORS[i % SEGMENT_COLORS.length],
+      color: segmentColors[i % segmentColors.length],
       label: seg.label,
       delaySec: 0.5 + i * 0.5,
     };
   });
 
   return (
-    <GraphicFrame title={payload.title} footer={payload.footer}>
+    <GraphicFrame
+      title={payload.title}
+      footer={payload.footer}
+      variant={payload.variant}
+      surfaceStyle={payload.surface_style}
+    >
       <div style={{display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 40}}>
         <svg width={540} height={540} viewBox="0 0 540 540">
           {/* Plate rim. */}
           <circle cx={CX} cy={CY} r={R + 14} fill={colors.paper} stroke={colors.line} strokeWidth={4} />
           {wedges.map((w, i) => (
-            <Wedge key={i} d={w.d} fill={w.color} delaySec={w.delaySec} />
+            <Wedge key={i} d={w.d} fill={w.color} colors={colors} delaySec={w.delaySec} />
           ))}
         </svg>
 
         <div style={{display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 18, maxWidth: 900}}>
           {wedges.map((w, i) => (
-            <Chip key={i} label={w.label} color={w.color} delaySec={w.delaySec + 0.15} />
+            <Chip key={i} label={w.label} color={w.color} colors={colors} delaySec={w.delaySec + 0.15} />
           ))}
         </div>
       </div>

@@ -2,17 +2,18 @@
  * Time-block routine graphic for practical routines such as 10 + 10 + 10 min.
  */
 import React from 'react';
-import {graphicTheme} from './graphic-theme';
+import {getGraphicColors, graphicTheme, type GraphicColorRoles} from './graphic-theme';
 import {GraphicRoutineSplitPayload} from './graphic-payloads';
 import {GraphicFrame, useReveal} from './GraphicFrame';
 
-const {colors, font, fontSize, radius} = graphicTheme;
+const {font, fontSize, radius} = graphicTheme;
 
 const RoutineBlock: React.FC<{
   time: string;
   text: string;
+  colors: GraphicColorRoles;
   delaySec: number;
-}> = ({time, text, delaySec}) => {
+}> = ({time, text, colors, delaySec}) => {
   const reveal = useReveal(delaySec);
   return (
     <div
@@ -59,7 +60,7 @@ const RoutineBlock: React.FC<{
   );
 };
 
-const TotalLabel: React.FC<{children: React.ReactNode}> = ({children}) => {
+const TotalLabel: React.FC<{children: React.ReactNode; colors: GraphicColorRoles}> = ({children, colors}) => {
   const reveal = useReveal(0.2);
   return (
     <div
@@ -68,7 +69,7 @@ const TotalLabel: React.FC<{children: React.ReactNode}> = ({children}) => {
         alignSelf: 'center',
         padding: '12px 30px',
         borderRadius: radius.pill,
-        background: 'rgba(124,138,74,0.16)',
+        background: colors.positiveSoft,
         color: colors.oliveDark,
         fontFamily: font.family,
         fontSize: 40,
@@ -86,9 +87,15 @@ export const RoutineSplitGraphic: React.FC<{
   durationInFrames: number;
   fps: number;
 }> = ({payload}) => {
+  const colors = getGraphicColors(payload.variant);
   const blocks = payload.blocks.slice(0, 4);
   return (
-    <GraphicFrame title={payload.title} footer={payload.footer}>
+    <GraphicFrame
+      title={payload.title}
+      footer={payload.footer}
+      variant={payload.variant}
+      surfaceStyle={payload.surface_style}
+    >
       <div
         style={{
           width: '100%',
@@ -100,10 +107,16 @@ export const RoutineSplitGraphic: React.FC<{
         }}
       >
         {payload.totalLabel && (
-          <TotalLabel>{payload.totalLabel}</TotalLabel>
+          <TotalLabel colors={colors}>{payload.totalLabel}</TotalLabel>
         )}
         {blocks.map((block, i) => (
-          <RoutineBlock key={`${block.time}-${i}`} time={block.time} text={block.text} delaySec={0.45 + i * 0.35} />
+          <RoutineBlock
+            key={`${block.time}-${i}`}
+            time={block.time}
+            text={block.text}
+            colors={colors}
+            delaySec={0.45 + i * 0.35}
+          />
         ))}
       </div>
     </GraphicFrame>

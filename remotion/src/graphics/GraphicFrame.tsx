@@ -7,9 +7,17 @@
  */
 import React from 'react';
 import {AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig} from 'remotion';
-import {graphicTheme} from './graphic-theme';
+import {
+  getGraphicColors,
+  graphicLayout,
+  graphicMotion,
+  graphicTheme,
+  type GraphicColorRoles,
+  type GraphicSurfaceStyle,
+  type GraphicVariant,
+} from './graphic-theme';
 
-const {colors, font, fontSize, spacing} = graphicTheme;
+const {font, fontSize, spacing} = graphicTheme;
 
 /** Calm fade-up reveal that starts at ``delaySec`` into the scene. */
 export function useReveal(delaySec: number): React.CSSProperties {
@@ -19,7 +27,7 @@ export function useReveal(delaySec: number): React.CSSProperties {
   const progress = spring({
     frame: frame - delayFrames,
     fps,
-    config: {damping: 200, mass: 0.7},
+    config: graphicMotion.spring,
     durationInFrames: Math.round(fps * 0.5),
   });
   const opacity = interpolate(progress, [0, 1], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
@@ -27,8 +35,13 @@ export function useReveal(delaySec: number): React.CSSProperties {
   return {opacity, transform: `translateY(${translateY}px)`};
 }
 
-export const GraphicTitle: React.FC<{children: React.ReactNode; delaySec?: number}> = ({
+export const GraphicTitle: React.FC<{
+  children: React.ReactNode;
+  colors?: GraphicColorRoles;
+  delaySec?: number;
+}> = ({
   children,
+  colors = graphicTheme.colors,
   delaySec = 0,
 }) => {
   const reveal = useReveal(delaySec);
@@ -40,7 +53,7 @@ export const GraphicTitle: React.FC<{children: React.ReactNode; delaySec?: numbe
         fontSize: fontSize.title,
         fontWeight: 800,
         lineHeight: 1.05,
-        letterSpacing: '0.5px',
+        letterSpacing: 0,
         color: colors.oliveDark,
         textTransform: 'uppercase',
         textAlign: 'center',
@@ -52,8 +65,13 @@ export const GraphicTitle: React.FC<{children: React.ReactNode; delaySec?: numbe
   );
 };
 
-export const GraphicFooter: React.FC<{children?: React.ReactNode; delaySec?: number}> = ({
+export const GraphicFooter: React.FC<{
+  children?: React.ReactNode;
+  colors?: GraphicColorRoles;
+  delaySec?: number;
+}> = ({
   children,
+  colors = graphicTheme.colors,
   delaySec = 0,
 }) => {
   const reveal = useReveal(delaySec);
@@ -79,6 +97,33 @@ export const GraphicFooter: React.FC<{children?: React.ReactNode; delaySec?: num
   );
 };
 
+function surfaceStyleFor(colors: GraphicColorRoles, surfaceStyle: GraphicSurfaceStyle): React.CSSProperties {
+  if (surfaceStyle === 'none' || surfaceStyle === 'plate_focus') {
+    return {};
+  }
+
+  if (surfaceStyle === 'editorial') {
+    return {
+      width: '100%',
+      padding: '28px 30px',
+      background: colors.surfaceElevated,
+      borderTop: `1px solid ${colors.line}`,
+      borderBottom: `1px solid ${colors.line}`,
+      boxShadow: graphicLayout.shadow.soft,
+      borderRadius: graphicLayout.radius.md,
+    };
+  }
+
+  return {
+    width: '100%',
+    padding: '30px',
+    background: colors.surfaceElevated,
+    border: `1px solid ${colors.line}`,
+    boxShadow: graphicLayout.shadow.card,
+    borderRadius: graphicLayout.radius.lg,
+  };
+}
+
 /**
  * Centre-band container. Title sits near the top of the safe area; ``children``
  * (the graphic body) fill the band between title and footer.
@@ -86,8 +131,13 @@ export const GraphicFooter: React.FC<{children?: React.ReactNode; delaySec?: num
 export const GraphicFrame: React.FC<{
   title: string;
   footer?: string;
+  variant?: GraphicVariant;
+  surfaceStyle?: GraphicSurfaceStyle;
   children: React.ReactNode;
-}> = ({title, footer, children}) => {
+}> = ({title, footer, variant = 'brand_default', surfaceStyle = 'none', children}) => {
+  const colors = getGraphicColors(variant);
+  const surfaceStyles = surfaceStyleFor(colors, surfaceStyle);
+  const hasSurface = surfaceStyle !== 'none' && surfaceStyle !== 'plate_focus';
   return (
     <AbsoluteFill
       style={{
@@ -100,7 +150,7 @@ export const GraphicFrame: React.FC<{
         alignItems: 'center',
       }}
     >
-      <GraphicTitle delaySec={0}>{title}</GraphicTitle>
+      <GraphicTitle colors={colors} delaySec={0}>{title}</GraphicTitle>
 
       <div
         style={{
@@ -112,10 +162,10 @@ export const GraphicFrame: React.FC<{
           justifyContent: 'center',
         }}
       >
-        {children}
+        <div style={hasSurface ? surfaceStyles : {width: '100%'}}>{children}</div>
       </div>
 
-      <GraphicFooter delaySec={0.6}>{footer}</GraphicFooter>
+      <GraphicFooter colors={colors} delaySec={0.6}>{footer}</GraphicFooter>
     </AbsoluteFill>
   );
 };

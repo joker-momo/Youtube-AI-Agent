@@ -6,6 +6,12 @@
  * fall back to stock rendering.
  */
 import {z} from 'zod';
+import type {
+  GraphicBackgroundMode,
+  GraphicSurfaceStyle,
+  GraphicVariant,
+  GraphicVisualTone,
+} from './graphic-theme';
 
 export const PLATE_RATIO_TOTAL = 100;
 export const PLATE_RATIO_EPSILON = 0.01;
@@ -13,11 +19,18 @@ export const MAX_GRAPHIC_ITEMS = 5;
 
 // --- TypeScript payload types ---------------------------------------------
 
+export type BaseGraphicStyleFields = {
+  variant?: GraphicVariant;
+  visual_tone?: GraphicVisualTone;
+  background_mode?: GraphicBackgroundMode;
+  surface_style?: GraphicSurfaceStyle;
+};
+
 export type GraphicChecklistPayload = {
   title: string;
   items: string[];
   footer?: string;
-};
+} & BaseGraphicStyleFields;
 
 export type GraphicStepListPayload = {
   title: string;
@@ -26,7 +39,7 @@ export type GraphicStepListPayload = {
     text: string;
   }>;
   footer?: string;
-};
+} & BaseGraphicStyleFields;
 
 export type GraphicPlateSegment = {
   label: string;
@@ -37,7 +50,7 @@ export type GraphicPlateRatioPayload = {
   title: string;
   segments: GraphicPlateSegment[];
   footer?: string;
-};
+} & BaseGraphicStyleFields;
 
 export type GraphicLabelCalloutPayload = {
   title: string;
@@ -48,7 +61,7 @@ export type GraphicLabelCalloutPayload = {
     note?: string;
   }>;
   footer?: string;
-};
+} & BaseGraphicStyleFields;
 
 export type GraphicComparisonPayload = {
   title: string;
@@ -63,7 +76,7 @@ export type GraphicComparisonPayload = {
     badge?: string;
   };
   footer?: string;
-};
+} & BaseGraphicStyleFields;
 
 export type GraphicRoutineSplitPayload = {
   title: string;
@@ -74,7 +87,7 @@ export type GraphicRoutineSplitPayload = {
     icon?: string;
   }>;
   footer?: string;
-};
+} & BaseGraphicStyleFields;
 
 /** Union of every supported graphic payload. */
 export type GraphicAnyPayload =
@@ -87,13 +100,36 @@ export type GraphicAnyPayload =
 
 // --- Zod schemas -----------------------------------------------------------
 
+const GraphicVariantSchema = z.enum([
+  'brand_default',
+  'warm_olive',
+  'soft_clay',
+  'cream_focus',
+  'evening_calm',
+]);
+
+const GraphicVisualToneSchema = z.enum(['calm', 'focus', 'warning_soft', 'positive', 'evening']);
+
+const GraphicBackgroundModeSchema = z.enum(['clean', 'radial', 'paper', 'video_blur']);
+
+const GraphicSurfaceStyleSchema = z.enum(['none', 'soft_card', 'editorial', 'plate_focus']);
+
+const BaseGraphicStyleFieldsSchema = {
+  variant: GraphicVariantSchema.optional(),
+  visual_tone: GraphicVisualToneSchema.optional(),
+  background_mode: GraphicBackgroundModeSchema.optional(),
+  surface_style: GraphicSurfaceStyleSchema.optional(),
+};
+
 export const GraphicChecklistPayloadSchema = z.object({
+  ...BaseGraphicStyleFieldsSchema,
   title: z.string().min(1).max(48),
   items: z.array(z.string().min(1).max(48)).min(2).max(MAX_GRAPHIC_ITEMS),
   footer: z.string().max(72).optional(),
 });
 
 export const GraphicStepListPayloadSchema = z.object({
+  ...BaseGraphicStyleFieldsSchema,
   title: z.string().min(1).max(48),
   steps: z
     .array(
@@ -109,6 +145,7 @@ export const GraphicStepListPayloadSchema = z.object({
 
 export const GraphicPlateRatioPayloadSchema = z
   .object({
+    ...BaseGraphicStyleFieldsSchema,
     title: z.string().min(1).max(48),
     segments: z
       .array(
@@ -133,6 +170,7 @@ export const GraphicPlateRatioPayloadSchema = z
   });
 
 export const GraphicLabelCalloutPayloadSchema = z.object({
+  ...BaseGraphicStyleFieldsSchema,
   title: z.string().min(1).max(60),
   productLabel: z.string().max(36).optional(),
   callouts: z
@@ -169,6 +207,7 @@ const GraphicComparisonSideSchema = z.object({
 });
 
 export const GraphicComparisonPayloadSchema = z.object({
+  ...BaseGraphicStyleFieldsSchema,
   title: comparisonText(60, 1),
   left: GraphicComparisonSideSchema,
   right: GraphicComparisonSideSchema,
@@ -176,6 +215,7 @@ export const GraphicComparisonPayloadSchema = z.object({
 });
 
 export const GraphicRoutineSplitPayloadSchema = z.object({
+  ...BaseGraphicStyleFieldsSchema,
   title: z.string().min(1).max(60),
   totalLabel: z.string().max(16).optional(),
   blocks: z

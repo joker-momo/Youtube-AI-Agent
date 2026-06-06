@@ -18,6 +18,36 @@ SUPPORTED_GRAPHIC_LAYOUTS = {
     "graphic_routine_split",
 }
 
+ALLOWED_GRAPHIC_VARIANTS = {
+    "brand_default",
+    "warm_olive",
+    "soft_clay",
+    "cream_focus",
+    "evening_calm",
+}
+
+ALLOWED_GRAPHIC_VISUAL_TONES = {
+    "calm",
+    "focus",
+    "warning_soft",
+    "positive",
+    "evening",
+}
+
+ALLOWED_GRAPHIC_BACKGROUND_MODES = {
+    "clean",
+    "radial",
+    "paper",
+    "video_blur",
+}
+
+ALLOWED_GRAPHIC_SURFACE_STYLES = {
+    "none",
+    "soft_card",
+    "editorial",
+    "plate_focus",
+}
+
 PLATE_RATIO_TOTAL = 100.0
 PLATE_RATIO_EPSILON = 0.01
 MAX_GRAPHIC_SCENES_PER_SHORT = 2
@@ -96,6 +126,7 @@ def validate_short_graphic_scenes(scenes: list[dict[str, Any]]) -> list[str]:
         if not isinstance(payload, dict):
             raise ValueError(f"Graphic scene {sid} ({layout}) is missing layout_payload.")
 
+        _validate_visual_style_fields(payload, sid, layout)
         _validate_title(payload, sid, layout)
         _validate_footer(payload, sid, layout, warnings)
 
@@ -126,6 +157,31 @@ def validate_short_graphic_scenes(scenes: list[dict[str, Any]]) -> list[str]:
         )
 
     return warnings
+
+
+def _validate_optional_choice(
+    payload: dict,
+    field: str,
+    allowed: set[str],
+    sid: Any,
+    layout: str,
+) -> None:
+    value = payload.get(field)
+    if value is None:
+        return
+    if not isinstance(value, str) or value not in allowed:
+        allowed_values = ", ".join(sorted(allowed))
+        raise ValueError(
+            f"Graphic scene {sid} ({layout}) has invalid {field}: {value!r}. "
+            f"Allowed values: {allowed_values}."
+        )
+
+
+def _validate_visual_style_fields(payload: dict, sid: Any, layout: str) -> None:
+    _validate_optional_choice(payload, "variant", ALLOWED_GRAPHIC_VARIANTS, sid, layout)
+    _validate_optional_choice(payload, "visual_tone", ALLOWED_GRAPHIC_VISUAL_TONES, sid, layout)
+    _validate_optional_choice(payload, "background_mode", ALLOWED_GRAPHIC_BACKGROUND_MODES, sid, layout)
+    _validate_optional_choice(payload, "surface_style", ALLOWED_GRAPHIC_SURFACE_STYLES, sid, layout)
 
 
 def _validate_title(payload: dict, sid: Any, layout: str) -> None:

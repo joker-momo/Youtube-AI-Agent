@@ -6,7 +6,13 @@
  */
 import React from 'react';
 import {AbsoluteFill, Img, OffthreadVideo, staticFile} from 'remotion';
-import {graphicTheme} from './graphic-theme';
+import {
+  getGraphicColors,
+  graphicVariants,
+  type GraphicBackgroundMode,
+  type GraphicColorRoles,
+  type GraphicVariant,
+} from './graphic-theme';
 
 const VIDEO_EXT = /\.(mp4|mov|webm|m4v)(\?|#|$)/i;
 
@@ -20,55 +26,85 @@ function resolveSrc(src?: string): string | undefined {
   }
 }
 
-const WarmWash: React.FC = () => (
+const WarmWash: React.FC<{colors: GraphicColorRoles; mode: GraphicBackgroundMode}> = ({colors, mode}) => {
+  const background =
+    mode === 'clean'
+      ? `linear-gradient(180deg, ${colors.surface} 0%, ${colors.background} 100%)`
+      : `radial-gradient(120% 90% at 50% 38%, ${colors.surface} 0%, ${colors.background} 55%, ${colors.surfaceAlt} 100%)`;
+  return (
+    <AbsoluteFill
+      style={{
+        background,
+      }}
+    />
+  );
+};
+
+const PaperTexture: React.FC = () => (
   <AbsoluteFill
     style={{
-      background: `radial-gradient(120% 90% at 50% 38%, ${graphicTheme.colors.paper} 0%, ${graphicTheme.colors.cream} 55%, #EFE5D4 100%)`,
+      opacity: 0.035,
+      backgroundImage: 'radial-gradient(rgba(47,42,36,0.35) 0.6px, transparent 0.6px)',
+      backgroundSize: '7px 7px',
+      mixBlendMode: 'multiply',
+      pointerEvents: 'none',
     }}
   />
 );
 
 /** Soft vignette to focus the eye centre, no harsh edges. */
-const Vignette: React.FC = () => (
+const Vignette: React.FC<{colors: GraphicColorRoles}> = ({colors}) => (
   <AbsoluteFill
     style={{
       background:
-        'radial-gradient(130% 100% at 50% 45%, rgba(0,0,0,0) 58%, rgba(47,42,36,0.16) 100%)',
+        `radial-gradient(130% 100% at 50% 45%, rgba(0,0,0,0) 58%, ${colors.shadow} 100%)`,
+      pointerEvents: 'none',
     }}
   />
 );
 
 export const GraphicBackground: React.FC<{
+  variant?: GraphicVariant;
+  backgroundMode?: GraphicBackgroundMode;
+  backgroundSrc?: string;
   src?: string;
   children?: React.ReactNode;
-}> = ({src, children}) => {
-  const resolved = resolveSrc(src);
+}> = ({variant = 'brand_default', backgroundMode = 'radial', backgroundSrc, src, children}) => {
+  const colors = getGraphicColors(variant);
+  const mediaSrc = backgroundSrc ?? src;
+  const resolved = resolveSrc(mediaSrc);
   const isVideo = resolved ? VIDEO_EXT.test(resolved) : false;
+  const shouldShowMedia = Boolean(resolved && backgroundMode === 'video_blur');
+  const resolvedMedia = shouldShowMedia ? resolved : undefined;
 
   return (
-    <AbsoluteFill style={{backgroundColor: graphicTheme.colors.cream}}>
-      <WarmWash />
+    <AbsoluteFill style={{backgroundColor: colors.background}}>
+      <WarmWash colors={colors} mode={backgroundMode} />
 
-      {resolved && (
+      {resolvedMedia && (
         <AbsoluteFill style={{filter: 'blur(28px) saturate(0.9)', transform: 'scale(1.12)'}}>
           {isVideo ? (
             <OffthreadVideo
-              src={resolved}
+              src={resolvedMedia}
               muted
               style={{width: '100%', height: '100%', objectFit: 'cover'}}
             />
           ) : (
-            <Img src={resolved} style={{width: '100%', height: '100%', objectFit: 'cover'}} />
+            <Img src={resolvedMedia} style={{width: '100%', height: '100%', objectFit: 'cover'}} />
           )}
         </AbsoluteFill>
       )}
 
       {/* Warm cream scrim so the graphic stays readable over any footage. */}
-      {resolved && <AbsoluteFill style={{backgroundColor: graphicTheme.colors.overlay}} />}
+      {resolvedMedia && <AbsoluteFill style={{backgroundColor: colors.overlay}} />}
 
-      <Vignette />
+      {backgroundMode === 'paper' && <PaperTexture />}
+
+      {backgroundMode !== 'clean' && <Vignette colors={colors} />}
 
       {children}
     </AbsoluteFill>
   );
 };
+
+export const defaultGraphicBackgroundColors = graphicVariants.brand_default;

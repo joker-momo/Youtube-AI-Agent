@@ -1,0 +1,221 @@
+{
+  "channel": {
+    "id": "vida-plena-45",
+    "name": "Vida Plena 45+",
+    "description": "Salud y bienestar práctico para personas de más de 45 años en España."
+  },
+  "style": {
+    "palette": {
+      "background": "#F6EFE4",
+      "primary": "#7C8A4A",
+      "secondary": "#D99A4E",
+      "accent": "#D99A4E",
+      "text": "#2F2A24"
+    }
+  },
+  "render": {
+    "fps": 30,
+    "duration_sec": 24,
+    "resolution": "1080x1920"
+  },
+  "audio": {
+    "narration": null,
+    "music": null
+  },
+  "seo": {
+    "title": "Graphic Theme Preview",
+    "description": "",
+    "thumbnail_path": ""
+  },
+  "scenes": [
+    {
+      "id": "THEME_01",
+      "narration": "",
+      "duration_sec": 3,
+      "layout": "graphic_plate_ratio",
+      "layout_payload": {
+        "variant": "warm_olive",
+        "background_mode": "radial",
+        "surface_style": "plate_focus",
+        "title": "REGLA DEL PLATO",
+        "segments": [
+          {"label": "1/2 verduras", "value": 50},
+          {"label": "1/4 proteína", "value": 25},
+          {"label": "1/4 patata", "value": 25}
+        ],
+        "footer": "Simple y fácil de recordar."
+      },
+      "visual_type": "graphic",
+      "visual_prompt": "",
+      "on_screen_text": "REGLA DEL PLATO",
+      "caption": "",
+      "motion": "none",
+      "asset_refs": {"background": ""}
+    },
+    {
+      "id": "THEME_02",
+      "narration": "",
+      "duration_sec": 3,
+      "layout": "graphic_plate_ratio",
+      "layout_payload": {
+        "variant": "soft_clay",
+        "background_mode": "radial",
+        "surface_style": "plate_focus",
+        "title": "PLATO EQUILIBRADO",
+        "segments": [
+          {"label": "Verduras", "value": 50},
+          {"label": "Proteína", "value": 25},
+          {"label": "Cereal o patata", "value": 25}
+        ],
+        "footer": "Sin contar calorías."
+      },
+      "visual_type": "graphic",
+      "visual_prompt": "",
+      "on_screen_text": "PLATO EQUILIBRADO",
+      "caption": "",
+      "motion": "none",
+      "asset_refs": {"background": ""}
+    },
+    {
+      "id": "THEME_03",
+      "narration": "",
+      "duration_sec": 3,
+      "layout": "graphic_checklist",
+      "layout_payload": {
+        "variant": "evening_calm",
+        "background_mode": "paper",
+        "surface_style": "soft_card",
+        "title": "ANTES DE DORMIR",
+        "items": ["Móvil lejos", "Luz baja", "Lista de pendientes"],
+        "footer": "Baja el ritmo poco a poco."
+      },
+      "visual_type": "graphic",
+      "visual_prompt": "",
+      "on_screen_text": "ANTES DE DORMIR",
+      "caption": "",
+      "motion": "none",
+      "asset_refs": {"background": ""}
+    },
+    {
+      "id": "THEME_04",
+      "narration": "",
+      "duration_sec": 3,
+      "layout": "graphic_step_list",
+      "layout_payload": {
+        "variant": "cream_focus",
+        "background_mode": "radial",
+        "surface_style": "editorial",
+        "title": "EN 3 PASOS",
+        "steps": [
+          {"label": "1", "text": "Mira la etiqueta"},
+          {"label": "2", "text": "Busca fibra"},
+          {"label": "3", "text": "Compara azúcares"}
+        ],
+        "footer": "Elige con calma."
+      },
+      "visual_type": "graphic",
+      "visual_prompt": "",
+      "on_screen_text": "EN 3 PASOS",
+      "caption": "",
+      "motion": "none",
+      "asset_refs": {"background": ""}
+    },
+    {
+      "id": "THEME_05",
+      "narration": "",
+      "duration_sec": 3,
+      "layout": "graphic_label_callout",
+      "layout_payload": {
+        "variant": "cream_focus",
+        "background_mode": "paper",
+        "surface_style": "soft_card",
+        "title": "MIRA PRIMERO",
+        "productLabel": "Pan integral",
+        "callouts": [
+          {"label": "Fibra", "value": "6 g", "note": "mejor saciedad"},
+          {"label": "Azúcares", "value": "3 g", "note": "por 100 g"}
+        ],
+        "footer": "El color no basta."
+      },
+      "visual_type": "graphic",
+      "visual_prompt": "",
+      "on_screen_text": "MIRA PRIMERO",
+      "caption": "",
+      "motion": "none",
+      "asset_refs": {"background": ""}
+    },
+    {
+      "id": "THEME_06",
+      "narration": "",
+      "duration_sec": 3,
+      "layout": "graphic_comparison",
+      "layout_payload": {
+        "variant": "soft_clay",
+        "visual_tone": "warning_soft",
+        "background_mode": "radial",
+        "surface_style": "soft_card",
+        "title": "EN EL SÚPER",
+        "left": {
+          "heading": "MEJOR",
+          "text": "Integral con buena fibra",
+          "badge": "Más saciante"
+        },
+        "right": {
+          "heading": "CUIDADO",
+          "text": "Oscuro sin grano integral",
+          "badge": "Lee etiqueta"
+        },
+        "footer": "Compara antes de elegir."
+      },
+      "visual_type": "graphic",
+      "visual_prompt": "",
+      "on_screen_text": "EN EL SÚPER",
+      "caption": "",
+      "motion": "none",
+      "asset_refs": {"background": ""}
+    },
+    {
+      "id": "THEME_07",
+      "narration": "",
+      "duration_sec": 3,
+      "layout": "graphic_routine_split",
+      "layout_payload": {
+        "variant": "evening_calm",
+        "visual_tone": "evening",
+        "background_mode": "paper",
+        "surface_style": "editorial",
+        "title": "RUTINA 30 MINUTOS",
+        "totalLabel": "30 min",
+        "blocks": [
+          {"time": "10 min", "text": "Cerrar el día"},
+          {"time": "10 min", "text": "Preparar dormitorio"},
+          {"time": "10 min", "text": "Respirar lento"}
+        ],
+        "footer": "No hace falta perfecto."
+      },
+      "visual_type": "graphic",
+      "visual_prompt": "",
+      "on_screen_text": "RUTINA 30 MINUTOS",
+      "caption": "",
+      "motion": "none",
+      "asset_refs": {"background": ""}
+    },
+    {
+      "id": "THEME_08",
+      "narration": "",
+      "duration_sec": 3,
+      "layout": "graphic_checklist",
+      "layout_payload": {
+        "title": "SIN VARIANTE",
+        "items": ["Campo opcional", "Default por layout", "Render estable"],
+        "footer": "Prueba de compatibilidad."
+      },
+      "visual_type": "graphic",
+      "visual_prompt": "",
+      "on_screen_text": "SIN VARIANTE",
+      "caption": "",
+      "motion": "none",
+      "asset_refs": {"background": ""}
+    }
+  ]
+}

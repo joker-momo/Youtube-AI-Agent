@@ -3,13 +3,13 @@
  * warm checkmarks. Large text, no full-screen card feel.
  */
 import React from 'react';
-import {graphicTheme} from './graphic-theme';
+import {getGraphicColors, graphicTheme, type GraphicColorRoles} from './graphic-theme';
 import {GraphicChecklistPayload} from './graphic-payloads';
 import {GraphicFrame, useReveal} from './GraphicFrame';
 
-const {colors, font, fontSize} = graphicTheme;
+const {font, fontSize} = graphicTheme;
 
-const Check: React.FC = () => (
+const Check: React.FC<{colors: GraphicColorRoles}> = ({colors}) => (
   <svg width={56} height={56} viewBox="0 0 56 56" style={{flexShrink: 0}}>
     <circle cx={28} cy={28} r={26} fill={colors.olive} />
     <path
@@ -23,7 +23,11 @@ const Check: React.FC = () => (
   </svg>
 );
 
-const ChecklistItem: React.FC<{children: React.ReactNode; delaySec: number}> = ({children, delaySec}) => {
+const ChecklistItem: React.FC<{
+  children: React.ReactNode;
+  colors: GraphicColorRoles;
+  delaySec: number;
+}> = ({children, colors, delaySec}) => {
   const reveal = useReveal(delaySec);
   return (
     <div
@@ -39,7 +43,7 @@ const ChecklistItem: React.FC<{children: React.ReactNode; delaySec: number}> = (
         boxShadow: `0 8px 24px ${colors.shadow}`,
       }}
     >
-      <Check />
+      <Check colors={colors} />
       <span
         style={{
           fontFamily: font.family,
@@ -60,12 +64,18 @@ export const GraphicChecklist: React.FC<{
   durationInFrames: number;
   fps: number;
 }> = ({payload}) => {
+  const colors = getGraphicColors(payload.variant);
   const items = payload.items.slice(0, 5);
   return (
-    <GraphicFrame title={payload.title} footer={payload.footer}>
+    <GraphicFrame
+      title={payload.title}
+      footer={payload.footer}
+      variant={payload.variant}
+      surfaceStyle={payload.surface_style}
+    >
       <div style={{display: 'flex', flexDirection: 'column', gap: 26, width: '100%'}}>
         {items.map((item, i) => (
-          <ChecklistItem key={i} delaySec={0.4 + i * 0.45}>
+          <ChecklistItem key={i} colors={colors} delaySec={0.4 + i * 0.45}>
             {item}
           </ChecklistItem>
         ))}

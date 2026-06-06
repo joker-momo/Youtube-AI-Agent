@@ -2,21 +2,23 @@
  * Two-choice comparison graphic. Framed as helpful choice-making, not fear.
  */
 import React from 'react';
-import {graphicTheme} from './graphic-theme';
+import {getGraphicColors, graphicTheme, type GraphicColorRoles} from './graphic-theme';
 import {GraphicComparisonPayload} from './graphic-payloads';
 import {GraphicFrame, useReveal} from './GraphicFrame';
 
-const {colors, font, fontSize, radius} = graphicTheme;
+const {font, fontSize, radius} = graphicTheme;
 
 const ChoicePanel: React.FC<{
   heading: string;
   text: string;
   badge?: string;
   tone: 'positive' | 'caution';
+  colors: GraphicColorRoles;
   delaySec: number;
-}> = ({heading, text, badge, tone, delaySec}) => {
+}> = ({heading, text, badge, tone, colors, delaySec}) => {
   const reveal = useReveal(delaySec);
-  const accent = tone === 'positive' ? colors.olive : colors.warmOrange;
+  const accent = tone === 'positive' ? colors.positive : colors.caution;
+  const badgeBackground = tone === 'positive' ? colors.positiveSoft : colors.cautionSoft;
   return (
     <div
       style={{
@@ -61,7 +63,7 @@ const ChoicePanel: React.FC<{
             alignSelf: 'flex-start',
             padding: '10px 18px',
             borderRadius: radius.pill,
-            background: tone === 'positive' ? 'rgba(124,138,74,0.14)' : 'rgba(217,154,78,0.16)',
+            background: badgeBackground,
             color: colors.mutedText,
             fontFamily: font.family,
             fontSize: 30,
@@ -81,11 +83,17 @@ export const ComparisonGraphic: React.FC<{
   durationInFrames: number;
   fps: number;
 }> = ({payload}) => {
+  const colors = getGraphicColors(payload.variant);
   return (
-    <GraphicFrame title={payload.title} footer={payload.footer}>
+    <GraphicFrame
+      title={payload.title}
+      footer={payload.footer}
+      variant={payload.variant}
+      surfaceStyle={payload.surface_style}
+    >
       <div style={{display: 'flex', gap: 24, width: '100%', maxWidth: 920}}>
-        <ChoicePanel {...payload.left} tone="positive" delaySec={0.35} />
-        <ChoicePanel {...payload.right} tone="caution" delaySec={0.65} />
+        <ChoicePanel {...payload.left} tone="positive" colors={colors} delaySec={0.35} />
+        <ChoicePanel {...payload.right} tone="caution" colors={colors} delaySec={0.65} />
       </div>
     </GraphicFrame>
   );

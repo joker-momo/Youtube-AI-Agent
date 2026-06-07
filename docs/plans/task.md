@@ -40,10 +40,10 @@
 | Task 38: Contract Merging in `idea_preservation.py` | [x] | Merge derived plan contract fields into ChatGPT script contract |
 | Task 39: Fix `validate_script_checklist_point_cap` | [x] | Update validator to properly check if points <= allowed_spoken_points and return None |
 | Task 40: Verification & Regression Tests for Point Cap | [x] | Write regression tests and run all unit tests |
-| Task 41: Create `retry_memory.py` | [ ] | Implement retry memory classes and stable ID normalization |
-| Task 42: Implement update and feedback generation logic | [ ] | Update RetryMemory and generate cumulative feedback |
-| Task 43: Integrate ScenePipelineState & Whitelist/Mutation Logic | [ ] | Enforce hard gates and version tracking in `short_builder.py` |
-| Task 44: Integrate Retry Memory in script and scene loops | [ ] | Parse and persist active/resolved/suppressed issues across attempts |
-| Task 45: Add regression tests and verify all passing | [ ] | Verify full test suite passes with new changes |
+| Task 41: Create `retry_memory.py` | [x] | Implement retry memory classes and stable ID normalization |
+| Task 42: Implement update and feedback generation logic | [x] | Update RetryMemory and generate cumulative feedback |
+| Task 43: Integrate ScenePipelineState & Whitelist/Mutation Logic | [x] | Enforce hard gates and version tracking in `short_builder.py` |
+| Task 44: Integrate Retry Memory in script and scene loops | [x] | Parse and persist active/resolved/suppressed issues across attempts |
+| Task 45: Add regression tests and verify all passing | [x] | Verify full test suite passes with new changes |
 
 

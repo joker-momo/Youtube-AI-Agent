@@ -1,5 +1,7 @@
+from pathlib import Path
 import re
 from dataclasses import dataclass, field, asdict
+
 
 @dataclass
 class ScenePipelineState:
@@ -84,7 +86,9 @@ def suppress_issue_by_id(memory: RetryMemory, issue_id: str) -> None:
 def generate_cumulative_feedback(memory: RetryMemory, attempt_number: int, candidate_summary: str = "") -> str:
     active_lines = []
     for idx, (issue_id, issue) in enumerate(memory.active_issues.items(), 1):
-        active_lines.append(f"{idx}. [{issue.stage}][{issue.scene_id or 'global'}][{issue.type}] {issue.required_change or issue.detail}")
+        stage_str = str(issue.stage).upper().replace("_", "-")
+        type_str = str(issue.type).upper().replace("_", "-")
+        active_lines.append(f"{idx}. [{stage_str}][{issue.scene_id or 'global'}][{type_str}] {issue.required_change or issue.detail}")
     
     active_issues_str = "\n".join(active_lines) if active_lines else "None. All previously identified issues are resolved/addressed."
     do_not_regress_str = "\n".join(memory.do_not_regress) if memory.do_not_regress else "None."
@@ -158,6 +162,39 @@ def assert_latest_scenes_ready(state: ScenePipelineState) -> None:
     except Exception as exc:
         log_final_gate_status(state, allowed=False, reason=str(exc))
         raise
+
+def save_retry_memory(memory: RetryMemory, filepath: Path) -> None:
+    from video_agent.storage.atomic import atomic_write_json
+    doc = {
+        "stage": memory.stage,
+        "active_issues": {k: v.to_dict() for k, v in memory.active_issues.items()},
+        "resolved_issues": {k: v.to_dict() for k, v in memory.resolved_issues.items()},
+        "suppressed_issues": {k: v.to_dict() for k, v in memory.suppressed_issues.items()},
+        "do_not_regress": memory.do_not_regress,
+        "hard_invariants": memory.hard_invariants,
+    }
+    atomic_write_json(filepath, doc)
+
+def load_retry_memory(filepath: Path) -> RetryMemory | None:
+    import json
+    if not filepath.exists():
+        return None
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        memory = RetryMemory(
+            stage=data["stage"],
+            do_not_regress=data.get("do_not_regress") or [],
+            hard_invariants=data.get("hard_invariants") or [],
+        )
+        for field_name in ("active_issues", "resolved_issues", "suppressed_issues"):
+            tgt = getattr(memory, field_name)
+            for k, v in (data.get(field_name) or {}).items():
+                tgt[k] = RetryIssue(**v)
+        return memory
+    except Exception:
+        return None
+
 
 
 

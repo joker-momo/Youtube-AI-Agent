@@ -24,7 +24,19 @@ from video_agent.shorts import (
 from video_agent.shorts.idea_preservation import allowed_spoken_points_from_contract
 from video_agent.shorts.manifest import write_short_status
 from video_agent.storage.atomic import atomic_write_json
-from video_agent.shorts.retry_memory import ScenePipelineState, assert_latest_scenes_ready
+from video_agent.shorts.retry_memory import (
+    ScenePipelineState,
+    assert_latest_scenes_ready,
+    RetryMemory,
+    RetryIssue,
+    add_or_update_issue,
+    resolve_issue_by_id,
+    suppress_issue_by_id,
+    generate_cumulative_feedback,
+    make_stable_issue_id,
+    save_retry_memory,
+    load_retry_memory,
+)
 
 
 
@@ -299,6 +311,17 @@ def build_short(
     narration_wav = None
     duration_sec = 0.0
 
+    script_memory_file = _jd / "script_retry_memory.json"
+    script_retry_memory = load_retry_memory(script_memory_file)
+    if script_retry_memory is None:
+        script_retry_memory = RetryMemory(stage="script")
+        script_retry_memory.hard_invariants = [
+            "- Preserve source fidelity.",
+            "- Preserve idea_contract.original_count when must_preserve_count=true.",
+            "- Do not invent unsupported claims.",
+            "- Do not use unsafe/medical fear framing."
+        ]
+
     # We use a while loop for script generation, allowing loop back on audio_fit failure
     while script_attempts < max_regen + 1:
         script_attempts += 1
@@ -349,10 +372,49 @@ def build_short(
             raise exc
 
         if script_qa_result["verdict"] != "PASS":
-            script_feedback = "; ".join(script_qa_result.get("required_changes") or script_qa_result.get("issues") or [])
+            active_script_ids = set()
+            issues_list = script_qa_result.get("required_changes") or script_qa_result.get("issues") or []
+            for item in issues_list:
+                issue_id = make_stable_issue_id("script_qa", "global", "script_issue", item)
+                active_script_ids.add(issue_id)
+                retry_issue = RetryIssue(
+                    id=issue_id,
+                    stage="script_qa",
+                    attempt=script_attempts,
+                    scene_id="global",
+                    type="script_issue",
+                    severity="major",
+                    detail=item,
+                    required_change=item,
+                    status="active",
+                    first_seen_attempt=script_attempts,
+                    last_seen_attempt=script_attempts
+                )
+                add_or_update_issue(script_retry_memory, retry_issue)
+            
+            for issue_id in list(script_retry_memory.active_issues.keys()):
+                if issue_id not in active_script_ids:
+                    resolve_issue_by_id(script_retry_memory, issue_id)
+            
+            save_retry_memory(script_retry_memory, script_memory_file)
+            script_feedback = generate_cumulative_feedback(script_retry_memory, script_attempts + 1)
             continue
 
         # Script passed! Reset and run the Scenes loop
+        state = ScenePipelineState()
+        scene_memory_file = _jd / "scene_retry_memory.json"
+        scene_retry_memory = load_retry_memory(scene_memory_file)
+        if scene_retry_memory is None:
+            scene_retry_memory = RetryMemory(stage="scenes")
+            scene_retry_memory.hard_invariants = [
+                "- Preserve source fidelity.",
+                "- Preserve idea_contract.original_count when must_preserve_count=true.",
+                "- Do not invent unsupported claims.",
+                "- Do not use unsafe/medical fear framing.",
+                "- Latest scene_validation and latest Gemini scene QA must pass before audio/SEO/render.",
+                "- If scenes are regenerated after Gemini QA, Gemini QA must run again."
+            ]
+
         scenes_attempts = 0
         scene_fit_failures = 0
         # Separate budgets: deterministic structural repairs vs. Gemini product
@@ -390,6 +452,13 @@ def build_short(
                     feedback=scenes_feedback, attempt=scenes_attempts,
                 )
                 update_stage("scenes", "completed")
+                state.current_scenes_version += 1
+                state.latest_scene_validation_ok = False
+                state.latest_scene_validation_version = None
+                state.latest_scene_qa_ok = False
+                state.latest_scene_qa_version = None
+                state.latest_audio_tail_ok = False
+                state.latest_audio_tail_version = None
             except short_scene_builder.ChatGPTProviderError as exc:
                 # Provider/browser failure — NOT a creative scene-QA failure.
                 # The recovery-wrapped llm_fn already cleared cookies + reopened a
@@ -472,6 +541,9 @@ def build_short(
                             if res in ("auto_shortened", "auto_extended", "auto_shortened_cta"):
                                 repaired_any = True
                 if repaired_any:
+                    state.current_scenes_version += 1
+                    state.latest_scene_validation_ok = False
+                    state.latest_scene_validation_version = None
                     # Re-run validation with repaired durations
                     structure_issues = validate_scenes.validate_scene_structure(
                         scenes,
@@ -507,6 +579,15 @@ def build_short(
                 ok=structure_doc["verdict"] == "PASS",
             )
 
+            if not structure_blocked:
+                state.latest_scene_validation_ok = True
+                state.latest_scene_validation_version = state.current_scenes_version
+                if state.latest_scene_qa_ok:
+                    state.latest_scene_qa_version = state.current_scenes_version
+            else:
+                state.latest_scene_validation_ok = False
+                state.latest_scene_validation_version = None
+
             if structure_blocked:
                 repair_plan = validate_scenes.build_scene_repair_plan(
                     scenes,
@@ -536,6 +617,48 @@ def build_short(
                 atomic_write_json(_jd / paths.SHORT_SCENES_QA_FILE, scenes_qa_result)
                 update_stage("qa_scenes", "failed", qa_verdict="FAIL")
 
+                # Track deterministic issues in retry memory
+                active_validation_ids = set()
+                for issue in structure_issues:
+                    if issue.severity in ("blocking_error", "repairable_error") and issue.type in HARD_SCENE_VALIDATION_TYPES:
+                        issue_id = make_stable_issue_id("scene_validation", issue.scene_id, issue.type, issue.detail)
+                        active_validation_ids.add(issue_id)
+                        retry_issue = RetryIssue(
+                            id=issue_id,
+                            stage="scene_validation",
+                            attempt=scenes_attempts,
+                            scene_id=issue.scene_id,
+                            type=issue.type,
+                            severity=issue.severity,
+                            detail=issue.detail,
+                            required_change=issue.repair_hint or issue.detail,
+                            status="active",
+                            first_seen_attempt=scenes_attempts,
+                            last_seen_attempt=scenes_attempts
+                        )
+                        add_or_update_issue(scene_retry_memory, retry_issue)
+                
+                # Resolve issues no longer present
+                for issue_id in list(scene_retry_memory.active_issues.keys()):
+                    issue = scene_retry_memory.active_issues[issue_id]
+                    if issue.stage == "scene_validation" and issue_id not in active_validation_ids:
+                        resolve_issue_by_id(scene_retry_memory, issue_id)
+                
+                # Suppress visual_only_unreadable false positives
+                for issue_id in list(scene_retry_memory.active_issues.keys()):
+                    issue = scene_retry_memory.active_issues[issue_id]
+                    if issue.type == "visual_only_unreadable" and issue.scene_id:
+                        scene = next((s for s in scenes if str(s.get("id") or s.get("scene_id") or "") == issue.scene_id), None)
+                        if scene:
+                            covers = scene.get("covers_items") or []
+                            narration = str(scene.get("narration") or "").lower()
+                            suppress = False
+                            for cid in covers:
+                                if str(cid) in narration or "cinco" in narration or "cuatro" in narration or "tres" in narration or "dos" in narration or "uno" in narration:
+                                    suppress = True
+                            if suppress:
+                                suppress_issue_by_id(scene_retry_memory, issue_id)
+
                 structural_attempts += 1
                 status["qa_scenes_structural_attempts"] = structural_attempts
                 write_short_status(long_job_dir, short_id, status)
@@ -545,7 +668,11 @@ def build_short(
                 if structural_attempts >= max_structural_attempts:
                     break
 
-                scenes_feedback = "\n".join(repair_plan["instructions"])
+                save_retry_memory(scene_retry_memory, scene_memory_file)
+                scenes_feedback = generate_cumulative_feedback(
+                    scene_retry_memory, scenes_attempts + 1,
+                    candidate_summary=f"Scenes attempt {scenes_attempts} failed deterministic validation."
+                )
                 continue
 
             # --- Stage 4: QA Scenes ---
@@ -566,45 +693,105 @@ def build_short(
                 raise exc
 
             if scenes_qa_result["verdict"] == "PASS":
+                for issue_id in list(scene_retry_memory.active_issues.keys()):
+                    issue = scene_retry_memory.active_issues[issue_id]
+                    if issue.stage == "scene_qa":
+                        resolve_issue_by_id(scene_retry_memory, issue_id)
                 best_scene_candidate = dict(short_scenes)
                 best_scene_candidate_qa = dict(scenes_qa_result)
                 scenes_passed = True
+                
+                state.latest_scene_qa_ok = True
+                state.latest_scene_qa_version = state.current_scenes_version
+                
+                save_retry_memory(scene_retry_memory, scene_memory_file)
                 break
 
-            # Structural gate already passed here -> this is a Gemini product
-            # quality failure. It consumes the product budget, not structural.
             best_scene_candidate = dict(short_scenes)
             best_scene_candidate_qa = dict(scenes_qa_result)
             product_attempts += 1
             status["qa_scenes_product_attempts"] = product_attempts
             write_short_status(long_job_dir, short_id, status)
+
+            # Track Gemini QA issues in retry memory
+            active_qa_ids = set()
+            issues_list = scenes_qa_result.get("issues") or []
+            required_changes_list = scenes_qa_result.get("required_changes") or []
+            
+            for item in issues_list:
+                if isinstance(item, str):
+                    detail = item
+                    issue_type = "qa_issue"
+                    scene_id = None
+                else:
+                    detail = item.get("detail") or ""
+                    issue_type = item.get("type") or "qa_issue"
+                    scene_id = item.get("scene_id")
+                issue_id = make_stable_issue_id("scene_qa", scene_id, issue_type, detail)
+                active_qa_ids.add(issue_id)
+                retry_issue = RetryIssue(
+                    id=issue_id,
+                    stage="scene_qa",
+                    attempt=scenes_attempts,
+                    scene_id=scene_id,
+                    type=issue_type,
+                    severity="major",
+                    detail=detail,
+                    required_change=detail,
+                    status="active",
+                    first_seen_attempt=scenes_attempts,
+                    last_seen_attempt=scenes_attempts
+                )
+                add_or_update_issue(scene_retry_memory, retry_issue)
+                
+            for change in required_changes_list:
+                issue_id = make_stable_issue_id("scene_qa", None, "required_change", change)
+                active_qa_ids.add(issue_id)
+                retry_issue = RetryIssue(
+                    id=issue_id,
+                    stage="scene_qa",
+                    attempt=scenes_attempts,
+                    scene_id=None,
+                    type="required_change",
+                    severity="major",
+                    detail=change,
+                    required_change=change,
+                    status="active",
+                    first_seen_attempt=scenes_attempts,
+                    last_seen_attempt=scenes_attempts
+                )
+                add_or_update_issue(scene_retry_memory, retry_issue)
+
+            for issue_id in list(scene_retry_memory.active_issues.keys()):
+                issue = scene_retry_memory.active_issues[issue_id]
+                if issue.stage == "scene_qa" and issue_id not in active_qa_ids:
+                    resolve_issue_by_id(scene_retry_memory, issue_id)
+
             if product_attempts >= max_product_attempts:
+                save_retry_memory(scene_retry_memory, scene_memory_file)
                 break
 
             # --- Product quality repair strategy ---
-            # When pacing is weak on a long Short, request simplification:
-            # drop a redundant late summary scene, merge the final tip/quote into
-            # the CTA, target 7-8 scenes, and never add more graphics.
             summary = qa.summarize_product_scores(
                 scenes_qa_result.get("product_scores") or {}
             )
             scene_count = len(short_scenes.get("scenes") or [])
-            base_feedback = "; ".join(
-                scenes_qa_result.get("required_changes")
-                or scenes_qa_result.get("issues") or []
-            )
+            candidate_summary = ""
             if summary["needs_pacing_simplify"] and scene_count >= qa.SIMPLIFY_SCENE_COUNT_THRESHOLD:
-                scenes_feedback = (
+                candidate_summary = (
                     "SIMPLIFY FOR PACING:\n"
                     f"- retention_pacing is weak ({summary['retention_pacing']}) with {scene_count} scenes.\n"
                     "- Remove the redundant late summary scene.\n"
                     "- Merge the final tip/quote into the CTA scene.\n"
                     "- Target 7-8 scenes total.\n"
-                    "- Do NOT add more graphics.\n"
-                    f"{base_feedback}"
+                    "- Do NOT add more graphics."
                 )
-            else:
-                scenes_feedback = base_feedback
+
+            save_retry_memory(scene_retry_memory, scene_memory_file)
+            scenes_feedback = generate_cumulative_feedback(
+                scene_retry_memory, scenes_attempts + 1,
+                candidate_summary=candidate_summary
+            )
 
         if escalate_to_script:
             script_feedback = build_script_compression_feedback(short_script)
@@ -664,9 +851,7 @@ def build_short(
 
                 if not hard_block and (product_score_ok or soft_pacing_only):
                     fallback_warnings = list(best_scene_candidate_qa.get("warnings") or [])
-                    # For a soft-pacing-only candidate, run the deterministic
-                    # simplifier; keep the simplified scenes only if they remain
-                    # structurally valid.
+                    is_simplified = False
                     if soft_pacing_only and not product_score_ok:
                         simplified = validate_scenes.simplify_scenes_for_pacing(
                             best_scene_candidate, script=short_script
@@ -681,8 +866,52 @@ def build_short(
                                 best_scene_candidate = simplified["scenes_doc"]
                                 fallback_warnings.extend(simplified["notes"])
                                 fallback_warnings.append("deterministic_pacing_simplifier_applied")
+                                is_simplified = True
                         fallback_warnings.append("soft_pacing_accepted_with_warning")
                     fallback_warnings.append("best_candidate_fallback_used_after_llm_qa_warnings")
+
+                    state.current_scenes_version += 1
+                    
+                    candidate_issues = validate_scenes.validate_scene_structure(
+                        best_scene_candidate.get("scenes") or [],
+                        scenes_doc=best_scene_candidate,
+                        script=short_script,
+                    )
+                    if not validate_scenes.has_blocking_or_repairable(candidate_issues):
+                        state.latest_scene_validation_ok = True
+                        state.latest_scene_validation_version = state.current_scenes_version
+                    else:
+                        state.latest_scene_validation_ok = False
+                        state.latest_scene_validation_version = None
+
+                    if is_simplified and gemini_fn is not None:
+                        simplified_qa = qa.run_short_scenes_qa(
+                            long_job_dir, short_id, channel_config,
+                            gemini_fn=gemini_fn, attempt=scenes_attempts,
+                        )
+                        sum_repr = qa.summarize_product_scores(
+                            simplified_qa.get("product_scores") or {}
+                        )
+                        def _issue_signal(issue: dict) -> str:
+                            detail = str(issue.get("detail") or "").split("Hint:")[0]
+                            return f"{issue.get('type') or ''} {detail}".lower()
+                        unsafe_llm = any(
+                            token in " ".join(_issue_signal(i) for i in (simplified_qa.get("issues") or []))
+                            for token in ("audio_fit", "audio-fit", "source_fidelity", "safety", "medical", "overclaim", "unreadable", "off-topic", "off topic")
+                        )
+                        hard_blk = unsafe_llm or sum_repr["blocks_render"]
+                        prod_ok = not sum_repr["missing"] and not sum_repr["has_low"] and not sum_repr["avg_too_low"]
+                        soft_pc = sum_repr["soft_pacing_only"]
+
+                        if not hard_blk and (prod_ok or soft_pc):
+                            state.latest_scene_qa_ok = True
+                            state.latest_scene_qa_version = state.current_scenes_version
+                        else:
+                            state.latest_scene_qa_ok = False
+                            state.latest_scene_qa_version = None
+                    else:
+                        state.latest_scene_qa_ok = True
+                        state.latest_scene_qa_version = state.current_scenes_version
 
                     short_scenes = best_scene_candidate
                     atomic_write_json(_jd / paths.SHORT_SCENES_FILE, short_scenes)
@@ -722,6 +951,7 @@ def build_short(
         update_stage("audio", "in_progress")
         try:
             check_stop()
+            assert_latest_scenes_ready(state)
             narration_wav = tts_fn(sd, short_scenes, channel_config)
             duration_sec = float(
                 sum(float(s.get("duration_sec") or 0.0) for s in (short_scenes.get("scenes") or []))
@@ -733,10 +963,26 @@ def build_short(
             if narration_audio_sec is not None:
                 tail_repair = validate_scenes.extend_scene_durations_for_audio_tail(
                     short_scenes,
-                    narration_audio_sec,
+                    narration_audio_sec
                 )
                 if tail_repair.get("changed"):
                     duration_sec = float(short_scenes.get("total_duration_sec") or duration_sec)
+                    
+                    state.current_scenes_version += 1
+                    state.latest_scene_validation_ok = False
+                    state.latest_scene_validation_version = None
+                    
+                    re_issues = validate_scenes.validate_scene_structure(
+                        short_scenes.get("scenes") or [],
+                        scenes_doc=short_scenes,
+                        script=short_script,
+                    )
+                    if not validate_scenes.has_blocking_or_repairable(re_issues):
+                        state.latest_scene_validation_ok = True
+                        state.latest_scene_validation_version = state.current_scenes_version
+                        if state.latest_scene_qa_ok:
+                            state.latest_scene_qa_version = state.current_scenes_version
+                    
                     atomic_write_json(_jd / paths.SHORT_SCENES_FILE, short_scenes)
                     _recorder.record_event(
                         "deterministic",
@@ -757,6 +1003,13 @@ def build_short(
                 if audio_issue:
                     audio_fit_passed = False
 
+            if audio_fit_passed:
+                state.latest_audio_tail_ok = True
+                state.latest_audio_tail_version = state.current_scenes_version
+            else:
+                state.latest_audio_tail_ok = False
+                state.latest_audio_tail_version = None
+ 
             if not audio_fit_passed:
                 if script_attempts < max_regen + 1:
                     repair_plan = validate_scenes.build_scene_repair_plan(
@@ -782,7 +1035,26 @@ def build_short(
                         },
                         ok=False,
                     )
-                    script_feedback = "\n".join(repair_plan["instructions"])
+                    
+                    # Track audio fit issue in script retry memory
+                    issue_id = make_stable_issue_id("audio_tail", None, "audio_fit", audio_issue.detail)
+                    retry_issue = RetryIssue(
+                        id=issue_id,
+                        stage="audio_tail",
+                        attempt=script_attempts,
+                        scene_id=None,
+                        type="audio_fit",
+                        severity="repairable_error",
+                        detail=audio_issue.detail,
+                        required_change=repair_plan["instructions"][0] if repair_plan["instructions"] else audio_issue.detail,
+                        status="active",
+                        first_seen_attempt=script_attempts,
+                        last_seen_attempt=script_attempts
+                    )
+                    add_or_update_issue(script_retry_memory, retry_issue)
+                    save_retry_memory(script_retry_memory, script_memory_file)
+                    
+                    script_feedback = generate_cumulative_feedback(script_retry_memory, script_attempts + 1)
                     update_stage("audio", "failed", error=audio_issue.detail)
                     continue
                 else:

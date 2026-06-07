@@ -32,3 +32,18 @@
 | Task 30: Implement defensive product scores parsing | [x] | Add defensive parsing and thresholds check in qa.py |
 | Task 31: Control flow script escalation and fallback score checks | [x] | Implement escalation loop and fallback scores check in short_builder.py |
 | Task 32: Add regression tests and verify all passing | [x] | Verify full test suite passes with new changes |
+| Task 33: Contract Item Derivation & Support Validation | [x] | Modify `idea_preservation.py` to copy overall scene IDs, update support references check, and backfill item 5 |
+| Task 34: Mechanical Duration Repair | [x] | Update `repair_scene_duration_if_possible` to clamp overlong checklist/payoff scene durations |
+| Task 35: Strengthen `visual_only_unreadable` Guard | [x] | Suppress false positives by checking spoken/captioned modes and improving ordinal token/short phrase matching |
+| Task 36: Retry/Fallback Improvements | [x] | Ensure scene validation loop auto-repairs duration and proceeds to scene QA if no other hard issues exist |
+| Task 37: Verification & Regression Tests | [x] | Run the full test suite and confirm all tests pass |
+| Task 38: Contract Merging in `idea_preservation.py` | [x] | Merge derived plan contract fields into ChatGPT script contract |
+| Task 39: Fix `validate_script_checklist_point_cap` | [x] | Update validator to properly check if points <= allowed_spoken_points and return None |
+| Task 40: Verification & Regression Tests for Point Cap | [x] | Write regression tests and run all unit tests |
+| Task 41: Create `retry_memory.py` | [ ] | Implement retry memory classes and stable ID normalization |
+| Task 42: Implement update and feedback generation logic | [ ] | Update RetryMemory and generate cumulative feedback |
+| Task 43: Integrate ScenePipelineState & Whitelist/Mutation Logic | [ ] | Enforce hard gates and version tracking in `short_builder.py` |
+| Task 44: Integrate Retry Memory in script and scene loops | [ ] | Parse and persist active/resolved/suppressed issues across attempts |
+| Task 45: Add regression tests and verify all passing | [ ] | Verify full test suite passes with new changes |
+
+

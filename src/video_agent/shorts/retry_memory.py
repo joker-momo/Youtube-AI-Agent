@@ -47,8 +47,80 @@ def make_stable_issue_id(stage: str, scene_id: str | None, issue_type: str, deta
     clean_text = re.sub(r'\b\d+(?:\.\d+)?\b', 'n', clean_text)
     clean_text = re.sub(r'\bs\d+\b', 'scene_id', clean_text)
     clean_text = re.sub(r'[^\w\s]', '', clean_text)
-    clean_text = " ".join(clean_text.split())
-    
     words = clean_text.split()
     normalized_rc = "_".join(words)
     return f"{stage}:{scene_str}:{type_str}:{normalized_rc}"
+
+def add_or_update_issue(memory: RetryMemory, issue: RetryIssue) -> None:
+    if issue.id in memory.active_issues:
+        existing = memory.active_issues[issue.id]
+        existing.last_seen_attempt = issue.attempt
+        existing.repeat_count += 1
+        existing.detail = issue.detail
+        existing.required_change = issue.required_change
+    else:
+        memory.active_issues[issue.id] = issue
+
+def make_do_not_regress_line(issue: RetryIssue) -> str:
+    if issue.stage == "scene_validation" and issue.type == "duration":
+        return f"- Keep {issue.scene_id or 'CTA'} duration within layout caps."
+    return f"- Do not reintroduce: {issue.required_change or issue.detail}."
+
+def resolve_issue_by_id(memory: RetryMemory, issue_id: str) -> None:
+    if issue_id in memory.active_issues:
+        issue = memory.active_issues[issue_id]
+        issue.status = "resolved"
+        memory.resolved_issues[issue_id] = issue
+        del memory.active_issues[issue_id]
+        memory.do_not_regress.append(make_do_not_regress_line(issue))
+
+def suppress_issue_by_id(memory: RetryMemory, issue_id: str) -> None:
+    if issue_id in memory.active_issues:
+        issue = memory.active_issues[issue_id]
+        issue.status = "suppressed"
+        memory.suppressed_issues[issue_id] = issue
+        del memory.active_issues[issue_id]
+
+def generate_cumulative_feedback(memory: RetryMemory, attempt_number: int, candidate_summary: str = "") -> str:
+    active_lines = []
+    for idx, (issue_id, issue) in enumerate(memory.active_issues.items(), 1):
+        active_lines.append(f"{idx}. [{issue.stage}][{issue.scene_id or 'global'}][{issue.type}] {issue.required_change or issue.detail}")
+    
+    active_issues_str = "\n".join(active_lines) if active_lines else "None. All previously identified issues are resolved/addressed."
+    do_not_regress_str = "\n".join(memory.do_not_regress) if memory.do_not_regress else "None."
+    hard_invariants_str = "\n".join(memory.hard_invariants) if memory.hard_invariants else "None."
+    
+    suppressed_lines = [
+        f"- {issue.required_change or issue.detail}" 
+        for issue in memory.suppressed_issues.values()
+    ]
+    suppressed_str = "\n".join(suppressed_lines) if suppressed_lines else "None."
+    
+    return f"""RETRY FEEDBACK — CUMULATIVE
+
+This is retry attempt {attempt_number}.
+You must satisfy ALL active requirements below.
+Do not only fix the newest issue.
+Do not reintroduce resolved issues.
+
+ACTIVE ISSUES TO FIX NOW:
+{active_issues_str}
+
+DO NOT REGRESS:
+{do_not_regress_str}
+
+HARD INVARIANTS:
+{hard_invariants_str}
+
+SUPPRESSED / STALE ISSUES:
+{suppressed_str}
+
+LATEST CANDIDATE SUMMARY:
+{candidate_summary or "None."}
+
+OUTPUT REQUIREMENTS:
+- Return a full corrected JSON object.
+- Do not return partial patches.
+- Do not remove source-supported idea items.
+- Do not change the approved script meaning."""
+

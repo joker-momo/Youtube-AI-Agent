@@ -10,3 +10,28 @@ def test_stable_id_normalization():
     
     assert id1 == id2
     assert id1 == "scene_validation:s07:duration:cta_scene_scene_id_must_be_n_sec"
+
+def test_retry_memory_feedback():
+    from video_agent.shorts.retry_memory import RetryMemory, add_or_update_issue, generate_cumulative_feedback
+    memory = RetryMemory(stage="scenes")
+    memory.hard_invariants = ["Preserve source fidelity."]
+    
+    issue = RetryIssue(
+        id="scene_validation:s07:duration:cta_too_long",
+        stage="scene_validation",
+        attempt=1,
+        scene_id="s07",
+        type="duration",
+        severity="repairable_error",
+        detail="CTA scene s07 duration exceeds 2.8s",
+        required_change="Clamp CTA scene s07 to <= 2.8s",
+        status="active",
+        first_seen_attempt=1,
+        last_seen_attempt=1
+    )
+    add_or_update_issue(memory, issue)
+    
+    feedback = generate_cumulative_feedback(memory, attempt_number=2)
+    assert "ACTIVE ISSUES TO FIX NOW:" in feedback
+    assert "1. [scene_validation][s07][duration] Clamp CTA scene s07 to <= 2.8s" in feedback
+    assert "Preserve source fidelity." in feedback

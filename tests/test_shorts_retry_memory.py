@@ -35,3 +35,15 @@ def test_retry_memory_feedback():
     assert "ACTIVE ISSUES TO FIX NOW:" in feedback
     assert "1. [scene_validation][s07][duration] Clamp CTA scene s07 to <= 2.8s" in feedback
     assert "Preserve source fidelity." in feedback
+
+def test_pipeline_state_assertions():
+    from video_agent.shorts.retry_memory import ScenePipelineState
+    state = ScenePipelineState()
+    state.current_scenes_version = 1
+    
+    import pytest
+    with pytest.raises(RuntimeError) as exc_info:
+        from video_agent.shorts.short_builder import assert_latest_scenes_ready
+        assert_latest_scenes_ready(state)
+    assert "deterministic" in str(exc_info.value)
+

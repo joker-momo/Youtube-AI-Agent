@@ -124,3 +124,40 @@ OUTPUT REQUIREMENTS:
 - Do not remove source-supported idea items.
 - Do not change the approved script meaning."""
 
+def log_final_gate_status(state: ScenePipelineState, allowed: bool, reason: str = "") -> None:
+    import json
+    log_doc = {
+        "final_gate": {
+            "current_scenes_version": state.current_scenes_version,
+            "scene_validation_ok": state.latest_scene_validation_ok,
+            "scene_validation_version": state.latest_scene_validation_version,
+            "scene_qa_ok": state.latest_scene_qa_ok,
+            "scene_qa_version": state.latest_scene_qa_version,
+            "allowed_to_continue": allowed,
+        }
+    }
+    if not allowed:
+        log_doc["final_gate"]["reason"] = reason
+    print(f"FINAL GATE STATUS: {json.dumps(log_doc)}")
+
+def assert_latest_scenes_ready(state: ScenePipelineState) -> None:
+    try:
+        if not state.latest_scene_validation_ok:
+            raise RuntimeError("Cannot proceed: latest scenes have not passed deterministic scene_validation.")
+
+        if state.latest_scene_validation_version != state.current_scenes_version:
+            raise RuntimeError("Cannot proceed: scene_validation result is stale.")
+
+        if not state.latest_scene_qa_ok:
+            raise RuntimeError("Cannot proceed: latest scenes have not passed Gemini scene QA.")
+
+        if state.latest_scene_qa_version != state.current_scenes_version:
+            raise RuntimeError("Cannot proceed: scene QA result is stale.")
+            
+        log_final_gate_status(state, allowed=True)
+    except Exception as exc:
+        log_final_gate_status(state, allowed=False, reason=str(exc))
+        raise
+
+
+

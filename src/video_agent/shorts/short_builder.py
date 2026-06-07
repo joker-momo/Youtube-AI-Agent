@@ -24,6 +24,8 @@ from video_agent.shorts import (
 from video_agent.shorts.idea_preservation import allowed_spoken_points_from_contract
 from video_agent.shorts.manifest import write_short_status
 from video_agent.storage.atomic import atomic_write_json
+from video_agent.shorts.retry_memory import ScenePipelineState, assert_latest_scenes_ready
+
 
 
 def _parse(raw: str) -> dict:

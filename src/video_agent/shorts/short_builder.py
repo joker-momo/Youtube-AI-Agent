@@ -6,6 +6,7 @@ defaults used by the autopilot.
 """
 from __future__ import annotations
 
+import datetime
 import json
 from pathlib import Path
 from typing import Any, Callable
@@ -29,6 +30,48 @@ def _parse(raw: str) -> dict:
 
     objs = extract_json_objects(raw or "")
     return objs[0] if objs else {}
+
+
+def _update_short_stage(status: dict[str, Any], stage_name: str, new_status: str, *, now_str: str | None = None, **kwargs) -> None:
+    now_str = now_str or datetime.datetime.now(datetime.timezone.utc).isoformat()
+    for s in status["stages"]:
+        if s["name"] != stage_name:
+            continue
+
+        previous_status = str(s.get("status") or "pending")
+        s["status"] = new_status
+
+        if new_status == "pending":
+            s["started_at"] = None
+            s["completed_at"] = None
+            s["actual_seconds"] = None
+            s.pop("error", None)
+            s.pop("qa_verdict", None)
+        elif new_status == "in_progress":
+            if previous_status != "in_progress" or not s.get("started_at"):
+                s["started_at"] = now_str
+            s["completed_at"] = None
+            s["actual_seconds"] = None
+            s.pop("error", None)
+            s.pop("qa_verdict", None)
+        elif new_status in ("completed", "failed", "skipped"):
+            if not s.get("started_at"):
+                s["started_at"] = now_str
+            s["completed_at"] = now_str
+            try:
+                from datetime import datetime as dt
+                t_start = dt.fromisoformat(str(s["started_at"]).replace("Z", "+00:00"))
+                t_end = dt.fromisoformat(now_str.replace("Z", "+00:00"))
+                s["actual_seconds"] = max(0, int((t_end - t_start).total_seconds()))
+            except Exception:
+                s["actual_seconds"] = 1
+
+        for k, v in kwargs.items():
+            s[k] = v
+        break
+
+    status["updated_at"] = now_str
+    status["heartbeat_at"] = now_str
 
 
 def _cover_text(hook: str, max_words: int) -> str:
@@ -87,8 +130,6 @@ def build_short(
     require_render_confirmation: bool = False,
     source_artifacts: dict | None = None,
 ) -> dict[str, Any]:
-    import datetime
-
     short_id = short_plan["short_id"]
     sd = paths.short_dir(long_job_dir, short_id)
     sd.mkdir(parents=True, exist_ok=True)
@@ -106,7 +147,14 @@ def build_short(
         gemini_fn = _recorder.wrap(gemini_fn, "gemini", default_kind="qa")
 
     ap = (channel_config.get("shorts") or {}).get("autopilot") or {}
-    max_regen = int(ap.get("max_regeneration_attempts", 2))
+    max_regen = int(ap.get("max_regeneration_attempts", 4))
+    # Separate retry budgets so deterministic structural failures and Gemini
+    # product-quality failures do not starve each other inside one shared loop.
+    max_structural_attempts = int(ap.get("max_structural_attempts", max_regen + 1))
+    max_product_attempts = int(ap.get("max_product_repair_attempts", max_regen + 1))
+    # Provider errors (ChatGPT "Something went wrong…") get their own retry budget
+    # so a browser failure never consumes a creative scene-regeneration attempt.
+    max_chatgpt_provider_retries = int(ap.get("max_chatgpt_provider_retries", 2))
     music_track = short_plan.get("music_track")
     cover_words = int(((channel_config.get("shorts") or {}).get("cover") or {}).get("text_max_words", 5))
 
@@ -124,6 +172,9 @@ def build_short(
         "score": short_plan.get("score"),
         "qa_verdict": "PENDING",
         "regeneration_attempts": 0,
+        "qa_scenes_attempts": 0,
+        "qa_scenes_structural_attempts": 0,
+        "qa_scenes_product_attempts": 0,
         "music_track": music_track,
         "source_scene_ids": short_plan.get("source_scene_ids") or short_plan.get("scene_ids") or [],
         "voice": {
@@ -159,28 +210,7 @@ def build_short(
     }
 
     def update_stage(stage_name: str, new_status: str, **kwargs):
-        now_str = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        for s in status["stages"]:
-            if s["name"] == stage_name:
-                s["status"] = new_status
-                if new_status == "in_progress" and not s.get("started_at"):
-                    s["started_at"] = now_str
-                elif new_status in ("completed", "failed", "skipped"):
-                    if not s.get("started_at"):
-                        s["started_at"] = now_str
-                    s["completed_at"] = now_str
-                    try:
-                        from datetime import datetime as dt
-                        t_start = dt.fromisoformat(s["started_at"].replace("Z", "+00:00"))
-                        t_end = dt.fromisoformat(now_str.replace("Z", "+00:00"))
-                        s["actual_seconds"] = max(0, int((t_end - t_start).total_seconds()))
-                    except Exception:
-                        s["actual_seconds"] = 1
-                for k, v in kwargs.items():
-                    s[k] = v
-                break
-        status["updated_at"] = now_str
-        status["heartbeat_at"] = now_str
+        _update_short_stage(status, stage_name, new_status, **kwargs)
         write_short_status(long_job_dir, short_id, status)
 
     def check_stop():
@@ -199,6 +229,8 @@ def build_short(
     script_feedback = ""
     script_attempts = 0
     scenes_attempts = 0
+    structural_attempts = 0
+    product_attempts = 0
     total_regeneration_attempts = 0
 
     plan_for_prompt = {**short_plan, "source_long_job_id": long_job_dir.name}
@@ -267,6 +299,15 @@ def build_short(
         # Script passed! Reset and run the Scenes loop
         scenes_attempts = 0
         scene_fit_failures = 0
+        # Separate budgets: deterministic structural repairs vs. Gemini product
+        # quality repairs. Each failure class consumes only its own budget.
+        structural_attempts = 0
+        product_attempts = 0
+        provider_error_attempts = 0
+        status["qa_scenes_attempts"] = 0
+        status["qa_scenes_structural_attempts"] = 0
+        status["qa_scenes_product_attempts"] = 0
+        write_short_status(long_job_dir, short_id, status)
         scenes_qa_result = {"verdict": "FAIL", "issues": ["not_generated"]}
         short_scenes = {}
         scenes_feedback = ""
@@ -275,9 +316,14 @@ def build_short(
 
         scenes_passed = False
         escalate_to_script = False
-        while scenes_attempts < max_regen + 1:
+        # Hard ceiling guards against a pathological loop where neither budget
+        # increments; in practice every iteration consumes structural or product.
+        _scenes_loop_ceiling = max_structural_attempts + max_product_attempts + 2
+        while scenes_attempts < _scenes_loop_ceiling:
             scenes_attempts += 1
             total_regeneration_attempts = (script_attempts - 1) + (scenes_attempts - 1)
+            status["qa_scenes_attempts"] = scenes_attempts
+            write_short_status(long_job_dir, short_id, status)
 
             # --- Stage 3: Scenes ---
             update_stage("scenes", "in_progress")
@@ -288,6 +334,56 @@ def build_short(
                     feedback=scenes_feedback, attempt=scenes_attempts,
                 )
                 update_stage("scenes", "completed")
+            except short_scene_builder.ChatGPTProviderError as exc:
+                # Provider/browser failure — NOT a creative scene-QA failure.
+                # The recovery-wrapped llm_fn already cleared cookies + reopened a
+                # fresh temp chat; here we just keep it off the creative budget and
+                # surface a non-QA failure if the provider keeps erroring.
+                provider_error_attempts += 1
+                snippet = getattr(exc, "snippet", "")
+                update_stage("scenes", "failed", error="chatgpt_provider_error")
+                _recorder.record_event(
+                    "chatgpt",
+                    "provider_error",
+                    {
+                        "event": "chatgpt_provider_error",
+                        "stage": "scene_generation",
+                        "action": "clear_browser_state_and_retry",
+                        "attempt": provider_error_attempts,
+                        "error_snippet": snippet,
+                    },
+                    ok=False,
+                )
+                atomic_write_json(_jd / paths.SHORT_FAILURE_REPORT_FILE, {
+                    "stage": "scene_generation",
+                    "type": "chatgpt_provider_error",
+                    "attempt": provider_error_attempts,
+                    "detail": "ChatGPT returned provider-error text instead of scene JSON.",
+                    "error_snippet": snippet,
+                })
+                if provider_error_attempts > max_chatgpt_provider_retries:
+                    for s in status["stages"]:
+                        if s["status"] == "pending":
+                            s["status"] = "skipped"
+                    status.update({
+                        "status": "needs_review",
+                        "rendered": False,
+                        "uploaded": False,
+                        "youtube_url": "",
+                        "requires_user_review": True,
+                        "qa_verdict": "PROVIDER_ERROR",
+                        "failure_kind": "chatgpt_provider_error",
+                        "failure_message": (
+                            "ChatGPT provider error persisted after browser/session "
+                            "cleanup and retry. This is not a scene QA failure."
+                        ),
+                        "regeneration_attempts": total_regeneration_attempts,
+                    })
+                    write_short_status(long_job_dir, short_id, status)
+                    return status
+                # Do NOT consume the scenes/creative budget for a provider error.
+                scenes_attempts -= 1
+                continue
             except Exception as exc:
                 update_stage("scenes", "failed")
                 status["status"] = "failed"
@@ -303,6 +399,7 @@ def build_short(
                 scenes_doc=short_scenes,
                 script=short_script,
             )
+            atomic_write_json(_jd / paths.SHORT_SCENES_FILE, short_scenes)
 
             # Check for scene_narration_fit failures
             has_fit_failure = any(
@@ -354,8 +451,13 @@ def build_short(
                 atomic_write_json(_jd / paths.SHORT_SCENES_QA_FILE, scenes_qa_result)
                 update_stage("qa_scenes", "failed", qa_verdict="FAIL")
 
+                structural_attempts += 1
+                status["qa_scenes_structural_attempts"] = structural_attempts
+                write_short_status(long_job_dir, short_id, status)
                 if scene_fit_failures >= 2:
                     escalate_to_script = True
+                    break
+                if structural_attempts >= max_structural_attempts:
                     break
 
                 scenes_feedback = "\n".join(repair_plan["instructions"])
@@ -383,10 +485,41 @@ def build_short(
                 best_scene_candidate_qa = dict(scenes_qa_result)
                 scenes_passed = True
                 break
-            if not validate_scenes.has_blocking_or_repairable(structure_issues):
-                best_scene_candidate = dict(short_scenes)
-                best_scene_candidate_qa = dict(scenes_qa_result)
-            scenes_feedback = "; ".join(scenes_qa_result.get("required_changes") or scenes_qa_result.get("issues") or [])
+
+            # Structural gate already passed here -> this is a Gemini product
+            # quality failure. It consumes the product budget, not structural.
+            best_scene_candidate = dict(short_scenes)
+            best_scene_candidate_qa = dict(scenes_qa_result)
+            product_attempts += 1
+            status["qa_scenes_product_attempts"] = product_attempts
+            write_short_status(long_job_dir, short_id, status)
+            if product_attempts >= max_product_attempts:
+                break
+
+            # --- Product quality repair strategy ---
+            # When pacing is weak on a long Short, request simplification:
+            # drop a redundant late summary scene, merge the final tip/quote into
+            # the CTA, target 7-8 scenes, and never add more graphics.
+            summary = qa.summarize_product_scores(
+                scenes_qa_result.get("product_scores") or {}
+            )
+            scene_count = len(short_scenes.get("scenes") or [])
+            base_feedback = "; ".join(
+                scenes_qa_result.get("required_changes")
+                or scenes_qa_result.get("issues") or []
+            )
+            if summary["needs_pacing_simplify"] and scene_count >= qa.SIMPLIFY_SCENE_COUNT_THRESHOLD:
+                scenes_feedback = (
+                    "SIMPLIFY FOR PACING:\n"
+                    f"- retention_pacing is weak ({summary['retention_pacing']}) with {scene_count} scenes.\n"
+                    "- Remove the redundant late summary scene.\n"
+                    "- Merge the final tip/quote into the CTA scene.\n"
+                    "- Target 7-8 scenes total.\n"
+                    "- Do NOT add more graphics.\n"
+                    f"{base_feedback}"
+                )
+            else:
+                scenes_feedback = base_feedback
 
         if escalate_to_script:
             script_feedback = (
@@ -414,37 +547,72 @@ def build_short(
                     scenes_doc=best_scene_candidate,
                     script=short_script,
                 )
-                llm_issue_text = json.dumps(best_scene_candidate_qa.get("issues") or [], ensure_ascii=False).lower()
+                # Hard blockers: never render on audio-fit, source/safety,
+                # unreadable text, or off-topic hook regardless of product scores.
+                # Scan the issue type + detail, but DROP the remediation "Hint:"
+                # tail — product hints mention "safety"/"audio-fit" generically
+                # and must not be mistaken for a real safety/audio-fit finding.
+                def _issue_signal(issue: dict) -> str:
+                    detail = str(issue.get("detail") or "").split("Hint:")[0]
+                    return f"{issue.get('type') or ''} {detail}".lower()
+                llm_issue_text = " ".join(
+                    _issue_signal(i) for i in (best_scene_candidate_qa.get("issues") or [])
+                )
                 unsafe_llm_issue = any(
                     token in llm_issue_text
-                    for token in ("source_fidelity", "safety", "medical", "overclaim", "unreadable", "off-topic", "off topic")
+                    for token in ("audio_fit", "audio-fit", "source_fidelity", "safety", "medical", "overclaim", "unreadable", "off-topic", "off topic")
                 )
-                
-                # Check product scores if gemini_fn is not None
+
+                # Product-score gates. A single dimension <= 5 blocks render
+                # outright. A lone soft pacing of 6 is rescuable via the
+                # deterministic simplifier / best-candidate-with-warnings path.
                 if gemini_fn is not None:
-                    scores = best_scene_candidate_qa.get("product_scores") or {}
-                    values = []
-                    for key in qa.PRODUCT_SCORE_KEYS:
-                        try:
-                            values.append(float(scores.get(key, 0)))
-                        except (TypeError, ValueError):
-                            values.append(0.0)
-                    average_score = sum(values) / len(values) if values else 0.0
-                    has_low_score = any(val < qa.MIN_PRODUCT_SCORE for val in values)
-                    avg_too_low = average_score < qa.MIN_AVERAGE_PRODUCT_SCORE
-                    missing_scores = len(values) != len(qa.PRODUCT_SCORE_KEYS)
-                    product_score_ok = (not missing_scores) and (not has_low_score) and (not avg_too_low)
+                    summary = qa.summarize_product_scores(
+                        best_scene_candidate_qa.get("product_scores") or {}
+                    )
+                    product_blocks_render = summary["blocks_render"]
+                    soft_pacing_only = summary["soft_pacing_only"]
+                    product_score_ok = (
+                        (not summary["missing"])
+                        and (not summary["has_low"])
+                        and (not summary["avg_too_low"])
+                    )
                 else:
+                    product_blocks_render = False
+                    soft_pacing_only = False
                     product_score_ok = True
 
-                if not validate_scenes.has_blocking_or_repairable(candidate_issues) and not unsafe_llm_issue and product_score_ok:
+                structural_blocked = validate_scenes.has_blocking_or_repairable(candidate_issues)
+                hard_block = structural_blocked or unsafe_llm_issue or product_blocks_render
+
+                if not hard_block and (product_score_ok or soft_pacing_only):
+                    fallback_warnings = list(best_scene_candidate_qa.get("warnings") or [])
+                    # For a soft-pacing-only candidate, run the deterministic
+                    # simplifier; keep the simplified scenes only if they remain
+                    # structurally valid.
+                    if soft_pacing_only and not product_score_ok:
+                        simplified = validate_scenes.simplify_scenes_for_pacing(
+                            best_scene_candidate, script=short_script
+                        )
+                        if simplified["changed"]:
+                            new_issues = validate_scenes.validate_scene_structure(
+                                simplified["scenes_doc"].get("scenes") or [],
+                                scenes_doc=simplified["scenes_doc"],
+                                script=short_script,
+                            )
+                            if not validate_scenes.has_blocking_or_repairable(new_issues):
+                                best_scene_candidate = simplified["scenes_doc"]
+                                fallback_warnings.extend(simplified["notes"])
+                                fallback_warnings.append("deterministic_pacing_simplifier_applied")
+                        fallback_warnings.append("soft_pacing_accepted_with_warning")
+                    fallback_warnings.append("best_candidate_fallback_used_after_llm_qa_warnings")
+
                     short_scenes = best_scene_candidate
+                    atomic_write_json(_jd / paths.SHORT_SCENES_FILE, short_scenes)
                     scenes_qa_result = {
                         **best_scene_candidate_qa,
                         "verdict": "PASS",
-                        "warnings": list(best_scene_candidate_qa.get("warnings") or []) + [
-                            "best_candidate_fallback_used_after_llm_qa_warnings"
-                        ],
+                        "warnings": fallback_warnings,
                         "provider": "best_candidate_fallback",
                     }
                     atomic_write_json(_jd / paths.SHORT_SCENES_QA_FILE, scenes_qa_result)
@@ -485,6 +653,25 @@ def build_short(
             )
             short_scenes["total_duration_sec"] = round(duration_sec, 1)
             narration_audio_sec = validate_scenes.probe_audio_duration_sec(narration_wav)
+            if narration_audio_sec is not None:
+                tail_repair = validate_scenes.extend_scene_durations_for_audio_tail(
+                    short_scenes,
+                    narration_audio_sec,
+                )
+                if tail_repair.get("changed"):
+                    duration_sec = float(short_scenes.get("total_duration_sec") or duration_sec)
+                    atomic_write_json(_jd / paths.SHORT_SCENES_FILE, short_scenes)
+                    _recorder.record_event(
+                        "deterministic",
+                        "audio_tail_repair",
+                        {
+                            "verdict": "PASS",
+                            "render_duration_sec": duration_sec,
+                            "narration_audio_sec": round(narration_audio_sec, 3),
+                            **tail_repair,
+                        },
+                        ok=True,
+                    )
             
             audio_fit_passed = True
             audio_issue = None
@@ -539,6 +726,9 @@ def build_short(
                         "duration_sec": round(duration_sec, 1),
                         "audio_fit_issue": audio_issue.to_dict(),
                         "regeneration_attempts": total_regeneration_attempts,
+                        "qa_scenes_attempts": scenes_attempts,
+                        "qa_scenes_structural_attempts": structural_attempts,
+                        "qa_scenes_product_attempts": product_attempts,
                     })
                     write_short_status(long_job_dir, short_id, status)
                     return status
@@ -580,6 +770,9 @@ def build_short(
             "duration_sec": round(duration_sec, 1),
             "qa_verdict": "PASS",
             "regeneration_attempts": total_regeneration_attempts,
+            "qa_scenes_attempts": scenes_attempts,
+            "qa_scenes_structural_attempts": structural_attempts,
+            "qa_scenes_product_attempts": product_attempts,
         })
         write_short_status(long_job_dir, short_id, status)
 
@@ -642,6 +835,9 @@ def build_short(
             "qa_verdict": "FAIL",
             "duration_sec": round(duration_sec, 1),
             "regeneration_attempts": total_regeneration_attempts,
+            "qa_scenes_attempts": scenes_attempts,
+            "qa_scenes_structural_attempts": structural_attempts,
+            "qa_scenes_product_attempts": product_attempts,
         })
         write_short_status(long_job_dir, short_id, status)
         return status
@@ -663,8 +859,9 @@ def build_short(
         cover_path = cover_fn(sd, channel_config)
         update_stage("render", "completed")
     except Exception as exc:
-        update_stage("render", "failed")
+        update_stage("render", "failed", error=str(exc))
         status["status"] = "failed"
+        status["error"] = str(exc)
         write_short_status(long_job_dir, short_id, status)
         raise exc
 

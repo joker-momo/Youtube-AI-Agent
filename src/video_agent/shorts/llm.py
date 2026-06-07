@@ -16,6 +16,10 @@ from typing import Any, Callable
 # Spec v6 §3.1 — every call uses a fresh temp conversation.
 TEMPORARY_CONVERSATIONS = True
 
+# Provider-error recovery (robustness spec §4): how many times to clear cookies +
+# re-send the same ChatGPT prompt before giving up with a provider error.
+MAX_CHATGPT_PROVIDER_RETRIES = 2
+
 
 def uses_temporary_conversations() -> bool:
     return TEMPORARY_CONVERSATIONS
@@ -75,3 +79,96 @@ def make_sync_sender(async_send: Callable[[str], "asyncio.Future[str]"]) -> Sync
         return fut.result()
 
     return _send
+
+
+# --- ChatGPT provider-error recovery (robustness spec §3 + §4) ---------------
+
+async def chatgpt_send_with_recovery(
+    client: Any,
+    prompt: str,
+    *,
+    response_timeout_ms: int = 300_000,
+    max_provider_retries: int = MAX_CHATGPT_PROVIDER_RETRIES,
+) -> str:
+    """Send a ChatGPT prompt, recovering from provider-error responses.
+
+    Primary recovery (per call when the response is provider-error text):
+    ``client.auth_clear_cookies("chatgpt")`` then re-send — the next send
+    re-navigates to a fresh temporary chat, so this is the cookie-reset + fresh
+    temp-chat path. Full temporary-profile reset is only attempted as a fallback
+    after the retry budget is exhausted (or if cookie clear fails), and only if
+    the client exposes ``reset_browser_profile`` (otherwise it is a no-op and the
+    caller surfaces a provider error).
+
+    Returns the final response text. If it is still provider-error text, the
+    caller (``build_short_scenes``) raises ``ChatGPTProviderError`` so the build
+    loop treats it as a provider failure, not a creative scene-QA failure."""
+    from video_agent.shorts.short_scene_builder import is_provider_error_text
+
+    text = await client.chatgpt_send(prompt, response_timeout_ms=response_timeout_ms)
+    if not is_provider_error_text(text):
+        return text
+
+    for attempt in range(1, max_provider_retries + 1):
+        _log_provider_error(attempt, text, action="clear_cookies_and_retry")
+        cleared = await _safe_clear_cookies(client)
+        if not cleared:
+            # Cookie clear failed -> escalate straight to profile-reset fallback.
+            await _safe_profile_reset(client)
+        text = await client.chatgpt_send(prompt, response_timeout_ms=response_timeout_ms)
+        if not is_provider_error_text(text):
+            return text
+
+    # Retry budget exhausted: last-resort full temporary-profile reset, then one
+    # final send. If it still fails, return the provider text for the caller to
+    # raise ChatGPTProviderError on.
+    _log_provider_error(max_provider_retries + 1, text, action="profile_reset_fallback")
+    if await _safe_profile_reset(client):
+        text = await client.chatgpt_send(prompt, response_timeout_ms=response_timeout_ms)
+    return text
+
+
+async def _safe_clear_cookies(client: Any) -> bool:
+    fn = getattr(client, "auth_clear_cookies", None)
+    if fn is None:
+        return False
+    try:
+        await fn("chatgpt")
+        return True
+    except Exception:
+        return False
+
+
+async def _safe_profile_reset(client: Any) -> bool:
+    """Best-effort full temporary-profile reset. Only runs if the client exposes
+    ``reset_browser_profile`` (no such worker endpoint by default) — otherwise a
+    logged no-op so we never touch a real user profile."""
+    fn = getattr(client, "reset_browser_profile", None)
+    if fn is None:
+        return False
+    try:
+        await fn("chatgpt")
+        return True
+    except Exception:
+        return False
+
+
+def _log_provider_error(attempt: int, text: str, *, action: str) -> None:
+    snippet = (text or "").strip().splitlines()[0][:120] if (text or "").strip() else ""
+    try:
+        print(
+            "[shorts.llm]",
+            json.dumps(
+                {
+                    "event": "chatgpt_provider_error",
+                    "stage": "scene_generation",
+                    "action": action,
+                    "attempt": attempt,
+                    "error_snippet": snippet,
+                },
+                ensure_ascii=False,
+            ),
+            file=sys.stderr,
+        )
+    except Exception:
+        pass

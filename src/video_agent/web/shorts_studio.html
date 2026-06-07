@@ -2025,6 +2025,7 @@ function renderShortPipelineCard(jobId, short) {
   const cover = short.cover_path ? '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(short.cover_path) : '';
   const statusColor = short.status === 'rendered' ? '#166534' : (short.status === 'needs_review' ? '#b45309' : '#334155');
   const steps = short.steps || [];
+  const qaScenesAttempts = renderQaScenesAttempts(short);
   return `
     <div style="display:grid;grid-template-columns:minmax(150px,190px) 1fr;gap:14px;padding:12px;border:1px solid var(--line-strong);border-radius:10px;background:var(--bg-soft)">
       <div style="width:100%;aspect-ratio:9/16;background:#0f172a;border-radius:9px;overflow:hidden;box-shadow:0 10px 24px rgba(15,23,42,.18)">
@@ -2035,7 +2036,9 @@ function renderShortPipelineCard(jobId, short) {
       <div style="min-width:0">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
           <div style="font-weight:800;font-size:16px">${escapeHtml(sid)}${short.title ? ` — ${escapeHtml(short.title)}` : ''} <span style="color:${statusColor}">· ${escapeHtml(short.status || '')}</span></div>
-          <div style="font-size:12px;color:var(--muted)">QA: ${escapeHtml(short.qa_verdict || '-')}</div>
+          <div style="font-size:12px;color:var(--muted);display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+            <span>QA: ${escapeHtml(short.qa_verdict || '-')}</span>${qaScenesAttempts}
+          </div>
         </div>
         <div style="margin-top:4px;font-size:13px;color:var(--text);line-height:1.35">${escapeHtml(short.hook || '')}</div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:6px;margin-top:10px">
@@ -2049,6 +2052,25 @@ function renderShortPipelineCard(jobId, short) {
         </div>
       </div>
     </div>`;
+}
+
+function renderQaScenesAttempts(short) {
+  const raw = short && short.qa_scenes_attempts;
+  if (raw === undefined || raw === null || raw === '') return '';
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return '';
+  // Optional breakdown: deterministic structural repairs vs. Gemini product
+  // quality repairs (set by short_builder). Shown only when present.
+  const struct = Number(short.qa_scenes_structural_attempts);
+  const prod = Number(short.qa_scenes_product_attempts);
+  const parts = [];
+  if (Number.isFinite(struct) && struct > 0) parts.push('struct ' + Math.trunc(struct));
+  if (Number.isFinite(prod) && prod > 0) parts.push('prod ' + Math.trunc(prod));
+  const breakdown = parts.length ? ' (' + parts.join(' · ') + ')' : '';
+  const label = 'QA Scenes: ' + String(Math.trunc(n)) + 'x' + breakdown;
+  const title = 'Number of scene-QA runs for this Short'
+    + (parts.length ? ' — structural = deterministic validation repairs, product = Gemini product-quality repairs' : '');
+  return `<span title="${escapeHtml(title)}" style="border:1px solid var(--line);border-radius:999px;padding:1px 6px;background:#fff;color:var(--muted);white-space:nowrap">${escapeHtml(label)}</span>`;
 }
 
 function renderShortSubstep(step) {
@@ -3298,6 +3320,7 @@ function renderShortsCards(jobId, data) {
 	    const video = s.video_path ? ('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(s.video_path)) : '';
 	    const artifact = (name) => '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent('shorts/' + sid + '/' + name);
 	    const chipColor = s.status === 'rendered' ? '#1a7f37' : (s.status === 'needs_review' ? '#b35900' : '#666');
+    const qaScenesAttempts = renderQaScenesAttempts(s);
     const needsReview = s.status === 'needs_review';
     return `
       <div class="idea-card" style="display:flex;gap:10px">
@@ -3308,9 +3331,9 @@ function renderShortsCards(jobId, data) {
           <div style="font-weight:600">${escapeHtml(sid)}${s.title ? ` — ${escapeHtml(s.title)}` : ''} · ${escapeHtml(s.format || '')}
             <span style="color:${chipColor};font-weight:700">· ${escapeHtml(s.status || '')}</span></div>
           <div style="font-size:12px;margin:4px 0">${escapeHtml(s.hook || '')}</div>
-	          <div style="font-size:11px;color:var(--muted)">
-	            ${s.duration_sec ? s.duration_sec + 's · ' : ''}QA: ${escapeHtml(s.qa_verdict || '-')} ·
-	            Music: ${escapeHtml(s.music_track || '-')} · Kokoro ef_dora 1.07
+	          <div style="font-size:11px;color:var(--muted);display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+	            <span>${s.duration_sec ? s.duration_sec + 's · ' : ''}QA: ${escapeHtml(s.qa_verdict || '-')}</span>${qaScenesAttempts}
+	            <span>Music: ${escapeHtml(s.music_track || '-')} · Kokoro ef_dora 1.07</span>
 	          </div>
 	          <div style="font-size:11px;color:var(--muted);margin-top:3px">
 	            Source: <a href="${artifact('short_source_map.json')}" target="_blank">Source Map</a> ·
@@ -4097,6 +4120,7 @@ function renderSingleCardHtml(jobId, d, idx, shortsSeoData, isOpen) {
           ${d.title ? ` <span style="font-weight: normal; color: var(--muted-2); font-size: 13px; margin-left: 8px;">— ${escapeHtml(d.title)}</span>` : ''}
         </div>
         <div class="code">${escapeHtml(d.format || '')} · ${escapeHtml(d.qa_verdict || '-')}</div>
+        <div style="margin-top:5px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:11px">${renderQaScenesAttempts(d)}</div>
       </div>
       <!-- Progress % and ETA like the long video -->
       <div class="rc-progress" style="text-align: right; margin-right: 14px; min-width: 100px;">
@@ -4254,7 +4278,8 @@ async function loadShortsRendersTab(jobId) {
     }
 
     const stateKey = JSON.stringify({ drafts, seo: shortsSeoData, progress: SHORTS_RENDER_PROGRESS });
-    if (stateKey === LAST_RENDERS_JSON_BY_JOB[jobId]) {
+    const rendersStillLoading = container.textContent.includes('Loading renders');
+    if (stateKey === LAST_RENDERS_JSON_BY_JOB[jobId] && !rendersStillLoading) {
       return;
     }
     LAST_RENDERS_JSON_BY_JOB[jobId] = stateKey;

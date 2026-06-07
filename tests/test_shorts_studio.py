@@ -77,6 +77,21 @@ def test_rendered_shorts_copy_hashtags_with_commas(html_name: str):
     assert "shortTagsList.join(' ')" not in html
 
 
+def test_shorts_studio_renders_cache_does_not_keep_loading_placeholder():
+    html = (Path(__file__).parents[1] / "src" / "video_agent" / "web" / "shorts_studio.html").read_text(encoding="utf-8")
+
+    assert "rendersStillLoading" in html
+    assert "stateKey === LAST_RENDERS_JSON_BY_JOB[jobId] && !rendersStillLoading" in html
+
+
+def test_shorts_studio_displays_qa_scenes_attempts():
+    html = (Path(__file__).parents[1] / "src" / "video_agent" / "web" / "shorts_studio.html").read_text(encoding="utf-8")
+
+    assert "function renderQaScenesAttempts" in html
+    assert "QA Scenes:" in html
+    assert "qa_scenes_attempts" in html
+
+
 def test_shorts_studio_state_uses_busy_guard_for_queue_jobs(client: TestClient, tmp_path: Path):
     _write_job(tmp_path, "job-1")
     queue = JobQueue(tmp_path / "queue.db")

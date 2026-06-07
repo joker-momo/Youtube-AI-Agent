@@ -777,6 +777,32 @@ def _stub_io(calls):
     return dict(tts_fn=tts_fn, mix_fn=mix_fn, render_fn=render_fn, cover_fn=cover_fn)
 
 
+def test_short_stage_retry_clears_stale_completion_and_error():
+    from video_agent.shorts.short_builder import _update_short_stage
+
+    status = {
+        "stages": [{
+            "name": "audio",
+            "label": "Audio TTS & Mix",
+            "status": "failed",
+            "started_at": "2026-06-06T20:53:33+00:00",
+            "completed_at": "2026-06-06T20:54:19+00:00",
+            "actual_seconds": 45,
+            "error": "Narration audio exceeds video duration.",
+            "qa_verdict": "FAIL",
+        }]
+    }
+
+    _update_short_stage(status, "audio", "in_progress", now_str="2026-06-06T20:58:27+00:00")
+
+    stage = status["stages"][0]
+    assert stage["status"] == "in_progress"
+    assert stage["completed_at"] is None
+    assert stage["actual_seconds"] is None
+    assert "error" not in stage
+    assert "qa_verdict" not in stage
+
+
 def test_build_short_pass_renders_and_writes_artifacts(tmp_path: Path):
     from video_agent.shorts import short_builder, paths
     job = _long_job(tmp_path)
@@ -794,6 +820,97 @@ def test_build_short_pass_renders_and_writes_artifacts(tmp_path: Path):
         assert (sd / "outputs" / f).exists(), f
     assert calls == ["tts", "mix", "render", "cover"]
     assert res["music_track"] == "shorts_sleep_stress"
+
+
+def test_build_short_records_render_exception_in_status(tmp_path: Path):
+    from video_agent.shorts import short_builder
+
+    job = _long_job(tmp_path)
+    calls: list[str] = []
+
+    def render_fn(short_dir, channel_config):
+        calls.append("render")
+        raise RuntimeError("render schema validation failed")
+
+    io = _stub_io(calls)
+    io["render_fn"] = render_fn
+    plan = {"short_id": "short-render-error", "format": "pain_to_tip", "scene_ids": ["scene-09"],
+            "source_start_sec": 183.0, "source_end_sec": 199.0, "music_track": "shorts_sleep_stress",
+            "narration_seed": "Marca una hora de cierre."}
+
+    try:
+        short_builder.build_short(job, plan, _cfg(), llm_fn=_llm_fn_factory(), **io)
+    except RuntimeError:
+        pass
+
+    status_doc = json.loads((job / "shorts" / "short-render-error" / "short_status.json").read_text())
+    render_stage = next(s for s in status_doc["stages"] if s["name"] == "render")
+    assert status_doc["status"] == "failed"
+    assert "render schema validation failed" in render_stage["error"]
+    assert "render schema validation failed" in status_doc["error"]
+
+
+def test_build_short_persists_auto_extended_scene_durations_before_gemini_qa(tmp_path: Path):
+    from video_agent.shorts import paths, short_builder
+
+    job = _long_job(tmp_path)
+    calls: list[str] = []
+    captured: dict[str, str] = {}
+    scenes = {
+        **_GOOD_SCENES,
+        "short_id": "short-auto-duration",
+        "total_duration_sec": 20.3,
+        "scenes": [
+            *_GOOD_SCENES["scenes"][:1],
+            {
+                **_GOOD_SCENES["scenes"][1],
+                "duration_sec": 2.0,
+                "narration": "Marca una hora de cierre.",
+            },
+            *_GOOD_SCENES["scenes"][2:4],
+            {**_GOOD_SCENES["scenes"][4], "duration_sec": 5.0},
+            *_GOOD_SCENES["scenes"][5:],
+        ],
+    }
+
+    def gemini_fn(prompt):
+        captured["prompt"] = prompt
+        return json.dumps({
+            "verdict": "PASS",
+            "issues": [],
+            "required_changes": [],
+            "product_scores": {
+                "audience_fit_45_plus": 8,
+                "hook_strength": 8,
+                "visual_specificity": 8,
+                "clarity": 8,
+                "retention_pacing": 8,
+                "natural_spanish": 8,
+                "saveability": 8,
+            },
+        })
+
+    plan = {"short_id": "short-auto-duration", "format": "pain_to_tip", "scene_ids": ["scene-09"],
+            "source_start_sec": 183.0, "source_end_sec": 199.0, "music_track": "shorts_sleep_stress",
+            "narration_seed": "Marca una hora de cierre."}
+
+    res = short_builder.build_short(
+        job,
+        plan,
+        _cfg(),
+        llm_fn=_llm_fn_factory(scenes=scenes),
+        gemini_fn=gemini_fn,
+        **_stub_io(calls),
+    )
+
+    sd = paths.short_dir(job, "short-auto-duration")
+    saved = json.loads((sd / "json" / paths.SHORT_SCENES_FILE).read_text(encoding="utf-8"))
+
+    assert res["status"] == "rendered"
+    assert saved["scenes"][1]["duration_sec"] == 2.7
+    assert saved["total_duration_sec"] == 21.2
+    assert '"duration_sec": 2.7' in captured["prompt"]
+    assert '"total_duration_sec": 21.2' in captured["prompt"]
 
 
 def test_build_short_regenerates_then_needs_review_after_limit(tmp_path: Path):
@@ -820,6 +937,69 @@ def test_build_short_regenerates_then_needs_review_after_limit(tmp_path: Path):
     assert attempts["n"] == 3
     assert "render" not in calls  # never rendered a failing short
     assert not (paths.short_dir(job, "short-02") / "short.mp4").exists()
+
+
+def test_build_short_exposes_qa_scenes_attempt_count(tmp_path: Path):
+    from video_agent.shorts import short_builder, paths
+
+    job = _long_job(tmp_path)
+    calls: list[str] = []
+    qa_attempts = {"n": 0}
+
+    def gemini_fn(prompt: str, **kwargs):
+        if "Scenes QA reviewer" in prompt:
+            qa_attempts["n"] += 1
+            if qa_attempts["n"] == 1:
+                return json.dumps({
+                    "verdict": "FAIL",
+                    "issues": [{"type": "retention_pacing", "severity": "repairable_error", "detail": "Merge repeated final scenes."}],
+                    "required_changes": ["Merge repeated final scenes."],
+                    "warnings": [],
+                    "product_scores": {
+                        "hook_strength": 8,
+                        "retention_pacing": 6,
+                        "visual_scene_fit": 8,
+                        "mobile_readability": 8,
+                        "layout_variety": 8,
+                        "source_fidelity": 8,
+                        "overall_product_quality": 8,
+                    },
+                })
+            return json.dumps({
+                "verdict": "PASS",
+                "issues": [],
+                "required_changes": [],
+                "warnings": [],
+                "product_scores": {
+                    "hook_strength": 8,
+                    "retention_pacing": 8,
+                    "visual_scene_fit": 8,
+                    "mobile_readability": 8,
+                    "layout_variety": 8,
+                    "source_fidelity": 8,
+                    "overall_product_quality": 8,
+                },
+            })
+        return json.dumps({"verdict": "PASS", "issues": [], "required_changes": [], "warnings": []})
+
+    plan = {"short_id": "short-qa-scenes-count", "format": "pain_to_tip", "scene_ids": ["scene-09"],
+            "source_start_sec": 183.0, "source_end_sec": 199.0, "music_track": "shorts_sleep_stress",
+            "narration_seed": "Marca una hora de cierre."}
+
+    res = short_builder.build_short(
+        job,
+        plan,
+        _cfg(),
+        llm_fn=_llm_fn_factory(),
+        gemini_fn=gemini_fn,
+        **_stub_io(calls),
+    )
+
+    status_doc = json.loads(
+        (paths.short_dir(job, "short-qa-scenes-count") / paths.SHORT_STATUS_FILE).read_text(encoding="utf-8")
+    )
+    assert res["qa_scenes_attempts"] == qa_attempts["n"]
+    assert status_doc["qa_scenes_attempts"] == qa_attempts["n"]
 
 
 def test_build_short_prepare_mode_stops_before_render(tmp_path: Path):
@@ -903,6 +1083,58 @@ def test_audio_fit_guard_runs_after_tts_before_mix_and_render(tmp_path: Path):
     assert "audio_fit" in json.dumps(res).lower()
 
 
+def test_audio_fit_small_tail_shortage_extends_scene_durations():
+    from video_agent.shorts import validate_scenes
+
+    scenes_doc = {
+        "total_duration_sec": 22.4,
+        "scenes": [
+            {"id": "s1", "layout": "short_hook", "duration_sec": 2.5},
+            {"id": "s2", "layout": "short_tip", "duration_sec": 4.2},
+            {"id": "s3", "layout": "short_tip", "duration_sec": 4.2},
+            {"id": "s4", "layout": "short_tip", "duration_sec": 4.2},
+            {"id": "s5", "layout": "short_tip", "duration_sec": 4.2},
+            {"id": "s6", "layout": "short_cta", "duration_sec": 2.4},
+        ],
+    }
+
+    result = validate_scenes.extend_scene_durations_for_audio_tail(
+        scenes_doc,
+        narration_audio_sec=22.42,
+    )
+
+    assert result["changed"] is True
+    assert scenes_doc["total_duration_sec"] >= 23.0
+    assert validate_scenes.validate_audio_fit(scenes_doc["total_duration_sec"], 22.42) is None
+    assert not validate_scenes.has_blocking_or_repairable(
+        validate_scenes.validate_scene_structure(scenes_doc["scenes"], scenes_doc=scenes_doc)
+    )
+
+
+def test_audio_fit_large_shortage_is_not_stretched_past_pacing():
+    from video_agent.shorts import validate_scenes
+
+    scenes_doc = {
+        "total_duration_sec": 21.0,
+        "scenes": [
+            {"id": "s1", "layout": "short_hook", "duration_sec": 2.5},
+            {"id": "s2", "layout": "short_tip", "duration_sec": 4.2},
+            {"id": "s3", "layout": "short_tip", "duration_sec": 4.2},
+            {"id": "s4", "layout": "short_tip", "duration_sec": 4.2},
+            {"id": "s5", "layout": "short_tip", "duration_sec": 3.5},
+            {"id": "s6", "layout": "short_cta", "duration_sec": 2.4},
+        ],
+    }
+
+    result = validate_scenes.extend_scene_durations_for_audio_tail(
+        scenes_doc,
+        narration_audio_sec=30.0,
+    )
+
+    assert result["changed"] is False
+    assert scenes_doc["total_duration_sec"] == 21.0
+
+
 def test_build_short_passes_source_artifacts_to_script_builder(tmp_path: Path, monkeypatch):
     from video_agent.shorts import paths, short_builder
 
@@ -979,6 +1211,15 @@ def test_normalize_short_scenes_keeps_existing_narration():
     out = short_scene_builder.normalize_short_scenes(scenes_doc, {"narration": "otra"})
     assert out["scenes"][0]["narration"] == "Ya tengo voz."
     assert out["scenes"][0]["id"] == "s1"
+
+
+def test_normalize_short_scenes_does_not_turn_empty_llm_output_into_cta_only():
+    from video_agent.shorts import short_scene_builder
+
+    out = short_scene_builder.normalize_short_scenes({}, {"cta": "Guárdalo para tu próxima compra."})
+
+    assert out["scenes"] == []
+    assert out["total_duration_sec"] == 0
 
 
 def test_normalize_short_scenes_seeds_full_render_contract():
@@ -1395,3 +1636,452 @@ def test_best_candidate_fallback_blocked_by_low_scores(tmp_path: Path):
     assert res["status"] == "needs_review"
     assert res["qa_verdict"] == "FAIL"
 
+
+def test_best_candidate_fallback_blocked_by_gemini_audio_fit_issue(tmp_path: Path):
+    from video_agent.shorts import short_builder
+
+    job = _long_job(tmp_path)
+    calls: list[str] = []
+    gemini_calls = {"n": 0}
+
+    def gemini_fn(prompt):
+        gemini_calls["n"] += 1
+        if gemini_calls["n"] == 1:
+            return json.dumps({"verdict": "PASS", "issues": [], "required_changes": []})
+        return json.dumps({
+            "verdict": "FAIL",
+            "issues": [{
+                "type": "audio_fit_risk",
+                "scene_id": None,
+                "severity": "major",
+                "detail": "Narration density creates an audio_fit risk before rendering.",
+            }],
+            "required_changes": ["Shorten narration before render; audio_fit risk is high."],
+            "product_scores": {
+                "audience_fit_45_plus": 8,
+                "hook_strength": 8,
+                "visual_specificity": 8,
+                "clarity": 8,
+                "retention_pacing": 6,
+                "natural_spanish": 8,
+                "saveability": 8,
+            },
+        })
+
+    cfg = _cfg()
+    cfg["shorts"]["autopilot"]["max_regeneration_attempts"] = 0
+
+    plan = {"short_id": "short-audio-fit-risk", "format": "pain_to_tip", "scene_ids": ["scene-09"], "music_track": "shorts_sleep_stress"}
+    res = short_builder.build_short(
+        job,
+        plan,
+        cfg,
+        llm_fn=_llm_fn_factory(),
+        gemini_fn=gemini_fn,
+        **_stub_io(calls),
+    )
+
+    assert res["status"] == "needs_review"
+    assert res["qa_verdict"] == "FAIL"
+    assert gemini_calls["n"] >= 2
+    assert "render" not in calls
+
+
+# --------------------------------------------------------------------------
+# Regression: graphic-count false positive + pacing simplification repair
+# --------------------------------------------------------------------------
+
+def test_two_graphics_not_failed_for_at_most_2_rule():
+    """A candidate with exactly 2 graphics must not fail QA when Gemini
+    incorrectly complains about an "at most 2 graphics" rule."""
+    from video_agent.shorts.qa import normalize_gemini_scenes_qa
+
+    parsed = {
+        "verdict": "FAIL",
+        "issues": [{
+            "type": "graphic_count",
+            "scene_id": None,
+            "severity": "major",
+            "detail": "Scene already has 2 graphics; at most 2 graphics allowed, remove one.",
+        }],
+        "required_changes": ["Remove one graphic — at most 2 graphics allowed."],
+        "warnings": [],
+        "scores": {},
+        "product_scores": {k: 8 for k in (
+            "audience_fit_45_plus", "hook_strength", "visual_specificity",
+            "clarity", "retention_pacing", "natural_spanish", "saveability",
+        )},
+    }
+
+    res = normalize_gemini_scenes_qa(parsed, graphic_count=2, graphic_led=False)
+    assert res["verdict"] == "PASS"
+    assert not any(i.get("type") == "graphic_count" for i in res["issues"])
+    assert not res["required_changes"]
+    assert any("Downgraded graphic-count" in w for w in res["warnings"])
+
+    # But a genuine over-cap (>=4 graphics) is still a real, blocking issue.
+    res4 = normalize_gemini_scenes_qa(parsed, graphic_count=4, graphic_led=False)
+    assert res4["verdict"] == "FAIL"
+    assert any(i.get("type") == "graphic_count" for i in res4["issues"])
+
+
+def test_two_graphics_not_failed_for_allowed_2_graphic_limit_phrase():
+    from video_agent.shorts.qa import normalize_gemini_scenes_qa
+
+    parsed = {
+        "verdict": "FAIL",
+        "issues": [{
+            "type": "product_quality_score_low",
+            "scene_id": None,
+            "severity": "major",
+            "detail": (
+                "The scene flow exceeds the allowed 2 graphic scene limit "
+                "(s04, s05 are graphics, but the structure creates unnecessary scene bloat)."
+            ),
+        }],
+        "required_changes": ["Ensure only 2 scenes use graphic_* layout."],
+        "warnings": [],
+        "product_scores": {k: 8 for k in (
+            "audience_fit_45_plus", "hook_strength", "visual_specificity",
+            "clarity", "retention_pacing", "natural_spanish", "saveability",
+        )},
+    }
+
+    res = normalize_gemini_scenes_qa(parsed, graphic_count=2, graphic_led=False)
+
+    assert res["verdict"] == "PASS"
+    assert not res["issues"]
+    assert not res["required_changes"]
+    assert any("Downgraded graphic-count" in w for w in res["warnings"])
+
+
+def _nine_scene_doc():
+    scenes = [
+        {"id": "s1", "duration_sec": 2.5, "layout": "short_hook", "on_screen_text": "ELIGE BIEN", "caption": "c", "visual_prompt": "v vertical", "narration": "¿Eliges bien el pan?"},
+        {"id": "s2", "duration_sec": 3.0, "layout": "short_tip", "on_screen_text": "REVISA ETIQUETA", "caption": "c", "visual_prompt": "v vertical", "narration": "Revisa la etiqueta primero."},
+        {"id": "s3", "duration_sec": 3.0, "layout": "short_tip", "on_screen_text": "HARINA INTEGRAL", "caption": "c", "visual_prompt": "v vertical", "narration": "Busca harina integral."},
+        {"id": "s4", "duration_sec": 3.0, "layout": "short_tip", "on_screen_text": "MIRA FIBRA", "caption": "c", "visual_prompt": "v vertical", "narration": "Mira la fibra."},
+        {"id": "s5", "duration_sec": 3.0, "layout": "short_tip", "on_screen_text": "MENOS AZUCAR", "caption": "c", "visual_prompt": "v vertical", "narration": "Compara los azúcares."},
+        {"id": "s6", "duration_sec": 3.0, "layout": "short_tip", "on_screen_text": "SIN ANADIDO", "caption": "c", "visual_prompt": "v vertical", "narration": "Evita azúcar añadido."},
+        {"id": "s7", "duration_sec": 3.0, "layout": "short_tip", "on_screen_text": "LISTA CORTA", "caption": "c", "visual_prompt": "v vertical", "narration": "Lee la lista corta."},
+        {"id": "s8", "duration_sec": 3.0, "layout": "short_tip", "on_screen_text": "PAN DENSO", "caption": "c", "visual_prompt": "v vertical", "narration": "Elige pan denso."},
+        {"id": "s9", "duration_sec": 2.5, "layout": "short_cta", "on_screen_text": "GUARDA ESTA LISTA", "caption": "c", "visual_prompt": "v vertical", "narration": "Guarda esta lista."},
+    ]
+    return {
+        "channel_id": "vida-plena-45", "short_id": "short-pacing",
+        "total_duration_sec": 26.0, "scenes": scenes,
+        "qa": {"verdict": "PENDING_SHORTS_QA"},
+    }
+
+
+def test_nine_scenes_soft_pacing_triggers_simplification_not_max_regen(tmp_path: Path):
+    """A 9-scene candidate with retention_pacing=6 (soft) should be rescued by
+    deterministic simplification rather than failing after max regenerations."""
+    from video_agent.shorts import short_builder, paths
+
+    job = _long_job(tmp_path)
+    calls: list[str] = []
+
+    script9 = {
+        **_GOOD_SCRIPT,
+        "short_id": "short-pacing",
+        "narration": "Revisa esta lista para elegir mejor pan. Mira la etiqueta y la fibra.",
+        "cta": "Guarda esta lista.",
+    }
+
+    def gemini_fn(prompt):
+        # Scene QA: structurally fine, but pacing is a soft 6 -> product FAIL.
+        return json.dumps({
+            "verdict": "PASS",
+            "issues": [],
+            "required_changes": [],
+            "product_scores": {
+                "audience_fit_45_plus": 8,
+                "hook_strength": 8,
+                "visual_specificity": 8,
+                "clarity": 8,
+                "retention_pacing": 6,   # soft pacing
+                "natural_spanish": 8,
+                "saveability": 8,
+            },
+        })
+
+    plan = {"short_id": "short-pacing", "format": "pain_to_tip", "scene_ids": ["scene-09"],
+            "source_start_sec": 183.0, "source_end_sec": 199.0, "music_track": "shorts_sleep_stress",
+            "narration_seed": "Revisa esta lista."}
+
+    res = short_builder.build_short(
+        job,
+        plan,
+        _cfg(),
+        llm_fn=_llm_fn_factory(script=script9, scenes=_nine_scene_doc()),
+        gemini_fn=gemini_fn,
+        **_stub_io(calls),
+    )
+
+    # Not a max-regeneration failure: the Short rendered via simplification.
+    assert res["status"] == "rendered"
+    assert "render" in calls
+
+    sd = paths.short_dir(job, "short-pacing")
+    saved = json.loads((sd / "json" / paths.SHORT_SCENES_FILE).read_text(encoding="utf-8"))
+    assert 7 <= len(saved["scenes"]) <= 8  # simplified down from 9
+
+    qa_doc = json.loads((sd / "json" / paths.SHORT_SCENES_QA_FILE).read_text(encoding="utf-8"))
+    warnings_blob = " ".join(qa_doc.get("warnings") or [])
+    assert "soft_pacing_accepted_with_warning" in warnings_blob
+    assert "deterministic_pacing_simplifier_applied" in warnings_blob
+
+
+# --------------------------------------------------------------------------
+# Regression: 3-graphic normal Short must fail deterministically before Gemini
+# --------------------------------------------------------------------------
+
+def _three_graphic_scenes():
+    """Mirrors the failing short-02_idea-02 candidate: a checklist Short with
+    3 graphics (setup checklist + label callout + comparison)."""
+    return [
+        {"id": "s01", "duration_sec": 3.0, "layout": "short_hook", "on_screen_text": "MARRON NO BASTA", "caption": "c", "visual_prompt": "manos sostienen pan integral en el súper, vertical", "narration": "El pan marrón no es integral."},
+        {"id": "s02", "duration_sec": 3.5, "layout": "short_tip", "on_screen_text": "REVISA RAPIDO", "caption": "c", "visual_prompt": "carrito de la compra en pasillo de panadería, vertical", "narration": "Haz esta revisión rápida."},
+        {"id": "s03", "duration_sec": 4.0, "layout": "graphic_checklist", "on_screen_text": "TRES PASOS", "caption": "c", "visual_prompt": "checklist", "narration": "Tres comprobaciones rápidas.", "layout_payload": {"title": "TRES PASOS", "items": ["Color no basta", "Primer ingrediente", "Compara fibra"]}},
+        {"id": "s04", "duration_sec": 4.5, "layout": "graphic_label_callout", "on_screen_text": "PRIMER INGREDIENTE", "caption": "c", "visual_prompt": "vertical nutrition label close-up", "narration": "Busca harina integral al principio.", "layout_payload": {"title": "PRIMER INGREDIENTE", "productLabel": "Pan integral", "callouts": [{"label": "Harina", "value": "integral"}, {"label": "Fibra", "value": "6 g"}]}},
+        {"id": "s05", "duration_sec": 3.5, "layout": "short_tip", "on_screen_text": "EN EL SUPER", "caption": "c", "visual_prompt": "persona comparando dos panes en el supermercado, vertical", "narration": "Compáralo en el súper."},
+        {"id": "s06", "duration_sec": 4.5, "layout": "graphic_comparison", "on_screen_text": "FIBRA Y AZUCAR", "caption": "c", "visual_prompt": "vertical two labels", "narration": "Compara fibra y azúcar.", "layout_payload": {"title": "EN EL SÚPER", "left": {"heading": "MEJOR", "text": "Más fibra"}, "right": {"heading": "CUIDADO", "text": "Más azúcar"}}},
+        {"id": "s07", "duration_sec": 2.5, "layout": "short_cta", "on_screen_text": "GUARDA ESTA LISTA", "caption": "c", "visual_prompt": "pan en cesta de la compra, vertical", "narration": "Guarda esta lista."},
+    ]
+
+
+def test_three_graphics_fails_deterministic_validation_and_repair_converts_checklist():
+    from video_agent.shorts import validate_scenes as v
+
+    scenes = _three_graphic_scenes()
+    script = {"short_format": "checklist", "narration": " ".join(s["narration"] for s in scenes), "cta": "Guarda esta lista."}
+    doc = {"total_duration_sec": round(sum(s["duration_sec"] for s in scenes), 1), "scenes": scenes}
+
+    issues = v.validate_scene_structure(scenes, scenes_doc=doc, script=script)
+
+    # 3 graphics on a normal (non-graphic-led) checklist Short -> repairable error
+    gc = [i for i in issues if i.type == "graphic_count"]
+    assert gc, "expected a graphic_count issue"
+    assert gc[0].severity == "repairable_error"
+    assert v.has_blocking_or_repairable(issues)
+
+    # Repair plan must keep label_callout + comparison and convert the checklist setup (s03)
+    plan = v.build_scene_repair_plan(scenes, issues, script=script)
+    blob = "\n".join(plan["instructions"])
+    assert "s03" in blob
+    assert "short_myth" in blob or "short_tip" in blob
+    assert "s04" in blob and "s06" in blob  # the two kept high-value graphics
+
+
+def test_two_graphics_realistic_base_passes_deterministic_validation():
+    from video_agent.shorts import validate_scenes as v
+
+    scenes = _three_graphic_scenes()
+    # Convert the setup checklist (s03) into a realistic short_myth -> 2 graphics left.
+    scenes[2] = {
+        "id": "s03", "duration_sec": 3.0, "layout": "short_myth",
+        "on_screen_text": "NO SOLO EL COLOR", "caption": "c",
+        "visual_prompt": "primer plano de manos girando el envase de pan para leer la etiqueta, vertical",
+        "narration": "No te fíes solo del color.",
+    }
+    script = {"short_format": "checklist", "narration": " ".join(s["narration"] for s in scenes), "cta": "Guarda esta lista."}
+    doc = {"total_duration_sec": round(sum(s["duration_sec"] for s in scenes), 1), "scenes": scenes}
+
+    issues = v.validate_scene_structure(scenes, scenes_doc=doc, script=script)
+
+    assert v.count_graphic_scenes(scenes) == 2
+    assert not any(i.type == "graphic_count" for i in issues)
+    assert not v.has_blocking_or_repairable(issues)
+
+
+def test_explicit_graphic_led_allows_three_graphics_as_warning():
+    from video_agent.shorts import validate_scenes as v
+
+    scenes = _three_graphic_scenes()
+    script = {"short_format": "checklist", "graphic_led": True, "narration": " ".join(s["narration"] for s in scenes), "cta": "Guarda esta lista."}
+    doc = {"total_duration_sec": round(sum(s["duration_sec"] for s in scenes), 1), "scenes": scenes}
+
+    issues = v.validate_scene_structure(scenes, scenes_doc=doc, script=script)
+    gc = [i for i in issues if i.type == "graphic_count"]
+    assert gc and gc[0].severity == "warning"
+    assert not v.has_blocking_or_repairable([i for i in issues if i.type == "graphic_count"])
+
+
+# --------------------------------------------------------------------------
+# Regression: ChatGPT provider-error robustness (spec §2-§5)
+# --------------------------------------------------------------------------
+
+_PROVIDER_ERROR_TEXT = (
+    "Something went wrong. If this issue persists please contact us through our "
+    "help center at help.openai.com."
+)
+
+
+def test_is_provider_error_text_and_payload_guards():
+    from video_agent.shorts.short_scene_builder import (
+        is_provider_error_text, is_valid_scene_payload,
+    )
+    assert is_provider_error_text(_PROVIDER_ERROR_TEXT)
+    assert is_provider_error_text("An error occurred, try again later")
+    assert not is_provider_error_text('{"scenes": [{"id": "s1"}]}')
+    assert not is_provider_error_text("")
+    assert not is_provider_error_text(None)
+
+    assert is_valid_scene_payload({"scenes": [{"id": "s1"}]})
+    assert not is_valid_scene_payload({"scenes": []})
+    assert not is_valid_scene_payload({"scenes": "nope"})
+    assert not is_valid_scene_payload("Something went wrong")
+    assert not is_valid_scene_payload(None)
+
+
+def test_build_short_scenes_raises_provider_error_not_empty_scenes(tmp_path: Path):
+    from video_agent.shorts import short_scene_builder as ssb
+
+    job = _long_job(tmp_path)
+
+    def llm_fn(kind, prompt):
+        return _PROVIDER_ERROR_TEXT
+
+    try:
+        ssb.build_short_scenes(
+            job, {"short_id": "short-pe"}, _GOOD_SCRIPT, _cfg(), llm_fn,
+        )
+    except ssb.ChatGPTProviderError as exc:
+        assert "help.openai.com" in (exc.snippet or "").lower() or exc.snippet
+    else:
+        raise AssertionError("expected ChatGPTProviderError")
+
+    # Provider error must NOT have written an (empty) scenes artifact.
+    from video_agent.shorts import paths
+    sd = paths.short_dir(job, "short-pe")
+    assert not (sd / "json" / paths.SHORT_SCENES_FILE).exists()
+
+
+def test_build_short_provider_error_does_not_emit_scene_count_zero(tmp_path: Path):
+    from video_agent.shorts import short_builder, paths
+    import json as _json
+
+    job = _long_job(tmp_path)
+    calls: list[str] = []
+    scene_calls = {"n": 0}
+
+    def llm_fn(kind, prompt):
+        if kind == "script":
+            return json.dumps(_GOOD_SCRIPT)
+        if kind == "scenes":
+            scene_calls["n"] += 1
+            return _PROVIDER_ERROR_TEXT  # provider error every time
+        return "{}"
+
+    def gemini_fn(prompt):
+        return json.dumps({"verdict": "PASS", "issues": [], "required_changes": []})
+
+    plan = {"short_id": "short-pe2", "format": "pain_to_tip", "scene_ids": ["scene-09"],
+            "music_track": "shorts_sleep_stress", "narration_seed": "x"}
+    res = short_builder.build_short(
+        job, plan, _cfg(), llm_fn=llm_fn, gemini_fn=gemini_fn, **_stub_io(calls),
+    )
+
+    # Surfaced as a provider error, not a scene-QA / scene_count failure.
+    assert res["status"] == "needs_review"
+    assert res["qa_verdict"] == "PROVIDER_ERROR"
+    assert res.get("failure_kind") == "chatgpt_provider_error"
+    assert "render" not in calls
+
+    # Retried on its own budget (default 2) -> 3 scene-generation attempts.
+    assert scene_calls["n"] == 3
+
+    # The failure report is a provider error, NOT "scene_count=0".
+    sd = paths.short_dir(job, "short-pe2")
+    fr = _json.loads((sd / "json" / paths.SHORT_FAILURE_REPORT_FILE).read_text(encoding="utf-8"))
+    assert fr["type"] == "chatgpt_provider_error"
+    # No empty/invalid scenes artifact, so no scene_count=0 creative feedback.
+    assert not (sd / "json" / paths.SHORT_SCENES_QA_FILE).exists()
+
+
+def test_chatgpt_send_with_recovery_clears_cookies_then_succeeds():
+    import asyncio
+    from video_agent.shorts import llm as shorts_llm
+
+    class FakeClient:
+        def __init__(self, responses):
+            self._responses = list(responses)
+            self.sends = 0
+            self.cleared = 0
+
+        async def chatgpt_send(self, prompt, *, response_timeout_ms=300_000):
+            self.sends += 1
+            return self._responses.pop(0)
+
+        async def auth_clear_cookies(self, site):
+            self.cleared += 1
+            return {"ok": True, "site": site}
+
+    good = '{"scenes": [{"id": "s1", "layout": "short_hook"}]}'
+    client = FakeClient([_PROVIDER_ERROR_TEXT, good])
+    out = asyncio.run(shorts_llm.chatgpt_send_with_recovery(client, "prompt"))
+    assert out == good
+    assert client.cleared == 1   # cookie reset before the successful retry
+    assert client.sends == 2
+
+
+def test_chatgpt_send_with_recovery_exhausts_and_returns_provider_text():
+    import asyncio
+    from video_agent.shorts import llm as shorts_llm
+
+    class FakeClient:
+        def __init__(self):
+            self.sends = 0
+            self.cleared = 0
+
+        async def chatgpt_send(self, prompt, *, response_timeout_ms=300_000):
+            self.sends += 1
+            return _PROVIDER_ERROR_TEXT
+
+        async def auth_clear_cookies(self, site):
+            self.cleared += 1
+            return {"ok": True}
+
+    client = FakeClient()
+    out = asyncio.run(
+        shorts_llm.chatgpt_send_with_recovery(client, "prompt", max_provider_retries=2)
+    )
+    # Still provider text -> caller (build_short_scenes) will raise ChatGPTProviderError.
+    from video_agent.shorts.short_scene_builder import is_provider_error_text
+    assert is_provider_error_text(out)
+    # 1 initial + 2 retries = 3 sends; cookies cleared on each retry.
+    assert client.sends == 3
+    assert client.cleared >= 2
+
+
+def test_empty_scenes_json_gets_distinct_repair_message():
+    from video_agent.shorts import validate_scenes as v
+    issues = v.validate_scene_structure([], scenes_doc={"scenes": []}, script=_GOOD_SCRIPT)
+    empty = [i for i in issues if i.type == "empty_scenes"]
+    assert empty and empty[0].severity == "repairable_error"
+    assert "empty scenes array" in empty[0].repair_hint.lower()
+    # The misleading "scene_count … outside recommended range" is NOT used for 0.
+    assert not any(i.type == "scene_count" for i in issues)
+
+
+def test_short_scene_prompt_v6_layout_budget_ordering_and_selfcheck():
+    from video_agent.shorts import prompts
+    cfg = _cfg()
+    plan = {"short_id": "short-order", "format": "checklist"}
+    script = {**_GOOD_SCRIPT, "short_format": "checklist"}
+    p = prompts.short_scene_prompt_v6(cfg, plan, script)
+
+    i_budget = p.find("NON-NEGOTIABLE LAYOUT BUDGET")
+    i_count = p.find("SCENE COUNT & TIMING")
+    i_graphics = p.find("GRAPHIC SCENE LAYOUTS")
+    i_schema = p.find("RETURN JSON SCHEMA")
+    i_selfcheck = p.find("FINAL SELF-CHECK BEFORE RETURNING JSON")
+
+    assert i_budget != -1
+    assert i_budget < i_count < i_graphics < i_schema
+    # self-check sits just before the schema
+    assert i_selfcheck != -1 and i_selfcheck < i_schema
+    # old verbatim-narration instruction is gone
+    assert "Keep the narration faithful to the SCRIPT" not in p
+    assert "do NOT copy long" in p

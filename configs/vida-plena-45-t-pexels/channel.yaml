@@ -213,7 +213,7 @@ shorts:
     require_user_review_before_render: false
     render_automatically: true
     render_only_if_qa_pass: true
-    max_regeneration_attempts: 2
+    max_regeneration_attempts: 4
     skip_if_shorts_already_exist: true
     continue_if_one_short_fails: true
     archive_on_force_regenerate: true

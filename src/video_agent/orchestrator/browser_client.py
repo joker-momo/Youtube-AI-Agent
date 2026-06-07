@@ -257,6 +257,25 @@ class BrowserClient:
             detail=response.text,
         )
 
+    async def auth_clear_cookies(self, site: str) -> dict:
+        """Clear all cookies for ``site`` in the persistent browser context.
+
+        Used to recover from ChatGPT provider errors ("Something went wrong…")
+        without touching the user's real browser data. The next ``chatgpt_send``
+        re-navigates to a fresh temporary chat, so cookie reset + re-send is the
+        primary provider-error recovery path."""
+        response = await self._delete(f"auth/{site}/cookies")
+        if response.status_code in (200, 204):
+            try:
+                return response.json()
+            except Exception:
+                return {"ok": True, "site": site}
+        raise BrowserClientError(
+            f"browser-worker clear cookies returned HTTP {response.status_code}",
+            status_code=response.status_code,
+            detail=response.text,
+        )
+
     async def run_session(
         self,
         site: str,

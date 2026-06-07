@@ -854,13 +854,32 @@ _SITE_DOMAINS = {
     "gemini": "google.com",
 }
 
+# Auth/login cookies that MUST be preserved so clearing cookies does NOT log the
+# user out of ChatGPT / Gemini. We drop only the non-auth bloat (the cookies that
+# cause HTTP 431 / provider errors) and re-add these afterwards.
+_AUTH_COOKIE_SUBSTRINGS = {
+    # ChatGPT (NextAuth session + OpenAI device/session + Cloudflare clearance).
+    "chatgpt": ("next-auth", "oai-did", "oai-sc", "cf_clearance", "_account"),
+    # Google account / Gemini login cookies. The "SID" family covers SID, HSID,
+    # SSID, APISID, SAPISID, __Secure-1PSID/3PSID, *PSIDTS, *SIDCC, LSID, OSID…
+    "gemini": ("sid", "nid", "lsid", "__secure-", "__host-", "sapisid", "apisid"),
+}
+
+
+def _is_auth_cookie(site: str, name: str) -> bool:
+    low = str(name or "").lower()
+    return any(token in low for token in _AUTH_COOKIE_SUBSTRINGS.get(site, ()))
+
 
 @app.delete("/auth/{site}/cookies", status_code=200)
-async def auth_clear_cookies(site: str) -> dict:
-    """Clear all cookies for the given site domain in the persistent browser context.
+async def auth_clear_cookies(site: str, preserve_session: bool = True) -> dict:
+    """Clear cookies for ``site`` while PRESERVING the current login session.
 
-    Useful when HTTP 431 (Request Header Fields Too Large) breaks navigation
-    because accumulated cookies bloat the request headers.
+    By default (``preserve_session=True``) only non-auth cookies are removed — the
+    login/session cookies for ChatGPT and Gemini are kept, so the controlled
+    browser stays signed in. This clears the bloat that causes HTTP 431 / provider
+    errors without forcing a re-login. Pass ``preserve_session=false`` to wipe
+    every cookie for the domain (full logout).
     """
     from playwright.async_api import async_playwright
 
@@ -876,16 +895,31 @@ async def auth_clear_cookies(site: str) -> dict:
             try:
                 context = browser.contexts[0] if browser.contexts else await browser.new_context()
                 before = await context.cookies()
-                before_count = sum(1 for c in before if domain in c.get("domain", ""))
+                domain_cookies = [c for c in before if domain in c.get("domain", "")]
+                before_count = len(domain_cookies)
+
+                preserved: list[dict] = []
+                if preserve_session:
+                    preserved = [
+                        c for c in domain_cookies
+                        if _is_auth_cookie(site, c.get("name", ""))
+                    ]
+
+                # Wipe the domain, then re-add the auth cookies we want to keep.
                 await context.clear_cookies(domain=f".{domain}")
                 await context.clear_cookies(domain=domain)
+                if preserved:
+                    await context.add_cookies(preserved)
+
                 after = await context.cookies()
                 after_count = sum(1 for c in after if domain in c.get("domain", ""))
                 return {
                     "ok": True,
                     "site": site,
                     "domain": domain,
+                    "preserve_session": preserve_session,
                     "cleared": before_count - after_count,
+                    "preserved": len(preserved),
                     "remaining": after_count,
                 }
             finally:

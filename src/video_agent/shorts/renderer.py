@@ -7,6 +7,7 @@ aliases) so the existing Remotion render pipeline can render it vertically
 from __future__ import annotations
 
 import json
+import math
 import shutil
 import subprocess
 from pathlib import Path
@@ -62,6 +63,7 @@ def materialize_short_job_aliases(short_dir: Path, channel_config: dict | None =
             scenes["total_duration_sec"] = round(
                 sum(float(s.get("duration_sec") or 0) for s in (scenes.get("scenes") or [])), 1
             )
+        scenes["total_duration_sec"] = int(math.ceil(float(scenes.get("total_duration_sec") or 0)))
         scenes["qa"] = {"verdict": "PASS"}
         atomic_write_json(jd / "scenes.json", scenes)
 

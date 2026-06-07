@@ -26,6 +26,23 @@ def test_materialize_short_job_aliases_emits_schema_valid_longform(tmp_path: Pat
     assert seo["tags"] == ["#x"]
 
 
+def test_materialize_short_job_aliases_rounds_decimal_total_duration_for_schema(tmp_path: Path):
+    from video_agent.shorts import renderer
+
+    sd = tmp_path / "short-01"
+    sd.mkdir()
+    (sd / "short_scenes.json").write_text(
+        json.dumps({"total_duration_sec": 26.9, "scenes": [{"id": "s1", "duration_sec": 26.9}]}),
+        encoding="utf-8",
+    )
+
+    renderer.materialize_short_job_aliases(sd, {"channel": {"id": "vida-plena-45"}})
+
+    scenes = json.loads((sd / "json" / "scenes.json").read_text())
+    assert scenes["total_duration_sec"] == 27
+    assert isinstance(scenes["total_duration_sec"], int)
+
+
 def test_build_cover_extract_command_uses_frame_sec(tmp_path: Path):
     from video_agent.shorts import renderer
     video = tmp_path / "short.mp4"

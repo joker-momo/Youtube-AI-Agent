@@ -12,6 +12,48 @@ from video_agent.storage.atomic import atomic_write_json
 PROVIDER = "chatgpt"
 
 
+class ChatGPTProviderError(Exception):
+    """Raised when ChatGPT returns provider/browser-error text instead of scene
+    JSON (e.g. "Something went wrong…"). This is NOT a creative scene-QA failure:
+    the caller must clean the browser/session and retry the same prompt, and must
+    NOT pass the response to scene validation or emit scene_count repair feedback."""
+
+    def __init__(self, message: str, *, snippet: str = ""):
+        super().__init__(message)
+        self.snippet = snippet
+
+
+# Provider/browser error phrases that ChatGPT renders as plain page text. If any
+# appears, the response is a provider failure, not a scenes answer.
+PROVIDER_ERROR_PATTERNS = (
+    "something went wrong",
+    "help.openai.com",
+    "please contact us",
+    "this issue persists",
+    "an error occurred",
+    "try again later",
+    "network error",
+    "unable to load",
+)
+
+
+def is_provider_error_text(text: str | None) -> bool:
+    value = (text or "").strip().lower()
+    if not value:
+        return False
+    return any(pattern in value for pattern in PROVIDER_ERROR_PATTERNS)
+
+
+def is_valid_scene_payload(payload: object) -> bool:
+    """A valid scenes payload is a JSON object with a non-empty ``scenes`` list."""
+    if not isinstance(payload, dict):
+        return False
+    scenes = payload.get("scenes")
+    if not isinstance(scenes, list):
+        return False
+    return len(scenes) > 0
+
+
 def _parse(raw: str) -> dict:
     from video_agent.operator import extract_json_objects
 
@@ -133,7 +175,7 @@ def normalize_short_scenes(scenes_doc: dict, short_script: dict) -> dict[str, An
         str(s.get("layout") or "").strip().lower() == "short_cta"
         for s in norm_scenes
     )
-    if script_cta and not has_cta_scene:
+    if norm_scenes and script_cta and not has_cta_scene:
         cta_idx = len(norm_scenes) + 1
         use_zero = any(re.match(r"^s\d{2}$", str(s.get("id") or "")) for s in norm_scenes)
         cta_id = f"s{cta_idx:02d}" if use_zero else f"s{cta_idx}"
@@ -157,7 +199,7 @@ def normalize_short_scenes(scenes_doc: dict, short_script: dict) -> dict[str, An
         })
 
     out["scenes"] = norm_scenes
-    total_dur = sum(float(s.get("duration_sec") or 0) for s in norm_scenes)
+    total_dur = float(sum(float(s.get("duration_sec") or 0) for s in norm_scenes))
     out["total_duration_sec"] = int(total_dur) if total_dur.is_integer() else round(total_dur, 1)
     return out
 
@@ -185,6 +227,15 @@ def build_short_scenes(
         output_artifact="short_scenes.json",
     ))
     raw = _invoke(llm_fn, "scenes", prompt)
+    # Provider-error guard (spec §2): detect "Something went wrong…" etc. BEFORE
+    # parsing/normalizing so a browser failure never becomes empty scenes, never
+    # enters scene_validation, and never produces "Fix scene_count=0" feedback.
+    if is_provider_error_text(raw):
+        snippet = (raw or "").strip().splitlines()[0][:200] if (raw or "").strip() else ""
+        raise ChatGPTProviderError(
+            "ChatGPT returned provider-error text instead of scene JSON.",
+            snippet=snippet,
+        )
     scenes = normalize_short_scenes(_parse(raw), short_script)
     jd = paths.short_json_dir(long_job_dir, short_plan["short_id"])
     jd.mkdir(parents=True, exist_ok=True)

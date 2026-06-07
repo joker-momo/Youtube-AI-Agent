@@ -375,6 +375,108 @@ PRODUCT_SCORE_KEYS = [
 ]
 MIN_PRODUCT_SCORE = 7
 MIN_AVERAGE_PRODUCT_SCORE = 8
+# A single product dimension at or below this score blocks render outright — no
+# best-candidate fallback may rescue it.
+MIN_PRODUCT_SCORE_RENDER_BLOCK = 5
+# A retention_pacing exactly at this value is treated as "soft": if it is the only
+# weak dimension, we simplify deterministically or render the best candidate with
+# a warning instead of failing after max regenerations.
+SOFT_PACING_SCORE = 6
+# Below this retention_pacing we attempt a simplification repair.
+PRODUCT_REPAIR_PACING_THRESHOLD = 7
+# Scene count at/above which simplification (drop redundant scenes, merge tip+CTA)
+# is the preferred pacing repair.
+SIMPLIFY_SCENE_COUNT_THRESHOLD = 9
+
+
+# Gemini sometimes flags a Short for "having too many graphics" even when the
+# deterministic graphic count is within the 1-2 cap. These patterns catch that
+# class of complaint so it can be reconciled against the deterministic count.
+_GRAPHIC_COUNT_COMPLAINT_PATTERNS = [
+    "at most 2 graphic",
+    "at most two graphic",
+    "already has 2 graphic",
+    "already has two graphic",
+    "maximum 2 graphic",
+    "maximum of 2 graphic",
+    "max 2 graphic",
+    "no more than 2 graphic",
+    "more than 2 graphic",
+    "exceeds 2 graphic",
+    "exceeds the allowed 2 graphic",
+    "exceed 2 graphic",
+    "exceed the allowed 2 graphic",
+    "only 2 graphic",
+    "only 2 scenes use graphic",
+    "only two scenes use graphic",
+    "limit of 2 graphic",
+    "allowed 2 graphic",
+    "2 scenes use graphic",
+    "two scenes use graphic",
+    "2 graphics already",
+    "two graphics already",
+    "too many graphic",
+]
+
+
+def is_graphic_count_complaint(text: str) -> bool:
+    t = str(text).lower()
+    return any(p in t for p in _GRAPHIC_COUNT_COMPLAINT_PATTERNS)
+
+
+def _graphic_count_is_real_error(graphic_count: int | None, graphic_led: bool) -> bool:
+    """A graphic-count complaint is a repairable error only when the deterministic
+    count actually exceeds the cap: >=4 always, or ==3 unless the Short is
+    intentionally graphic-led. With <=2 graphics (or unknown count) the complaint
+    is a Gemini false positive and is downgraded to a warning."""
+    if graphic_count is None:
+        return False
+    if graphic_count >= 4:
+        return True
+    if graphic_count == 3 and not graphic_led:
+        return True
+    return False
+
+
+def summarize_product_scores(scores: dict[str, Any]) -> dict[str, Any]:
+    """Defensive summary of the seven product-quality scores, used by the build
+    loop to decide between product repair, best-candidate fallback, and hard
+    failure. Mirrors the gates in ``normalize_gemini_scenes_qa``."""
+    values: list[float] = []
+    parsed: dict[str, float] = {}
+    for key in PRODUCT_SCORE_KEYS:
+        if key in scores:
+            v = parse_defensive_score(scores[key])
+            values.append(v)
+            parsed[key] = v
+
+    missing = len(values) != len(PRODUCT_SCORE_KEYS)
+    average = sum(values) / len(values) if values else 0.0
+    min_score = min(values) if values else 0.0
+    low_dims = {k: v for k, v in parsed.items() if v < MIN_PRODUCT_SCORE}
+    pacing = parsed.get("retention_pacing")
+
+    blocks_render = missing or (bool(values) and min_score <= MIN_PRODUCT_SCORE_RENDER_BLOCK)
+    soft_pacing_only = (
+        not missing
+        and not blocks_render
+        and set(low_dims.keys()) <= {"retention_pacing"}
+        and pacing == SOFT_PACING_SCORE
+    )
+    return {
+        "values": values,
+        "scores": parsed,
+        "missing": missing,
+        "average": average,
+        "min_score": min_score,
+        "low_dims": low_dims,
+        "has_low": bool(low_dims),
+        "avg_too_low": average < MIN_AVERAGE_PRODUCT_SCORE,
+        "blocks_render": blocks_render,
+        "soft_pacing_only": soft_pacing_only,
+        "retention_pacing": pacing,
+        "needs_pacing_simplify": pacing is not None and pacing < PRODUCT_REPAIR_PACING_THRESHOLD,
+    }
 
 
 def parse_defensive_score(val: Any) -> float:
@@ -396,7 +498,12 @@ def parse_defensive_score(val: Any) -> float:
         return 0.0
 
 
-def normalize_gemini_scenes_qa(parsed: dict[str, Any]) -> dict[str, Any]:
+def normalize_gemini_scenes_qa(
+    parsed: dict[str, Any],
+    *,
+    graphic_count: int | None = None,
+    graphic_led: bool = False,
+) -> dict[str, Any]:
     verdict = str(parsed.get("verdict", "")).upper() or "FAIL"
     issues = list(parsed.get("issues") or [])
     required_changes = list(parsed.get("required_changes") or [])
@@ -420,11 +527,18 @@ def normalize_gemini_scenes_qa(parsed: dict[str, Any]) -> dict[str, Any]:
         t = text.lower()
         return any(p in t for p in graphic_pref_patterns)
 
-    # Filter out graphic preference issues and move them to warnings
+    graphic_count_is_real = _graphic_count_is_real_error(graphic_count, graphic_led)
+
+    # Filter out graphic preference issues (and false-positive graphic-count
+    # complaints) and move them to warnings.
     new_issues = []
     for issue in issues:
         detail = str(issue.get("detail") or "")
-        if is_graphic_pref(detail):
+        if is_graphic_count_complaint(detail) and not graphic_count_is_real:
+            warnings.append(
+                f"Downgraded graphic-count issue (deterministic graphic_count={graphic_count}): {detail}"
+            )
+        elif is_graphic_pref(detail):
             warnings.append(f"Downgraded Gemini issue: {detail}")
         else:
             new_issues.append(issue)
@@ -432,7 +546,11 @@ def normalize_gemini_scenes_qa(parsed: dict[str, Any]) -> dict[str, Any]:
     # Filter out graphic preference required changes
     new_required_changes = []
     for rc in required_changes:
-        if is_graphic_pref(rc):
+        if is_graphic_count_complaint(rc) and not graphic_count_is_real:
+            warnings.append(
+                f"Downgraded graphic-count change (deterministic graphic_count={graphic_count}): {rc}"
+            )
+        elif is_graphic_pref(rc):
             warnings.append(f"Downgraded Gemini change: {rc}")
         else:
             new_required_changes.append(rc)
@@ -528,7 +646,12 @@ def _run_gemini_scenes_qa(
     ))
     raw = gemini_fn(prompt)
     parsed = _parse_gemini(raw) or {}
-    return normalize_gemini_scenes_qa(parsed)
+    scenes = scenes_doc.get("scenes") or []
+    graphic_count = validate_scenes.count_graphic_scenes(scenes)
+    graphic_led = validate_scenes.is_graphic_led(scenes, script=script)
+    return normalize_gemini_scenes_qa(
+        parsed, graphic_count=graphic_count, graphic_led=graphic_led
+    )
 
 
 def run_short_scenes_qa(

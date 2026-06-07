@@ -8,6 +8,7 @@ renderer. Mirrors the Zod checks in ``remotion/src/graphics/graphic-payloads.ts`
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import json
 import math
 import re
 import wave
@@ -181,6 +182,60 @@ def validate_audio_fit(
     return None
 
 
+def extend_scene_durations_for_audio_tail(
+    scenes_doc: dict[str, Any],
+    narration_audio_sec: float,
+    *,
+    margin_sec: float = AUDIO_TAIL_MARGIN_SEC,
+    max_auto_extension_sec: float = 1.5,
+) -> dict[str, Any]:
+    """Add a small deterministic tail pad when narration fits except margin.
+
+    This handles the common exact-fit case (e.g. 22.4s audio over a 22.4s
+    scene plan) without asking the LLM to regenerate an otherwise good Short.
+    Large shortages still fail audio_fit and go through script compression.
+    """
+    scenes = list((scenes_doc or {}).get("scenes") or [])
+    current_total = float(sum(_duration(scene) for scene in scenes))
+    required_total = math.ceil((float(narration_audio_sec or 0.0) + float(margin_sec or 0.0)) * 10.0) / 10.0
+    shortage = round(required_total - current_total, 3)
+    if shortage <= 0:
+        if scenes_doc is not None:
+            scenes_doc["total_duration_sec"] = round(current_total, 1)
+        return {"changed": False, "added_sec": 0.0, "reason": "already_fits"}
+    if shortage > float(max_auto_extension_sec or 0.0):
+        return {"changed": False, "added_sec": 0.0, "reason": "shortage_too_large", "shortage_sec": shortage}
+    if current_total + shortage > MAX_SHORT_DURATION_SEC:
+        return {"changed": False, "added_sec": 0.0, "reason": "would_exceed_short_cap", "shortage_sec": shortage}
+
+    remaining = shortage
+    notes: list[str] = []
+    # Prefer extending later scenes so the hook stays tight. Respect per-layout
+    # hard caps and the global hard cap; target-range warnings are acceptable.
+    for scene in reversed(scenes):
+        if remaining <= 0:
+            break
+        layout = str(scene.get("layout") or "")
+        hard_max = LAYOUT_DURATION_TARGETS.get(layout, (0.0, 0.0, GLOBAL_SCENE_MAX_SEC))[2]
+        hard_max = min(float(hard_max), GLOBAL_SCENE_MAX_SEC)
+        dur = _duration(scene)
+        room = round(hard_max - dur, 3)
+        if room <= 0:
+            continue
+        add = min(room, remaining)
+        scene["duration_sec"] = round(dur + add, 1)
+        remaining = round(remaining - add, 3)
+        notes.append(f"Extended {scene.get('id') or scene.get('scene_id') or '?'} by {add:.1f}s for audio tail.")
+
+    added = round(shortage - max(remaining, 0.0), 3)
+    new_total = round(sum(_duration(scene) for scene in scenes), 1)
+    scenes_doc["scenes"] = scenes
+    scenes_doc["total_duration_sec"] = new_total
+    if remaining > 0:
+        return {"changed": added > 0, "added_sec": added, "reason": "insufficient_scene_room", "shortage_sec": shortage, "notes": notes}
+    return {"changed": True, "added_sec": added, "reason": "extended_for_audio_tail", "notes": notes}
+
+
 def probe_audio_duration_sec(path: Path) -> float | None:
     try:
         with wave.open(str(path), "rb") as handle:
@@ -229,6 +284,193 @@ def _missing_graphic_candidate(scene: dict[str, Any]) -> bool:
     )
 
 
+def count_graphic_scenes(scenes: list[dict[str, Any]]) -> int:
+    """Deterministic count of graphic_* layout scenes."""
+    return sum(
+        1 for s in (scenes or [])
+        if str(s.get("layout") or "").startswith("graphic_")
+    )
+
+
+def is_graphic_led(scenes: list[dict[str, Any]], *, script: dict[str, Any] | None = None) -> bool:
+    """A Short is intentionally graphic-led when graphics make up at least half of
+    its scenes — those legitimately want 3 graphics. Below that, 3 graphics is an
+    accident to be flagged."""
+    scenes = list(scenes or [])
+    if not scenes:
+        return False
+    graphic_count = count_graphic_scenes(scenes)
+    return graphic_count * 2 >= len(scenes)
+
+
+def is_explicit_graphic_led(script: dict[str, Any] | None) -> bool:
+    """A Short is graphic-led ONLY when the input says so explicitly. Being a
+    checklist/explainer is NOT enough — those are normal Shorts capped at 2
+    graphics. We look for an explicit flag/marker in the plan or script."""
+    if not script:
+        return False
+    if script.get("graphic_led") is True or script.get("is_graphic_led") is True:
+        return True
+    markers = " ".join(
+        str(script.get(k) or "")
+        for k in ("style", "mode", "short_format", "format", "visual_style")
+    ).lower()
+    return "graphic_led" in markers or "graphic-led" in markers
+
+
+# Highest-value graphic layouts are kept first when trimming below the cap;
+# setup/recap graphics (checklist/step_list) are converted to realistic scenes.
+_GRAPHIC_KEEP_PRIORITY = [
+    "graphic_label_callout",   # "primer ingrediente"
+    "graphic_comparison",      # "fibra / azúcar / jarabes"
+    "graphic_plate_ratio",
+    "graphic_routine_split",
+    "graphic_step_list",
+    "graphic_checklist",       # setup/recap — convert first
+]
+
+
+def graphic_repair_targets(
+    scenes: list[dict[str, Any]], *, max_keep: int = None,
+) -> tuple[list[str], list[str]]:
+    """Decide which graphics to keep vs. convert when over the cap.
+
+    Returns ``(keep_ids, convert_ids)``. Keeps the highest-value graphics
+    (label_callout for the first ingredient, comparison for fibra/azúcar);
+    convert ids are the lower-value setup/recap graphics (e.g. graphic_checklist)
+    that should become realistic short_tip/short_myth scenes."""
+    if max_keep is None:
+        max_keep = MAX_GRAPHIC_SCENES_PER_SHORT
+    graphics = [
+        (i, s) for i, s in enumerate(scenes or [])
+        if str(s.get("layout") or "").startswith("graphic_")
+    ]
+
+    def rank(item: tuple[int, dict[str, Any]]) -> tuple[int, int]:
+        idx, scene = item
+        layout = str(scene.get("layout") or "")
+        pri = _GRAPHIC_KEEP_PRIORITY.index(layout) if layout in _GRAPHIC_KEEP_PRIORITY else 99
+        return (pri, idx)
+
+    ranked = sorted(graphics, key=rank)
+    keep = ranked[:max_keep]
+    convert = ranked[max_keep:]
+    keep_ids = [_scene_id(s, i) for i, s in keep]
+    convert_ids = [_scene_id(s, i) for i, s in convert]
+    return keep_ids, convert_ids
+
+
+def _scene_tokens(scene: dict[str, Any]) -> set[str]:
+    text = f"{scene.get('narration') or ''} {scene.get('on_screen_text') or ''}"
+    return {w.lower() for w in _words(text)}
+
+
+def _redundancy_score(scene: dict[str, Any], others: list[dict[str, Any]]) -> float:
+    """Jaccard-style overlap of a scene's tokens against the union of the others.
+    Higher means the scene adds less new information."""
+    tokens = _scene_tokens(scene)
+    if not tokens:
+        return 1.0
+    union: set[str] = set()
+    for other in others:
+        union |= _scene_tokens(other)
+    if not union:
+        return 0.0
+    return len(tokens & union) / len(tokens)
+
+
+def simplify_scenes_for_pacing(
+    scenes_doc: dict[str, Any],
+    *,
+    script: dict[str, Any] | None = None,
+    target_max: int = 8,
+    target_min: int = 7,
+) -> dict[str, Any]:
+    """Deterministic pacing repair for over-long Shorts (spec: retention_pacing low
+    with many scenes). Drops the most redundant late summary scenes and merges a
+    trailing tip/quote into the CTA, targeting 7-8 scenes. Never adds graphics.
+
+    Returns ``{"scenes_doc", "changed", "notes", "removed_ids", "merged"}``.
+    The returned doc is a fresh copy; the input is not mutated.
+    """
+    doc = json.loads(json.dumps(scenes_doc or {}))
+    scenes = list(doc.get("scenes") or [])
+    notes: list[str] = []
+    removed_ids: list[str] = []
+    merged = False
+
+    if len(scenes) <= target_max:
+        return {"scenes_doc": scenes_doc, "changed": False, "notes": [], "removed_ids": [], "merged": False}
+
+    # 1. Drop the most redundant late summary scenes (never the hook or the CTA),
+    #    preferring scenes in the back half, until we reach the target count.
+    while len(scenes) > target_max:
+        # Candidate body scenes: exclude first (hook) and last (CTA).
+        body_indices = list(range(1, len(scenes) - 1))
+        # Restrict to non-graphic scenes in the back half so we strip late recaps,
+        # not core graphics or the opening payoff.
+        late_start = max(1, len(scenes) // 2)
+        candidates = [
+            i for i in body_indices
+            if i >= late_start and not str(scenes[i].get("layout") or "").startswith("graphic_")
+        ]
+        if not candidates:
+            candidates = [
+                i for i in body_indices
+                if not str(scenes[i].get("layout") or "").startswith("graphic_")
+            ]
+        if not candidates:
+            break
+        # Pick the most redundant candidate (ties -> latest index).
+        best_i = max(
+            candidates,
+            key=lambda i: (_redundancy_score(scenes[i], [s for j, s in enumerate(scenes) if j != i]), i),
+        )
+        removed = scenes.pop(best_i)
+        removed_ids.append(_scene_id(removed, best_i))
+        notes.append(f"Removed redundant late summary scene {_scene_id(removed, best_i)}.")
+
+    # 2. Merge a trailing tip/quote into the CTA when it fits the layout cap.
+    if len(scenes) > target_min and len(scenes) >= 2:
+        cta = scenes[-1]
+        penult = scenes[-2]
+        cta_is_cta = str(cta.get("layout") or "") == "short_cta"
+        penult_layout = str(penult.get("layout") or "")
+        if cta_is_cta and penult_layout in {"short_tip", "short_quote", "short_pain", "short_checklist"}:
+            combined_narration = f"{penult.get('narration') or ''} {cta.get('narration') or ''}".strip()
+            combined_dur = round(_duration(penult) + _duration(cta), 1)
+            # Respect the CTA layout's own hard cap (short_cta is much tighter
+            # than the global cap), so the merge never produces an over-long CTA.
+            cta_hard_max = LAYOUT_DURATION_TARGETS.get(
+                str(cta.get("layout") or ""), (0.0, 0.0, GLOBAL_SCENE_MAX_SEC)
+            )[2]
+            fits = (
+                estimate_spanish_narration_sec(combined_narration) <= cta_hard_max
+                and combined_dur <= cta_hard_max
+            )
+            if fits:
+                cta["narration"] = combined_narration
+                cta["duration_sec"] = combined_dur
+                scenes.pop(-2)
+                removed_ids.append(_scene_id(penult, len(scenes) - 1))
+                merged = True
+                notes.append("Merged final tip/quote into the CTA scene.")
+
+    changed = bool(removed_ids) or merged
+    if not changed:
+        return {"scenes_doc": scenes_doc, "changed": False, "notes": [], "removed_ids": [], "merged": False}
+
+    doc["scenes"] = scenes
+    doc["total_duration_sec"] = round(sum(_duration(s) for s in scenes), 1)
+    return {
+        "scenes_doc": doc,
+        "changed": True,
+        "notes": notes,
+        "removed_ids": removed_ids,
+        "merged": merged,
+    }
+
+
 def validate_scene_structure(
     scenes: list[dict[str, Any]],
     *,
@@ -249,7 +491,18 @@ def validate_scene_structure(
 
     min_count = 6 if is_checklist else 4
     max_count = 9 if is_checklist else 8
-    if scene_count < min_count or scene_count > max_count:
+    if scene_count == 0:
+        # Genuine empty scenes array from valid JSON (spec §7.2). A provider error
+        # is caught earlier in build_short_scenes and never reaches here, so a
+        # zero count means the model returned {"scenes": []}.
+        issues.append(SceneValidationIssue(
+            type="empty_scenes",
+            scene_id=None,
+            severity="repairable_error",
+            detail="Scenes array is empty.",
+            repair_hint="Your JSON contains an empty scenes array. Return 5-8 actual scenes. This is invalid.",
+        ))
+    elif scene_count < min_count or scene_count > max_count:
         issues.append(SceneValidationIssue(
             type="scene_count",
             scene_id=None,
@@ -403,22 +656,36 @@ def validate_scene_structure(
         if _missing_graphic_candidate(scene):
             missing_graphic_candidates += 1
 
-    if graphic_count == 3:
-        issues.append(SceneValidationIssue(
-            type="graphic_count",
-            scene_id=None,
-            severity="warning",
-            detail=f"Short has 3 graphic scenes; normal Shorts should use 1-2 unless intentionally graphic-led.",
-            repair_hint="Verify if 3 graphics are intentionally needed, otherwise reduce to 1-2.",
-        ))
-    elif graphic_count >= 4:
-        issues.append(SceneValidationIssue(
-            type="graphic_count",
-            scene_id=None,
-            severity="repairable_error",
-            detail=f"Short has {graphic_count} graphic scenes; normal Shorts should use 1-2.",
-            repair_hint="Keep the two highest-value graphics and convert extras to stock short_tip/short_checklist scenes.",
-        ))
+    if graphic_count > MAX_GRAPHIC_SCENES_PER_SHORT:
+        explicit_graphic_led = is_explicit_graphic_led(script)
+        keep_ids, convert_ids = graphic_repair_targets(scenes)
+        convert_txt = ", ".join(convert_ids) or "the lowest-value graphic(s)"
+        keep_txt = ", ".join(keep_ids) or "the highest-value graphics"
+        if explicit_graphic_led and graphic_count == 3:
+            # Input explicitly opted into a graphic-led Short: 3 is allowed but flagged.
+            issues.append(SceneValidationIssue(
+                type="graphic_count",
+                scene_id=None,
+                severity="warning",
+                detail="Short has 3 graphic scenes (graphic-led requested). Confirm pacing stays strong.",
+                repair_hint="Keep 3 only if intentionally graphic-led; otherwise reduce to 1-2.",
+            ))
+        else:
+            # Normal Short over the 2-graphic cap -> repairable error.
+            issues.append(SceneValidationIssue(
+                type="graphic_count",
+                scene_id=None,
+                severity="repairable_error",
+                detail=(
+                    f"Short has {graphic_count} graphic scenes; a normal Short allows at most "
+                    f"{MAX_GRAPHIC_SCENES_PER_SHORT}. Being a checklist/explainer does not make it graphic-led."
+                ),
+                repair_hint=(
+                    f"Keep only the 1-2 highest-value graphics ({keep_txt}: label_callout for the first "
+                    f"ingredient, comparison for fibra/azúcar/jarabes). Convert setup/recap graphics "
+                    f"({convert_txt}) into realistic short_tip or short_myth scenes with supermarket/kitchen visuals."
+                ),
+            ))
 
     if missing_graphic_candidates and graphic_count >= MAX_GRAPHIC_SCENES_PER_SHORT:
         issues.append(SceneValidationIssue(
@@ -510,8 +777,29 @@ def build_scene_repair_plan(
             })
         elif issue.type == "graphic_count":
             repair_modes.append("reduce_graphics")
-            instructions.append("- Keep exactly 2 graphic scenes, chosen for the highest-value knowledge moments.")
-            instructions.append("- Convert extra graphic/checklist-heavy scenes to stock short_tip or short_checklist scenes.")
+            keep_ids, convert_ids = graphic_repair_targets(scenes)
+            instructions.append(
+                f"- Keep at most {MAX_GRAPHIC_SCENES_PER_SHORT} graphic scenes: "
+                f"{', '.join(keep_ids) or 'the highest-value graphics'} "
+                "(graphic_label_callout for the first ingredient, graphic_comparison for fibra/azúcar/jarabes)."
+            )
+            for cid in convert_ids:
+                original = next((s for s in scenes if _scene_id(s, -1) == cid), {})
+                ost = str(original.get("on_screen_text") or "MIRA LA ETIQUETA")[:32]
+                instructions.append(
+                    f"- Convert {cid} (graphic setup/recap) into a realistic short_myth or short_tip scene "
+                    f"with supermarket/kitchen visuals; keep on_screen_text like \"{ost}\". Do NOT keep it as a graphic."
+                )
+                suggested_scene_plan.append({
+                    "id": cid,
+                    "duration_sec": 3.0,
+                    "layout": "short_myth",
+                    "on_screen_text": ost,
+                })
+            if not convert_ids:
+                instructions.append(
+                    "- Convert setup/recap graphics into stock short_tip or short_myth scenes with realistic visuals."
+                )
         elif issue.type == "passive_cta":
             repair_modes.append("cta_rewrite")
             instructions.append("- Rewrite passive CTA text to an action CTA such as GUARDA ESTA LISTA or GUÁRDALO PARA LA COMPRA.")

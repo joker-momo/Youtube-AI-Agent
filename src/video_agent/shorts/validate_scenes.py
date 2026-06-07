@@ -67,6 +67,7 @@ class SceneValidationIssue:
     severity: str  # "blocking_error" | "repairable_error" | "warning"
     detail: str
     repair_hint: str | None = None
+    instructions: list[str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -775,6 +776,7 @@ def build_scene_repair_plan(
         only_issue = active_issues[0]
         original = next((scene for scene in scenes if _scene_id(scene, -1) == only_issue.scene_id), {})
         if str(original.get("layout") or "") == "short_cta":
+            only_issue.instructions = [f"- Set {only_issue.scene_id} duration_sec to 2.6-2.8."]
             return {
                 "repair_mode": "shorten_cta_duration",
                 "instructions": [
@@ -795,22 +797,21 @@ def build_scene_repair_plan(
     suggested_scene_plan: list[dict[str, Any]] = []
 
     for issue in issues:
-        if issue.severity == "warning":
-            continue
+        issue_instrs = []
         if issue.type in {"duration_cap", "scene_narration_fit"} and issue.scene_id:
             repair_modes.append("split_long_scene")
             original = next((scene for scene in scenes if _scene_id(scene, -1) == issue.scene_id), {})
             layout = original.get("layout") or ""
             if issue.type == "scene_narration_fit":
                 if layout == "short_hook":
-                    instructions.extend([
+                    issue_instrs.extend([
                         f"- Fix {issue.scene_id}:",
                         "  - Hook narration is too long for 3.0 sec.",
                         "  - Replace with a 4-6 word hook that preserves the current idea.",
                         "  - Keep the longer idea in on_screen_text or next scene."
                     ])
                 elif layout == "graphic_label_callout":
-                    instructions.extend([
+                    issue_instrs.extend([
                         f"- Fix {issue.scene_id}:",
                         "  - Current narration is too long for a single graphic_label_callout scene.",
                         "  - Do not exceed 5.0 sec.",
@@ -821,27 +822,27 @@ def build_scene_repair_plan(
                         "    s06b graphic_label_callout 4.2s: compact source-supported label."
                     ])
                 elif layout == "short_quote":
-                    instructions.extend([
+                    issue_instrs.extend([
                         f"- Fix {issue.scene_id}:",
                         "  - Quote narration is too long.",
                         "  - Shorten to one source-supported sentence.",
                         "  - Keep nuance in on_screen_text or caption only if readable."
                     ])
                 elif layout == "short_cta":
-                    instructions.extend([
+                    issue_instrs.extend([
                         f"- Fix {issue.scene_id}:",
                         "  - CTA narration is too long.",
                         '  - Shorten to: "Guárdalo para la compra." or "Úsalo en el súper."'
                     ])
                 else:
-                    instructions.append(f"- Fix {issue.scene_id}: {issue.detail}")
-                    instructions.append("- Condense narration or increase scene duration within layout cap. Do not exceed hard cap.")
+                    issue_instrs.append(f"- Fix {issue.scene_id}: {issue.detail}")
+                    issue_instrs.append("- Condense narration or increase scene duration within layout cap. Do not exceed hard cap.")
             else:
                 if layout == "short_cta":
-                    instructions.append(f"- Set {issue.scene_id} duration_sec to 2.6-2.8.")
+                    issue_instrs.append(f"- Set {issue.scene_id} duration_sec to 2.6-2.8.")
                 else:
-                    instructions.append(f"- Fix {issue.scene_id}: {issue.detail}")
-                    instructions.append("- No scene may exceed 5.0 sec in a normal Short; split, shorten, or regenerate the scene.")
+                    issue_instrs.append(f"- Fix {issue.scene_id}: {issue.detail}")
+                    issue_instrs.append("- No scene may exceed 5.0 sec in a normal Short; split, shorten, or regenerate the scene.")
             if layout != "short_cta":
                 suggested_scene_plan.append({
                     "id": f"{issue.scene_id}a",
@@ -858,14 +859,14 @@ def build_scene_repair_plan(
         elif issue.type == "graphic_count":
             repair_modes.append("reduce_graphics")
             keep_ids, convert_ids = graphic_repair_targets(scenes)
-            instructions.append(
+            issue_instrs.append(
                 f"- Keep at most {MAX_GRAPHIC_SCENES_PER_SHORT} graphic scenes: "
                 f"{', '.join(keep_ids) or 'the highest-value graphics'} for the current idea."
             )
             for cid in convert_ids:
                 original = next((s for s in scenes if _scene_id(s, -1) == cid), {})
                 ost = str(original.get("on_screen_text") or "MIRA LA ETIQUETA")[:32]
-                instructions.append(
+                issue_instrs.append(
                     f"- Convert {cid} (graphic setup/recap) into a realistic short_myth or short_tip scene "
                     f"with supermarket/kitchen visuals; keep on_screen_text like \"{ost}\". Do NOT keep it as a graphic."
                 )
@@ -876,19 +877,19 @@ def build_scene_repair_plan(
                     "on_screen_text": ost,
                 })
             if not convert_ids:
-                instructions.append(
+                issue_instrs.append(
                     "- Convert setup/recap graphics into stock short_tip or short_myth scenes with realistic visuals."
                 )
         elif issue.type == "passive_cta":
             repair_modes.append("cta_rewrite")
-            instructions.append("- Rewrite passive CTA text to an action CTA such as GUARDA ESTA LISTA or GUÁRDALO PARA LA COMPRA.")
+            issue_instrs.append("- Rewrite passive CTA text to an action CTA such as GUARDA ESTA LISTA or GUÁRDALO PARA LA COMPRA.")
         elif issue.type == "audio_fit":
             repair_modes.append("audio_fit")
             contract = (script or {}).get("idea_contract") or {}
             from video_agent.shorts.idea_preservation import allowed_spoken_points_from_contract
 
             allowed_points = allowed_spoken_points_from_contract(contract)
-            instructions.extend([
+            issue_instrs.extend([
                 "AUDIO-FIT REPAIR PLAN:",
                 "- Actual narration audio exceeds video duration.",
                 "- Condense narration; do not stretch scenes above caps.",
@@ -902,18 +903,21 @@ def build_scene_repair_plan(
             ])
         elif issue.type == "script_word_budget":
             repair_modes.append("script_condense")
-            instructions.append("- Compress narration while preserving source-supported promised items.")
-            instructions.append("- Treat 35s as a soft target; use split_recommended if quality cannot fit the Short ceiling.")
+            issue_instrs.append("- Compress narration while preserving source-supported promised items.")
+            issue_instrs.append("- Treat 35s as a soft target; use split_recommended if quality cannot fit the Short ceiling.")
         elif issue.type == "slideshow_risk":
             repair_modes.append("reduce_slideshow_density")
-            instructions.append("- Reduce only the exact dense checklist/graphic scene identified by the validator.")
-            instructions.append("- Do not convert good footage-led item scenes into short_checklist scenes.")
+            issue_instrs.append("- Reduce only the exact dense checklist/graphic scene identified by the validator.")
+            issue_instrs.append("- Do not convert good footage-led item scenes into short_checklist scenes.")
             if issue.repair_hint:
-                instructions.append(f"- {issue.repair_hint}")
+                issue_instrs.append(f"- {issue.repair_hint}")
         else:
-            instructions.append(f"- Fix {issue.type}: {issue.detail}")
+            issue_instrs.append(f"- Fix {issue.type}: {issue.detail}")
             if issue.repair_hint:
-                instructions.append(f"- {issue.repair_hint}")
+                issue_instrs.append(f"- {issue.repair_hint}")
+
+        instructions.extend(issue_instrs)
+        issue.instructions = issue_instrs
 
     mode = " | ".join(sorted(set(repair_modes))) if repair_modes else "warnings_only"
     return {

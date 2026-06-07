@@ -584,6 +584,10 @@ def build_short(
                 state.latest_scene_validation_version = state.current_scenes_version
                 if state.latest_scene_qa_ok:
                     state.latest_scene_qa_version = state.current_scenes_version
+                for issue_id in list(scene_retry_memory.active_issues.keys()):
+                    issue = scene_retry_memory.active_issues[issue_id]
+                    if issue.stage == "scene_validation":
+                        resolve_issue_by_id(scene_retry_memory, issue_id)
             else:
                 state.latest_scene_validation_ok = False
                 state.latest_scene_validation_version = None
@@ -620,23 +624,23 @@ def build_short(
                 # Track deterministic issues in retry memory
                 active_validation_ids = set()
                 for issue in structure_issues:
-                    if issue.severity in ("blocking_error", "repairable_error") and issue.type in HARD_SCENE_VALIDATION_TYPES:
-                        issue_id = make_stable_issue_id("scene_validation", issue.scene_id, issue.type, issue.detail)
-                        active_validation_ids.add(issue_id)
-                        retry_issue = RetryIssue(
-                            id=issue_id,
-                            stage="scene_validation",
-                            attempt=scenes_attempts,
-                            scene_id=issue.scene_id,
-                            type=issue.type,
-                            severity=issue.severity,
-                            detail=issue.detail,
-                            required_change=issue.repair_hint or issue.detail,
-                            status="active",
-                            first_seen_attempt=scenes_attempts,
-                            last_seen_attempt=scenes_attempts
-                        )
-                        add_or_update_issue(scene_retry_memory, retry_issue)
+                    issue_id = make_stable_issue_id("scene_validation", issue.scene_id, issue.type, issue.detail)
+                    active_validation_ids.add(issue_id)
+                    required_change = "\n".join(issue.instructions) if getattr(issue, "instructions", None) else (issue.repair_hint or issue.detail)
+                    retry_issue = RetryIssue(
+                        id=issue_id,
+                        stage="scene_validation",
+                        attempt=scenes_attempts,
+                        scene_id=issue.scene_id,
+                        type=issue.type,
+                        severity=issue.severity,
+                        detail=issue.detail,
+                        required_change=required_change,
+                        status="active",
+                        first_seen_attempt=scenes_attempts,
+                        last_seen_attempt=scenes_attempts
+                    )
+                    add_or_update_issue(scene_retry_memory, retry_issue)
                 
                 # Resolve issues no longer present
                 for issue_id in list(scene_retry_memory.active_issues.keys()):

@@ -88,7 +88,10 @@ def generate_cumulative_feedback(memory: RetryMemory, attempt_number: int, candi
     for idx, (issue_id, issue) in enumerate(memory.active_issues.items(), 1):
         stage_str = str(issue.stage).upper().replace("_", "-")
         type_str = str(issue.type).upper().replace("_", "-")
-        active_lines.append(f"{idx}. [{stage_str}][{issue.scene_id or 'global'}][{type_str}] {issue.required_change or issue.detail}")
+        desc = issue.required_change or issue.detail
+        if issue.detail and issue.detail not in desc:
+            desc = f"{desc} - {issue.detail}"
+        active_lines.append(f"{idx}. [{stage_str}][{issue.scene_id or 'global'}][{type_str}] {desc}")
     
     active_issues_str = "\n".join(active_lines) if active_lines else "None. All previously identified issues are resolved/addressed."
     do_not_regress_str = "\n".join(memory.do_not_regress) if memory.do_not_regress else "None."

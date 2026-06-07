@@ -45,5 +45,6 @@
 | Task 43: Integrate ScenePipelineState & Whitelist/Mutation Logic | [x] | Enforce hard gates and version tracking in `short_builder.py` |
 | Task 44: Integrate Retry Memory in script and scene loops | [x] | Parse and persist active/resolved/suppressed issues across attempts |
 | Task 45: Add regression tests and verify all passing | [x] | Verify full test suite passes with new changes |
-
-
+| Task 46: Generate Repair Plan Instructions for Warnings in `validate_scenes.py` | [x] | Do not skip warnings in build_scene_repair_plan |
+| Task 47: Include Details in Cumulative Feedback in `retry_memory.py` | [x] | Update generate_cumulative_feedback formatting |
+| Task 48: Verification & Regression Tests for Validation Issues | [x] | Verify all 12 retry memory tests pass and run full suite |

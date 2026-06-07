@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from video_agent.shorts.idea_preservation import derive_idea_contract, derive_idea_items
+
 _OUTPUT_RULES = (
     "OUTPUT RULES:\n"
     "- Return exactly one raw JSON object.\n"
@@ -78,6 +80,13 @@ def short_script_prompt(channel_config: dict, short_plan: dict, source_artifacts
     seed = short_plan.get("narration_seed", "")
     idea_block = _idea_block(short_plan).strip() or "(none)"
     source_block_text = _source_block(source_artifacts or {}).strip() or "(none)"
+    idea_contract = derive_idea_contract(short_plan)
+    idea_items = derive_idea_items(short_plan, idea_contract)
+    contract_blob = json.dumps(
+        {"idea_contract": idea_contract, "idea_items": idea_items},
+        ensure_ascii=False,
+        indent=2,
+    )
 
     schema = (
         "{\n"
@@ -96,6 +105,22 @@ def short_script_prompt(channel_config: dict, short_plan: dict, source_artifacts
         "    }\n"
         "  ],\n"
         '  "cta": "string",\n'
+        '  "idea_contract": {\n'
+        '    "preserved": true,\n'
+        '    "original_count": 5,\n'
+        '    "final_count": 5,\n'
+        '    "adaptation_used": false,\n'
+        '    "adaptation_reason": ""\n'
+        "  },\n"
+        '  "idea_items": [\n'
+        "    {\n"
+        '      "item_id": 1,\n'
+        '      "label": "string",\n'
+        '      "spoken_or_visual_role": "narration | on_screen_text | caption | layout_payload | visual_action",\n'
+        '      "source_support": ["key_point_1"],\n'
+        '      "required": true\n'
+        "    }\n"
+        "  ],\n"
         '  "qa": {\n'
         '    "verdict": "PENDING_SHORTS_QA"\n'
         "  }\n"
@@ -109,11 +134,16 @@ def short_script_prompt(channel_config: dict, short_plan: dict, source_artifacts
         "Do not summarize the full long video.\n"
         "Use only claims clearly supported by the provided key_points, source scenes, and narration seed.\n"
         "If a claim is not supported, omit it.\n"
-        "Create a 20–45 second Short with ONE main idea.\n\n"
+        "Create a 20–60 second Short with ONE main idea.\n\n"
         "INPUTS:\n"
         f"SHORT IDEA block:\n{idea_block}\n\n"
         f"SOURCE block:\n{source_block_text}\n\n"
         f"SOURCE NARRATION SEED:\n{seed}\n\n"
+        f"IDEA PRESERVATION CONTRACT:\n{contract_blob}\n\n"
+        "The selected idea is a viewer promise. If the idea title/hook/format contains a number, preserve that number in the final Short.\n"
+        "Do NOT silently change 5 errores -> 2 errores, 5 errores -> errores comunes, or 3 pasos -> 2 pasos unless adaptation_allowed is explicitly true.\n"
+        "If the idea seems too dense: compress each item to a micro-point, move detail to on-screen text/graphic payload later, allow content-led duration, or mark SPLIT_RECOMMENDED.\n"
+        "But do not reduce the count without explicit approval.\n\n"
         "OUTPUT RULES:\n"
         "Return exactly ONE raw valid JSON object.\n"
         "No markdown fences.\n"
@@ -148,9 +178,12 @@ def short_script_prompt(channel_config: dict, short_plan: dict, source_artifacts
         "Use the calibrated Vida Plena voice budget: estimated Spanish WPS is 2.25.\n"
         "For a 35s Short, aim for about 60–70 spoken Spanish words.\n"
         "For a 30s Short, aim for about 50–60 spoken Spanish words.\n"
-        "For a 45s hard-max Short, do not exceed about 85–90 spoken Spanish words unless explicitly requested.\n"
-        "If the idea has 5 checklist points, make each point very compact.\n"
-        "For checklist/explainer Shorts: 3 spoken checklist points = ideal; 4 spoken checklist points = maximum; 5 spoken checklist points = too dense unless intentionally longer.\n"
+        "For a 60s hard-max Short, do not exceed about 115–125 spoken Spanish words unless explicitly requested.\n"
+        "CHECKLIST POINT COUNT POLICY:\n"
+        "If idea_contract.must_preserve_count=true, preserve the promised count; exact count uses original_count, range count uses idea_count_max as the upper bound.\n"
+        "Do not reduce 5 errores to 3 or 4 only to satisfy a generic checklist rule.\n"
+        "If there is no locked count, 3 spoken checklist points is ideal, 4 is a normal upper target, and 5+ may be too dense unless intentionally longer or split.\n"
+        "For locked-count ideas, compact each item instead of reducing the number of items.\n"
         "Move supporting detail to on-screen text or graphic payload instead of narration when possible.\n\n"
         f"RETURN JSON SCHEMA:\n{schema}\n"
     )
@@ -169,7 +202,7 @@ def short_scene_prompt(channel_config: dict, short_plan: dict, short_script: dic
         "SCENE RULES:\n"
         "- 5-12 short scenes total.\n"
         "- First scene 1.5-3.0 seconds. Normal scenes 2.0-5.0 seconds. CTA scene 3.0-6.0 seconds.\n"
-        "- Total 25-45 seconds.\n"
+        "- Total 25-60 seconds.\n"
         "- on_screen_text 2-5 words; must NOT duplicate the caption exactly.\n"
         "- visual_prompt MUST be English only and describe a vertical-friendly shot.\n"
         "- layouts allowed: short_hook, short_pain, short_tip, short_checklist, short_quote, short_cta.\n"
@@ -187,6 +220,7 @@ def short_seo_prompt(channel_config: dict, short_plan: dict, short_script: dict,
     hook = str(short_script.get("hook") or "").strip()
     narration = str(short_script.get("narration") or "").strip()
     cta = str(short_script.get("cta") or "").strip()
+    idea_contract = short_script.get("idea_contract") or {}
     short_format = str(short_plan.get("format") or "").strip()
     viewer_pain = str(short_plan.get("viewer_pain") or "").strip()
     payoff = str(short_plan.get("practical_payoff") or "").strip()
@@ -221,7 +255,13 @@ def short_seo_prompt(channel_config: dict, short_plan: dict, short_script: dict,
         f"- HOOK: {hook}\n"
         f"- NARRATION: {narration[:1200]}\n"
         f"- CTA: {cta}\n\n"
+        f"- Idea contract: {json.dumps(idea_contract, ensure_ascii=False)}\n\n"
         f"{_OUTPUT_RULES}\n"
+        "SEO IDEA FIDELITY:\n"
+        "- If the original idea promised 5 errores and final script preserved 5 errores, title/description may mention 5 errores.\n"
+        "- If adaptation was explicitly approved and final script changed count, SEO must match final count.\n"
+        "- Never publish title \"5 errores\" if the final video only covers 2.\n"
+        "- Never publish title \"2 errores\" if the selected idea required 5 and adaptation_allowed is false.\n\n"
         "LANGUAGE RULES:\n"
         "- es-ES, adults 45+ register.\n"
         "- Do NOT use \"ancianos\", \"abuelos\", \"seniors\", \"personas mayores\", or any age-shaming wording.\n\n"
@@ -363,6 +403,7 @@ def short_scene_prompt_v6(channel_config: dict, short_plan: dict,
         '        "items": ["string"],\n'
         '        "emphasis": "string"\n'
         "      },\n"
+        '      "covers_items": [1],\n'
         '      "source_scene_ids": []\n'
         "    }\n"
         "  ],\n"
@@ -400,6 +441,9 @@ def short_scene_prompt_v6(channel_config: dict, short_plan: dict,
         "SCRIPT FIDELITY & NARRATION:\n"
         "Preserve the SCRIPT meaning and source-supported claims, but do NOT copy long "
         "script phrases verbatim.\n"
+        "If SCRIPT has idea_contract.original_count/final_count, preserve that count in scenes; all promised items must appear in a readable way and do not drop items silently.\n"
+        "Each scene must include covers_items: an array of idea_items.item_id values covered by that scene. A scene may cover one or two promised items; do not cover more than 2 unless it is only a quick recap after all items were introduced.\n"
+        "If narration is too dense, speak the short item label and move detail to caption, on_screen_text, visual action, or layout_payload.\n"
         "You may shorten scene.narration to fit timing if:\n"
         "- the core meaning stays faithful,\n"
         "- no new claim is added,\n"
@@ -414,10 +458,10 @@ def short_scene_prompt_v6(channel_config: dict, short_plan: dict,
         "SCENE COUNT & TIMING:\n"
         "- target_duration_sec is a soft planning target, not a hard pacing requirement.\n"
         "- Retention pacing is more important than exactly matching target_duration_sec.\n"
-        "- Valid final duration is 20–45 sec; ideal final duration is 28–38 sec for most Shorts.\n"
+        "- Valid final duration is 20–60 sec; ideal final duration is 28–38 sec for most Shorts.\n"
         "- If good pacing results in 26–34 sec, do not stretch scenes.\n"
-        "- Create 5–8 scenes by default.\n"
-        "- For checklist/explainer Shorts, create 6–9 scenes.\n"
+        "- Create 5–12 scenes by default when the idea contract needs the extra time.\n"
+        "- For checklist/explainer Shorts, create 6–12 scenes when the idea contract needs it.\n"
         "- For simple hook-tip-CTA Shorts, create 4–6 scenes.\n"
         "- Never create a 7–12 sec scene to hit the target.\n"
         "- Normal lifestyle scenes should be short: hook/opening 1.8–2.8 sec hard max 3.0; myth/setup 2.0–3.0 hard max 3.2; tip/lifestyle reinforcement 2.2–4.2 hard max 5.0; short_checklist 3.0–4.5 hard max 5.0; CTA 1.8–2.6 hard max 2.8.\n"
@@ -609,7 +653,7 @@ def gemini_qa_prompt(channel_config: dict, short_script: dict,
     }
     rules = (
         "GEMINI QA RULES (spec v6 §13):\n"
-        "- duration 20-45s; first 2s = pain/curiosity/number/mistake; no greeting.\n"
+        "- duration 20-60s; first 2s = pain/curiosity/number/mistake; no greeting.\n"
         "- one main idea; payoff before CTA; CTA short; CTA <= 20% of duration.\n"
         "- on_screen_text 2-5 words; captions <= 2 lines.\n"
         "- visuals match the pain/topic; source_map exists; source fidelity OK.\n"
@@ -633,17 +677,23 @@ def gemini_qa_prompt(channel_config: dict, short_script: dict,
     )
 
 
-def gemini_script_qa_prompt(channel_config: dict, short_script: dict, short_source_map: dict | None = None) -> str:
+def gemini_script_qa_prompt(
+    channel_config: dict,
+    short_script: dict,
+    short_source_map: dict | None = None,
+    original_idea: dict | None = None,
+) -> str:
     """Gemini QA validates script quality, language, and safety."""
     script_json = json.dumps(short_script, ensure_ascii=False)
     source_map_json = json.dumps(short_source_map, ensure_ascii=False) if short_source_map else "(none)"
+    original_idea_json = json.dumps(original_idea or {}, ensure_ascii=False) if original_idea else "(none)"
 
     schema = (
         "{\n"
         '  "verdict": "PASS | FAIL",\n'
         '  "issues": [\n'
         "    {\n"
-        '      "type": "hook | structure | cta | source_fidelity | safety | language | schema | style",\n'
+        '      "type": "hook | structure | cta | source_fidelity | source_support | idea_fidelity | safety | language | schema | style",\n'
         '      "severity": "major | minor",\n'
         '      "detail": "string"\n'
         "    }\n"
@@ -667,6 +717,7 @@ def gemini_script_qa_prompt(channel_config: dict, short_script: dict, short_sour
     return (
         "You are the Shorts Script QA reviewer for a Spain-first wellness channel for adults aged 45+.\n\n"
         "Review the provided Short script against retention, style, safety, source fidelity, and readiness for scene generation.\n\n"
+        f"ORIGINAL IDEA:\n{original_idea_json}\n\n"
         f"SCRIPT:\n{script_json}\n\n"
         f"SOURCE MAP:\n{source_map_json}\n\n"
         "OUTPUT RULES:\n"
@@ -692,14 +743,22 @@ def gemini_script_qa_prompt(channel_config: dict, short_script: dict, short_sour
         "- Do not use \"ancianos\", \"abuelos\", \"seniors\", \"personas mayores\", or age-shaming language.\n"
         "- Source fidelity must be checked against SOURCE MAP when present.\n"
         "- If SOURCE MAP is missing, do not invent support. Add a warning.\n\n"
+        "IDEA COUNT FIDELITY:\n"
+        "- If the selected original idea promises a number of items, the script must preserve that number unless adaptation_allowed is true.\n"
+        "- FAIL with idea_fidelity if original idea says 5 errores but script only covers 2 errores, or 3 pasos becomes 2 pasos.\n"
+        "- Do not suggest reducing the count as the first repair. Suggest micro-compressing each item, moving detail to on-screen text, content-led duration, or split_recommended.\n"
+        "- Source support must be explicit: each promised item needs at least one valid source_support reference and labels must be meaningfully different.\n"
+        "- Do not trust only preserved=true; verify final_count, idea_items length, and planned narration/visual representation.\n\n"
         "WORD-BUDGET / AUDIO-FIT RULES:\n"
         "- Estimate spoken duration using calibrated Spanish WPS 2.25 plus sentence pauses.\n"
         "- For a 35s Short, 60–70 spoken Spanish words is the normal budget.\n"
         "- For a 30s Short, 50–60 words is the normal budget.\n"
-        "- For a 45s hard-max Short, 85–90 words is the upper budget unless explicitly requested.\n"
-        "- FAIL if estimated spoken duration exceeds target_duration_sec by more than 5% or exceeds 38 sec for a normal Short.\n"
-        "- For checklist/explainer Shorts, speak 3 checklist points ideally, 4 maximum; do not narrate five long steps in a 35s Short.\n"
-        "- If too long, request compression before scene generation; do not ask scenes to solve it with long durations.\n\n"
+        "- For a 60s hard-max Short, 115–125 words is the upper budget unless explicitly requested.\n"
+        "- Do not fail only because duration exceeds the old 38s preference; warn if the script is longer but still engaging and structurally clear.\n"
+        "- FAIL if the script is rushed, repetitive, unclear, unsupported, unsafe, audio-fit impossible, or poor product quality.\n"
+        "- CHECKLIST POINT COUNT QA POLICY: if idea_contract.must_preserve_count=true, exact count allows original_count and range count allows idea_count_max; fail only for rushed/unreadable/unsupported/unsafe/audio-fit impossible execution.\n"
+        "- If must_preserve_count=false, 3 points is ideal, 4 is a normal upper target, and 5+ may fail if it hurts clarity, pacing, or audio-fit.\n"
+        "- Repair by compacting each item, moving detail to visuals, or recommending split_recommended. Do not ask to reduce the promised count unless adaptation_allowed=true.\n\n"
         "SCHEMA CHECK:\n"
         "The script should include:\n"
         "- short_id\n"
@@ -723,8 +782,7 @@ def gemini_script_qa_prompt(channel_config: dict, short_script: dict, short_sour
         "- Spanish is not es-ES\n"
         "- required JSON fields are missing\n"
         "- source fidelity cannot be confirmed for important claims when SOURCE MAP is present\n\n"
-        "- narration exceeds the calibrated spoken-time budget\n"
-        "- checklist/explainer narration speaks more than 4 checklist points for a normal 30–38s Short\n\n"
+        "- narration is audio-fit impossible or rushed beyond practical Short quality\n\n"
         "SCORING:\n"
         "Scores must be integers from 0 to 10.\n"
         "- hook: first-2-seconds strength and clarity\n"

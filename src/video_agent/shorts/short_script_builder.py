@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from video_agent.shorts import paths, prompts
+from video_agent.shorts.idea_preservation import ensure_script_idea_fields
 from video_agent.shorts.llm import LLMCallLog, log_llm_call
 from video_agent.storage.atomic import atomic_write_json
 
@@ -39,6 +40,7 @@ def build_short_script(
     ))
     raw = _invoke(llm_fn, "script", prompt)
     script = _parse(raw)
+    script = ensure_script_idea_fields(script, short_plan)
     jd = paths.short_json_dir(long_job_dir, short_plan["short_id"])
     jd.mkdir(parents=True, exist_ok=True)
     atomic_write_json(jd / paths.SHORT_SCRIPT_FILE, script)

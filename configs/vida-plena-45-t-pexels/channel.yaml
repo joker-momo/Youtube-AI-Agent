@@ -248,7 +248,7 @@ shorts:
   duration:
     min_sec: 20
     target_min_sec: 25
-    target_max_sec: 45
+    target_max_sec: 60
     hard_max_sec: 60
   render:
     format: "short"

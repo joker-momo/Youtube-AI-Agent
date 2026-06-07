@@ -25,7 +25,7 @@ def _cfg():
         "channel": {"id": "vida-plena-45"},
         "shorts": {
             "autopilot": {"max_regeneration_attempts": 2},
-            "duration": {"min_sec": 20, "target_max_sec": 45},
+            "duration": {"min_sec": 20, "target_max_sec": 60},
             "tts": {"provider": "kokoro", "voice_id": "ef_dora", "speed": 1.07},
             "funnel": {"default_cta_without_url": "Vídeo completo en el canal.", "cta_max_words": 8},
         },
@@ -63,9 +63,12 @@ def test_v13_script_prompt_uses_calibrated_word_budget_without_old_rule():
     assert "80-105" not in p
     assert "60–70 spoken spanish words" in p or "60-70 spoken spanish words" in p
     assert "2.25" in p
-    assert "3 spoken checklist points" in p
-    assert "4 spoken checklist points" in p
-    assert "5 spoken checklist points" in p
+    assert "checklist point count policy" in p
+    assert "if there is no locked count" in p
+    assert "3 spoken checklist points is ideal" in p
+    assert "4 is a normal upper target" in p
+    assert "4 spoken checklist points = maximum" not in p
+    assert "5 spoken checklist points = too dense" not in p
 
 
 def test_short_scene_prompt_requires_vertical_and_layouts():
@@ -153,8 +156,8 @@ def test_v13_scene_and_qa_prompts_supersede_old_scene_count_and_numeric_authorit
 
     assert "create 4–7 scenes" not in scene_prompt
     assert "create 4-7 scenes" not in scene_prompt
-    assert "5–8 scenes" in scene_prompt or "5-8 scenes" in scene_prompt
-    assert "6–9 scenes" in scene_prompt or "6-9 scenes" in scene_prompt
+    assert "5–12 scenes" in scene_prompt or "5-12 scenes" in scene_prompt
+    assert "6–12 scenes" in scene_prompt or "6-12 scenes" in scene_prompt
     assert "soft planning target" in scene_prompt
     assert "never create a 7–12 sec scene" in scene_prompt or "never create a 7-12 sec scene" in scene_prompt
     assert "deterministic validator is authoritative" in qa_prompt
@@ -685,7 +688,7 @@ def test_script_rule_qa_rejects_over_word_budget_before_scenes(tmp_path: Path):
 
     job = _good_short_dir(tmp_path)
     sd = paths.short_dir(job, "short-01")
-    long_narration = " ".join(["palabra"] * 115)
+    long_narration = " ".join(["palabra"] * 150)
     (sd / "short_script.json").write_text(json.dumps({
         "short_id": "short-01",
         "hook": "Mira esto antes de comprar pan",
@@ -820,6 +823,60 @@ def test_build_short_pass_renders_and_writes_artifacts(tmp_path: Path):
         assert (sd / "outputs" / f).exists(), f
     assert calls == ["tts", "mix", "render", "cover"]
     assert res["music_track"] == "shorts_sleep_stress"
+
+
+def test_build_short_soft_scene_validation_warning_proceeds_to_gemini_qa(tmp_path: Path, monkeypatch):
+    from video_agent.shorts import short_builder, validate_scenes
+
+    job = _long_job(tmp_path)
+    calls: list[str] = []
+    qa_calls = {"n": 0}
+
+    def soft_scene_validation(*args, **kwargs):
+        return [
+            validate_scenes.SceneValidationIssue(
+                type="slideshow_risk",
+                scene_id=None,
+                severity="warning",
+                detail="Footage-led candidate has mild list density.",
+            )
+        ]
+
+    def gemini_fn(prompt):
+        if "Scenes QA reviewer" in prompt:
+            qa_calls["n"] += 1
+        return json.dumps({
+            "verdict": "PASS",
+            "issues": [],
+            "required_changes": [],
+            "warnings": [],
+            "product_scores": {
+                "hook_strength": 8,
+                "retention_pacing": 8,
+                "visual_scene_fit": 8,
+                "mobile_readability": 8,
+                "layout_variety": 8,
+                "source_fidelity": 8,
+                "overall_product_quality": 8,
+            },
+        })
+
+    monkeypatch.setattr(validate_scenes, "validate_scene_structure", soft_scene_validation)
+
+    plan = {"short_id": "short-soft-scene-warning", "format": "pain_to_tip", "scene_ids": ["scene-09"],
+            "source_start_sec": 183.0, "source_end_sec": 199.0, "music_track": "shorts_sleep_stress",
+            "narration_seed": "Marca una hora de cierre."}
+    res = short_builder.build_short(
+        job,
+        plan,
+        _cfg(),
+        llm_fn=_llm_fn_factory(scenes={**_GOOD_SCENES, "short_id": "short-soft-scene-warning"}),
+        gemini_fn=gemini_fn,
+        **_stub_io(calls),
+    )
+
+    assert qa_calls["n"] >= 1
+    assert res["status"] in {"rendered", "needs_review"}
 
 
 def test_build_short_records_render_exception_in_status(tmp_path: Path):

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from video_agent.shorts import paths, prompts, validate_scenes
+from video_agent.shorts.idea_preservation import validate_script_idea_contract
 from video_agent.shorts.llm import LLMCallLog, log_llm_call
 
 LLM_PROVIDER = "gemini"
@@ -53,7 +54,7 @@ def _run_rule_qa(
 
     dcfg = (channel_config.get("shorts") or {}).get("duration") or {}
     min_sec = float(dcfg.get("min_sec", 20))
-    max_sec = float(dcfg.get("target_max_sec", 45))
+    max_sec = float(dcfg.get("target_max_sec", 60))
     cta_max_words = int(((channel_config.get("shorts") or {}).get("funnel") or {}).get("cta_max_words", 8))
 
     narration = str(script.get("narration") or "")
@@ -184,6 +185,19 @@ def run_short_qa(
     return out
 
 
+def _route_validation_issue(
+    issue: validate_scenes.SceneValidationIssue,
+    issues: list[str],
+    warnings: list[str],
+) -> None:
+    severity = getattr(issue, "severity", "") or "repairable_error"
+    if severity == "warning":
+        warnings.append(issue.detail)
+        return
+    issues.append(issue.type)
+    warnings.append(issue.detail)
+
+
 def _run_rule_script_qa(
     long_job_dir: Path,
     short_id: str,
@@ -214,12 +228,16 @@ def _run_rule_script_qa(
         issues.append("empty_narration")
     word_budget_issue = validate_scenes.validate_script_word_budget(script)
     if word_budget_issue:
-        issues.append(word_budget_issue.type)
-        warnings.append(word_budget_issue.detail)
+        _route_validation_issue(word_budget_issue, issues, warnings)
     checklist_issue = validate_scenes.validate_script_checklist_point_cap(script)
     if checklist_issue:
-        issues.append(checklist_issue.type)
-        warnings.append(checklist_issue.detail)
+        _route_validation_issue(checklist_issue, issues, warnings)
+    if script.get("original_idea"):
+        for idea_issue in validate_script_idea_contract(
+            script,
+            original_idea=script.get("original_idea") or {},
+        ):
+            _route_validation_issue(idea_issue, issues, warnings)
     if not source_map or not (source_map.get("used_source_scenes")):
         issues.append("missing_source_map")
 
@@ -255,7 +273,12 @@ def _run_gemini_script_qa(
     sd = paths.short_dir(long_job_dir, short_id)
     script = _load(paths.resolve_short_json(sd, paths.SHORT_SCRIPT_FILE))
     source_map = _load(paths.resolve_short_json(sd, paths.SHORT_SOURCE_MAP_FILE))
-    prompt = prompts.gemini_script_qa_prompt(channel_config, script, source_map)
+    prompt = prompts.gemini_script_qa_prompt(
+        channel_config,
+        script,
+        source_map,
+        original_idea=script.get("original_idea") or {},
+    )
     log_llm_call(LLMCallLog(
         task="short_script_qa", provider=LLM_PROVIDER, short_id=short_id,
         attempt=attempt,
@@ -311,7 +334,7 @@ def _run_rule_scenes_qa(
 
     dcfg = (channel_config.get("shorts") or {}).get("duration") or {}
     min_sec = float(dcfg.get("min_sec", 20))
-    max_sec = float(dcfg.get("target_max_sec", 45))
+    max_sec = float(dcfg.get("target_max_sec", 60))
 
     issues: list[str] = []
     warnings: list[str] = []

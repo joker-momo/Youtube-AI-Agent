@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from video_agent.shorts import paths, prompts
+from video_agent.shorts.idea_preservation import normalize_covers_items
 from video_agent.shorts.llm import LLMCallLog, log_llm_call
 from video_agent.storage.atomic import atomic_write_json
 
@@ -158,6 +159,12 @@ def normalize_short_scenes(scenes_doc: dict, short_script: dict) -> dict[str, An
             "graphic" if str(sc.get("layout") or "").startswith("graphic_") else "generated_placeholder",
         )
         sc.setdefault("layout_payload", {})
+        covers_items, covers_warnings = normalize_covers_items(sc.get("covers_items"))
+        sc["covers_items"] = covers_items
+        if covers_warnings:
+            existing_warnings = list(sc.get("planner_warnings") or [])
+            existing_warnings.extend(covers_warnings)
+            sc["planner_warnings"] = existing_warnings
         sc.setdefault("layout_reason", "short")
         sc.setdefault("motion", "none")
         sc.setdefault("asset_refs", {})
@@ -189,6 +196,7 @@ def normalize_short_scenes(scenes_doc: dict, short_script: dict) -> dict[str, An
             "visual_prompt": "Close-up of a calm person looking warmly at camera, soft natural light",
             "layout": "short_cta",
             "layout_payload": {"title": cta_oneliner, "subtitle": cta_caption},
+            "covers_items": [],
             "layout_reason": "auto_cta_appended",
             "motion": "slow_zoom",
             "asset_refs": {},

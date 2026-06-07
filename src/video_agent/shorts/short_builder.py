@@ -21,6 +21,7 @@ from video_agent.shorts import (
     source_map,
     validate_scenes,
 )
+from video_agent.shorts.idea_preservation import allowed_spoken_points_from_contract
 from video_agent.shorts.manifest import write_short_status
 from video_agent.storage.atomic import atomic_write_json
 
@@ -77,6 +78,59 @@ def _update_short_stage(status: dict[str, Any], stage_name: str, new_status: str
 def _cover_text(hook: str, max_words: int) -> str:
     words = [w for w in str(hook).strip().strip("¿?¡!.,").split() if w]
     return " ".join(words[:max_words]).upper()
+
+
+def build_script_compression_feedback(short_script: dict[str, Any] | None) -> str:
+    script = short_script or {}
+    contract = script.get("idea_contract") or {}
+    allowed_points = allowed_spoken_points_from_contract(contract)
+    count_label = str(contract.get("count_label") or "items").strip() or "items"
+    point_line = (
+        f"- Keep all {allowed_points} promised {count_label}."
+        if allowed_points
+        else "- Keep 3-4 spoken points if it improves retention and no locked count exists."
+    )
+    return "\n".join([
+        "SCRIPT COMPRESSION REQUIRED:",
+        "- Scene-level narration fit failed after 2 attempts.",
+        point_line,
+        "- Make each item shorter and more natural.",
+        "- Move supporting detail to on-screen text, captions, visual action, or layout_payload.",
+        "- Use only source-supported language from the current idea.",
+        "- If it still cannot fit without rushed narration or poor readability, return split_recommended.",
+        "- Do not reduce the promised count unless adaptation_allowed=true.",
+    ])
+
+
+HARD_SCENE_VALIDATION_TYPES = {
+    "missing_item_coverage",
+    "unknown_item_coverage",
+    "layout",
+    "payload",
+    "audio_fit",
+    "source_support",
+    "safety",
+    "duration_range",
+    "duration_cap",
+    "scene_narration_fit",
+    "empty_scenes",
+    "first_scene_layout",
+    "last_scene_cta",
+}
+
+
+def should_fallback_to_gemini_scene_qa(issues: list[validate_scenes.SceneValidationIssue]) -> bool:
+    """Allow scene QA fallback only when deterministic issues are genuinely soft."""
+    if not issues:
+        return True
+    for issue in issues:
+        if issue.severity in {"blocking_error", "repairable_error"}:
+            if issue.type in {"slideshow_risk", "visual_only_unreadable"}:
+                return False
+            return False
+        if issue.type in HARD_SCENE_VALIDATION_TYPES:
+            return False
+    return True
 
 
 # -- default real side-effect implementations (wired lazily) ----------------
@@ -399,6 +453,30 @@ def build_short(
                 scenes_doc=short_scenes,
                 script=short_script,
             )
+
+            # Auto-repair duration/narration-fit if it's the only class of hard issues remaining
+            hard_errors = [
+                i for i in structure_issues
+                if i.severity in ("blocking_error", "repairable_error")
+                and i.type in HARD_SCENE_VALIDATION_TYPES
+            ]
+            if hard_errors and all(i.type in ("duration_cap", "scene_narration_fit") for i in hard_errors):
+                repaired_any = False
+                for issue in hard_errors:
+                    if issue.scene_id:
+                        scene_to_fix = next((s for s in scenes if str(s.get("id") or s.get("scene_id") or "") == issue.scene_id), None)
+                        if scene_to_fix:
+                            res = validate_scenes.repair_scene_duration_if_possible(scene_to_fix)
+                            if res in ("auto_shortened", "auto_extended", "auto_shortened_cta"):
+                                repaired_any = True
+                if repaired_any:
+                    # Re-run validation with repaired durations
+                    structure_issues = validate_scenes.validate_scene_structure(
+                        scenes,
+                        scenes_doc=short_scenes,
+                        script=short_script,
+                    )
+
             atomic_write_json(_jd / paths.SHORT_SCENES_FILE, short_scenes)
 
             # Check for scene_narration_fit failures
@@ -409,9 +487,14 @@ def build_short(
             if has_fit_failure:
                 scene_fit_failures += 1
 
+            structure_blocked = (
+                validate_scenes.has_blocking_or_repairable(structure_issues)
+                and not should_fallback_to_gemini_scene_qa(structure_issues)
+            )
+
             structure_doc = {
                 "attempt": scenes_attempts,
-                "verdict": "FAIL" if validate_scenes.has_blocking_or_repairable(structure_issues) else "PASS",
+                "verdict": "FAIL" if structure_blocked else "PASS",
                 "issues": validate_scenes.issues_to_dicts(structure_issues),
             }
             atomic_write_json(_jd / paths.SHORT_SCENE_STRUCTURE_FILE, structure_doc)
@@ -422,7 +505,7 @@ def build_short(
                 ok=structure_doc["verdict"] == "PASS",
             )
 
-            if validate_scenes.has_blocking_or_repairable(structure_issues):
+            if structure_blocked:
                 repair_plan = validate_scenes.build_scene_repair_plan(
                     scenes,
                     structure_issues,
@@ -522,15 +605,7 @@ def build_short(
                 scenes_feedback = base_feedback
 
         if escalate_to_script:
-            script_feedback = (
-                "SCRIPT COMPRESSION REQUIRED:\n"
-                "- Scene-level narration fit failed after 2 attempts.\n"
-                "- Compress hook to 4–6 words.\n"
-                '- Compress ingredient narration to "Busca harina integral al principio."\n'
-                '- Compress final line to "La etiqueta ayuda a elegir."\n'
-                "- Move examples to on-screen text / graphic payload.\n"
-                "- Keep 3 spoken checklist points max."
-            )
+            script_feedback = build_script_compression_feedback(short_script)
             atomic_write_json(_jd / paths.SHORT_FAILURE_REPORT_FILE, {
                 "stage": "scenes",
                 "attempt": scenes_attempts,

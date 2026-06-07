@@ -10,7 +10,7 @@ def _cfg() -> dict:
         "shorts": {
             "autopilot": {"max_regeneration_attempts": 1},
             "cover": {"text_max_words": 5},
-            "duration": {"min_sec": 20, "target_max_sec": 45},
+            "duration": {"min_sec": 20, "target_max_sec": 60},
             "tts": {"provider": "kokoro", "voice_id": "ef_dora", "speed": 1.07},
             "funnel": {"default_cta_without_url": "Vídeo completo en el canal.", "cta_max_words": 8},
         },

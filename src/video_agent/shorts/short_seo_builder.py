@@ -6,6 +6,7 @@ import re
 from typing import Any, Callable
 
 from video_agent.shorts import paths, prompts
+from video_agent.shorts.idea_preservation import validate_seo_idea_consistency
 from video_agent.storage.atomic import atomic_write_json
 
 
@@ -120,6 +121,10 @@ def build_short_seo(
         "language": "es-ES",
         "ai_disclosure": True,
     }
+    consistency_issues = validate_seo_idea_consistency(seo, short_script)
+    if any(issue.severity in {"blocking_error", "repairable_error"} for issue in consistency_issues):
+        detail = "; ".join(issue.detail for issue in consistency_issues)
+        raise ValueError(f"SEO idea fidelity validation failed: {detail}")
     jd = paths.short_json_dir(long_job_dir, short_id)
     jd.mkdir(parents=True, exist_ok=True)
     atomic_write_json(jd / paths.SHORT_SEO_FILE, seo)

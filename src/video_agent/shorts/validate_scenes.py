@@ -49,9 +49,9 @@ LAYOUT_DURATION_TARGETS = {
     "short_myth": (2.0, 3.0, 3.2),
     "short_tip": (2.2, 4.2, 5.0),
     "short_checklist": (3.0, 4.5, 5.0),
-    "short_pain": (2.0, 3.8, 4.5),
-    "short_cta": (1.8, 2.6, 2.8),
-    "graphic_checklist": (3.0, 4.0, 4.5),
+    "short_pain": (3.2, 4.0, 4.5),
+    "short_cta": (2.4, 2.8, 2.8),
+    "graphic_checklist": (4.2, 5.0, 5.0),
     "graphic_step_list": (3.0, 4.0, 4.5),
     "graphic_label_callout": (3.5, 5.0, 5.0),
     "graphic_comparison": (3.5, 5.0, 5.0),
@@ -753,6 +753,37 @@ def validate_scene_structure(
             repair_hint="Do not add a third graphic; improve the stock visual_prompt instead.",
         ))
 
+    if script:
+        contract = (script or {}).get("idea_contract") or {}
+        # Detect if this is a 5-error bread Short
+        is_5_error_bread = (
+            (contract.get("original_count") == 5 or contract.get("final_count") == 5)
+            and any(term in str(script.get("narration") or "").lower() for term in ("pan", "bread", "hogaza"))
+        )
+        if is_5_error_bread:
+            # 1. Enforce total duration >= 25.5s
+            if total_for_range and total_for_range < 25.5:
+                issues.append(SceneValidationIssue(
+                    type="duration_range",
+                    scene_id=None,
+                    severity="repairable_error",
+                    detail=f"Total duration {total_for_range:.1f}s is too short for a 5-error Short (minimum 25.5s required).",
+                    repair_hint="Increase individual scene durations to 3.2-4.0s for errors, 4.2-5.0s for payoff, 2.4-2.8s for CTA to reach 26-30s."
+                ))
+            # 2. Enforce graphic_checklist payoff scene layout (scene right before CTA)
+            if len(scenes) >= 2:
+                payoff_idx = len(scenes) - 2
+                payoff_scene = scenes[payoff_idx]
+                payoff_id = _scene_id(payoff_scene, payoff_idx)
+                if payoff_scene.get("layout") != "graphic_checklist":
+                    issues.append(SceneValidationIssue(
+                        type="payoff_layout",
+                        scene_id=payoff_id,
+                        severity="repairable_error",
+                        detail=f"Payoff scene {payoff_id} layout is {payoff_scene.get('layout')!r}; expected graphic_checklist for 5-error bread Short.",
+                        repair_hint="Use layout 'graphic_checklist' for the payoff scene to render a readable saveable checklist card."
+                    ))
+
     if script and (script.get("idea_items") or (script.get("idea_contract") or {}).get("must_preserve_count")):
         from video_agent.shorts.idea_preservation import validate_scene_idea_coverage
 
@@ -911,6 +942,15 @@ def build_scene_repair_plan(
             issue_instrs.append("- Do not convert good footage-led item scenes into short_checklist scenes.")
             if issue.repair_hint:
                 issue_instrs.append(f"- {issue.repair_hint}")
+        elif issue.type == "payoff_layout":
+            repair_modes.append("payoff_checklist")
+            issue_instrs.extend([
+                f"- Fix {issue.scene_id}:",
+                "  - Convert the payoff scene to layout 'graphic_checklist'.",
+                "  - Use title: 'MEJOR ASÍ'.",
+                "  - Set items to: ['Porción visible', 'Plato pequeño', 'Comida completa'].",
+                "  - Set duration_sec to 4.2-5.0 seconds."
+            ])
         else:
             issue_instrs.append(f"- Fix {issue.type}: {issue.detail}")
             if issue.repair_hint:
@@ -962,7 +1002,7 @@ MAX_GRAPHIC_SCENES_PER_SHORT = 2
 GRAPHIC_MIN_DURATION_SEC = 2.5
 GRAPHIC_MAX_DURATION_SEC = 5.0
 GRAPHIC_LAYOUT_DURATION_TARGETS = {
-    "graphic_checklist": (3.0, 4.0, 4.5),
+    "graphic_checklist": (4.2, 5.0, 5.0),
     "graphic_step_list": (3.0, 4.0, 4.5),
     "graphic_plate_ratio": (3.0, 4.5, 5.0),
     "graphic_label_callout": (3.5, 5.0, 5.0),

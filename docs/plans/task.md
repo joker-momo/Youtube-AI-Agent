@@ -48,3 +48,8 @@
 | Task 46: Generate Repair Plan Instructions for Warnings in `validate_scenes.py` | [x] | Do not skip warnings in build_scene_repair_plan |
 | Task 47: Include Details in Cumulative Feedback in `retry_memory.py` | [x] | Update generate_cumulative_feedback formatting |
 | Task 48: Verification & Regression Tests for Validation Issues | [x] | Verify all 12 retry memory tests pass and run full suite |
+| Task 49: Update Visual Styling & Opacity in Remotion | [x] | Reduce overlay opacity, move captions up, enlarge caption text |
+| Task 50: Implement Deterministic Pacing and Payoff Layout in `validate_scenes.py` | [x] | Enforce pacing targets, 25.5s floor, graphic_checklist payoff layout |
+| Task 51: Enforce Strict QA Thresholds in `qa.py` | [x] | Define REQUIRED_PRODUCT_SCORE_THRESHOLDS and update validation |
+| Task 52: Update Prompt Templates in `prompts.py` | [x] | Instruct ChatGPT and Gemini on new visual, pacing, and SEO rules |
+| Task 53: Verification & Test Execution | [x] | Verify all tests pass |

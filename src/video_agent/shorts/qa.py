@@ -396,17 +396,26 @@ PRODUCT_SCORE_KEYS = [
     "natural_spanish",
     "saveability",
 ]
-MIN_PRODUCT_SCORE = 7
-MIN_AVERAGE_PRODUCT_SCORE = 8
+REQUIRED_PRODUCT_SCORE_THRESHOLDS = {
+    "hook_strength": 9.0,
+    "clarity": 9.0,
+    "retention_pacing": 9.0,
+    "visual_specificity": 9.0,
+    "audience_fit_45_plus": 9.0,
+    "natural_spanish": 9.0,
+    "saveability": 8.5,
+}
+MIN_PRODUCT_SCORE = 9.0
+MIN_AVERAGE_PRODUCT_SCORE = 8.9
 # A single product dimension at or below this score blocks render outright — no
 # best-candidate fallback may rescue it.
-MIN_PRODUCT_SCORE_RENDER_BLOCK = 5
+MIN_PRODUCT_SCORE_RENDER_BLOCK = 8.5
 # A retention_pacing exactly at this value is treated as "soft": if it is the only
 # weak dimension, we simplify deterministically or render the best candidate with
 # a warning instead of failing after max regenerations.
-SOFT_PACING_SCORE = 6
+SOFT_PACING_SCORE = 8.0
 # Below this retention_pacing we attempt a simplification repair.
-PRODUCT_REPAIR_PACING_THRESHOLD = 7
+PRODUCT_REPAIR_PACING_THRESHOLD = 9.0
 # Scene count at/above which simplification (drop redundant scenes, merge tip+CTA)
 # is the preferred pacing repair.
 SIMPLIFY_SCENE_COUNT_THRESHOLD = 9
@@ -476,15 +485,19 @@ def summarize_product_scores(scores: dict[str, Any]) -> dict[str, Any]:
     missing = len(values) != len(PRODUCT_SCORE_KEYS)
     average = sum(values) / len(values) if values else 0.0
     min_score = min(values) if values else 0.0
-    low_dims = {k: v for k, v in parsed.items() if v < MIN_PRODUCT_SCORE}
+    low_dims = {
+        k: v
+        for k, v in parsed.items()
+        if k in REQUIRED_PRODUCT_SCORE_THRESHOLDS and v < REQUIRED_PRODUCT_SCORE_THRESHOLDS[k]
+    }
     pacing = parsed.get("retention_pacing")
 
-    blocks_render = missing or (bool(values) and min_score <= MIN_PRODUCT_SCORE_RENDER_BLOCK)
+    blocks_render = missing or bool(low_dims)
     soft_pacing_only = (
         not missing
         and not blocks_render
         and set(low_dims.keys()) <= {"retention_pacing"}
-        and pacing == SOFT_PACING_SCORE
+        and pacing is not None and pacing == SOFT_PACING_SCORE
     )
     return {
         "values": values,
@@ -605,7 +618,7 @@ def normalize_gemini_scenes_qa(
         low_scores = {
             key: val
             for key, val in score_dict.items()
-            if val < MIN_PRODUCT_SCORE
+            if key in REQUIRED_PRODUCT_SCORE_THRESHOLDS and val < REQUIRED_PRODUCT_SCORE_THRESHOLDS[key]
         }
         average = sum(values) / len(values) if values else 0.0
 
@@ -614,18 +627,18 @@ def normalize_gemini_scenes_qa(
                 "type": "product_quality_score_low",
                 "scene_id": None,
                 "severity": "major",
-                "detail": f"Some product quality scores are below {MIN_PRODUCT_SCORE}: {low_scores}. Hint: Improve the weak product-quality dimensions while preserving safety, audio-fit, and scene caps."
+                "detail": f"Some product quality scores are below their required thresholds: {low_scores}. Required: {REQUIRED_PRODUCT_SCORE_THRESHOLDS}. Hint: Improve the weak product-quality dimensions while preserving safety, audio-fit, and scene caps."
             })
-            score_required_changes.append(f"Some product quality scores are below {MIN_PRODUCT_SCORE}: {low_scores}. Hint: Improve the weak product-quality dimensions while preserving safety, audio-fit, and scene caps.")
+            score_required_changes.append(f"Some product quality scores are below their required thresholds: {low_scores}. Required: {REQUIRED_PRODUCT_SCORE_THRESHOLDS}. Hint: Improve the weak product-quality dimensions while preserving safety, audio-fit, and scene caps.")
 
         if average < MIN_AVERAGE_PRODUCT_SCORE:
             score_issues.append({
                 "type": "product_quality_average_low",
                 "scene_id": None,
                 "severity": "major",
-                "detail": f"Average product quality score is {average:.1f}, below {MIN_AVERAGE_PRODUCT_SCORE}. Hint: Improve hook, visual specificity, clarity, pacing, natural Spanish, and saveability."
+                "detail": f"Average product quality score is {average:.1f}, below {MIN_AVERAGE_PRODUCT_SCORE:.2f}. Hint: Improve hook, visual specificity, clarity, pacing, natural Spanish, and saveability."
             })
-            score_required_changes.append(f"Average product quality score is {average:.1f}, below {MIN_AVERAGE_PRODUCT_SCORE}. Hint: Improve hook, visual specificity, clarity, pacing, natural Spanish, and saveability.")
+            score_required_changes.append(f"Average product quality score is {average:.1f}, below {MIN_AVERAGE_PRODUCT_SCORE:.2f}. Hint: Improve hook, visual specificity, clarity, pacing, natural Spanish, and saveability.")
 
     # Apply score issues to new_issues and required changes
     new_issues.extend(score_issues)

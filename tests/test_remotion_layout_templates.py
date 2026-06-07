@@ -54,7 +54,7 @@ def test_short_layout_constants_use_10_percent_horizontal_safe_zone():
     assert "safeX: 108" in source
     assert "hookZone: {yMin: 360, yMax: 850, width: 864}" in source
     assert "bodyZone: {yMin: 860, yMax: 1250, width: 820}" in source
-    assert "captionZone: {yMin: 1180, yMax: 1460, width: 800}" in source
+    assert "captionZone: {yMin: 1100, yMax: 1380, width: 800}" in source
     assert "ctaZone: {yMin: 1180, yMax: 1420, width: 800}" in source
 
 

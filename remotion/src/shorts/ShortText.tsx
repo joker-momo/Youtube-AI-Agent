@@ -94,7 +94,7 @@ export const BodyText: React.FC<{children: React.ReactNode; fontSize?: number; a
 
 export const CaptionText: React.FC<{children: React.ReactNode; fontSize?: number; accentColor?: string}> = ({
   children,
-  fontSize = 42,
+  fontSize = 48,
   accentColor,
 }) => {
   const anim = useEntrance();

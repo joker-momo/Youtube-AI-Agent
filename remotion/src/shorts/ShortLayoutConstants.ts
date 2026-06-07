@@ -21,7 +21,7 @@ export const SHORT_LAYOUT = {
   // Primary text zones (y px, top-down).
   hookZone: {yMin: 360, yMax: 850, width: 864},
   bodyZone: {yMin: 860, yMax: 1250, width: 820},
-  captionZone: {yMin: 1180, yMax: 1460, width: 800},
+  captionZone: {yMin: 1100, yMax: 1380, width: 800},
   ctaZone: {yMin: 1180, yMax: 1420, width: 800},
 
   // Absolute hard floor — anything readable below this risks YouTube UI.
@@ -31,9 +31,9 @@ export const SHORT_LAYOUT = {
 /** Three overlay presets per spec §3.2. Tuned up after legibility review
  *  (bright-background scenes were washing out the hook copy). */
 export const SHORT_OVERLAYS = {
-  default: {fullDarkenOpacity: 0.30, bottomGradientOpacity: 0.60, centerTextScrimOpacity: 0.42},
-  dark: {fullDarkenOpacity: 0.20, bottomGradientOpacity: 0.52, centerTextScrimOpacity: 0.34},
-  bright: {fullDarkenOpacity: 0.40, bottomGradientOpacity: 0.66, centerTextScrimOpacity: 0.50},
+  default: {fullDarkenOpacity: 0.24, bottomGradientOpacity: 0.48, centerTextScrimOpacity: 0.34},
+  dark: {fullDarkenOpacity: 0.16, bottomGradientOpacity: 0.42, centerTextScrimOpacity: 0.27},
+  bright: {fullDarkenOpacity: 0.32, bottomGradientOpacity: 0.53, centerTextScrimOpacity: 0.40},
 } as const;
 
 export type OverlayKey = keyof typeof SHORT_OVERLAYS;

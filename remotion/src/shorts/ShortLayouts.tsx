@@ -90,7 +90,7 @@ export const ShortPainLayout: React.FC<ShortSceneInput> = ({on_screen_text, capt
         </Zone>
       )}
       {cap && cap !== body && (
-        <Zone yMin={1180} yMax={1380} width={SHORT_LAYOUT.captionZone.width}>
+        <Zone yMin={1100} yMax={1300} width={SHORT_LAYOUT.captionZone.width}>
           <CaptionText accentColor={accentColor}>{cap}</CaptionText>
         </Zone>
       )}
@@ -115,7 +115,7 @@ export const ShortTipLayout: React.FC<ShortSceneInput> = ({on_screen_text, capti
         </Zone>
       )}
       {cap && cap !== body && (
-        <Zone yMin={1180} yMax={1400} width={SHORT_LAYOUT.captionZone.width}>
+        <Zone yMin={1100} yMax={1320} width={SHORT_LAYOUT.captionZone.width}>
           <CaptionText accentColor={accentColor}>{cap}</CaptionText>
         </Zone>
       )}

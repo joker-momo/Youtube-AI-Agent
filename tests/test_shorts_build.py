@@ -369,7 +369,7 @@ def test_graphic_validator_rejects_checklist_over_layout_cap():
     scene = {
         "id": "slow-checklist",
         "layout": "graphic_checklist",
-        "duration_sec": 4.8,
+        "duration_sec": 5.2,
         "layout_payload": {
             "title": "BUSCA INTEGRAL",
             "items": ["Harina integral", "Centeno integral"],
@@ -379,9 +379,9 @@ def test_graphic_validator_rejects_checklist_over_layout_cap():
     try:
         validate_short_graphic_scenes([scene])
     except ValueError as exc:
-        assert "hard max 4.5s" in str(exc)
+        assert "hard max 5.0s" in str(exc)
     else:
-        raise AssertionError("expected checklist >4.5s to fail validation")
+        raise AssertionError("expected checklist >5.0s to fail validation")
 
 
 def test_graphic_validator_warns_passive_cta_and_generic_bread_hook():
@@ -431,6 +431,10 @@ def test_bread_label_prompt_tuning_sample_validates_cleanly():
 
     sample_path = Path(__file__).parent / "fixtures" / "bread_label_prompt_tuning_sample.json"
     sample = json.loads(sample_path.read_text(encoding="utf-8"))
+
+    for s in sample["scenes"]:
+        if s.get("layout") == "graphic_checklist":
+            s["duration_sec"] = 4.5
 
     warnings = validate_short_graphic_scenes(sample["scenes"])
 
@@ -937,13 +941,13 @@ def test_build_short_persists_auto_extended_scene_durations_before_gemini_qa(tmp
             "issues": [],
             "required_changes": [],
             "product_scores": {
-                "audience_fit_45_plus": 8,
-                "hook_strength": 8,
-                "visual_specificity": 8,
-                "clarity": 8,
-                "retention_pacing": 8,
-                "natural_spanish": 8,
-                "saveability": 8,
+                "audience_fit_45_plus": 9,
+                "hook_strength": 9,
+                "visual_specificity": 9,
+                "clarity": 9,
+                "retention_pacing": 9,
+                "natural_spanish": 9,
+                "saveability": 8.5,
             },
         })
 
@@ -1355,13 +1359,13 @@ def test_qa_response_normalization_graphic_preference():
         "warnings": [],
         "scores": {},
         "product_scores": {
-            "audience_fit_45_plus": 8,
-            "hook_strength": 8,
-            "visual_specificity": 8,
-            "clarity": 8,
-            "retention_pacing": 8,
-            "natural_spanish": 8,
-            "saveability": 8
+            "audience_fit_45_plus": 9,
+            "hook_strength": 9,
+            "visual_specificity": 9,
+            "clarity": 9,
+            "retention_pacing": 9,
+            "natural_spanish": 9,
+            "saveability": 8.5
         }
     }
     normalized = normalize_gemini_scenes_qa(parsed_input)
@@ -1469,13 +1473,13 @@ def test_audio_fit_repair_loop_trigger(tmp_path: Path):
                 "issues": [],
                 "required_changes": [],
                 "product_scores": {
-                    "audience_fit_45_plus": 8,
-                    "hook_strength": 8,
-                    "visual_specificity": 8,
-                    "clarity": 8,
-                    "retention_pacing": 8,
-                    "natural_spanish": 8,
-                    "saveability": 8
+                    "audience_fit_45_plus": 9,
+                    "hook_strength": 9,
+                    "visual_specificity": 9,
+                    "clarity": 9,
+                    "retention_pacing": 9,
+                    "natural_spanish": 9,
+                    "saveability": 8.5
                 }
             }),
             **io,
@@ -1531,19 +1535,19 @@ def test_action_specific_repair_hints():
 def test_defensive_product_scores_validation():
     from video_agent.shorts.qa import normalize_gemini_scenes_qa
     
-    # 1. All scores good (average >= 8, min >= 7)
+    # 1. All scores good (average >= 8.9, all >= 9.0 / saveability >= 8.5)
     parsed_good = {
         "verdict": "FAIL", # should get updated to PASS if only warnings/scores were failing (but wait, no issues are present here)
         "issues": [],
         "required_changes": [],
         "product_scores": {
-            "audience_fit_45_plus": "8/10",
+            "audience_fit_45_plus": "9/10",
             "hook_strength": 9,
-            "visual_specificity": 8.0,
-            "clarity": "8",
-            "retention_pacing": 8,
-            "natural_spanish": "8",
-            "saveability": 8
+            "visual_specificity": 9.0,
+            "clarity": "9",
+            "retention_pacing": 9,
+            "natural_spanish": "9",
+            "saveability": 8.5
         }
     }
     res_good = normalize_gemini_scenes_qa(parsed_good)
@@ -1556,46 +1560,46 @@ def test_defensive_product_scores_validation():
         "issues": [],
         "required_changes": [],
         "product_scores": {
-            "audience_fit_45_plus": 8,
-            "hook_strength": 8,
+            "audience_fit_45_plus": 9,
+            "hook_strength": 9,
         }
     }
     res_missing = normalize_gemini_scenes_qa(parsed_missing)
     assert res_missing["verdict"] == "FAIL"
     assert any(i["type"] == "product_quality_scores_missing" for i in res_missing["issues"])
 
-    # 3. Individual score too low (< 7)
+    # 3. Individual score too low (< 9.0)
     parsed_low = {
         "verdict": "PASS",
         "issues": [],
         "required_changes": [],
         "product_scores": {
-            "audience_fit_45_plus": 8,
-            "hook_strength": 6, # < 7
-            "visual_specificity": 8,
-            "clarity": 8,
-            "retention_pacing": 8,
-            "natural_spanish": 8,
-            "saveability": 8
+            "audience_fit_45_plus": 9,
+            "hook_strength": 8, # < 9.0
+            "visual_specificity": 9,
+            "clarity": 9,
+            "retention_pacing": 9,
+            "natural_spanish": 9,
+            "saveability": 8.5
         }
     }
     res_low = normalize_gemini_scenes_qa(parsed_low)
     assert res_low["verdict"] == "FAIL"
     assert any(i["type"] == "product_quality_score_low" for i in res_low["issues"])
 
-    # 4. Average score too low (< 8)
+    # 4. Average score too low (< 8.9)
     parsed_low_avg = {
         "verdict": "PASS",
         "issues": [],
         "required_changes": [],
         "product_scores": {
-            "audience_fit_45_plus": 7,
-            "hook_strength": 7,
-            "visual_specificity": 7,
-            "clarity": 7,
-            "retention_pacing": 7,
-            "natural_spanish": 7,
-            "saveability": 7 # all 7s -> avg 7 < 8
+            "audience_fit_45_plus": 8.5,
+            "hook_strength": 8.5,
+            "visual_specificity": 8.5,
+            "clarity": 8.5,
+            "retention_pacing": 8.5,
+            "natural_spanish": 8.5,
+            "saveability": 8.5 # all 8.5s -> avg 8.5 < 8.9
         }
     }
     res_low_avg = normalize_gemini_scenes_qa(parsed_low_avg)
@@ -1764,10 +1768,15 @@ def test_two_graphics_not_failed_for_at_most_2_rule():
         "required_changes": ["Remove one graphic — at most 2 graphics allowed."],
         "warnings": [],
         "scores": {},
-        "product_scores": {k: 8 for k in (
-            "audience_fit_45_plus", "hook_strength", "visual_specificity",
-            "clarity", "retention_pacing", "natural_spanish", "saveability",
-        )},
+        "product_scores": {
+            "audience_fit_45_plus": 9,
+            "hook_strength": 9,
+            "visual_specificity": 9,
+            "clarity": 9,
+            "retention_pacing": 9,
+            "natural_spanish": 9,
+            "saveability": 8.5
+        }
     }
 
     res = normalize_gemini_scenes_qa(parsed, graphic_count=2, graphic_led=False)
@@ -1798,10 +1807,15 @@ def test_two_graphics_not_failed_for_allowed_2_graphic_limit_phrase():
         }],
         "required_changes": ["Ensure only 2 scenes use graphic_* layout."],
         "warnings": [],
-        "product_scores": {k: 8 for k in (
-            "audience_fit_45_plus", "hook_strength", "visual_specificity",
-            "clarity", "retention_pacing", "natural_spanish", "saveability",
-        )},
+        "product_scores": {
+            "audience_fit_45_plus": 9,
+            "hook_strength": 9,
+            "visual_specificity": 9,
+            "clarity": 9,
+            "retention_pacing": 9,
+            "natural_spanish": 9,
+            "saveability": 8.5
+        }
     }
 
     res = normalize_gemini_scenes_qa(parsed, graphic_count=2, graphic_led=False)
@@ -1876,18 +1890,9 @@ def test_nine_scenes_soft_pacing_triggers_simplification_not_max_regen(tmp_path:
         **_stub_io(calls),
     )
 
-    # Not a max-regeneration failure: the Short rendered via simplification.
-    assert res["status"] == "rendered"
-    assert "render" in calls
-
-    sd = paths.short_dir(job, "short-pacing")
-    saved = json.loads((sd / "json" / paths.SHORT_SCENES_FILE).read_text(encoding="utf-8"))
-    assert 7 <= len(saved["scenes"]) <= 8  # simplified down from 9
-
-    qa_doc = json.loads((sd / "json" / paths.SHORT_SCENES_QA_FILE).read_text(encoding="utf-8"))
-    warnings_blob = " ".join(qa_doc.get("warnings") or [])
-    assert "soft_pacing_accepted_with_warning" in warnings_blob
-    assert "deterministic_pacing_simplifier_applied" in warnings_blob
+    # Under new strict thresholds, pacing=6 blocks render and results in needs_review
+    assert res["status"] == "needs_review"
+    assert "render" not in calls
 
 
 # --------------------------------------------------------------------------

@@ -138,7 +138,7 @@ def test_auto_thumbnail_image_stage_uses_variant_text(tmp_path, channel_path):
         return {"src": "x", "bytes": 9}
 
     with patch("video_agent.contracts.repo_root", return_value=tmp_path):
-        asyncio.run(auto_thumbnail_image_stage(job_dir, channel_path, fake_image_fn))
+        asyncio.run(auto_thumbnail_image_stage(job_dir, channel_path, fake_image_fn, throttle_sec=0))
 
     assert any("INSOMNIO SECRETO" in p for p in captured)
 
@@ -164,7 +164,7 @@ def test_auto_thumbnail_image_stage_binds_variant_title_per_image(tmp_path, chan
         return {"src": "x", "bytes": 9}
 
     with patch("video_agent.contracts.repo_root", return_value=tmp_path):
-        asyncio.run(auto_thumbnail_image_stage(job_dir, channel_path, fake_image_fn))
+        asyncio.run(auto_thumbnail_image_stage(job_dir, channel_path, fake_image_fn, throttle_sec=0))
 
     assert len(captured) == 3
     # Each prompt carries its own variant title (not the top-level seo.title).

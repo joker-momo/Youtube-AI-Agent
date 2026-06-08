@@ -17,6 +17,8 @@ from typing import Any
 
 DEFAULT_SPANISH_WPS = 2.25
 AUDIO_TAIL_MARGIN_SEC = 0.6
+AUDIO_TAIL_EPSILON_SEC = 0.05
+AUDIO_TAIL_REPAIR_BUFFER_SEC = 0.1
 MIN_SHORT_DURATION_SEC = 20.0
 MAX_SHORT_DURATION_SEC = 60.0
 IDEAL_MIN_SHORT_DURATION_SEC = 28.0
@@ -225,8 +227,11 @@ def validate_audio_fit(
     narration_audio_sec: float,
     *,
     margin_sec: float = AUDIO_TAIL_MARGIN_SEC,
+    epsilon_sec: float = AUDIO_TAIL_EPSILON_SEC,
 ) -> SceneValidationIssue | None:
-    if float(narration_audio_sec or 0) + margin_sec > float(render_duration_sec or 0):
+    required_margin = float(margin_sec or 0.0)
+    actual_margin = float(render_duration_sec or 0.0) - float(narration_audio_sec or 0.0)
+    if actual_margin + float(epsilon_sec or 0.0) < required_margin:
         return SceneValidationIssue(
             type="audio_fit",
             scene_id=None,
@@ -245,6 +250,7 @@ def extend_scene_durations_for_audio_tail(
     narration_audio_sec: float,
     *,
     margin_sec: float = AUDIO_TAIL_MARGIN_SEC,
+    repair_buffer_sec: float = AUDIO_TAIL_REPAIR_BUFFER_SEC,
     max_auto_extension_sec: float = 1.5,
 ) -> dict[str, Any]:
     """Add a small deterministic tail pad when narration fits except margin.
@@ -255,7 +261,14 @@ def extend_scene_durations_for_audio_tail(
     """
     scenes = list((scenes_doc or {}).get("scenes") or [])
     current_total = float(sum(_duration(scene) for scene in scenes))
-    required_total = math.ceil((float(narration_audio_sec or 0.0) + float(margin_sec or 0.0)) * 10.0) / 10.0
+    required_total = math.ceil(
+        (
+            float(narration_audio_sec or 0.0)
+            + float(margin_sec or 0.0)
+            + float(repair_buffer_sec or 0.0)
+        )
+        * 10.0
+    ) / 10.0
     shortage = round(required_total - current_total, 3)
     if shortage <= 0:
         if scenes_doc is not None:

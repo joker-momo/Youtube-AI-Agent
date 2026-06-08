@@ -182,6 +182,31 @@ def _default_thumbnail_fn(long_job_dir: Path, short_id: str, channel_config: dic
     return None
 
 
+def _scene_duration_sum(scenes_doc: dict[str, Any]) -> float:
+    return round(
+        sum(float(scene.get("duration_sec") or 0.0) for scene in ((scenes_doc or {}).get("scenes") or [])),
+        1,
+    )
+
+
+def _snapshot_scene_durations(scenes_doc: dict[str, Any]) -> dict[str, float]:
+    snapshot: dict[str, float] = {}
+    for index, scene in enumerate((scenes_doc or {}).get("scenes") or []):
+        scene_id = str(scene.get("id") or scene.get("scene_id") or index)
+        snapshot[scene_id] = float(scene.get("duration_sec") or 0.0)
+    return snapshot
+
+
+def _restore_scene_durations(scenes_doc: dict[str, Any], snapshot: dict[str, float]) -> None:
+    if not snapshot:
+        return
+    for index, scene in enumerate((scenes_doc or {}).get("scenes") or []):
+        scene_id = str(scene.get("id") or scene.get("scene_id") or index)
+        if scene_id in snapshot:
+            scene["duration_sec"] = snapshot[scene_id]
+    scenes_doc["total_duration_sec"] = _scene_duration_sum(scenes_doc)
+
+
 def build_short(
     long_job_dir: Path,
     short_plan: dict,
@@ -280,6 +305,22 @@ def build_short(
     def update_stage(stage_name: str, new_status: str, **kwargs):
         _update_short_stage(status, stage_name, new_status, **kwargs)
         write_short_status(long_job_dir, short_id, status)
+        if new_status in {"completed", "failed", "skipped"}:
+            payload = {"stage": stage_name, "status": new_status, **kwargs}
+            if "verdict" not in payload:
+                qa_verdict = payload.get("qa_verdict")
+                if qa_verdict:
+                    payload["verdict"] = qa_verdict
+                elif new_status == "completed":
+                    payload["verdict"] = "PASS"
+                elif new_status == "failed":
+                    payload["verdict"] = "FAIL"
+            _recorder.record_event(
+                "deterministic",
+                "stage_status",
+                payload,
+                ok=new_status != "failed",
+            )
 
     def check_stop():
         if (long_job_dir / ".stop_requested").exists() or (sd / ".stop_requested").exists():
@@ -696,7 +737,14 @@ def build_short(
                 write_short_status(long_job_dir, short_id, status)
                 raise exc
 
-            if scenes_qa_result["verdict"] == "PASS":
+            qa_pass = scenes_qa_result.get("verdict") == "PASS"
+            scenes_qa_result["qa_pass"] = qa_pass
+            scenes_qa_result["provider_call_ok"] = bool(
+                scenes_qa_result.get("provider_call_ok")
+                or scenes_qa_result.get("provider") in {"gemini", "rule_based"}
+            )
+
+            if qa_pass:
                 for issue_id in list(scene_retry_memory.active_issues.keys()):
                     issue = scene_retry_memory.active_issues[issue_id]
                     if issue.stage == "scene_qa":
@@ -807,7 +855,10 @@ def build_short(
             })
             continue
 
-        # Fallback handling
+        # Final hard gate: a provider call that returned JSON is not the same
+        # as a passed QA verdict. If Gemini scene QA says FAIL, do not rescue it
+        # as a best candidate; retry scenes while budget remains, otherwise stop
+        # before audio tail repair, SEO, or render.
         if not scenes_passed and scenes_qa_result["verdict"] != "PASS":
             if best_scene_candidate is not None and best_scene_candidate_qa is not None:
                 candidate_issues = validate_scenes.validate_scene_structure(
@@ -815,125 +866,17 @@ def build_short(
                     scenes_doc=best_scene_candidate,
                     script=short_script,
                 )
-                # Hard blockers: never render on audio-fit, source/safety,
-                # unreadable text, or off-topic hook regardless of product scores.
-                # Scan the issue type + detail, but DROP the remediation "Hint:"
-                # tail — product hints mention "safety"/"audio-fit" generically
-                # and must not be mistaken for a real safety/audio-fit finding.
-                def _issue_signal(issue: dict) -> str:
-                    detail = str(issue.get("detail") or "").split("Hint:")[0]
-                    return f"{issue.get('type') or ''} {detail}".lower()
-                llm_issue_text = " ".join(
-                    _issue_signal(i) for i in (best_scene_candidate_qa.get("issues") or [])
-                )
-                unsafe_llm_issue = any(
-                    token in llm_issue_text
-                    for token in ("audio_fit", "audio-fit", "source_fidelity", "safety", "medical", "overclaim", "unreadable", "off-topic", "off topic")
-                )
-
-                # Product-score gates. A single dimension <= 5 blocks render
-                # outright. A lone soft pacing of 6 is rescuable via the
-                # deterministic simplifier / best-candidate-with-warnings path.
-                if gemini_fn is not None:
-                    summary = qa.summarize_product_scores(
-                        best_scene_candidate_qa.get("product_scores") or {}
-                    )
-                    product_blocks_render = summary["blocks_render"]
-                    soft_pacing_only = summary["soft_pacing_only"]
-                    product_score_ok = (
-                        (not summary["missing"])
-                        and (not summary["has_low"])
-                        and (not summary["avg_too_low"])
-                    )
-                else:
-                    product_blocks_render = False
-                    soft_pacing_only = False
-                    product_score_ok = True
-
-                structural_blocked = validate_scenes.has_blocking_or_repairable(candidate_issues)
-                hard_block = structural_blocked or unsafe_llm_issue or product_blocks_render
-
-                if not hard_block and (product_score_ok or soft_pacing_only):
-                    fallback_warnings = list(best_scene_candidate_qa.get("warnings") or [])
-                    is_simplified = False
-                    if soft_pacing_only and not product_score_ok:
-                        simplified = validate_scenes.simplify_scenes_for_pacing(
-                            best_scene_candidate, script=short_script
-                        )
-                        if simplified["changed"]:
-                            new_issues = validate_scenes.validate_scene_structure(
-                                simplified["scenes_doc"].get("scenes") or [],
-                                scenes_doc=simplified["scenes_doc"],
-                                script=short_script,
-                            )
-                            if not validate_scenes.has_blocking_or_repairable(new_issues):
-                                best_scene_candidate = simplified["scenes_doc"]
-                                fallback_warnings.extend(simplified["notes"])
-                                fallback_warnings.append("deterministic_pacing_simplifier_applied")
-                                is_simplified = True
-                        fallback_warnings.append("soft_pacing_accepted_with_warning")
-                    fallback_warnings.append("best_candidate_fallback_used_after_llm_qa_warnings")
-
-                    state.current_scenes_version += 1
-                    
-                    candidate_issues = validate_scenes.validate_scene_structure(
-                        best_scene_candidate.get("scenes") or [],
-                        scenes_doc=best_scene_candidate,
-                        script=short_script,
-                    )
-                    if not validate_scenes.has_blocking_or_repairable(candidate_issues):
-                        state.latest_scene_validation_ok = True
-                        state.latest_scene_validation_version = state.current_scenes_version
-                    else:
-                        state.latest_scene_validation_ok = False
-                        state.latest_scene_validation_version = None
-
-                    if is_simplified and gemini_fn is not None:
-                        simplified_qa = qa.run_short_scenes_qa(
-                            long_job_dir, short_id, channel_config,
-                            gemini_fn=gemini_fn, attempt=scenes_attempts,
-                        )
-                        sum_repr = qa.summarize_product_scores(
-                            simplified_qa.get("product_scores") or {}
-                        )
-                        def _issue_signal(issue: dict) -> str:
-                            detail = str(issue.get("detail") or "").split("Hint:")[0]
-                            return f"{issue.get('type') or ''} {detail}".lower()
-                        unsafe_llm = any(
-                            token in " ".join(_issue_signal(i) for i in (simplified_qa.get("issues") or []))
-                            for token in ("audio_fit", "audio-fit", "source_fidelity", "safety", "medical", "overclaim", "unreadable", "off-topic", "off topic")
-                        )
-                        hard_blk = unsafe_llm or sum_repr["blocks_render"]
-                        prod_ok = not sum_repr["missing"] and not sum_repr["has_low"] and not sum_repr["avg_too_low"]
-                        soft_pc = sum_repr["soft_pacing_only"]
-
-                        if not hard_blk and (prod_ok or soft_pc):
-                            state.latest_scene_qa_ok = True
-                            state.latest_scene_qa_version = state.current_scenes_version
-                        else:
-                            state.latest_scene_qa_ok = False
-                            state.latest_scene_qa_version = None
-                    else:
-                        state.latest_scene_qa_ok = True
-                        state.latest_scene_qa_version = state.current_scenes_version
-
-                    short_scenes = best_scene_candidate
-                    atomic_write_json(_jd / paths.SHORT_SCENES_FILE, short_scenes)
-                    scenes_qa_result = {
-                        **best_scene_candidate_qa,
-                        "verdict": "PASS",
-                        "warnings": fallback_warnings,
-                        "provider": "best_candidate_fallback",
-                    }
-                    atomic_write_json(_jd / paths.SHORT_SCENES_QA_FILE, scenes_qa_result)
-                    scenes_passed = True
-                else:
-                    atomic_write_json(_jd / paths.SHORT_FAILURE_REPORT_FILE, {
-                        "stage": "qa_scenes",
-                        "best_candidate_available": True,
-                        "deterministic_issues": validate_scenes.issues_to_dicts(candidate_issues),
-                        "llm_qa": best_scene_candidate_qa,
-                    })
+                state.latest_scene_qa_ok = False
+                state.latest_scene_qa_version = None
+                atomic_write_json(_jd / paths.SHORT_FAILURE_REPORT_FILE, {
+                    "stage": "qa_scenes",
+                    "best_candidate_available": True,
+                    "deterministic_issues": validate_scenes.issues_to_dicts(candidate_issues),
+                    "llm_qa": best_scene_candidate_qa,
+                    "latest_scene_qa_ok": state.latest_scene_qa_ok,
+                    "latest_scene_qa_version": state.latest_scene_qa_version,
+                    "detail": "Gemini scene QA verdict was FAIL; audio, SEO, and render are blocked.",
+                })
 
         if not scenes_passed:
             break
@@ -956,12 +899,10 @@ def build_short(
         try:
             check_stop()
             assert_latest_scenes_ready(state)
+            approved_scene_durations = _snapshot_scene_durations(short_scenes)
             narration_wav = tts_fn(sd, short_scenes, channel_config)
-            duration_sec = float(
-                sum(float(s.get("duration_sec") or 0.0) for s in (short_scenes.get("scenes") or []))
-                or short_scenes.get("total_duration_sec")
-                or 0.0
-            )
+            _restore_scene_durations(short_scenes, approved_scene_durations)
+            duration_sec = float(_scene_duration_sum(short_scenes) or short_scenes.get("total_duration_sec") or 0.0)
             short_scenes["total_duration_sec"] = round(duration_sec, 1)
             narration_audio_sec = validate_scenes.probe_audio_duration_sec(narration_wav)
             if narration_audio_sec is not None:
@@ -970,7 +911,8 @@ def build_short(
                     narration_audio_sec
                 )
                 if tail_repair.get("changed"):
-                    duration_sec = float(short_scenes.get("total_duration_sec") or duration_sec)
+                    duration_sec = float(_scene_duration_sum(short_scenes) or short_scenes.get("total_duration_sec") or duration_sec)
+                    short_scenes["total_duration_sec"] = round(duration_sec, 1)
                     
                     state.current_scenes_version += 1
                     state.latest_scene_validation_ok = False
@@ -986,6 +928,8 @@ def build_short(
                         state.latest_scene_validation_version = state.current_scenes_version
                         if state.latest_scene_qa_ok:
                             state.latest_scene_qa_version = state.current_scenes_version
+                    duration_sec = float(_scene_duration_sum(short_scenes) or short_scenes.get("total_duration_sec") or duration_sec)
+                    short_scenes["total_duration_sec"] = round(duration_sec, 1)
                     
                     atomic_write_json(_jd / paths.SHORT_SCENES_FILE, short_scenes)
                     _recorder.record_event(
@@ -1015,78 +959,56 @@ def build_short(
                 state.latest_audio_tail_version = None
  
             if not audio_fit_passed:
-                if script_attempts < max_regen + 1:
-                    repair_plan = validate_scenes.build_scene_repair_plan(
-                        short_scenes.get("scenes") or [],
-                        [audio_issue],
-                        script=short_script,
-                    )
-                    atomic_write_json(_jd / paths.SHORT_FAILURE_REPORT_FILE, {
-                        "stage": "audio",
-                        "issues": [audio_issue.to_dict()],
+                repair_plan = validate_scenes.build_scene_repair_plan(
+                    short_scenes.get("scenes") or [],
+                    [audio_issue],
+                    script=short_script,
+                )
+                _recorder.record_event(
+                    "deterministic",
+                    "audio_fit",
+                    {
+                        "verdict": "FAIL",
+                        "issue": audio_issue.to_dict(),
                         "render_duration_sec": duration_sec,
                         "narration_audio_sec": round(narration_audio_sec, 3),
                         "repair_plan": repair_plan,
-                    })
-                    _recorder.record_event(
-                        "deterministic",
-                        "audio_fit",
-                        {
-                            "verdict": "FAIL",
-                            "issue": audio_issue.to_dict(),
-                            "render_duration_sec": duration_sec,
-                            "narration_audio_sec": round(narration_audio_sec, 3),
-                        },
-                        ok=False,
-                    )
-                    
-                    # Track audio fit issue in script retry memory
-                    issue_id = make_stable_issue_id("audio_tail", None, "audio_fit", audio_issue.detail)
-                    retry_issue = RetryIssue(
-                        id=issue_id,
-                        stage="audio_tail",
-                        attempt=script_attempts,
-                        scene_id=None,
-                        type="audio_fit",
-                        severity="repairable_error",
-                        detail=audio_issue.detail,
-                        required_change=repair_plan["instructions"][0] if repair_plan["instructions"] else audio_issue.detail,
-                        status="active",
-                        first_seen_attempt=script_attempts,
-                        last_seen_attempt=script_attempts
-                    )
-                    add_or_update_issue(script_retry_memory, retry_issue)
-                    save_retry_memory(script_retry_memory, script_memory_file)
-                    
-                    script_feedback = generate_cumulative_feedback(script_retry_memory, script_attempts + 1)
-                    update_stage("audio", "failed", error=audio_issue.detail)
-                    continue
-                else:
-                    update_stage("audio", "failed", error=audio_issue.detail)
-                    atomic_write_json(_jd / paths.SHORT_FAILURE_REPORT_FILE, {
-                        "stage": "audio",
-                        "issues": [audio_issue.to_dict()],
-                        "render_duration_sec": duration_sec,
-                        "narration_audio_sec": round(narration_audio_sec, 3),
-                    })
-                    status.update({
-                        "status": "needs_review",
-                        "rendered": False,
-                        "uploaded": False,
-                        "youtube_url": "",
-                        "requires_user_review": True,
-                        "qa_verdict": "FAIL",
-                        "duration_sec": round(duration_sec, 1),
-                        "audio_fit_issue": audio_issue.to_dict(),
-                        "regeneration_attempts": total_regeneration_attempts,
-                        "qa_scenes_attempts": scenes_attempts,
-                        "qa_scenes_structural_attempts": structural_attempts,
-                        "qa_scenes_product_attempts": product_attempts,
-                    })
-                    write_short_status(long_job_dir, short_id, status)
-                    return status
+                    },
+                    ok=False,
+                )
+                update_stage("audio", "failed", error=audio_issue.detail)
+                atomic_write_json(_jd / paths.SHORT_FAILURE_REPORT_FILE, {
+                    "stage": "audio",
+                    "issues": [audio_issue.to_dict()],
+                    "render_duration_sec": duration_sec,
+                    "narration_audio_sec": round(narration_audio_sec, 3),
+                    "repair_plan": repair_plan,
+                })
+                status.update({
+                    "status": "needs_review",
+                    "rendered": False,
+                    "uploaded": False,
+                    "youtube_url": "",
+                    "requires_user_review": True,
+                    "qa_verdict": "FAIL",
+                    "duration_sec": round(duration_sec, 1),
+                    "audio_fit_issue": audio_issue.to_dict(),
+                    "regeneration_attempts": total_regeneration_attempts,
+                    "qa_scenes_attempts": scenes_attempts,
+                    "qa_scenes_structural_attempts": structural_attempts,
+                    "qa_scenes_product_attempts": product_attempts,
+                })
+                write_short_status(long_job_dir, short_id, status)
+                return status
             else:
                 audio_fit_passed = True
+                update_stage(
+                    "audio",
+                    "completed",
+                    qa_verdict="PASS",
+                    render_duration_sec=round(duration_sec, 1),
+                    narration_audio_sec=round(narration_audio_sec, 3) if narration_audio_sec is not None else None,
+                )
         except Exception as exc:
             update_stage("audio", "failed")
             status["status"] = "failed"
@@ -1238,7 +1160,8 @@ def _write_render_props(short_dir: Path, short_scenes: dict, channel_config: dic
     # config so Shorts also get VideoToolbox HW encode, Metal/ANGLE WebGL,
     # and proper concurrency on Mac. ``shorts.render`` overrides win.
     base_render = (channel_config.get("render") or {})
-    duration_sec = short_scenes.get("total_duration_sec") or 35
+    duration_sec = _scene_duration_sum(short_scenes) or float(short_scenes.get("total_duration_sec") or 35)
+    short_scenes["total_duration_sec"] = round(duration_sec, 1)
     render_block = {
         "composition": rcfg.get("composition", "ShortVideoStandard"),
         "thumbnail_composition": rcfg.get("thumbnail_composition", "ShortCover"),

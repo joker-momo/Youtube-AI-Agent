@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import math
 import os
 import shutil
 import subprocess
@@ -454,11 +455,12 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
     logger.log("ASSETS_READY", {"job_id": job_id, "cost_usd": 0})
 
     branding = _prepare_branding(channel_config)
+    scene_duration_sec = round(sum(float(s.get("duration_sec") or 0.0) for s in (scene_doc.get("scenes") or [])), 1)
     render_props = {
         "channel": channel_config["channel"],
         "style": style,
         "render": channel_config["render"]
-        | {"duration_sec": scene_doc["total_duration_sec"] + branding["intro_sec"] + branding["outro_sec"]},
+        | {"duration_sec": scene_duration_sec + branding["intro_sec"] + branding["outro_sec"]},
         "scenes": scene_doc["scenes"],
         "audio": assets["audio"],
         "seo": seo,
@@ -619,6 +621,41 @@ def _should_prepare_audio_in_subprocess(job_dir: Path, channel_config: dict) -> 
     return not (narration.exists() and narration.stat().st_size > 0)
 
 
+def _is_short_job_dir(job_dir: Path, channel_config: dict | None = None) -> bool:
+    if job_dir.parent.name == "shorts":
+        return True
+    if (job_dir / "json" / "short_render_props.json").exists() or (job_dir / "short_render_props.json").exists():
+        return True
+    try:
+        render_resolution = str(((channel_config or {}).get("render") or {}).get("resolution") or "")
+        w_str, h_str = render_resolution.lower().split("x", 1)
+        return int(h_str) > int(w_str)
+    except (ValueError, AttributeError):
+        return False
+
+
+def _scene_duration_sum(scene_doc: dict) -> float:
+    return round(sum(float(scene.get("duration_sec") or 0.0) for scene in (scene_doc.get("scenes") or [])), 1)
+
+
+def _snapshot_scene_durations(scene_doc: dict) -> dict[str, float]:
+    snapshot: dict[str, float] = {}
+    for index, scene in enumerate((scene_doc or {}).get("scenes") or []):
+        scene_id = str(scene.get("id") or scene.get("scene_id") or index)
+        snapshot[scene_id] = float(scene.get("duration_sec") or 0.0)
+    return snapshot
+
+
+def _restore_scene_durations(scene_doc: dict, snapshot: dict[str, float]) -> None:
+    if not snapshot:
+        return
+    for index, scene in enumerate((scene_doc or {}).get("scenes") or []):
+        scene_id = str(scene.get("id") or scene.get("scene_id") or index)
+        if scene_id in snapshot:
+            scene["duration_sec"] = snapshot[scene_id]
+    scene_doc["total_duration_sec"] = int(math.ceil(_scene_duration_sum(scene_doc)))
+
+
 def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
     root = repo_root()
     channel_config = read_yaml(options.channel_path)
@@ -654,36 +691,28 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
                 scene["audio_offset_sec"] = ws["audio_offset_sec"]
                 scene["word_segments"] = ws["word_segments"]
 
-    # ── Duration sync: recalculate scene duration_sec from actual audio ──────────
-    # When TTS was already synthesized (tts_cached), prepare_assets skips
-    # dynamic_sync so scene durations stay at the LLM-estimated values (10-11s).
-    # We fix this here, before render_props is assembled, by deriving the true
-    # per-scene durations from:
-    #   a) whisper offset table (most accurate), or
-    #   b) actual narration audio file duration split proportionally.
-    _sync_scene_durations_from_audio(job_dir, scene_doc)
+    is_short_job = _is_short_job_dir(job_dir, channel_config)
+    short_duration_snapshot = _snapshot_scene_durations(scene_doc) if is_short_job else {}
+
+    # ── Duration sync: recalculate long-form scene duration_sec from actual audio ─
+    # Shorts have already passed scene validation + audio tail repair before
+    # render_operator_job is called. Resyncing them against cached narration audio
+    # compresses approved scene plans (for example 26.4s -> 20.0s), so keep the
+    # scene-plan timings authoritative for Short jobs.
+    if not is_short_job:
+        _sync_scene_durations_from_audio(job_dir, scene_doc)
 
     if _should_prepare_audio_in_subprocess(job_dir, channel_config):
         _run_prepare_assets_audio_subprocess(job_dir, options.channel_path)
         scene_doc = read_json(_resolve_json_file(job_dir, "scenes.json"))
+        if is_short_job:
+            _restore_scene_durations(scene_doc, short_duration_snapshot)
 
     # Force portrait stock-asset orientation when this job is a Short, so the
     # render-path call to prepare_assets stays in sync with the TTS-path
     # override in shorts/audio.py. Without this, Shorts re-fetch landscape
     # Pexels clips here and overwrite the portrait ones from the TTS stage.
     visual_config = dict(channel_config.get("visuals") or {})
-    short_render_props = job_dir / "short_render_props.json"
-    is_short_job = False
-    if short_render_props.exists():
-        is_short_job = True
-    else:
-        try:
-            render_resolution = str((channel_config.get("render") or {}).get("resolution") or "")
-            w_str, h_str = render_resolution.lower().split("x", 1)
-            if int(h_str) > int(w_str):
-                is_short_job = True
-        except (ValueError, AttributeError):
-            pass
     if is_short_job and (channel_config.get("shorts") or {}).get(
         "source", {}
     ).get("prefer_vertical_assets", True):
@@ -698,6 +727,10 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
         | {"music": channel_config.get("music") or {}},
         channel_id=channel_config["channel"]["id"],
     )
+    if is_short_job:
+        _restore_scene_durations(scene_doc, short_duration_snapshot)
+        write_json(job_dir / ARTIFACT_SCENES, scene_doc)
+        validate_json(scene_doc, root / "schemas/scenes.schema.json")
     branding = _prepare_branding(channel_config)
 
     render_config = channel_config["render"].copy()
@@ -709,11 +742,12 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
         if "cover_composition" in shorts_render and shorts_render["cover_composition"] is not None:
             render_config["thumbnail_composition"] = shorts_render["cover_composition"]
 
+    scene_duration_sec = round(sum(float(s.get("duration_sec") or 0.0) for s in (scene_doc.get("scenes") or [])), 1)
     render_props = {
         "channel": channel_config["channel"],
         "style": style,
         "render": render_config
-        | {"duration_sec": scene_doc["total_duration_sec"] + branding["intro_sec"] + branding["outro_sec"]},
+        | {"duration_sec": scene_duration_sec + branding["intro_sec"] + branding["outro_sec"]},
         "scenes": scene_doc["scenes"],
         "audio": assets["audio"],
         "seo": seo,

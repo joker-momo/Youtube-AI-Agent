@@ -685,9 +685,12 @@ def _run_gemini_scenes_qa(
     scenes = scenes_doc.get("scenes") or []
     graphic_count = validate_scenes.count_graphic_scenes(scenes)
     graphic_led = validate_scenes.is_graphic_led(scenes, script=script)
-    return normalize_gemini_scenes_qa(
+    normalized = normalize_gemini_scenes_qa(
         parsed, graphic_count=graphic_count, graphic_led=graphic_led
     )
+    normalized["provider_call_ok"] = True
+    normalized["qa_pass"] = normalized.get("verdict") == "PASS"
+    return normalized
 
 
 def run_short_scenes_qa(

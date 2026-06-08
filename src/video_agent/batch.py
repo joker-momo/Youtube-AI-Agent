@@ -47,10 +47,23 @@ def _resolve_artifact(job_dir: Path, new_rel: str, legacy_rel: str | None = None
 
 def build_audit_row(job_dir: Path) -> AuditRow:
     visual_review_path = _resolve_artifact(job_dir, ARTIFACT_VISUAL_REVIEW)
+    if not visual_review_path.exists():
+        return AuditRow(
+            job_dir=job_dir,
+            topic="-",
+            video_status="skipped",
+            visual_status="MISSING",
+            score_range="-",
+            contact_sheet="-",
+            source_mix="-",
+            provider_mix="-",
+            searched_provider_mix="-",
+            issue_count=0,
+        )
     visual_review = read_json(visual_review_path)
     
     render_props_path = _resolve_artifact(job_dir, "json/render_props.json")
-    render_props = read_json(render_props_path)
+    render_props = read_json(render_props_path) if render_props_path.exists() else {}
     
     summary = visual_review["summary"]
     

@@ -1,4 +1,6 @@
+import json
 import os
+import subprocess
 from pathlib import Path
 
 from video_agent.stages.render import build_remotion_commands
@@ -93,6 +95,49 @@ def test_video_render_ignores_unknown_gl_backend(tmp_path):
 
     assert "--gl" not in commands.video
     assert "--gl" not in commands.thumbnail
+
+
+def test_pre_render_duration_validation_blocks_props_scene_sum_mismatch(tmp_path):
+    from video_agent.stages.render import validate_render_duration_matches_scene_sum
+
+    render_props = tmp_path / "render_props.json"
+    render_props.write_text(
+        json.dumps({
+            "render": {"duration_sec": 20.0},
+            "scenes": [
+                {"id": "s01", "duration_sec": 13.2},
+                {"id": "s02", "duration_sec": 13.2},
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+    try:
+        validate_render_duration_matches_scene_sum(render_props)
+    except ValueError as exc:
+        assert "render.duration_sec 20.0s does not match scene sum 26.4s" in str(exc)
+    else:
+        raise AssertionError("expected duration mismatch to fail before render")
+
+
+def test_post_render_duration_validation_blocks_short_mp4_mismatch(tmp_path, monkeypatch):
+    from video_agent.stages.render import validate_rendered_video_duration
+
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"mp4")
+
+    def fake_run(cmd, check, capture_output, text):
+        assert "ffprobe" in cmd[0]
+        return subprocess.CompletedProcess(cmd, 0, stdout="20.000000\n", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    try:
+        validate_rendered_video_duration(video, expected_duration_sec=26.4)
+    except ValueError as exc:
+        assert "MP4 duration 20.0s does not match render.duration_sec 26.4s" in str(exc)
+    else:
+        raise AssertionError("expected rendered MP4 duration mismatch to fail")
 
 
 def test_thumbnail_uses_render_props_content_instead_of_demo_copy():

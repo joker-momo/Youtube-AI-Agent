@@ -187,7 +187,14 @@ def render_markdown(history: list[dict[str, Any]], *, short_id: str = "") -> str
         provider = h.get("provider", "?")
         kind = h.get("kind", "?")
         ok = h.get("ok", True)
-        status = "✅ OK" if ok else "❌ FAIL"
+        payload = h.get("payload") if isinstance(h.get("payload"), dict) else {}
+        verdict = str(payload.get("verdict") or "").upper()
+        if verdict == "PASS":
+            status = "✅ PASS"
+        elif verdict == "FAIL":
+            status = "❌ FAIL"
+        else:
+            status = "✅ OK" if ok else "❌ FAIL"
         ms = h.get("duration_ms")
         dur = f"{ms} ms" if isinstance(ms, int) else "?"
         ts = h.get("ts", "")
@@ -195,6 +202,15 @@ def render_markdown(history: list[dict[str, Any]], *, short_id: str = "") -> str
         lines.append(f"_{ts} · {dur}_\n")
         if not ok and h.get("error"):
             lines.append(f"> **Error:** {h['error']}\n")
+        if payload:
+            reason = payload.get("error") or payload.get("reason") or payload.get("detail")
+            if not reason and isinstance(payload.get("issue"), dict):
+                reason = payload["issue"].get("detail")
+            if reason:
+                lines.append(f"**Reason:** {reason}\n")
+            lines.append("**Payload:**\n")
+            lines.append(_fence(json.dumps(payload, ensure_ascii=False, indent=2)))
+            lines.append("")
         lines.append("**Prompt:**\n")
         lines.append(_fence(str(h.get("prompt") or "")))
         lines.append("")

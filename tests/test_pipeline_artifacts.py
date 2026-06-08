@@ -17,7 +17,7 @@ def test_pipeline_writes_structured_artifacts_without_render(tmp_path, monkeypat
         "source_dir": str(tmp_path / "missing-image-library"),
         "scene_count_target": 5,
     }
-    channel_config["tts"] = {"provider": "mock-local"}
+    channel_config["tts"] = {"provider": "mock-local", "sample_rate": 24000}
     channel_path = tmp_path / "channel.yaml"
     channel_path.write_text(yaml.safe_dump(channel_config), encoding="utf-8")
     result = run_pipeline(
@@ -69,7 +69,7 @@ def test_operator_render_writes_review_page_without_render(tmp_path, monkeypatch
         "source_dir": str(tmp_path / "missing-image-library"),
         "scene_count_target": 1,
     }
-    channel_config["tts"] = {"provider": "mock-local"}
+    channel_config["tts"] = {"provider": "mock-local", "sample_rate": 24000}
     channel_path = tmp_path / "channel.yaml"
     channel_path.write_text(yaml.safe_dump(channel_config), encoding="utf-8")
 

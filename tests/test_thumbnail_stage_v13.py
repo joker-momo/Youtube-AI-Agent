@@ -121,7 +121,7 @@ def test_stage_writes_planner_metadata_json(tmp_path: Path, channel_path: Path):
         return {"src": "x", "bytes": 9}
 
     with patch("video_agent.contracts.repo_root", return_value=tmp_path):
-        asyncio.run(auto_thumbnail_image_stage(job_dir, channel_path, fake_image_fn))
+        asyncio.run(auto_thumbnail_image_stage(job_dir, channel_path, fake_image_fn, throttle_sec=0))
 
     plans_path = job_dir / "json" / "thumbnail_prompt_plans.json"
     assert plans_path.exists(), "thumbnail_prompt_plans.json must be written"
@@ -153,7 +153,7 @@ def test_stage_uses_planner_prompts_with_variant_strategies(
         return {"src": "x", "bytes": 9}
 
     with patch("video_agent.contracts.repo_root", return_value=tmp_path):
-        asyncio.run(auto_thumbnail_image_stage(job_dir, channel_path, fake_image_fn))
+        asyncio.run(auto_thumbnail_image_stage(job_dir, channel_path, fake_image_fn, throttle_sec=0))
 
     assert len(captured) == 3
     # Each variant must use its own variant_title (planner uses variant title,
@@ -179,7 +179,7 @@ def test_stage_persists_prompt_markdown_per_variant(
         return {"src": "x", "bytes": 9}
 
     with patch("video_agent.contracts.repo_root", return_value=tmp_path):
-        asyncio.run(auto_thumbnail_image_stage(job_dir, channel_path, fake_image_fn))
+        asyncio.run(auto_thumbnail_image_stage(job_dir, channel_path, fake_image_fn, throttle_sec=0))
 
     log_dir = job_dir / "operator" / "chatgpt"
     log_paths = sorted(log_dir.glob("thumbnail_prompt_*.md"))

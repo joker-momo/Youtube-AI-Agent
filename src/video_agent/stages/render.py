@@ -122,6 +122,68 @@ def _render_gl(render_props_path: Path) -> str | None:
     return value
 
 
+def _render_scene_sum(props: dict) -> float:
+    return round(sum(float(scene.get("duration_sec") or 0.0) for scene in (props.get("scenes") or [])), 3)
+
+
+def validate_render_duration_matches_scene_sum(
+    render_props_path: Path,
+    *,
+    tolerance_sec: float = 0.2,
+) -> float:
+    props = read_json(render_props_path)
+    render_duration = float((props.get("render") or {}).get("duration_sec") or 0.0)
+    scene_sum = _render_scene_sum(props)
+    branding = props.get("branding") or {}
+    branding_duration = float(branding.get("intro_sec") or 0.0) + float(branding.get("outro_sec") or 0.0)
+    expected_duration = round(scene_sum + branding_duration, 3)
+    if abs(render_duration - expected_duration) > float(tolerance_sec):
+        raise ValueError(
+            f"render.duration_sec {render_duration:.1f}s does not match scene sum {scene_sum:.1f}s "
+            f"(tolerance {float(tolerance_sec):.1f}s)."
+        )
+    return render_duration
+
+
+def probe_video_duration_sec(video_path: Path) -> float | None:
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(video_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return float(result.stdout.strip())
+    except (subprocess.SubprocessError, ValueError):
+        return None
+
+
+def validate_rendered_video_duration(
+    video_path: Path,
+    *,
+    expected_duration_sec: float,
+    tolerance_sec: float = 0.3,
+) -> float:
+    actual = probe_video_duration_sec(video_path)
+    if actual is None:
+        raise ValueError(f"Could not probe MP4 duration for {video_path}.")
+    if abs(float(actual) - float(expected_duration_sec)) > float(tolerance_sec):
+        raise ValueError(
+            f"MP4 duration {float(actual):.1f}s does not match render.duration_sec "
+            f"{float(expected_duration_sec):.1f}s (tolerance {float(tolerance_sec):.1f}s)."
+        )
+    return float(actual)
+
+
 def _get_thumbnail_composition(props: dict) -> str:
     render_cfg = props.get("render", {}) or {}
     comp = render_cfg.get("thumbnail_composition") or render_cfg.get("cover_composition")
@@ -442,6 +504,7 @@ def render_with_remotion(
     if job_dir.name == "json":
         job_dir = job_dir.parent
 
+    expected_duration_sec = validate_render_duration_matches_scene_sum(render_props_path)
     commands = build_remotion_commands(render_props_path, video_path, thumbnail_path)
     progress_path = job_dir / "json" / "render_progress.json"
     render_pid_path = job_dir / "json" / ".render.pid"
@@ -462,6 +525,7 @@ def render_with_remotion(
             true_peak_dbtp=loudness["true_peak_dbtp"],
             lra=loudness["lra"],
         )
+    validate_rendered_video_duration(video_path, expected_duration_sec=expected_duration_sec)
     # Mark 100% on completion.
     try:
         atomic_write_json(

@@ -107,3 +107,23 @@ def test_recorder_logs_deterministic_events(tmp_path: Path):
     assert hist[0]["kind"] == "scene_validation"
     assert hist[0]["ok"] is True
     assert hist[0]["payload"]["issues"] == ["duration_cap"]
+
+
+def test_render_markdown_uses_payload_verdict_for_stage_events(tmp_path: Path):
+    rec = llm_history.LLMHistoryRecorder(tmp_path / "h.jsonl")
+
+    rec.record_event("deterministic", "stage_status", {"stage": "qa_script", "status": "completed", "verdict": "PASS"})
+    rec.record_event(
+        "deterministic",
+        "stage_status",
+        {"stage": "qa_scenes", "status": "failed", "verdict": "FAIL", "error": "Scene QA rejected layout."},
+        ok=False,
+    )
+
+    md = llm_history.render_markdown(llm_history.read_history(tmp_path / "h.jsonl"))
+
+    assert "qa_script" in md
+    assert "✅ PASS" in md
+    assert "qa_scenes" in md
+    assert "❌ FAIL" in md
+    assert "**Reason:** Scene QA rejected layout." in md

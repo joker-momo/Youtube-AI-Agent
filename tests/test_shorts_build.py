@@ -162,6 +162,10 @@ def test_v13_scene_and_qa_prompts_supersede_old_scene_count_and_numeric_authorit
     assert "never create a 7–12 sec scene" in scene_prompt or "never create a 7-12 sec scene" in scene_prompt
     assert "deterministic validator is authoritative" in qa_prompt
     assert "do not fail solely for a numeric threshold" in qa_prompt
+    assert "inside the accepted numeric ranges" in qa_prompt
+    assert "s02–s06 are 3.6s" in qa_prompt
+    assert "s08 is 2.6s" in qa_prompt
+    assert "acceptable value that merely needs visual/render verification" in qa_prompt
     assert "audience_fit" in qa_prompt
     assert "audio_fit_risk" in qa_prompt
 
@@ -557,6 +561,16 @@ def test_rendered_short_audio_fit_regression_blocks_35s_video_with_40s_audio():
     assert "35.0s" in issue.detail
 
 
+def test_audio_fit_allows_tiny_tail_margin_rounding_shortage():
+    from video_agent.shorts.validate_scenes import validate_audio_fit
+
+    assert validate_audio_fit(render_duration_sec=23.6, narration_audio_sec=23.005, margin_sec=0.6) is None
+
+    issue = validate_audio_fit(render_duration_sec=23.4, narration_audio_sec=23.005, margin_sec=0.6)
+    assert issue is not None
+    assert issue.type == "audio_fit"
+
+
 def test_v13_spanish_narration_estimate_uses_calibrated_wps():
     from video_agent.shorts.validate_scenes import (
         DEFAULT_SPANISH_WPS,
@@ -829,6 +843,149 @@ def test_build_short_pass_renders_and_writes_artifacts(tmp_path: Path):
     assert res["music_track"] == "shorts_sleep_stress"
 
 
+def test_build_short_records_stage_pass_fail_status_in_prompt_history(tmp_path: Path):
+    from video_agent.shorts import llm_history, paths, short_builder
+
+    job = _long_job(tmp_path)
+    calls: list[str] = []
+    plan = {"short_id": "short-history-stages", "format": "pain_to_tip", "scene_ids": ["scene-09"],
+            "source_start_sec": 183.0, "source_end_sec": 199.0, "music_track": "shorts_sleep_stress",
+            "narration_seed": "Marca una hora de cierre."}
+
+    short_builder.build_short(job, plan, _cfg(), llm_fn=_llm_fn_factory(), **_stub_io(calls))
+
+    hist_path = paths.short_dir(job, "short-history-stages") / "json" / paths.SHORT_LLM_HISTORY_FILE
+    stage_events = [
+        h for h in llm_history.read_history(hist_path)
+        if h.get("provider") == "deterministic" and h.get("kind") == "stage_status"
+    ]
+    assert any(e["payload"]["stage"] == "script" and e["payload"]["status"] == "completed" for e in stage_events)
+    assert any(e["payload"]["stage"] == "qa_script" and e["payload"]["verdict"] == "PASS" for e in stage_events)
+    assert any(e["payload"]["stage"] == "audio" and e["payload"]["status"] == "completed" for e in stage_events)
+
+
+def test_short_render_props_use_scene_sum_when_total_duration_is_stale(tmp_path: Path):
+    from video_agent.shorts import paths, short_builder
+
+    short_dir = tmp_path / "short"
+    scenes = [
+        {"id": "s01", "duration_sec": 2.5},
+        {"id": "s02", "duration_sec": 3.5},
+        {"id": "s03", "duration_sec": 3.5},
+        {"id": "s04", "duration_sec": 3.5},
+        {"id": "s05", "duration_sec": 3.5},
+        {"id": "s06", "duration_sec": 3.5},
+        {"id": "s07", "duration_sec": 5.0},
+        {"id": "s08", "duration_sec": 2.5},
+    ]
+    assert round(sum(float(scene["duration_sec"]) for scene in scenes), 1) == 27.5
+
+    short_builder._write_render_props(
+        short_dir,
+        {"total_duration_sec": 21.7, "scenes": scenes},
+        _cfg(),
+        "shorts_sleep_stress",
+    )
+
+    props = json.loads((short_dir / "json" / paths.SHORT_RENDER_PROPS_FILE).read_text(encoding="utf-8"))
+    assert props["total_duration_sec"] == 27.5
+    assert props["render"]["duration_sec"] == 27.5
+
+
+def test_build_short_preserves_scene_plan_duration_when_tts_mutates_scene_durations(tmp_path: Path):
+    import wave
+
+    from video_agent.shorts import llm_history, paths, short_builder
+
+    job = _long_job(tmp_path)
+    calls: list[str] = []
+    mix_durations: list[float] = []
+    plan = {"short_id": "short-preserve-duration", "format": "mistake_list", "scene_ids": ["scene-09"],
+            "source_start_sec": 183.0, "source_end_sec": 199.0, "music_track": "shorts_sleep_stress",
+            "narration_seed": "Cinco errores con el pan."}
+    scenes_doc = {
+        "channel_id": "vida-plena-45",
+        "short_id": "short-preserve-duration",
+        "total_duration_sec": 27.6,
+        "scenes": [
+            {"id": "s01", "duration_sec": 2.2, "on_screen_text": "NO ES EL PAN", "caption": "SON 5 HÁBITOS", "layout": "short_hook", "visual_prompt": "Realistic bread on Spanish kitchen table", "narration": "No es el pan."},
+            {"id": "s02", "duration_sec": 3.6, "on_screen_text": "DE PIE", "caption": "Sin plato", "layout": "short_pain", "visual_prompt": "Realistic person eating bread standing in kitchen", "narration": "Uno: comerlo de pie."},
+            {"id": "s03", "duration_sec": 3.6, "on_screen_text": "SUMAR SIN DECIDIR", "caption": "Con arroz o pasta", "layout": "short_pain", "visual_prompt": "Realistic bread next to rice on Spanish table", "narration": "Dos: sumarlo sin decidir."},
+            {"id": "s04", "duration_sec": 3.6, "on_screen_text": "BARRA A LA VISTA", "caption": "Demasiado a mano", "layout": "short_pain", "visual_prompt": "Realistic bread bar left on dining table", "narration": "Tres: dejar la barra a la vista."},
+            {"id": "s05", "duration_sec": 3.6, "on_screen_text": "CANSANCIO", "caption": "Otro trozo", "layout": "short_pain", "visual_prompt": "Realistic tired adult cutting another bread slice", "narration": "Cuatro: cortar por cansancio."},
+            {"id": "s06", "duration_sec": 3.6, "on_screen_text": "CENA IMPROVISADA", "caption": "A bocados", "layout": "short_pain", "visual_prompt": "Realistic bread and cheese dinner bites on plate", "narration": "Cinco: cenar improvisando."},
+            {"id": "s07", "duration_sec": 4.8, "on_screen_text": "MEJOR ASÍ", "caption": "Porción visible", "layout": "graphic_checklist", "visual_prompt": "Realistic small plate with bread portion", "narration": "Mejor: porción visible, plato pequeño, comida completa.", "layout_payload": {"title": "MEJOR ASÍ", "items": ["Porción visible", "Plato pequeño", "Comida completa"]}},
+            {"id": "s08", "duration_sec": 2.6, "on_screen_text": "GUÁRDALO", "caption": "PARA TU PRÓXIMA CENA", "layout": "short_cta", "visual_prompt": "Realistic warm kitchen close-up", "narration": "Guárdalo."},
+        ],
+        "qa": {"verdict": "PENDING_SCENES_QA"},
+    }
+
+    def tts_fn(short_dir, short_scenes, channel_config):
+        calls.append("tts")
+        compressed = [1.44, 3.35, 3.27, 3.38, 3.55, 4.13, 3.8, 1.86]
+        for scene, duration in zip(short_scenes["scenes"], compressed, strict=True):
+            scene["duration_sec"] = duration
+        short_scenes["total_duration_sec"] = round(sum(compressed), 2)
+        audio_dir = short_dir / "audio"
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        wav_path = audio_dir / "short_narration.wav"
+        with wave.open(str(wav_path), "w") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(8000)
+            handle.writeframes(b"\0\0" * int(24.78 * 8000))
+        return wav_path
+
+    io = _stub_io(calls)
+    io["tts_fn"] = tts_fn
+
+    def mix_fn(short_dir, narration_wav, music_track, channel_config, duration_sec):
+        calls.append("mix")
+        mix_durations.append(duration_sec)
+        (short_dir / "audio").mkdir(parents=True, exist_ok=True)
+        out = short_dir / "audio" / "short_mix.m4a"
+        out.write_bytes(b"m")
+        return out
+
+    io["mix_fn"] = mix_fn
+
+    res = short_builder.build_short(
+        job,
+        plan,
+        _cfg(),
+        llm_fn=_llm_fn_factory(scenes=scenes_doc),
+        gemini_fn=lambda p: json.dumps({
+            "verdict": "PASS",
+            "issues": [],
+            "required_changes": [],
+            "warnings": [],
+            "product_scores": {
+                "audience_fit_45_plus": 10,
+                "hook_strength": 10,
+                "visual_specificity": 10,
+                "clarity": 10,
+                "retention_pacing": 9,
+                "natural_spanish": 10,
+                "saveability": 10,
+            },
+        }),
+        **io,
+    )
+
+    short_dir = paths.short_dir(job, "short-preserve-duration")
+    saved_scenes = json.loads((short_dir / "json" / paths.SHORT_SCENES_FILE).read_text(encoding="utf-8"))
+    render_props = json.loads((short_dir / "json" / paths.SHORT_RENDER_PROPS_FILE).read_text(encoding="utf-8"))
+    hist = llm_history.read_history(short_dir / "json" / paths.SHORT_LLM_HISTORY_FILE)
+    audio_tail_events = [h for h in hist if h.get("kind") == "audio_tail_repair"]
+
+    assert res["status"] == "rendered"
+    assert round(sum(float(scene["duration_sec"]) for scene in saved_scenes["scenes"]), 1) == 27.7
+    assert saved_scenes["total_duration_sec"] == 27.7
+    assert render_props["render"]["duration_sec"] == 27.7
+    assert mix_durations == [27.7]
+    assert audio_tail_events == []
+
+
 def test_build_short_soft_scene_validation_warning_proceeds_to_gemini_qa(tmp_path: Path, monkeypatch):
     from video_agent.shorts import short_builder, validate_scenes
 
@@ -1063,6 +1220,93 @@ def test_build_short_exposes_qa_scenes_attempt_count(tmp_path: Path):
     assert status_doc["qa_scenes_attempts"] == qa_attempts["n"]
 
 
+def test_gemini_scene_qa_fail_blocks_audio_seo_and_render(tmp_path: Path):
+    from video_agent.shorts import paths, short_builder
+
+    job = _long_job(tmp_path)
+    calls: list[str] = []
+
+    def llm_fn(kind: str, prompt: str):
+        calls.append(kind)
+        if kind == "script":
+            return json.dumps(_GOOD_SCRIPT)
+        if kind == "scenes":
+            return json.dumps(_GOOD_SCENES)
+        if kind == "seo":
+            return json.dumps({"title": "Should not run", "description": "d", "hashtags": ["#shorts"]})
+        return "{}"
+
+    def gemini_fn(prompt: str):
+        if "Scenes QA reviewer" not in prompt:
+            return json.dumps({"verdict": "PASS", "issues": [], "required_changes": [], "warnings": []})
+        return json.dumps({
+            "verdict": "FAIL",
+            "issues": [
+                {
+                    "type": "visual",
+                    "scene_id": "s2",
+                    "severity": "major",
+                    "detail": "Acceptable duration, but verify the visual is warm enough.",
+                }
+            ],
+            "required_changes": ["Verify the visual is warm enough."],
+            "warnings": [],
+            "product_scores": {
+                "audience_fit_45_plus": 9,
+                "hook_strength": 9,
+                "visual_specificity": 9,
+                "clarity": 9,
+                "retention_pacing": 9,
+                "natural_spanish": 9,
+                "saveability": 9,
+            },
+        })
+
+    cfg = _cfg()
+    cfg["shorts"]["autopilot"]["max_regeneration_attempts"] = 0
+    plan = {
+        "short_id": "short-qa-fail-gate",
+        "format": "pain_to_tip",
+        "scene_ids": ["scene-09"],
+        "source_start_sec": 183.0,
+        "source_end_sec": 199.0,
+        "music_track": "shorts_sleep_stress",
+        "narration_seed": "Marca una hora de cierre.",
+    }
+
+    res = short_builder.build_short(
+        job,
+        plan,
+        cfg,
+        llm_fn=llm_fn,
+        gemini_fn=gemini_fn,
+        **_stub_io(calls),
+    )
+
+    short_dir = paths.short_dir(job, "short-qa-fail-gate")
+    qa_doc = json.loads(paths.resolve_short_json(short_dir, paths.SHORT_SCENES_QA_FILE).read_text(encoding="utf-8"))
+    failure_doc = json.loads(paths.resolve_short_json(short_dir, paths.SHORT_FAILURE_REPORT_FILE).read_text(encoding="utf-8"))
+    retry_memory = json.loads((short_dir / "json" / "scene_retry_memory.json").read_text(encoding="utf-8"))
+
+    assert qa_doc["verdict"] == "FAIL"
+    assert qa_doc["provider_call_ok"] is True
+    assert qa_doc["qa_pass"] is False
+    assert failure_doc["latest_scene_qa_ok"] is False
+    assert res["status"] == "needs_review"
+    assert res["qa_verdict"] == "FAIL"
+    assert "tts" not in calls
+    assert "seo" not in calls
+    assert "render" not in calls
+    assert not (short_dir / paths.SHORT_SEO_FILE).exists()
+    assert not (short_dir / "outputs" / "short.mp4").exists()
+    active_details = [
+        str(issue.get("detail") or "")
+        for issue in retry_memory["active_issues"].values()
+    ]
+    assert any("visual is warm enough" in detail for detail in active_details)
+    assert any("Verify the visual is warm enough" in detail for detail in active_details)
+
+
 def test_build_short_prepare_mode_stops_before_render(tmp_path: Path):
     from video_agent.shorts import short_builder, paths
 
@@ -1170,6 +1414,34 @@ def test_audio_fit_small_tail_shortage_extends_scene_durations():
     assert not validate_scenes.has_blocking_or_repairable(
         validate_scenes.validate_scene_structure(scenes_doc["scenes"], scenes_doc=scenes_doc)
     )
+
+
+def test_audio_tail_repair_does_not_compress_scene_sum_to_audio_duration():
+    from video_agent.shorts import validate_scenes
+
+    scenes_doc = {
+        "total_duration_sec": 21.7,
+        "scenes": [
+            {"id": "s01", "layout": "short_hook", "duration_sec": 2.5},
+            {"id": "s02", "layout": "short_tip", "duration_sec": 3.5},
+            {"id": "s03", "layout": "short_tip", "duration_sec": 3.5},
+            {"id": "s04", "layout": "short_tip", "duration_sec": 3.5},
+            {"id": "s05", "layout": "short_tip", "duration_sec": 3.5},
+            {"id": "s06", "layout": "short_tip", "duration_sec": 3.5},
+            {"id": "s07", "layout": "short_checklist", "duration_sec": 5.0},
+            {"id": "s08", "layout": "short_cta", "duration_sec": 2.5},
+        ],
+    }
+
+    result = validate_scenes.extend_scene_durations_for_audio_tail(
+        scenes_doc,
+        narration_audio_sec=20.92,
+    )
+
+    assert result["changed"] is False
+    assert result["reason"] == "already_fits"
+    assert scenes_doc["total_duration_sec"] == 27.5
+    assert validate_scenes.validate_audio_fit(scenes_doc["total_duration_sec"], 20.92) is None
 
 
 def test_audio_fit_large_shortage_is_not_stretched_past_pacing():
@@ -1418,10 +1690,49 @@ def test_total_duration_sec_normalization():
     assert not any(i.type == "duration_sum" for i in blocking)
 
 
-def test_audio_fit_repair_loop_trigger(tmp_path: Path):
+def test_five_error_accepted_duration_ranges_do_not_fail_scenes_qa(tmp_path: Path):
+    from video_agent.shorts import paths, qa
+
+    job = _long_job(tmp_path)
+    short_id = "short-five-error-durations"
+    short_dir = paths.short_dir(job, short_id)
+    (short_dir / "json").mkdir(parents=True, exist_ok=True)
+    script = {
+        "short_id": short_id,
+        "short_format": "mistake_list",
+        "target_duration_sec": 28.2,
+        "hook": "No es el pan.",
+        "narration": (
+            "No es el pan. Uno: comerlo de pie. Dos: sumarlo sin decidir. "
+            "Tres: dejar la barra a la vista. Cuatro: cortar por cansancio. "
+            "Cinco: cenar improvisando. Mejor: porción visible, plato pequeño, comida completa. Guárdalo."
+        ),
+        "cta": "Guárdalo.",
+    }
+    scenes = [
+        {"id": "s01", "layout": "short_hook", "duration_sec": 2.8, "on_screen_text": "NO ES EL PAN", "caption": "Mira cómo lo usas", "visual_prompt": "Realistic bread on Spanish kitchen table", "narration": "No es el pan."},
+        {"id": "s02", "layout": "short_pain", "duration_sec": 3.6, "on_screen_text": "DE PIE", "caption": "Sin plato", "visual_prompt": "Realistic person eating bread standing in kitchen", "narration": "Uno: comerlo de pie."},
+        {"id": "s03", "layout": "short_pain", "duration_sec": 3.6, "on_screen_text": "SUMAR SIN DECIDIR", "caption": "Con arroz o pasta", "visual_prompt": "Realistic bread next to rice on Spanish table", "narration": "Dos: sumarlo sin decidir."},
+        {"id": "s04", "layout": "short_pain", "duration_sec": 3.6, "on_screen_text": "BARRA A LA VISTA", "caption": "Demasiado a mano", "visual_prompt": "Realistic bread bar left on dining table", "narration": "Tres: dejar la barra a la vista."},
+        {"id": "s05", "layout": "short_pain", "duration_sec": 3.6, "on_screen_text": "CANSANCIO", "caption": "Otro trozo", "visual_prompt": "Realistic tired adult cutting another bread slice", "narration": "Cuatro: cortar por cansancio."},
+        {"id": "s06", "layout": "short_pain", "duration_sec": 3.6, "on_screen_text": "CENA IMPROVISADA", "caption": "A bocados", "visual_prompt": "Realistic bread and cheese dinner bites on plate", "narration": "Cinco: cenar improvisando."},
+        {"id": "s07", "layout": "short_checklist", "duration_sec": 4.8, "on_screen_text": "MEJOR ASÍ", "caption": "Porción visible", "visual_prompt": "Realistic small plate with bread portion", "narration": "Mejor: porción visible, plato pequeño, comida completa.", "layout_payload": {"items": ["Porción visible", "Plato pequeño", "Comida completa"]}},
+        {"id": "s08", "layout": "short_cta", "duration_sec": 2.6, "on_screen_text": "GUÁRDALO", "caption": "PARA TU PRÓXIMA CENA", "visual_prompt": "Realistic warm kitchen close-up", "narration": "Guárdalo."},
+    ]
+    scenes_doc = {"short_id": short_id, "total_duration_sec": 28.2, "scenes": scenes}
+    (short_dir / "json" / paths.SHORT_SCRIPT_FILE).write_text(json.dumps(script), encoding="utf-8")
+    (short_dir / "json" / paths.SHORT_SCENES_FILE).write_text(json.dumps(scenes_doc), encoding="utf-8")
+
+    out = qa.run_short_scenes_qa(job, short_id, _cfg(), gemini_fn=None)
+
+    assert out["verdict"] == "PASS"
+    assert not any("duration" in str(issue).lower() for issue in out["issues"])
+
+
+def test_audio_fit_failure_surfaces_without_regenerating_script(tmp_path: Path):
     import wave
     from unittest.mock import patch
-    from video_agent.shorts import short_builder
+    from video_agent.shorts import llm_history, paths, short_builder
 
     job = _long_job(tmp_path)
     calls: list[str] = []
@@ -1485,9 +1796,31 @@ def test_audio_fit_repair_loop_trigger(tmp_path: Path):
             **io,
         )
 
-        assert script_attempts["n"] == 2
-        assert any("AUDIO-FIT" in f or "narration audio exceeds" in f for f in script_attempts["feedbacks"])
         assert res["status"] == "needs_review"
+        assert res["qa_verdict"] == "FAIL"
+        assert script_attempts["n"] == 1
+        assert calls == ["tts"]
+        assert not any("AUDIO-FIT" in f or "narration audio exceeds" in f for f in script_attempts["feedbacks"])
+        assert "audio_fit" in json.dumps(res).lower()
+
+        short_dir = paths.short_dir(job, "short-audio-fit-retry")
+        status_doc = json.loads((short_dir / "short_status.json").read_text(encoding="utf-8"))
+        audio_stage = next(stage for stage in status_doc["stages"] if stage["name"] == "audio")
+        assert audio_stage["status"] == "failed"
+        assert "Narration audio" in audio_stage["error"]
+
+        hist = llm_history.read_history(short_dir / "json" / paths.SHORT_LLM_HISTORY_FILE)
+        stage_events = [
+            h for h in hist
+            if h.get("provider") == "deterministic" and h.get("kind") == "stage_status"
+        ]
+        audio_fail_events = [
+            h for h in stage_events
+            if h.get("payload", {}).get("stage") == "audio" and h.get("payload", {}).get("status") == "failed"
+        ]
+        assert len(audio_fail_events) == 1
+        assert audio_fail_events[0]["payload"]["verdict"] == "FAIL"
+        assert "Narration audio" in audio_fail_events[0]["payload"]["error"]
 
 
 def test_repair_scene_duration_if_possible():

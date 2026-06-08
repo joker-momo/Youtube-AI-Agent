@@ -32,9 +32,12 @@ def test_retry_memory_feedback():
     add_or_update_issue(memory, issue)
     
     feedback = generate_cumulative_feedback(memory, attempt_number=2)
-    assert "ACTIVE ISSUES TO FIX NOW:" in feedback
-    assert "1. [SCENE-VALIDATION][s07][DURATION] Clamp CTA scene s07 to <= 2.8s" in feedback
+    assert "ACTIVE BLOCKERS TO FIX NOW:" in feedback
+    assert "1. [SCENE-VALIDATION][s07][DURATION]" in feedback
+    assert "Class: HARD_BLOCKER" in feedback
+    assert "Required fix: Clamp CTA scene s07 to <= 2.8s" in feedback
     assert "Preserve source fidelity." in feedback
+
 
 def test_pipeline_state_assertions():
     from video_agent.shorts.retry_memory import ScenePipelineState
@@ -336,5 +339,71 @@ def test_get_short_rule_context():
     ctx = get_short_rule_context(idea, script)
     assert ctx["is_bread_shopping_checklist"] is True
     assert ctx["is_five_errors_bread_short"] is False
+
+def test_cumulative_feedback_sections():
+    from video_agent.shorts.retry_memory import RetryMemory, RetryIssue, add_or_update_issue, generate_cumulative_feedback
+    memory = RetryMemory(stage="scenes")
+    
+    # Add a hard/repairable blocker
+    issue_blocker = RetryIssue(
+        id="scene_validation:s05:unreadable:1",
+        stage="scene_validation",
+        attempt=1,
+        scene_id="s05",
+        type="unreadable",
+        severity="major",
+        detail="Required item is unreadable",
+        required_change="Speak the item OR give it a clearer scene",
+        status="active",
+        first_seen_attempt=1,
+        last_seen_attempt=1,
+        issue_class="repairable_blocker",
+        reason="visual_only_unreadable"
+    )
+    add_or_update_issue(memory, issue_blocker)
+    
+    # Add a soft warning
+    issue_warning = RetryIssue(
+        id="scene_qa:s01:hook_motion:1",
+        stage="scene_qa",
+        attempt=1,
+        scene_id="s01",
+        type="hook_motion",
+        severity="minor",
+        detail="Hook motion could be sharper",
+        required_change="Hook motion could be sharper",
+        status="active",
+        first_seen_attempt=1,
+        last_seen_attempt=1,
+        issue_class="soft_warning",
+        reason="weak_hook_motion"
+    )
+    add_or_update_issue(memory, issue_warning)
+    
+    # Add a suppressed issue
+    issue_suppressed = RetryIssue(
+        id="scene_qa:global:five_errors:1",
+        stage="scene_qa",
+        attempt=1,
+        scene_id=None,
+        type="five_errors",
+        severity="minor",
+        detail="Suppressed because format is checklist",
+        required_change="Suppressed because format is checklist",
+        status="suppressed",
+        first_seen_attempt=1,
+        last_seen_attempt=1,
+        issue_class="stale_or_suppressed",
+        reason="wrong_context_five_errors_rule"
+    )
+    memory.suppressed_issues[issue_suppressed.id] = issue_suppressed
+    
+    feedback = generate_cumulative_feedback(memory, attempt_number=2)
+    assert "ACTIVE BLOCKERS TO FIX NOW:" in feedback
+    assert "Class: REPAIRABLE_BLOCKER" in feedback
+    assert "WARNINGS / NICE-TO-HAVE (DO NOT BLOCK):" in feedback
+    assert "SUPPRESSED / STALE ISSUES:" in feedback
+
+
 
 

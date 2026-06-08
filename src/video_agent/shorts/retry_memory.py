@@ -28,9 +28,12 @@ class RetryIssue:
     first_seen_attempt: int
     last_seen_attempt: int
     repeat_count: int = 1
+    issue_class: str = ""
+    reason: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
+
 
 @dataclass
 class RetryMemory:
@@ -84,34 +87,81 @@ def suppress_issue_by_id(memory: RetryMemory, issue_id: str) -> None:
         del memory.active_issues[issue_id]
 
 def generate_cumulative_feedback(memory: RetryMemory, attempt_number: int, candidate_summary: str = "") -> str:
-    active_lines = []
-    for idx, (issue_id, issue) in enumerate(memory.active_issues.items(), 1):
+    blockers_lines = []
+    warnings_lines = []
+    
+    blocker_idx = 1
+    warning_idx = 1
+    for issue_id, issue in memory.active_issues.items():
         stage_str = str(issue.stage).upper().replace("_", "-")
         type_str = str(issue.type).upper().replace("_", "-")
         desc = issue.required_change or issue.detail
         if issue.detail and issue.detail not in desc:
             desc = f"{desc} - {issue.detail}"
-        active_lines.append(f"{idx}. [{stage_str}][{issue.scene_id or 'global'}][{type_str}] {desc}")
-    
-    active_issues_str = "\n".join(active_lines) if active_lines else "None. All previously identified issues are resolved/addressed."
+        
+        # Determine issue_class dynamically if not populated
+        issue_class = issue.issue_class
+        if not issue_class:
+            if issue.severity == "warning" or "warning" in issue.severity.lower() or "soft" in issue.severity.lower():
+                issue_class = "soft_warning"
+            elif issue.severity == "suppressed" or issue.status == "suppressed":
+                issue_class = "stale_or_suppressed"
+            else:
+                issue_class = "hard_blocker"
+
+        if issue_class == "soft_warning":
+            warnings_lines.append(f"{warning_idx}. [{stage_str}][{issue.scene_id or 'global'}][{type_str}] {desc}")
+            warning_idx += 1
+        elif issue_class == "stale_or_suppressed":
+            pass
+        else:
+            # blockers
+            cl = issue_class.upper()
+            rn = issue.reason if issue.reason else type_str.lower()
+            blockers_lines.append(
+                f"{blocker_idx}. [{stage_str}][{issue.scene_id or 'global'}][{type_str}]\n"
+                f"   Class: {cl}\n"
+                f"   Reason: {rn}\n"
+                f"   Required fix: {desc}"
+            )
+            blocker_idx += 1
+            
+    active_issues_str = "\n".join(blockers_lines) if blockers_lines else "None."
+    warnings_str = "\n".join(warnings_lines) if warnings_lines else "None."
     do_not_regress_str = "\n".join(memory.do_not_regress) if memory.do_not_regress else "None."
     hard_invariants_str = "\n".join(memory.hard_invariants) if memory.hard_invariants else "None."
     
-    suppressed_lines = [
-        f"- {issue.required_change or issue.detail}" 
-        for issue in memory.suppressed_issues.values()
+    suppressed_lines = []
+    # Merge suppressed issues
+    all_suppressed = list(memory.suppressed_issues.values()) + [
+        issue for issue in memory.active_issues.values() if issue.issue_class == "stale_or_suppressed"
     ]
+    seen_suppressed = set()
+    unique_suppressed = []
+    for issue in all_suppressed:
+        if issue.id not in seen_suppressed:
+            seen_suppressed.add(issue.id)
+            unique_suppressed.append(issue)
+            
+    for idx, issue in enumerate(unique_suppressed, 1):
+        stage_str = str(issue.stage).upper().replace("_", "-")
+        type_str = str(issue.type).upper().replace("_", "-")
+        desc = issue.required_change or issue.detail
+        suppressed_lines.append(f"{idx}. [{stage_str}][{issue.scene_id or 'global'}][{type_str}] {desc}")
+        
     suppressed_str = "\n".join(suppressed_lines) if suppressed_lines else "None."
     
     return f"""RETRY FEEDBACK — CUMULATIVE
 
 This is retry attempt {attempt_number}.
-You must satisfy ALL active requirements below.
-Do not only fix the newest issue.
-Do not reintroduce resolved issues.
+Only HARD/REPAIRABLE blockers below must be fixed.
+Do not regress hard invariants.
 
-ACTIVE ISSUES TO FIX NOW:
+ACTIVE BLOCKERS TO FIX NOW:
 {active_issues_str}
+
+WARNINGS / NICE-TO-HAVE (DO NOT BLOCK):
+{warnings_str}
 
 DO NOT REGRESS:
 {do_not_regress_str}
@@ -130,6 +180,7 @@ OUTPUT REQUIREMENTS:
 - Do not return partial patches.
 - Do not remove source-supported idea items.
 - Do not change the approved script meaning."""
+
 
 def log_final_gate_status(state: ScenePipelineState, allowed: bool, reason: str = "") -> None:
     import json

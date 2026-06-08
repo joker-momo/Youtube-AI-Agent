@@ -240,7 +240,9 @@ def ensure_script_idea_fields(script: dict[str, Any], short_plan: dict[str, Any]
         contract.setdefault("adaptation_allowed", bool((short_plan or {}).get("adaptation_allowed", False)))
         contract.setdefault("adaptation_used", False)
         contract.setdefault("adaptation_reason", "")
-        if not contract.get("final_count"):
+        if not contract.get("adaptation_allowed"):
+            contract["final_count"] = contract.get("original_count")
+        elif not contract.get("final_count"):
             contract["final_count"] = contract.get("idea_count_max") or contract.get("original_count")
     out["idea_contract"] = contract
     if contract.get("must_preserve_count") and not out.get("idea_items"):
@@ -370,6 +372,7 @@ def normalize_scene_covers_items(scenes_doc: dict[str, Any] | None) -> list[Scen
 def validate_scene_idea_coverage(
     scenes_doc: dict[str, Any] | None,
     script: dict[str, Any] | None,
+    attempt: int = 1,
 ) -> list[SceneValidationIssue]:
     scenes_doc = scenes_doc or {}
     script = script or {}
@@ -443,7 +446,7 @@ def validate_scene_idea_coverage(
                 ))
                 break
 
-    issues.extend(_slideshow_issues(scenes_doc.get("scenes") or []))
+    issues.extend(_slideshow_issues(scenes_doc.get("scenes") or [], attempt=attempt))
     return issues
 
 
@@ -748,7 +751,7 @@ def _visible_text_chunk_count(scene: dict[str, Any]) -> int:
     return count
 
 
-def _slideshow_issues(scenes: list[dict[str, Any]]) -> list[SceneValidationIssue]:
+def _slideshow_issues(scenes: list[dict[str, Any]], attempt: int = 1) -> list[SceneValidationIssue]:
     graphic = 0
     graphic_checklist = 0
     short_checklist = 0
@@ -805,10 +808,13 @@ def _slideshow_issues(scenes: list[dict[str, Any]]) -> list[SceneValidationIssue
         or checklist_like >= 5
         or consecutive_dense >= 2
     )
+    severity = "repairable_error" if hard_dense else "warning"
+    if attempt >= 2:
+        severity = "warning"
     return [SceneValidationIssue(
         type="slideshow_risk",
         scene_id=None,
-        severity="repairable_error" if hard_dense else "warning",
+        severity=severity,
         detail=(
             "Short is too text/list heavy: "
             f"graphics={graphic}, graphic_checklist={graphic_checklist}, "
@@ -816,7 +822,7 @@ def _slideshow_issues(scenes: list[dict[str, Any]]) -> list[SceneValidationIssue
         ),
         repair_hint=(
             "Reduce the exact dense checklist/graphic scene carrying too many text chunks."
-            if hard_dense
+            if severity == "repairable_error"
             else "Allowed if footage-led, readable, and all promised items are covered."
         ),
     )]

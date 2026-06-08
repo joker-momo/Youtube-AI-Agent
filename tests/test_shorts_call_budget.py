@@ -89,7 +89,7 @@ def test_call_budget_schema_matches_spec_v_fix():
     s = build_call_budget_summary([])
     assert set(s["by_reason"]) == {
         "provider_error", "qa_soft_warn", "qa_hard_fail", "qa_retry", "schema_error", "scene_validation_fail",
-        "audio_fit_fail", "renderer_contract_fail", "wrong_context_suppressed", "retention_grammar_repair", "retry_collapse", "unknown",
+        "audio_fit_fail", "renderer_contract_fail", "wrong_context_suppressed", "noncanonical_count_inference", "retention_grammar_repair", "retry_collapse", "duration_normalized", "deterministic_repair", "unknown",
     }
     assert set(s["retry_counts"]) == {
         "script_generation", "scene_generation", "qa_script", "qa_scenes",

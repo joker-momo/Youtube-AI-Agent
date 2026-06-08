@@ -147,6 +147,32 @@ def normalize_qa_issue(
     issue_type_lower = issue_type.lower()
     detail_lower = detail.lower()
 
+    if "total_duration_normalized" in issue_type_lower or "total_duration_normalized" in detail_lower or "duration_normalized" in issue_type_lower:
+        return NormalizedIssue(
+            issue_class=IssueClass.SOFT_WARNING,
+            reason="duration_normalized",
+            source=inferred_source,
+            scene_id=scene_id,
+            issue_type=issue_type,
+            detail=detail,
+            repair_hint=repair_hint,
+            include_in_retry_feedback=False,
+            trigger_regeneration=False,
+        )
+
+    if "duration_pacing" in issue_type_lower or "pacing remains strong" in detail_lower or "pacing remains strong" in (repair_hint or "").lower():
+        return NormalizedIssue(
+            issue_class=IssueClass.SOFT_WARNING,
+            reason="duration_pacing",
+            source=inferred_source,
+            scene_id=scene_id,
+            issue_type=issue_type,
+            detail=detail,
+            repair_hint=repair_hint,
+            include_in_retry_feedback=True,
+            trigger_regeneration=False,
+        )
+
     severity_lower = ""
     if isinstance(issue, dict):
         severity_lower = str(issue.get("severity") or "").lower()
@@ -230,6 +256,36 @@ def normalize_qa_issue(
             reason = "wrong_context_five_errors_rule"
             trigger_regeneration = False
             include_in_retry_feedback = False
+
+    # Apply noncanonical count authority check
+    contract_data = script.get("idea_contract") or {}
+    if not isinstance(contract_data, dict):
+        contract_data = {}
+    orig_count = contract_data.get("original_count") or real_idea.get("original_count")
+    if orig_count is not None:
+        try:
+            orig_count_val = int(orig_count)
+        except (ValueError, TypeError):
+            orig_count_val = None
+
+        if orig_count_val is not None:
+            has_mismatch = False
+            if orig_count_val != 5:
+                # If the canonical count is not 5 (e.g. 4 or 3), and the QA issue demands 5 steps/errors/items,
+                # it is a noncanonical count inference from the narration seed.
+                five_patterns = [
+                    "5-step", "5 step", "5 steps", "five-step", "five step", "five steps",
+                    "cinco", "quinto", "5 errores", "5-errores", "5 pasos", "5-pasos",
+                    "5 habitos", "5 hábitos", "5 items", "5-item", "5 points", "5-point"
+                ]
+                if any(p in detail_lower for p in five_patterns):
+                    has_mismatch = True
+
+            if has_mismatch:
+                issue_class = IssueClass.STALE_OR_SUPPRESSED
+                reason = "noncanonical_count_inference"
+                trigger_regeneration = False
+                include_in_retry_feedback = False
 
     return NormalizedIssue(
         issue_class=issue_class,
@@ -548,6 +604,7 @@ def _run_rule_scenes_qa(
     long_job_dir: Path,
     short_id: str,
     channel_config: dict,
+    attempt: int = 1,
 ) -> dict[str, Any]:
     sd = paths.short_dir(long_job_dir, short_id)
     scenes_doc = _load(paths.resolve_short_json(sd, paths.SHORT_SCENES_FILE))
@@ -565,6 +622,7 @@ def _run_rule_scenes_qa(
         scenes,
         scenes_doc=scenes_doc,
         script=script,
+        attempt=attempt,
     )
     hard_structure = [
         issue for issue in structure_issues
@@ -939,7 +997,7 @@ def run_short_scenes_qa(
     gemini_fn: Callable[[str], str] | None = None,
     attempt: int = 1,
 ) -> dict[str, Any]:
-    rule = _run_rule_scenes_qa(long_job_dir, short_id, channel_config)
+    rule = _run_rule_scenes_qa(long_job_dir, short_id, channel_config, attempt=attempt)
     if rule["verdict"] == "FAIL":
         return rule
     if gemini_fn is None:

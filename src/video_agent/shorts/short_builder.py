@@ -773,12 +773,23 @@ def _build_short_impl(
             update_stage("qa_script", "completed" if verdict in ("PASS", "WARN") else "failed", qa_verdict=verdict)
             
             # Record classification and wrong context suppression for script QA
-            if verdict == "FAIL":
+            raw_gemini_verdict = script_qa_result.get("verdict")
+            if raw_gemini_verdict == "FAIL" or verdict == "FAIL":
+                classification_reason = "qa_hard_fail"
+                if not script_blockers:
+                    classification_reason = "qa_soft_warn"
+                    has_wrong_context = any(n.reason == "wrong_context_five_errors_rule" for n in normalized_script_issues)
+                    has_noncanonical = any(n.reason == "noncanonical_count_inference" for n in normalized_script_issues)
+                    if has_noncanonical:
+                        classification_reason = "noncanonical_count_inference"
+                    elif has_wrong_context:
+                        classification_reason = "wrong_context_suppressed"
+                
                 _recorder.record_event(
                     "deterministic",
                     "qa_classification",
                     {
-                        "reason": "qa_soft_warn" if not script_blockers else "qa_hard_fail",
+                        "reason": classification_reason,
                     },
                     ok=True
                 )
@@ -793,6 +804,16 @@ def _build_short_impl(
                         },
                         ok=False
                     )
+                elif norm.reason == "noncanonical_count_inference":
+                    _recorder.record_event(
+                        "deterministic",
+                        "noncanonical_count_inference",
+                        {
+                            "reason": "noncanonical_count_inference",
+                            "detail": norm.detail,
+                        },
+                        ok=False
+                    )
         except Exception as exc:
             update_stage("qa_script", "failed")
             status["status"] = "failed"
@@ -801,9 +822,14 @@ def _build_short_impl(
 
         if script_qa_result["verdict"] not in ("PASS", "WARN"):
             active_script_ids = set()
+            suppressed_script_ids = set()
             for norm in normalized_script_issues:
                 issue_id = make_stable_issue_id("script_qa", "global", norm.issue_type, norm.detail)
-                active_script_ids.add(issue_id)
+                if norm.issue_class == qa.IssueClass.STALE_OR_SUPPRESSED:
+                    suppressed_script_ids.add(issue_id)
+                else:
+                    active_script_ids.add(issue_id)
+                
                 retry_issue = RetryIssue(
                     id=issue_id,
                     stage="script_qa",
@@ -821,11 +847,12 @@ def _build_short_impl(
                 )
                 if retry_issue.status == "suppressed":
                     script_retry_memory.suppressed_issues[issue_id] = retry_issue
+                    suppress_issue_by_id(script_retry_memory, issue_id)
                 else:
                     add_or_update_issue(script_retry_memory, retry_issue)
             
             for issue_id in list(script_retry_memory.active_issues.keys()):
-                if issue_id not in active_script_ids:
+                if issue_id not in active_script_ids and issue_id not in suppressed_script_ids:
                     resolve_issue_by_id(script_retry_memory, issue_id)
             
             save_retry_memory(script_retry_memory, script_memory_file)
@@ -932,6 +959,7 @@ def _build_short_impl(
                         short_scenes.get("scenes") or [],
                         scenes_doc=short_scenes,
                         script=short_script,
+                        attempt=scenes_attempts,
                     )
                     renderable = not validate_scenes.has_blocking_or_repairable(collapse_issues)
                     _recorder.record_event(
@@ -1058,6 +1086,7 @@ def _build_short_impl(
                     rhythm_candidate.get("scenes") or [],
                     scenes_doc=rhythm_candidate,
                     script=short_script,
+                    attempt=scenes_attempts,
                 )
                 if validate_scenes.has_blocking_or_repairable(rhythm_issues):
                     update_stage("visual_rhythm_plan", "completed", qa_verdict="WARN", discarded=True)
@@ -1081,6 +1110,7 @@ def _build_short_impl(
                 scenes,
                 scenes_doc=short_scenes,
                 script=short_script,
+                attempt=scenes_attempts,
             )
 
             # Auto-repair duration/narration-fit if it's the only class of hard issues remaining
@@ -1107,6 +1137,7 @@ def _build_short_impl(
                         scenes,
                         scenes_doc=short_scenes,
                         script=short_script,
+                        attempt=scenes_attempts,
                     )
 
             atomic_write_json(_jd / paths.SHORT_SCENES_FILE, short_scenes)
@@ -1153,6 +1184,71 @@ def _build_short_impl(
             if structure_blocked:
                 if scenes_attempts == 1:
                     attempt_1_failed_layout_schema = True
+                
+                # Check for scene regeneration cap
+                stop_scene_retries = False
+                max_limit = min(2, max_regen + 1)
+                if scenes_attempts >= max_limit:
+                    if scenes_attempts == 2 and attempt_1_failed_layout_schema and max_regen >= 2:
+                        pass
+                    else:
+                        stop_scene_retries = True
+
+                if stop_scene_retries:
+                    remaining_blockers = [
+                        i for i in structure_issues
+                        if i.severity in ("blocking_error", "repairable_error")
+                        and i.type != "slideshow_risk"
+                    ]
+                    if not remaining_blockers:
+                        # Downgrade slideshow_risk and warnings to WARN and continue
+                        structure_blocked = False
+                        scenes_passed = True
+                        state.latest_scene_validation_ok = True
+                        state.latest_scene_validation_version = state.current_scenes_version
+                        scenes_qa_result = {
+                            "verdict": "WARN",
+                            "issues": validate_scenes.issues_to_dicts(structure_issues),
+                            "required_changes": [],
+                            "warnings": [i.detail for i in structure_issues],
+                            "provider": "deterministic",
+                        }
+                        atomic_write_json(_jd / paths.SHORT_SCENES_QA_FILE, scenes_qa_result)
+                        update_stage("qa_scenes", "completed", qa_verdict="WARN")
+                        
+                        _recorder.record_event(
+                            "deterministic",
+                            "qa_classification",
+                            {
+                                "reason": "qa_soft_warn",
+                            },
+                            ok=True
+                        )
+                        break
+                    else:
+                        scenes_passed = False
+                        status.update({
+                            "status": "needs_review",
+                            "rendered": False,
+                            "uploaded": False,
+                            "youtube_url": "",
+                            "requires_user_review": True,
+                            "qa_verdict": "FAIL",
+                            "failure_reason": f"Scene validation failed hard blocker: {[b.detail for b in remaining_blockers]}",
+                        })
+                        write_short_status(long_job_dir, short_id, status)
+                        save_retry_memory(scene_retry_memory, scene_memory_file)
+                        
+                        _recorder.record_event(
+                            "deterministic",
+                            "qa_classification",
+                            {
+                                "reason": "scene_validation_fail",
+                            },
+                            ok=True
+                        )
+                        return status
+
                 repair_plan = validate_scenes.build_scene_repair_plan(
                     scenes,
                     structure_issues,
@@ -1181,12 +1277,46 @@ def _build_short_impl(
                 atomic_write_json(_jd / paths.SHORT_SCENES_QA_FILE, scenes_qa_result)
                 update_stage("qa_scenes", "failed", qa_verdict="FAIL")
 
+                # Log qa_classification event
+                classification_reason = "scene_validation_fail"
+                if any(i.type == "slideshow_risk" for i in structure_issues):
+                    if scenes_attempts >= 2:
+                        classification_reason = "retry_collapse"
+                    else:
+                        classification_reason = "scene_validation_fail"
+                elif any(i.type == "duration_pacing" for i in structure_issues):
+                    classification_reason = "qa_soft_warn"
+                elif any(i.type == "total_duration_normalized" for i in structure_issues):
+                    classification_reason = "duration_normalized"
+
+                _recorder.record_event(
+                    "deterministic",
+                    "qa_classification",
+                    {
+                        "reason": classification_reason,
+                    },
+                    ok=True
+                )
+
                 # Track deterministic issues in retry memory
                 active_validation_ids = set()
                 for issue in structure_issues:
                     issue_id = make_stable_issue_id("scene_validation", issue.scene_id, issue.type, issue.detail)
                     active_validation_ids.add(issue_id)
                     required_change = "\n".join(issue.instructions) if getattr(issue, "instructions", None) else (issue.repair_hint or issue.detail)
+                    
+                    issue_class_val = "soft_warning" if issue.severity == "warning" else ("repairable_blocker" if issue.severity == "repairable_error" else "hard_blocker")
+                    reason_val = issue.type
+                    if issue.type == "total_duration_normalized":
+                        reason_val = "duration_normalized"
+                        issue_class_val = "soft_warning"
+                    elif issue.type == "duration_pacing":
+                        reason_val = "duration_pacing"
+                        issue_class_val = "soft_warning"
+                    elif issue.type == "weak_hook_motion":
+                        reason_val = "weak_hook_motion"
+                        issue_class_val = "soft_warning"
+
                     retry_issue = RetryIssue(
                         id=issue_id,
                         stage="scene_validation",
@@ -1198,7 +1328,9 @@ def _build_short_impl(
                         required_change=required_change,
                         status="active",
                         first_seen_attempt=scenes_attempts,
-                        last_seen_attempt=scenes_attempts
+                        last_seen_attempt=scenes_attempts,
+                        issue_class=issue_class_val,
+                        reason=reason_val
                     )
                     add_or_update_issue(scene_retry_memory, retry_issue)
                 
@@ -1281,12 +1413,23 @@ def _build_short_impl(
                 update_stage("qa_scenes", "completed" if verdict in ("PASS", "WARN") else "failed", qa_verdict=verdict)
                 
                 # Record classification and wrong context suppression for scene QA
-                if verdict == "FAIL":
+                raw_gemini_verdict = scenes_qa_result.get("verdict")
+                if raw_gemini_verdict == "FAIL" or verdict == "FAIL":
+                    classification_reason = "qa_hard_fail"
+                    if not scene_blockers:
+                        classification_reason = "qa_soft_warn"
+                        has_wrong_context = any(n.reason == "wrong_context_five_errors_rule" for n in normalized_scene_issues)
+                        has_noncanonical = any(n.reason == "noncanonical_count_inference" for n in normalized_scene_issues)
+                        if has_noncanonical:
+                            classification_reason = "noncanonical_count_inference"
+                        elif has_wrong_context:
+                            classification_reason = "wrong_context_suppressed"
+                    
                     _recorder.record_event(
                         "deterministic",
                         "qa_classification",
                         {
-                            "reason": "qa_soft_warn" if not scene_blockers else "qa_hard_fail",
+                            "reason": classification_reason,
                         },
                         ok=True
                     )
@@ -1297,6 +1440,16 @@ def _build_short_impl(
                             "wrong_context_suppressed",
                             {
                                 "reason": "wrong_context_suppressed",
+                                "detail": norm.detail,
+                            },
+                            ok=False
+                        )
+                    elif norm.reason == "noncanonical_count_inference":
+                        _recorder.record_event(
+                            "deterministic",
+                            "noncanonical_count_inference",
+                            {
+                                "reason": "noncanonical_count_inference",
                                 "detail": norm.detail,
                             },
                             ok=False
@@ -1337,9 +1490,14 @@ def _build_short_impl(
 
             # Track Gemini QA issues in retry memory
             active_qa_ids = set()
+            suppressed_qa_ids = set()
             for norm in normalized_scene_issues:
                 issue_id = make_stable_issue_id("scene_qa", norm.scene_id, norm.issue_type, norm.detail)
-                active_qa_ids.add(issue_id)
+                if norm.issue_class == qa.IssueClass.STALE_OR_SUPPRESSED:
+                    suppressed_qa_ids.add(issue_id)
+                else:
+                    active_qa_ids.add(issue_id)
+                
                 retry_issue = RetryIssue(
                     id=issue_id,
                     stage="scene_qa",
@@ -1357,12 +1515,13 @@ def _build_short_impl(
                 )
                 if retry_issue.status == "suppressed":
                     scene_retry_memory.suppressed_issues[issue_id] = retry_issue
+                    suppress_issue_by_id(scene_retry_memory, issue_id)
                 else:
                     add_or_update_issue(scene_retry_memory, retry_issue)
 
             for issue_id in list(scene_retry_memory.active_issues.keys()):
                 issue = scene_retry_memory.active_issues[issue_id]
-                if issue.stage == "scene_qa" and issue_id not in active_qa_ids:
+                if issue.stage == "scene_qa" and issue_id not in active_qa_ids and issue_id not in suppressed_qa_ids:
                     resolve_issue_by_id(scene_retry_memory, issue_id)
 
             # Max attempts check: MAX_SCENE_REGEN_ATTEMPTS = 2
@@ -1486,6 +1645,7 @@ def _build_short_impl(
                     best_scene_candidate.get("scenes") or [],
                     scenes_doc=best_scene_candidate,
                     script=short_script,
+                    attempt=scenes_attempts,
                 )
                 state.latest_scene_qa_ok = False
                 state.latest_scene_qa_version = None

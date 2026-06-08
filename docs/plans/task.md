@@ -76,6 +76,19 @@
 | Task 74: Task 2 - Rule context & wrong-context filtering | [x] | Implement get_short_rule_context and template context filtering in qa.py |
 | Task 75: Task 3 - Retry feedback formatting in `retry_memory.py` | [x] | Restructure retry memory prompt layout |
 | Task 76: Task 4 - Loop gating & exit report in `short_builder.py` | [x] | Implement severity-gated loop decisions and summary exit reporting |
-| Task 77: Task 5 - Deterministic repair functions for hook/unreadable | [/] | Implement deterministic repairs for weak hook motion and unreadable items |
-| Task 78: Task 6 - Expand reasons in `call_budget.py` | [ ] | Add and classify new reasons in call budget |
-| Task 79: Task 7 - Write 8 new spec acceptance tests | [ ] | Add acceptance tests and verify full suite passes |
+| Task 77: Task 5 - Deterministic repair functions for hook/unreadable | [x] | Implement deterministic repairs for weak hook motion and unreadable items |
+| Task 78: Task 6 - Expand reasons in `call_budget.py` | [x] | Add and classify new reasons in call budget |
+| Task 79: Task 7 - Write 8 new spec acceptance tests | [x] | Add acceptance tests and verify full suite passes |
+| Task 80: Count Authority in Script QA Prompt (`prompts.py`) | [x] | Add COUNT AUTHORITY section to gemini_script_qa_prompt |
+| Task 81: Mismatch Suppression logic (`qa.py`) | [x] | Suppress mismatching count QA issues in normalize_qa_issue |
+| Task 82: Contract Protection (`idea_preservation.py`) | [x] | Prevent contract mutation in ensure_script_idea_fields |
+| Task 83: Suppressed issues Retry Memory routing (`short_builder.py`) | [x] | Route stale_or_suppressed issues in script/scene QA loops |
+| Task 84: Call budget reasons and classification events mapping | [x] | Expand call budget reasons and log qa_classification override events |
+| Task 85: Add unit/integration tests and verify | [x] | Verify with automated tests and ensure all tests pass |
+| Task 86: Update repair_weak_hook_motion in validate_scenes.py | [x] | Deterministic weak hook motion repair |
+| Task 87: Pass attempt and downgrade slideshow_risk on attempts >= 2 | [x] | slideshow_risk downgrade logic |
+| Task 88: Filter repair instructions for warnings | [x] | Filter warnings from build_scene_repair_plan |
+| Task 89: Update issue classifications in normalize_qa_issue | [x] | Classify duration_pacing and total_duration_normalized |
+| Task 90: Pass attempt and populate RetryIssue fields in short_builder.py | [x] | Update loop, cap enforcement, and retry memory fields |
+| Task 91: Whitelist reasons and improve call budget classification | [x] | Whitelist and map classifications in call_budget.py |
+

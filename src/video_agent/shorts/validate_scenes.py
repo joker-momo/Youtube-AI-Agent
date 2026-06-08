@@ -598,6 +598,7 @@ def validate_scene_structure(
     scenes_doc: dict[str, Any] | None = None,
     script: dict[str, Any] | None = None,
     audio_duration_sec: float | None = None,
+    attempt: int = 1,
 ) -> list[SceneValidationIssue]:
     """Deterministic pre-QA validation for Shorts scene structure.
 
@@ -916,7 +917,7 @@ def validate_scene_structure(
     if script and (script.get("idea_items") or (script.get("idea_contract") or {}).get("must_preserve_count")):
         from video_agent.shorts.idea_preservation import validate_scene_idea_coverage
 
-        issues.extend(validate_scene_idea_coverage(scenes_doc, script))
+        issues.extend(validate_scene_idea_coverage(scenes_doc, script, attempt=attempt))
 
     if audio_duration_sec is not None:
         issue = validate_audio_fit(total_for_range or scene_sum, audio_duration_sec)
@@ -956,7 +957,7 @@ def build_scene_repair_plan(
     ]
     suggested_scene_plan: list[dict[str, Any]] = []
 
-    for issue in issues:
+    for issue in active_issues:
         issue_instrs = []
         if issue.type in {"duration_cap", "scene_narration_fit"} and issue.scene_id:
             repair_modes.append("split_long_scene")
@@ -1552,9 +1553,11 @@ def repair_weak_hook_motion(scenes: list[dict]) -> bool:
     if not scenes:
         return False
     first_scene = scenes[0]
-    if not first_scene.get("motion") or str(first_scene.get("motion")).lower().strip() == "none":
+    first_motion = str(first_scene.get("motion") or "").strip()
+    if first_motion not in {"push_in", "object_reveal", "face_cut", "text_pop", "crop_shift"}:
         first_scene["motion"] = "push_in"
-        first_scene["pattern_interrupt"] = "text_pop at 0.5s"
+        if not first_scene.get("pattern_interrupt"):
+            first_scene["pattern_interrupt"] = "text_pop at 0.5s"
         return True
     return False
 

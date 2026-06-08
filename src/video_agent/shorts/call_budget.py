@@ -25,8 +25,11 @@ _REASONS = (
     "audio_fit_fail",
     "renderer_contract_fail",
     "wrong_context_suppressed",
+    "noncanonical_count_inference",
     "retention_grammar_repair",
     "retry_collapse",
+    "duration_normalized",
+    "deterministic_repair",
     "unknown",
 )
 
@@ -69,6 +72,12 @@ def _classify(record: dict[str, Any]) -> str:
         return "provider_error"
     if "audio_fit" in kind or "audio_fit" in error:
         return "audio_fit_fail"
+    if "weak_hook_motion" in kind or "weak_hook_motion" in error or explicit == "weak_hook_motion":
+        return "deterministic_repair"
+    if "duration_pacing" in kind or "duration_pacing" in error or explicit == "duration_pacing":
+        return "qa_soft_warn"
+    if "total_duration_normalized" in kind or "total_duration_normalized" in error or explicit == "total_duration_normalized" or explicit == "duration_normalized":
+        return "duration_normalized"
     if "scene_validation" in kind or "scene_structure" in kind or "scene_validation" in error:
         return "scene_validation_fail"
     if "render" in kind or "renderer" in error or "remotion" in error:
@@ -77,6 +86,8 @@ def _classify(record: dict[str, Any]) -> str:
         return "schema_error"
     if "wrong_context_suppressed" in kind or "wrong_context_suppressed" in error:
         return "wrong_context_suppressed"
+    if "noncanonical_count_inference" in kind or "noncanonical_count_inference" in error:
+        return "noncanonical_count_inference"
     if "retry_collapse" in kind or "retry_collapse" in error:
         return "retry_collapse"
     if "qa_soft_warn" in kind or "qa_soft_warn" in error:
@@ -102,7 +113,10 @@ def build_call_budget_summary(
         rec_copy = dict(rec)
         provider = rec_copy.get("provider")
         kind = rec_copy.get("kind")
-        if provider == "gemini" and kind in ("qa_scenes", "qa_script", "qa"):
+        if (
+            (provider == "gemini" and kind in ("qa_scenes", "qa_script", "qa"))
+            or (provider == "deterministic" and kind == "stage_status" and (rec_copy.get("payload") or {}).get("stage") in ("qa_scenes", "qa_script"))
+        ):
             last_qa_idx = len(processed_history)
         
         if provider == "deterministic" and kind == "qa_classification":

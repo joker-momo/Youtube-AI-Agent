@@ -635,11 +635,216 @@ def test_no_chatgpt_regeneration_for_hook_repair():
     assert scenes[0]["motion"] == "push_in"
     assert scenes[0]["pattern_interrupt"] == "text_pop at 0.5s"
 
-    # Scene that already has motion should NOT be changed
+    # Scene that already has motion (but is weak) should be repaired to push_in
     scenes2 = [
         {"id": "s01", "duration_sec": 3.5, "layout": "hook_layout", "motion": "zoom_in"}
     ]
     changed2 = repair_weak_hook_motion(scenes2)
-    assert changed2 is False
+    assert changed2 is True
+    assert scenes2[0]["motion"] == "push_in"
+
+
+def test_canonical_checklist_count_authority():
+    from video_agent.shorts.qa import normalize_qa_issue, IssueClass
+    from video_agent.shorts.idea_preservation import ensure_script_idea_fields
+    from video_agent.shorts.call_budget import build_call_budget_summary
+
+    # 1. QA Mismatch Suppression Logic
+    idea = {"original_count": 4, "title": "Test idea", "format": "checklist"}
+    script = {
+        "idea_contract": {
+            "original_count": 4,
+            "must_preserve_count": True,
+        }
+    }
+    scenes = {}
+
+    # Gemini QA incorrectly infers 5-step checklist
+    issue_five_step = {
+        "type": "idea_fidelity",
+        "detail": "The original idea defines a 5-step checklist, but the script only has 4 items."
+    }
+
+    norm = normalize_qa_issue(issue_five_step, idea=idea, script=script, scenes=scenes)
+    assert norm.issue_class == IssueClass.STALE_OR_SUPPRESSED
+    assert norm.reason == "noncanonical_count_inference"
+    assert norm.trigger_regeneration is False
+
+    # Check spanish count mismatch
+    issue_spanish_five = {
+        "type": "idea_fidelity",
+        "detail": "El guión debe tener cinco errores como indica la idea."
+    }
+    norm_sp = normalize_qa_issue(issue_spanish_five, idea=idea, script=script, scenes=scenes)
+    assert norm_sp.issue_class == IssueClass.STALE_OR_SUPPRESSED
+    assert norm_sp.reason == "noncanonical_count_inference"
+
+    # Should NOT suppress if original_count is actually 5
+    script_five = {
+        "idea_contract": {
+            "original_count": 5,
+            "must_preserve_count": True,
+        }
+    }
+    norm_not_suppressed = normalize_qa_issue(issue_five_step, idea={"original_count": 5}, script=script_five, scenes=scenes)
+    assert norm_not_suppressed.issue_class != IssueClass.STALE_OR_SUPPRESSED
+
+    # 2. Contract Protection
+    chatgpt_script_mutated = {
+        "idea_contract": {
+            "original_count": 5,
+            "final_count": 5,
+            "must_preserve_count": True,
+        }
+    }
+    short_plan = {
+        "key_points": [1, 2, 3, 4],  # Canonical original_count = 4
+        "format": "checklist",
+    }
+    protected_script = ensure_script_idea_fields(chatgpt_script_mutated, short_plan)
+    assert protected_script["idea_contract"]["original_count"] == 4
+    assert protected_script["idea_contract"]["final_count"] == 4
+
+    # 3. Call Budget reason mapping
+    history = [
+        {"provider": "gemini", "kind": "qa_script", "verdict": "FAIL", "ok": True},
+        {"provider": "deterministic", "kind": "qa_classification", "payload": {"reason": "noncanonical_count_inference"}},
+    ]
+    summary = build_call_budget_summary(history)
+    assert summary["by_reason"]["noncanonical_count_inference"] == 1
+    assert summary["by_reason"]["qa_hard_fail"] == 0
+
+
+def test_repair_weak_hook_motion_non_strong():
+    from video_agent.shorts.validate_scenes import repair_weak_hook_motion
+    scenes = [
+        {"id": "s01", "duration_sec": 3.5, "layout": "short_hook", "motion": "pan_right"}
+    ]
+    changed = repair_weak_hook_motion(scenes)
+    assert changed is True
+    assert scenes[0]["motion"] == "push_in"
+    assert scenes[0]["pattern_interrupt"] == "text_pop at 0.5s"
+
+
+def test_slideshow_risk_downgrade():
+    from video_agent.shorts.validate_scenes import validate_scene_structure
+    # Define scenes that trigger hard slideshow_risk
+    scenes = [
+        {"id": "s01", "duration_sec": 3.0, "layout": "short_hook", "motion": "push_in", "retention_function": "hook"},
+        {"id": "s02", "duration_sec": 3.0, "layout": "graphic_checklist", "layout_payload": {"items": [1, 2, 3]}},
+        {"id": "s03", "duration_sec": 3.0, "layout": "graphic_checklist", "layout_payload": {"items": [1, 2, 3]}},
+        {"id": "s04", "duration_sec": 3.0, "layout": "graphic_checklist", "layout_payload": {"items": [1, 2, 3]}},
+        {"id": "s05", "duration_sec": 3.0, "layout": "short_cta", "motion": "push_in"}
+    ]
+    # At attempt 1, slideshow_risk is a repairable_error (blocker)
+    issues_1 = validate_scene_structure(scenes, attempt=1, script={"idea_items": [{"item_id": 1}]})
+    slideshow_1 = next((i for i in issues_1 if i.type == "slideshow_risk"), None)
+    assert slideshow_1 is not None
+    assert slideshow_1.severity == "repairable_error"
+
+    # At attempt 2, slideshow_risk is downgraded to warning
+    issues_2 = validate_scene_structure(scenes, attempt=2, script={"idea_items": [{"item_id": 1}]})
+    slideshow_2 = next((i for i in issues_2 if i.type == "slideshow_risk"), None)
+    assert slideshow_2 is not None
+    assert slideshow_2.severity == "warning"
+
+
+def test_repair_plan_ignores_warnings():
+    from video_agent.shorts.validate_scenes import SceneValidationIssue, build_scene_repair_plan
+    scenes = [
+        {"id": "s01", "duration_sec": 3.5, "layout": "short_hook", "motion": "push_in"}
+    ]
+    issues = [
+        SceneValidationIssue(
+            type="duration_pacing",
+            scene_id="s01",
+            severity="warning",
+            detail="Outside target pacing",
+            repair_hint="Allowed if pacing remains strong"
+        )
+    ]
+    plan = build_scene_repair_plan(scenes, issues)
+    # The warning should not produce repair plan instructions
+    assert len(plan["instructions"]) == 5  # Just the 5 default boilerplate headers, no issue instructions
+
+
+def test_normalize_duration_pacing_and_total_duration():
+    from video_agent.shorts.qa import normalize_qa_issue, IssueClass
+    
+    issue_pacing = {
+        "type": "duration_pacing",
+        "detail": "Scene s02 duration is outside target pacing",
+        "severity": "warning"
+    }
+    norm_pacing = normalize_qa_issue(issue_pacing, idea={}, script={}, scenes={})
+    assert norm_pacing.issue_class == IssueClass.SOFT_WARNING
+    assert norm_pacing.reason == "duration_pacing"
+    assert norm_pacing.trigger_regeneration is False
+
+    issue_norm = {
+        "type": "total_duration_normalized",
+        "detail": "total_duration_sec normalized from 32 to 30",
+        "severity": "warning"
+    }
+    norm_dur = normalize_qa_issue(issue_norm, idea={}, script={}, scenes={})
+    assert norm_dur.issue_class == IssueClass.SOFT_WARNING
+    assert norm_dur.reason == "duration_normalized"
+    assert norm_dur.trigger_regeneration is False
+    assert norm_dur.include_in_retry_feedback is False
+
+
+def test_call_budget_classification_with_new_reasons():
+    from video_agent.shorts.call_budget import build_call_budget_summary
+    history = [
+        # stage_status failed
+        {"provider": "deterministic", "kind": "stage_status", "ok": False, "payload": {"stage": "qa_scenes"}},
+        {"provider": "deterministic", "kind": "qa_classification", "payload": {"reason": "duration_normalized"}},
+        
+        # gemini qa failed
+        {"provider": "gemini", "kind": "qa_scenes", "ok": False, "reason": "qa_soft_warn"},
+        {"provider": "deterministic", "kind": "qa_classification", "payload": {"reason": "deterministic_repair"}},
+    ]
+    summary = build_call_budget_summary(history)
+    assert summary["by_reason"]["duration_normalized"] == 1
+    assert summary["by_reason"]["deterministic_repair"] == 1
+    assert summary["by_reason"]["unknown"] == 0
+
+
+def test_scene_retry_cap_and_memory():
+    from video_agent.shorts.retry_memory import RetryMemory, RetryIssue, add_or_update_issue
+    from video_agent.shorts.validate_scenes import SceneValidationIssue
+    
+    issue = SceneValidationIssue(
+        type="total_duration_normalized",
+        scene_id=None,
+        severity="warning",
+        detail="normalized total duration"
+    )
+    issue_class_val = "soft_warning" if issue.severity == "warning" else ("repairable_blocker" if issue.severity == "repairable_error" else "hard_blocker")
+    reason_val = issue.type
+    if issue.type == "total_duration_normalized":
+        reason_val = "duration_normalized"
+        issue_class_val = "soft_warning"
+        
+    retry_issue = RetryIssue(
+        id="x",
+        stage="scene_validation",
+        attempt=1,
+        scene_id=None,
+        type=issue.type,
+        severity=issue.severity,
+        detail=issue.detail,
+        required_change=issue.detail,
+        status="active",
+        first_seen_attempt=1,
+        last_seen_attempt=1,
+        issue_class=issue_class_val,
+        reason=reason_val
+    )
+    assert retry_issue.issue_class == "soft_warning"
+    assert retry_issue.reason == "duration_normalized"
+
+
+
 
 

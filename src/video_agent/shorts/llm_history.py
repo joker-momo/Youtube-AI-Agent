@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import re
 import threading
 import time
 from pathlib import Path
@@ -161,6 +162,22 @@ class LLMHistoryRecorder:
         return wrapped
 
 
+def _verdict_from_text(text: str) -> str:
+    """Best-effort PASS/WARN/FAIL extraction from a JSON-ish response string.
+
+    QA and anti-AI prompts flow through ``wrap``; their verdict lives in the
+    response body, not a payload, so the transcript would otherwise show a bare
+    OK. Find the first ``"verdict": "..."`` occurrence and normalize it.
+    """
+    if not text:
+        return ""
+    m = re.search(r'"verdict"\s*:\s*"([^"]+)"', text)
+    if not m:
+        return ""
+    v = m.group(1).strip().upper()
+    return v if v in {"PASS", "WARN", "FAIL"} else ""
+
+
 def _fence(text: str) -> str:
     """Wrap text in a fenced block, escaping nested fences."""
     body = (text or "").replace("```", "ʼʼʼ")
@@ -189,8 +206,12 @@ def render_markdown(history: list[dict[str, Any]], *, short_id: str = "") -> str
         ok = h.get("ok", True)
         payload = h.get("payload") if isinstance(h.get("payload"), dict) else {}
         verdict = str(payload.get("verdict") or "").upper()
+        if not verdict:
+            verdict = _verdict_from_text(str(h.get("response") or ""))
         if verdict == "PASS":
             status = "✅ PASS"
+        elif verdict == "WARN":
+            status = "⚠️ WARN"
         elif verdict == "FAIL":
             status = "❌ FAIL"
         else:

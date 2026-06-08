@@ -127,3 +127,33 @@ def test_render_markdown_uses_payload_verdict_for_stage_events(tmp_path: Path):
     assert "qa_scenes" in md
     assert "❌ FAIL" in md
     assert "**Reason:** Scene QA rejected layout." in md
+
+
+def test_render_markdown_surfaces_verdict_from_qa_response(tmp_path: Path):
+    """QA prompts go through wrap(); their PASS/FAIL verdict lives in the JSON
+    response string, not a payload. render_markdown must surface it so each
+    prompt entry shows the stage status, not a bare OK."""
+    rec = llm_history.LLMHistoryRecorder(tmp_path / "h.jsonl")
+    qa_fn = rec.wrap(lambda p: '{"verdict": "FAIL", "reason": "weak hook"}', "gemini", default_kind="qa_script")
+    qa_fn("review script")
+    md = llm_history.render_markdown(llm_history.read_history(tmp_path / "h.jsonl"))
+    assert "qa_script" in md
+    assert "❌ FAIL" in md
+    assert "✅ OK" not in md
+
+
+def test_render_markdown_surfaces_warn_verdict(tmp_path: Path):
+    rec = llm_history.LLMHistoryRecorder(tmp_path / "h.jsonl")
+    fn = rec.wrap(lambda p: 'noise before {"verdict":"WARN"} trailing', "gemini", default_kind="anti_ai_review")
+    fn("review")
+    md = llm_history.render_markdown(llm_history.read_history(tmp_path / "h.jsonl"))
+    assert "anti_ai_review" in md
+    assert "⚠️ WARN" in md
+
+
+def test_render_markdown_pass_verdict_from_response(tmp_path: Path):
+    rec = llm_history.LLMHistoryRecorder(tmp_path / "h.jsonl")
+    fn = rec.wrap(lambda p: '{"verdict": "PASS"}', "gemini", default_kind="qa_scenes")
+    fn("ok")
+    md = llm_history.render_markdown(llm_history.read_history(tmp_path / "h.jsonl"))
+    assert "✅ PASS" in md

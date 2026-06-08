@@ -6,7 +6,6 @@
  *
  *   ShortBackground (cover-fit media + 3-layer overlay)
  *   + Layout from registry (short_hook / short_pain / ... / short_cta)
- *   + optional ShortProgress top bar
  *
  * One scene per ``Sequence``, durations come from each scene's ``duration_sec``.
  */
@@ -15,7 +14,6 @@ import {AbsoluteFill, Sequence, Audio, useVideoConfig, staticFile} from 'remotio
 import {RenderProps, Scene} from './render-props';
 import {ShortBackground} from './shorts/ShortBackground';
 import {pickShortLayout} from './shorts/ShortLayouts';
-import {ShortProgress} from './shorts/ShortProgress';
 import {GraphicSceneRenderer, isGraphicScene} from './graphics/GraphicSceneRenderer';
 
 function pickOverlayKey(scene: Scene): 'default' | 'dark' | 'bright' {
@@ -82,8 +80,6 @@ export const ShortVideo: React.FC<RenderProps> = (props) => {
 
       {/* Single narration track spanning the whole composition. */}
       {narrationSrc && <Audio src={narrationSrc} />}
-
-      <ShortProgress />
     </AbsoluteFill>
   );
 };

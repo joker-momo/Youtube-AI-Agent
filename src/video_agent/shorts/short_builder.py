@@ -188,6 +188,132 @@ def _default_thumbnail_fn(long_job_dir: Path, short_id: str, channel_config: dic
     return None
 
 
+# Average product score (0-10) at/above which a soft-only scene-QA FAIL is
+# auto-passed as WARN instead of regenerated (spec §6).
+SCORE_AUTOPASS_AVERAGE = 8.5
+
+MAX_QA_RETRIES_PER_STAGE = 1
+MAX_SCENE_REGEN_ATTEMPTS = 2
+MAX_SCRIPT_REGEN_ATTEMPTS = 1
+MAX_PROVIDER_RETRIES_PER_CALL = 3
+
+
+_HARD_QA_ISSUE_MARKERS = (
+    "safety", "source_fidelity", "source_support", "idea", "schema",
+    "layout", "contract", "audio_fit", "duration_cap", "product_quality",
+    "missing_item", "first_scene", "last_scene", "empty_scenes",
+)
+
+
+def _scene_qa_has_hard_fail(result: dict[str, Any]) -> bool:
+    """True when a scene-QA result carries a blocking/repairable issue that must
+    be regenerated. Soft suggestions (severity warning, no required changes) are
+    not hard fails."""
+    for item in (result.get("issues") or []):
+        if not isinstance(item, dict):
+            # Bare string issue: treat as soft suggestion.
+            continue
+        severity = str(item.get("severity") or "").lower()
+        if severity in {"blocking_error", "repairable_error", "major"}:
+            return True
+        itype = str(item.get("type") or "").lower()
+        if any(marker in itype for marker in _HARD_QA_ISSUE_MARKERS):
+            return True
+    # A concrete required change is a hard ask.
+    return bool(result.get("required_changes"))
+
+
+def has_hard_fail(result: dict[str, Any]) -> bool:
+    if result.get("provider") == "rule_based" and result.get("verdict") == "FAIL":
+        return True
+    issues = result.get("issues") or []
+    for item in issues:
+        if isinstance(item, str):
+            item_lower = item.lower()
+            if any(m in item_lower for m in ["safety", "source_fidelity", "source_support", "health_claim", "disclaimer", "medical", "contract"]):
+                return True
+            continue
+        itype = str(item.get("type") or "").lower()
+        severity = str(item.get("severity") or "").lower()
+        detail = str(item.get("detail") or "").lower()
+        if severity == "blocking_error":
+            return True
+        hard_markers = {
+            "safety", "source_fidelity", "source_support", "idea", "schema",
+            "layout", "contract", "first_scene", "empty_scenes", "greeting",
+            "disclaimer", "medical", "overclaim", "narration", "source_map"
+        }
+        if any(m in itype for m in hard_markers):
+            if "product_quality" in itype:
+                continue
+            return True
+        if any(m in detail for m in ["safety", "source_fidelity", "source_support", "health claim", "medical overclaim"]):
+            return True
+    return False
+
+
+def check_and_apply_auto_pass(qa_result: dict[str, Any]) -> bool:
+    verdict = qa_result.get("verdict", "FAIL")
+    if verdict in {"PASS", "WARN"}:
+        return True
+    if has_hard_fail(qa_result):
+        return False
+    from video_agent.shorts.qa import parse_defensive_score
+    p_scores = qa_result.get("product_scores") or {}
+    avg_product = 0.0
+    if p_scores:
+        vals = [parse_defensive_score(v) for v in p_scores.values()]
+        avg_product = sum(vals) / len(vals) if vals else 0.0
+    q_scores = qa_result.get("scores") or {}
+    avg_quality = 0.0
+    if q_scores:
+        vals = [parse_defensive_score(v) for v in q_scores.values()]
+        avg_quality = sum(vals) / len(vals) if vals else 0.0
+    if avg_product >= 8.5 or avg_quality >= 85:
+        qa_result["verdict"] = "WARN"
+        qa_result["forced_pass_reason"] = "high_score_no_hard_fail"
+        return True
+    return False
+
+
+
+def _normalized_script_hash(script: dict[str, Any]) -> str:
+    from video_agent.shorts.quality_hash import stable_hash
+    hook = str(script.get("hook") or "").strip().lower()
+    narration = str(script.get("narration") or "").strip().lower()
+    cta = str(script.get("cta") or "").strip().lower()
+    idea_items = script.get("idea_items") or script.get("points") or script.get("checklist") or []
+    if isinstance(idea_items, list):
+        idea_items = [str(item).strip().lower() for item in idea_items]
+    norm = {
+        "hook": hook,
+        "narration": narration,
+        "cta": cta,
+        "idea_items": idea_items
+    }
+    return stable_hash(norm)
+
+
+def _normalized_scene_hash(short_scenes: dict[str, Any]) -> str:
+    """Stable hash of the render-relevant scene fields, used to detect a retry
+    loop where the generator keeps emitting the same output (spec §8)."""
+    from video_agent.shorts.quality_hash import stable_hash
+
+    norm = []
+    for sc in (short_scenes.get("scenes") or []):
+        payload = sc.get("layout_payload") or {}
+        norm.append({
+            "layout": sc.get("layout"),
+            "narration": (sc.get("narration") or "").strip().lower(),
+            "caption": (sc.get("caption") or "").strip().lower(),
+            "on_screen_text": (sc.get("on_screen_text") or "").strip().lower(),
+            "duration_sec": round(float(sc.get("duration_sec") or 0.0), 1),
+            "title": (payload.get("title") or ""),
+            "items": payload.get("items") or payload.get("bullets") or [],
+        })
+    return stable_hash(norm)
+
+
 def _scene_duration_sum(scenes_doc: dict[str, Any]) -> float:
     return round(
         sum(float(scene.get("duration_sec") or 0.0) for scene in ((scenes_doc or {}).get("scenes") or [])),
@@ -213,7 +339,127 @@ def _restore_scene_durations(scenes_doc: dict[str, Any], snapshot: dict[str, flo
     scenes_doc["total_duration_sec"] = _scene_duration_sum(scenes_doc)
 
 
+def record_retry_event(
+    recorder: llm_history.LLMHistoryRecorder,
+    reason: str,
+    scope: str,
+    attempt: int,
+    max_attempts: int,
+    hard_fail: bool,
+    source_stage: str,
+    details: dict | None = None
+) -> None:
+    payload = {
+        "retry_reason": reason,
+        "retry_scope": scope,
+        "attempt": attempt,
+        "max_attempts": max_attempts,
+        "hard_fail": hard_fail,
+        "source_stage": source_stage,
+    }
+    if details:
+        payload.update(details)
+    recorder.record_event(
+        "deterministic",
+        "retry_classification",
+        payload,
+        ok=True,
+    )
+
+
+def wrap_llm_with_provider_retries(original_llm_fn: Callable[..., str], recorder: llm_history.LLMHistoryRecorder, provider: str) -> Callable[..., str]:
+    def wrapped(*args: Any, **kwargs: Any) -> str:
+        from video_agent.shorts.short_scene_builder import is_provider_error_text, ChatGPTProviderError
+        from video_agent.shorts.llm_history import _guess_kind
+
+        prompt = ""
+        if len(args) == 2:
+            prompt = str(args[1])
+        elif len(args) == 1:
+            prompt = str(args[0])
+
+        stage_name = _guess_kind(provider, prompt)
+
+        last_error = None
+        for attempt in range(1, MAX_PROVIDER_RETRIES_PER_CALL + 1):
+            try:
+                res = original_llm_fn(*args, **kwargs)
+                if is_provider_error_text(res):
+                    raise ChatGPTProviderError("Provider error text returned by LLM", snippet=res[:200])
+                return res
+            except Exception as exc:
+                last_error = exc
+                record_retry_event(
+                    recorder,
+                    reason="provider_error",
+                    scope="provider_only",
+                    attempt=attempt,
+                    max_attempts=MAX_PROVIDER_RETRIES_PER_CALL,
+                    hard_fail=True,
+                    source_stage=stage_name,
+                    details={"error": str(exc)}
+                )
+                if attempt == MAX_PROVIDER_RETRIES_PER_CALL:
+                    raise exc
+        raise last_error or RuntimeError("Provider retries exhausted")
+    return wrapped
+
+
 def build_short(
+    long_job_dir: Path,
+    short_plan: dict,
+    channel_config: dict,
+    *,
+    llm_fn: Callable[..., str] = _default_llm_fn,
+    gemini_fn: Callable[[str], str] | None = None,
+    tts_fn: Callable[..., Path] = _default_tts_fn,
+    mix_fn: Callable[..., Path] = _default_mix_fn,
+    render_fn: Callable[..., Path] = _default_render_fn,
+    cover_fn: Callable[..., Path] = _default_cover_fn,
+    thumbnail_fn: Callable[..., Path | None] = _default_thumbnail_fn,
+    long_video_url: str = "",
+    require_render_confirmation: bool = False,
+    source_artifacts: dict | None = None,
+) -> dict[str, Any]:
+    short_id = short_plan["short_id"]
+    _jd = paths.short_json_dir(long_job_dir, short_id)
+    _jd.mkdir(parents=True, exist_ok=True)
+    try:
+        return _build_short_impl(
+            long_job_dir,
+            short_plan,
+            channel_config,
+            llm_fn=llm_fn,
+            gemini_fn=gemini_fn,
+            tts_fn=tts_fn,
+            mix_fn=mix_fn,
+            render_fn=render_fn,
+            cover_fn=cover_fn,
+            thumbnail_fn=thumbnail_fn,
+            long_video_url=long_video_url,
+            require_render_confirmation=require_render_confirmation,
+            source_artifacts=source_artifacts,
+        )
+    finally:
+        history_file = _jd / paths.SHORT_LLM_HISTORY_FILE
+        if history_file.exists():
+            try:
+                budget_summary = call_budget.build_call_budget_summary(
+                    llm_history.read_history(history_file)
+                )
+                atomic_write_json(_jd / paths.SHORT_CALL_BUDGET_SUMMARY_FILE, budget_summary)
+                recorder = llm_history.LLMHistoryRecorder(history_file)
+                recorder.record_event(
+                    "deterministic",
+                    "call_budget_summary",
+                    budget_summary,
+                    ok=budget_summary["verdict"] != "FAIL",
+                )
+            except Exception:
+                pass
+
+
+def _build_short_impl(
     long_job_dir: Path,
     short_plan: dict,
     channel_config: dict,
@@ -242,8 +488,10 @@ def build_short(
     # failed QA verdicts and every regeneration retry — to one JSONL file.
     _recorder = llm_history.LLMHistoryRecorder(_jd / paths.SHORT_LLM_HISTORY_FILE)
     llm_fn = _recorder.wrap(llm_fn, "chatgpt")
+    llm_fn = wrap_llm_with_provider_retries(llm_fn, _recorder, "chatgpt")
     if gemini_fn is not None:
         gemini_fn = _recorder.wrap(gemini_fn, "gemini", default_kind="qa")
+        gemini_fn = wrap_llm_with_provider_retries(gemini_fn, _recorder, "gemini")
 
     ap = (channel_config.get("shorts") or {}).get("autopilot") or {}
     max_regen = int(ap.get("max_regeneration_attempts", 4))
@@ -253,7 +501,7 @@ def build_short(
     max_product_attempts = int(ap.get("max_product_repair_attempts", max_regen + 1))
     # Provider errors (ChatGPT "Something went wrong…") get their own retry budget
     # so a browser failure never consumes a creative scene-regeneration attempt.
-    max_chatgpt_provider_retries = int(ap.get("max_chatgpt_provider_retries", 2))
+    max_chatgpt_provider_retries = 0
     music_track = short_plan.get("music_track")
     cover_words = int(((channel_config.get("shorts") or {}).get("cover") or {}).get("text_max_words", 5))
 
@@ -401,6 +649,7 @@ def build_short(
         write_short_status(long_job_dir, short_id, status)
         raise exc
 
+    prev_script_hash = None
     # We use a while loop for script generation, allowing loop back on audio_fit failure
     while script_attempts < max_regen + 1:
         script_attempts += 1
@@ -423,6 +672,60 @@ def build_short(
             write_short_status(long_job_dir, short_id, status)
             raise exc
 
+        cur_script_hash = _normalized_script_hash(short_script)
+        if prev_script_hash is not None and cur_script_hash == prev_script_hash:
+            script_qa_result = qa.run_short_script_qa(
+                long_job_dir, short_id, channel_config,
+                music_track=music_track, gemini_fn=gemini_fn, attempt=script_attempts,
+            )
+            check_and_apply_auto_pass(script_qa_result)
+            atomic_write_json(_jd / paths.SHORT_SCRIPT_QA_FILE, script_qa_result)
+            verdict = script_qa_result.get("verdict", "FAIL")
+            update_stage("qa_script", "completed" if verdict in ("PASS", "WARN") else "failed", qa_verdict=verdict)
+
+            renderable = not has_hard_fail(script_qa_result)
+            _recorder.record_event(
+                "deterministic",
+                "retry_collapse",
+                {
+                    "verdict": "WARN" if renderable else "FAIL",
+                    "retry_reason": "qa_retry",
+                    "retry_scope": "script_only",
+                    "attempt": script_attempts,
+                    "renderable": renderable,
+                    "detail": "Identical script output across retries; stopping loop.",
+                },
+                ok=renderable,
+            )
+            if renderable:
+                script_qa_result["verdict"] = "WARN"
+                script_qa_result["collapsed"] = True
+                status["hook"] = str(short_script.get("hook") or "")
+                write_short_status(long_job_dir, short_id, status)
+                try:
+                    sm = source_map.build_source_map(long_job_dir, short_plan, short_script, channel_config, long_video_url)
+                    atomic_write_json(_jd / paths.SHORT_SOURCE_MAP_FILE, sm)
+                except Exception:
+                    pass
+                break
+            else:
+                for s in status["stages"]:
+                    if s["status"] == "pending":
+                        s["status"] = "skipped"
+                status.update({
+                    "status": "needs_review",
+                    "rendered": False,
+                    "uploaded": False,
+                    "youtube_url": "",
+                    "requires_user_review": True,
+                    "qa_verdict": "FAIL",
+                    "regeneration_attempts": script_attempts,
+                })
+                write_short_status(long_job_dir, short_id, status)
+                return status
+
+        prev_script_hash = cur_script_hash
+
         # Update hook dynamically
         status["hook"] = str(short_script.get("hook") or "")
         write_short_status(long_job_dir, short_id, status)
@@ -442,35 +745,61 @@ def build_short(
                 long_job_dir, short_id, channel_config,
                 music_track=music_track, gemini_fn=gemini_fn, attempt=script_attempts,
             )
+            check_and_apply_auto_pass(script_qa_result)
+            
+            # Normalize script QA issues
+            normalized_script_issues = []
+            for item in script_qa_result.get("issues") or []:
+                norm = qa.normalize_qa_issue(item, idea=short_plan, script=short_script, scenes={}, source="script_qa")
+                normalized_script_issues.append(norm)
+            for item in script_qa_result.get("required_changes") or []:
+                norm = qa.normalize_qa_issue(item, idea=short_plan, script=short_script, scenes={}, source="script_qa")
+                if not any(x.detail == norm.detail for x in normalized_script_issues):
+                    normalized_script_issues.append(norm)
+            
+            script_qa_result["normalized_issues"] = [n.to_dict() for n in normalized_script_issues]
+            
+            script_blockers = [n for n in normalized_script_issues if n.issue_class in {qa.IssueClass.HARD_BLOCKER, qa.IssueClass.REPAIRABLE_BLOCKER}]
+            script_warnings = [n for n in normalized_script_issues if n.issue_class == qa.IssueClass.SOFT_WARNING]
+            
+            if not script_blockers:
+                script_qa_result["verdict"] = "WARN" if script_warnings else "PASS"
+            else:
+                script_qa_result["verdict"] = "FAIL"
+                
             atomic_write_json(_jd / paths.SHORT_SCRIPT_QA_FILE, script_qa_result)
             verdict = script_qa_result.get("verdict", "FAIL")
-            update_stage("qa_script", "completed" if verdict == "PASS" else "failed", qa_verdict=verdict)
+            update_stage("qa_script", "completed" if verdict in ("PASS", "WARN") else "failed", qa_verdict=verdict)
         except Exception as exc:
             update_stage("qa_script", "failed")
             status["status"] = "failed"
             write_short_status(long_job_dir, short_id, status)
             raise exc
 
-        if script_qa_result["verdict"] != "PASS":
+        if script_qa_result["verdict"] not in ("PASS", "WARN"):
             active_script_ids = set()
-            issues_list = script_qa_result.get("required_changes") or script_qa_result.get("issues") or []
-            for item in issues_list:
-                issue_id = make_stable_issue_id("script_qa", "global", "script_issue", item)
+            for norm in normalized_script_issues:
+                issue_id = make_stable_issue_id("script_qa", "global", norm.issue_type, norm.detail)
                 active_script_ids.add(issue_id)
                 retry_issue = RetryIssue(
                     id=issue_id,
                     stage="script_qa",
                     attempt=script_attempts,
                     scene_id="global",
-                    type="script_issue",
-                    severity="major",
-                    detail=item,
-                    required_change=item,
-                    status="active",
+                    type=norm.issue_type,
+                    severity="minor" if norm.issue_class == "soft_warning" else "major",
+                    detail=norm.detail,
+                    required_change=norm.repair_hint or norm.detail,
+                    status="active" if norm.issue_class != "stale_or_suppressed" else "suppressed",
                     first_seen_attempt=script_attempts,
-                    last_seen_attempt=script_attempts
+                    last_seen_attempt=script_attempts,
+                    issue_class=norm.issue_class,
+                    reason=norm.reason
                 )
-                add_or_update_issue(script_retry_memory, retry_issue)
+                if retry_issue.status == "suppressed":
+                    script_retry_memory.suppressed_issues[issue_id] = retry_issue
+                else:
+                    add_or_update_issue(script_retry_memory, retry_issue)
             
             for issue_id in list(script_retry_memory.active_issues.keys()):
                 if issue_id not in active_script_ids:
@@ -479,6 +808,7 @@ def build_short(
             save_retry_memory(script_retry_memory, script_memory_file)
             script_feedback = generate_cumulative_feedback(script_retry_memory, script_attempts + 1)
             continue
+
 
         update_stage("spoken_humanization", "in_progress")
         try:
@@ -525,6 +855,7 @@ def build_short(
         structural_attempts = 0
         product_attempts = 0
         provider_error_attempts = 0
+        attempt_1_failed_layout_schema = False
         status["qa_scenes_attempts"] = 0
         status["qa_scenes_structural_attempts"] = 0
         status["qa_scenes_product_attempts"] = 0
@@ -537,6 +868,8 @@ def build_short(
 
         scenes_passed = False
         escalate_to_script = False
+        prev_scene_hash: str | None = None
+        scene_collapsed = False
         # Hard ceiling guards against a pathological loop where neither budget
         # increments; in practice every iteration consumes structural or product.
         _scenes_loop_ceiling = max_structural_attempts + max_product_attempts + 2
@@ -564,6 +897,46 @@ def build_short(
                 state.latest_scene_qa_version = None
                 state.latest_audio_tail_ok = False
                 state.latest_audio_tail_version = None
+
+                # Spec §8: retry-collapse protection. If a regeneration produced
+                # the same normalized scenes as the previous attempt, the
+                # generator is stuck — stop looping. Accept with WARN when the
+                # output is renderable + safe, otherwise let the loop end and
+                # report a clear failure.
+                cur_scene_hash = _normalized_scene_hash(short_scenes)
+                if prev_scene_hash is not None and cur_scene_hash == prev_scene_hash:
+                    collapse_issues = validate_scenes.validate_scene_structure(
+                        short_scenes.get("scenes") or [],
+                        scenes_doc=short_scenes,
+                        script=short_script,
+                    )
+                    renderable = not validate_scenes.has_blocking_or_repairable(collapse_issues)
+                    _recorder.record_event(
+                        "deterministic",
+                        "retry_collapse",
+                        {
+                            "verdict": "WARN" if renderable else "FAIL",
+                            "retry_reason": "scene_validation_fail",
+                            "retry_scope": "scenes_only",
+                            "attempt": scenes_attempts,
+                            "renderable": renderable,
+                            "detail": "Identical scene output across retries; stopping loop.",
+                        },
+                        ok=renderable,
+                    )
+                    if renderable:
+                        best_scene_candidate = dict(short_scenes)
+                        best_scene_candidate_qa = {"verdict": "WARN", "collapsed": True}
+                        scenes_qa_result = {"verdict": "WARN", "collapsed": True, "qa_pass": True}
+                        scenes_passed = True
+                        state.latest_scene_validation_ok = True
+                        state.latest_scene_validation_version = state.current_scenes_version
+                        state.latest_scene_qa_ok = True
+                        state.latest_scene_qa_version = state.current_scenes_version
+                        atomic_write_json(_jd / paths.SHORT_SCENES_FILE, short_scenes)
+                    scene_collapsed = True
+                    break
+                prev_scene_hash = cur_scene_hash
             except short_scene_builder.ChatGPTProviderError as exc:
                 # Provider/browser failure — NOT a creative scene-QA failure.
                 # The recovery-wrapped llm_fn already cleared cookies + reopened a
@@ -732,6 +1105,8 @@ def build_short(
                 state.latest_scene_validation_version = None
 
             if structure_blocked:
+                if scenes_attempts == 1:
+                    attempt_1_failed_layout_schema = True
                 repair_plan = validate_scenes.build_scene_repair_plan(
                     scenes,
                     structure_issues,
@@ -826,11 +1201,37 @@ def build_short(
                     long_job_dir, short_id, channel_config,
                     gemini_fn=gemini_fn, attempt=scenes_attempts,
                 )
-                atomic_write_json(_jd / paths.SHORT_SCENES_QA_FILE, scenes_qa_result)
+                check_and_apply_auto_pass(scenes_qa_result)
+                
+                # Normalize scenes QA issues
+                normalized_scene_issues = []
+                for item in scenes_qa_result.get("issues") or []:
+                    norm = qa.normalize_qa_issue(
+                        item, idea=short_plan, script=short_script, scenes=short_scenes,
+                        source="gemini_scene_qa" if scenes_qa_result.get("provider") == "gemini" else "scene_validation"
+                    )
+                    normalized_scene_issues.append(norm)
+                for item in scenes_qa_result.get("required_changes") or []:
+                    norm = qa.normalize_qa_issue(
+                        item, idea=short_plan, script=short_script, scenes=short_scenes,
+                        source="gemini_scene_qa" if scenes_qa_result.get("provider") == "gemini" else "scene_validation"
+                    )
+                    if not any(x.detail == norm.detail for x in normalized_scene_issues):
+                        normalized_scene_issues.append(norm)
+                        
+                scenes_qa_result["normalized_issues"] = [n.to_dict() for n in normalized_scene_issues]
+                
+                scene_blockers = [n for n in normalized_scene_issues if n.issue_class in {qa.IssueClass.HARD_BLOCKER, qa.IssueClass.REPAIRABLE_BLOCKER}]
+                scene_warnings = [n for n in normalized_scene_issues if n.issue_class == qa.IssueClass.SOFT_WARNING]
+                scene_suppressed = [n for n in normalized_scene_issues if n.issue_class == qa.IssueClass.STALE_OR_SUPPRESSED]
+                
+                if not scene_blockers:
+                    scenes_qa_result["verdict"] = "WARN" if scene_warnings else "PASS"
+                else:
+                    scenes_qa_result["verdict"] = "FAIL"
+                
                 verdict = scenes_qa_result.get("verdict", "FAIL")
-                # Fix C4: deterministic scene validation already passed before
-                # Gemini QA runs, so a soft WARN is an acceptable preference, not
-                # a regeneration trigger. Only FAIL loops back.
+                atomic_write_json(_jd / paths.SHORT_SCENES_QA_FILE, scenes_qa_result)
                 update_stage("qa_scenes", "completed" if verdict in ("PASS", "WARN") else "failed", qa_verdict=verdict)
             except Exception as exc:
                 update_stage("qa_scenes", "failed")
@@ -868,61 +1269,107 @@ def build_short(
 
             # Track Gemini QA issues in retry memory
             active_qa_ids = set()
-            issues_list = scenes_qa_result.get("issues") or []
-            required_changes_list = scenes_qa_result.get("required_changes") or []
-            
-            for item in issues_list:
-                if isinstance(item, str):
-                    detail = item
-                    issue_type = "qa_issue"
-                    scene_id = None
+            for norm in normalized_scene_issues:
+                issue_id = make_stable_issue_id("scene_qa", norm.scene_id, norm.issue_type, norm.detail)
+                active_qa_ids.add(issue_id)
+                retry_issue = RetryIssue(
+                    id=issue_id,
+                    stage="scene_qa",
+                    attempt=scenes_attempts,
+                    scene_id=norm.scene_id,
+                    type=norm.issue_type,
+                    severity="minor" if norm.issue_class == "soft_warning" else "major",
+                    detail=norm.detail,
+                    required_change=norm.repair_hint or norm.detail,
+                    status="active" if norm.issue_class != "stale_or_suppressed" else "suppressed",
+                    first_seen_attempt=scenes_attempts,
+                    last_seen_attempt=scenes_attempts,
+                    issue_class=norm.issue_class,
+                    reason=norm.reason
+                )
+                if retry_issue.status == "suppressed":
+                    scene_retry_memory.suppressed_issues[issue_id] = retry_issue
                 else:
-                    detail = item.get("detail") or ""
-                    issue_type = item.get("type") or "qa_issue"
-                    scene_id = item.get("scene_id")
-                issue_id = make_stable_issue_id("scene_qa", scene_id, issue_type, detail)
-                active_qa_ids.add(issue_id)
-                retry_issue = RetryIssue(
-                    id=issue_id,
-                    stage="scene_qa",
-                    attempt=scenes_attempts,
-                    scene_id=scene_id,
-                    type=issue_type,
-                    severity="major",
-                    detail=detail,
-                    required_change=detail,
-                    status="active",
-                    first_seen_attempt=scenes_attempts,
-                    last_seen_attempt=scenes_attempts
-                )
-                add_or_update_issue(scene_retry_memory, retry_issue)
-                
-            for change in required_changes_list:
-                issue_id = make_stable_issue_id("scene_qa", None, "required_change", change)
-                active_qa_ids.add(issue_id)
-                retry_issue = RetryIssue(
-                    id=issue_id,
-                    stage="scene_qa",
-                    attempt=scenes_attempts,
-                    scene_id=None,
-                    type="required_change",
-                    severity="major",
-                    detail=change,
-                    required_change=change,
-                    status="active",
-                    first_seen_attempt=scenes_attempts,
-                    last_seen_attempt=scenes_attempts
-                )
-                add_or_update_issue(scene_retry_memory, retry_issue)
+                    add_or_update_issue(scene_retry_memory, retry_issue)
 
             for issue_id in list(scene_retry_memory.active_issues.keys()):
                 issue = scene_retry_memory.active_issues[issue_id]
                 if issue.stage == "scene_qa" and issue_id not in active_qa_ids:
                     resolve_issue_by_id(scene_retry_memory, issue_id)
 
-            if product_attempts >= max_product_attempts:
-                save_retry_memory(scene_retry_memory, scene_memory_file)
-                break
+            # Max attempts check: MAX_SCENE_REGEN_ATTEMPTS = 2
+            # Allow attempt 3 only if:
+            # - attempt 1 failed schema/layout hard blocker;
+            # - and current candidate is not renderable.
+            stop_scene_retries = False
+            renderable = not structure_blocked and not any(
+                n.issue_class == qa.IssueClass.HARD_BLOCKER for n in normalized_scene_issues
+            )
+            
+            if scenes_attempts >= 2:
+                if scenes_attempts == 2 and attempt_1_failed_layout_schema and not renderable:
+                    pass
+                else:
+                    stop_scene_retries = True
+
+            if stop_scene_retries:
+                remaining_blockers = [
+                    n for n in normalized_scene_issues
+                    if n.issue_class in {qa.IssueClass.HARD_BLOCKER, qa.IssueClass.REPAIRABLE_BLOCKER}
+                ]
+                remaining_warnings = [
+                    n for n in normalized_scene_issues
+                    if n.issue_class == qa.IssueClass.SOFT_WARNING
+                ]
+                
+                decision = ""
+                if not remaining_blockers:
+                    # Downgrade to WARN and continue
+                    scenes_qa_result["verdict"] = "WARN"
+                    scenes_qa_result["qa_pass"] = True
+                    scenes_passed = True
+                    best_scene_candidate = dict(short_scenes)
+                    best_scene_candidate_qa = dict(scenes_qa_result)
+                    
+                    state.latest_scene_qa_ok = True
+                    state.latest_scene_qa_version = state.current_scenes_version
+                    decision = "continued_with_warn"
+                else:
+                    scenes_passed = False
+                    decision = "failed_hard_blocker"
+                    
+                summary_report = {
+                    "stage": "qa_scenes",
+                    "scenes_attempts": scenes_attempts,
+                    "remaining_blockers": [b.to_dict() for b in remaining_blockers],
+                    "remaining_warnings": [w.to_dict() for w in remaining_warnings],
+                    "renderable": renderable,
+                    "decision": decision,
+                }
+                atomic_write_json(_jd / paths.SHORT_FAILURE_REPORT_FILE, summary_report)
+                
+                print(f"Scene QA stopped after {scenes_attempts} attempts.\n"
+                      f"Remaining blockers: {[b.detail for b in remaining_blockers]}\n"
+                      f"Remaining warnings: {[w.detail for w in remaining_warnings]}\n"
+                      f"Renderable: {renderable}\n"
+                      f"Decision: {decision}")
+                      
+                if decision == "failed_hard_blocker":
+                    status.update({
+                        "status": "failed",
+                        "rendered": False,
+                        "uploaded": False,
+                        "youtube_url": "",
+                        "requires_user_review": True,
+                        "qa_verdict": "FAIL",
+                        "failure_reason": f"Scene QA failed hard blocker: {[b.detail for b in remaining_blockers]}",
+                    })
+                    write_short_status(long_job_dir, short_id, status)
+                    save_retry_memory(scene_retry_memory, scene_memory_file)
+                    return status
+                else:
+                    save_retry_memory(scene_retry_memory, scene_memory_file)
+                    break
 
             # --- Product quality repair strategy ---
             summary = qa.summarize_product_scores(
@@ -945,6 +1392,7 @@ def build_short(
                 scene_retry_memory, scenes_attempts + 1,
                 candidate_summary=candidate_summary
             )
+
 
         if escalate_to_script:
             script_feedback = build_script_compression_feedback(short_script)
@@ -1413,22 +1861,7 @@ def build_short(
     )
     update_stage("performance_memory", "completed", memory_status="rendered")
 
-    # Fix C: reason-aware call/retry budget summary, derived from the recorded
-    # LLM history so transient provider errors are not blamed on the quality loop.
-    try:
-        budget_summary = call_budget.build_call_budget_summary(
-            llm_history.read_history(_jd / paths.SHORT_LLM_HISTORY_FILE)
-        )
-        atomic_write_json(_jd / paths.SHORT_CALL_BUDGET_SUMMARY_FILE, budget_summary)
-        # v4 §2.2: surface the budget as a stage in the LLM history/log.
-        _recorder.record_event(
-            "deterministic",
-            "call_budget_summary",
-            budget_summary,
-            ok=budget_summary["verdict"] != "FAIL",
-        )
-    except Exception:
-        pass
+
 
     return status
 

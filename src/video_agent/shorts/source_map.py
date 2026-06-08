@@ -33,7 +33,7 @@ def build_source_map(
 ) -> dict[str, Any]:
     idx = _long_scene_index(long_job_dir)
     used = []
-    for sid in short_plan.get("scene_ids") or []:
+    for sid in short_plan.get("scene_ids") or short_plan.get("source_scene_ids") or []:
         scene = idx.get(str(sid), {})
         used.append(
             {

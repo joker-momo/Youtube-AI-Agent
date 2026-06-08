@@ -75,11 +75,18 @@ def _idea_block(short_plan: dict) -> str:
     )
 
 
-def short_script_prompt(channel_config: dict, short_plan: dict, source_artifacts: dict | None = None) -> str:
+def short_script_prompt(
+    channel_config: dict,
+    short_plan: dict,
+    source_artifacts: dict | None = None,
+    *,
+    retention_plan: dict | None = None,
+) -> str:
     fmt = short_plan.get("format", "pain_to_tip")
     seed = short_plan.get("narration_seed", "")
     idea_block = _idea_block(short_plan).strip() or "(none)"
     source_block_text = _source_block(source_artifacts or {}).strip() or "(none)"
+    retention_plan_text = json.dumps(retention_plan or {}, ensure_ascii=False, indent=2)
     idea_contract = derive_idea_contract(short_plan)
     idea_items = derive_idea_items(short_plan, idea_contract)
     contract_blob = json.dumps(
@@ -105,6 +112,11 @@ def short_script_prompt(channel_config: dict, short_plan: dict, source_artifacts
         "    }\n"
         "  ],\n"
         '  "cta": "string",\n'
+        '  "hook_pattern": "string",\n'
+        '  "curiosity_gap": "string",\n'
+        '  "micro_tension_lines": ["string"],\n'
+        '  "identity_line": "string",\n'
+        '  "comment_trigger": "string",\n'
         '  "idea_contract": {\n'
         '    "preserved": true,\n'
         '    "original_count": 5,\n'
@@ -138,6 +150,7 @@ def short_script_prompt(channel_config: dict, short_plan: dict, source_artifacts
         "INPUTS:\n"
         f"SHORT IDEA block:\n{idea_block}\n\n"
         f"SOURCE block:\n{source_block_text}\n\n"
+        f"RETENTION PLAN:\n{retention_plan_text}\n\n"
         f"SOURCE NARRATION SEED:\n{seed}\n\n"
         f"IDEA PRESERVATION CONTRACT:\n{contract_blob}\n\n"
         "The selected idea is a viewer promise. If the idea title/hook/format contains a number, preserve that number in the final Short.\n"
@@ -155,6 +168,9 @@ def short_script_prompt(channel_config: dict, short_plan: dict, source_artifacts
         "Speak to adults 45+ without using words like \"ancianos\", \"abuelos\", \"seniors\", \"personas mayores\", or age-shaming language.\n\n"
         "RETENTION RULES:\n"
         "The first 2 seconds must open with pain, curiosity, a number, or a common mistake.\n"
+        "Use retention_plan.hook_pattern, curiosity_gap, payoff_promise, identity_resonance, and comment_trigger when present.\n"
+        "Include at least two micro_tension_lines for Shorts longer than 20 seconds.\n"
+        "Include one reflective comment/save trigger, not spammy engagement bait.\n"
         "No greeting.\n"
         "Do not say \"en este short\", \"en este vídeo\", \"hoy\", \"bienvenidos\", or \"hola\".\n"
         "Keep one main idea only.\n"
@@ -216,11 +232,19 @@ def short_scene_prompt(channel_config: dict, short_plan: dict, short_script: dic
     )
 
 
-def short_seo_prompt(channel_config: dict, short_plan: dict, short_script: dict, long_video_url: str = "") -> str:
+def short_seo_prompt(
+    channel_config: dict,
+    short_plan: dict,
+    short_script: dict,
+    long_video_url: str = "",
+    *,
+    retention_plan: dict | None = None,
+) -> str:
     hook = str(short_script.get("hook") or "").strip()
     narration = str(short_script.get("narration") or "").strip()
     cta = str(short_script.get("cta") or "").strip()
     idea_contract = short_script.get("idea_contract") or {}
+    comment_trigger = ((retention_plan or {}).get("comment_trigger") or {}).get("question", "")
     short_format = str(short_plan.get("format") or "").strip()
     viewer_pain = str(short_plan.get("viewer_pain") or "").strip()
     payoff = str(short_plan.get("practical_payoff") or "").strip()
@@ -255,6 +279,7 @@ def short_seo_prompt(channel_config: dict, short_plan: dict, short_script: dict,
         f"- HOOK: {hook}\n"
         f"- NARRATION: {narration[:1200]}\n"
         f"- CTA: {cta}\n\n"
+        f"- Retention-plan comment trigger: {comment_trigger or '(none)'}\n\n"
         f"- Idea contract: {json.dumps(idea_contract, ensure_ascii=False)}\n\n"
         f"{_OUTPUT_RULES}\n"
         "SEO IDEA FIDELITY:\n"
@@ -291,6 +316,7 @@ def short_seo_prompt(channel_config: dict, short_plan: dict, short_script: dict,
         "- For nutrition Shorts, prefer broad viewer-search terms like #alimentacionsaludable or #platosaludable over invented age-number nutrition hashtags.\n"
         "- Always include #shorts ONLY as a 5th hashtag at most; never as the first.\n\n"
         "PINNED COMMENT RULES:\n"
+        "- Prefer the retention-plan comment trigger when it is reflective, safe, and genuinely tied to the Short.\n"
         "- 1 to 2 sentences in es-ES that reflect the real pain from the script (carga mental, insomnio, ansiedad, etc.).\n"
         "- End with one open question that invites the viewer to share their own experience (no yes/no).\n"
         "- Do NOT shove the long-video URL into the pinned comment unless the long_video_url field is non-empty AND the question naturally invites watching more.\n\n"
@@ -343,7 +369,11 @@ def planner_prompt(channel_config: dict, candidates: list[dict],
             "candidate_id": "candidate-XX",
             "source_scene_ids": ["scene-NN"],
             "hook_angle": "...",
+            "hook_pattern": "common_mistake",
             "viewer_pain": "...",
+            "curiosity_gap": "...",
+            "comment_trigger_type": "personal_experience",
+            "identity_angle": "sin culpa después de los 45",
             "practical_payoff": "...",
             "music_track": "shorts_sleep_stress",
             "cta_type": "long_video_channel_cta",
@@ -357,6 +387,7 @@ def planner_prompt(channel_config: dict, candidates: list[dict],
         "- Only select candidate_id values present in CANDIDATES below.\n"
         "- Do NOT invent source scenes. source_scene_ids must come from the candidate.\n"
         "- Each selected Short MUST include a 'reason'.\n"
+        "- Each selected Short SHOULD include hook_pattern, viewer_pain, curiosity_gap, comment_trigger_type, and identity_angle.\n"
         "- Allowed formats: " + ", ".join(formats) + ".\n"
         "- Do not force weak Shorts; lower target_count if candidates are weak.\n"
     )
@@ -378,10 +409,19 @@ def planner_prompt(channel_config: dict, candidates: list[dict],
     )
 
 
-def short_scene_prompt_v6(channel_config: dict, short_plan: dict,
-                          short_script: dict, feedback: str = "") -> str:
+def short_scene_prompt_v6(
+    channel_config: dict,
+    short_plan: dict,
+    short_script: dict,
+    feedback: str = "",
+    *,
+    retention_plan: dict | None = None,
+    spoken_humanization: dict | None = None,
+) -> str:
     """Spec v6 §2.4 / §9.3 — ChatGPT chooses each scene's layout."""
     script_json = json.dumps(short_script, ensure_ascii=False)[:2000]
+    retention_json = json.dumps(retention_plan or {}, ensure_ascii=False)[:2000]
+    humanization_json = json.dumps(spoken_humanization or {}, ensure_ascii=False)[:1600]
     feedback_block = feedback.strip() if feedback else "(none)"
 
     schema = (
@@ -400,6 +440,9 @@ def short_scene_prompt_v6(channel_config: dict, short_plan: dict,
         '      "on_screen_text": "string",\n'
         '      "visual_prompt": "English visual generation prompt, vertical 9:16",\n'
         '      "motion": "string",\n'
+        '      "retention_function": "hook | tension | proof | payoff | identity | cta",\n'
+        '      "rhythm_tag": "push | reveal | contrast | pause | payoff | comment",\n'
+        '      "pattern_interrupt": "string",\n'
         '      "layout_payload": {\n'
         '        "title": "string",\n'
         '        "items": ["string"],\n'
@@ -418,11 +461,19 @@ def short_scene_prompt_v6(channel_config: dict, short_plan: dict,
     return (
         "Turn this approved Short script into vertical 9:16 scenes for generation.\n\n"
         f"SCRIPT:\n{script_json}\n\n"
+        f"RETENTION PLAN:\n{retention_json}\n\n"
+        f"SPOKEN HUMANIZATION:\n{humanization_json}\n\n"
         f"RETRY FEEDBACK:\n{feedback_block}\n\n"
         "TASK:\n"
         "Create scene-by-scene visual instructions for a vertical YouTube Short.\n"
         "Do not rewrite the core message.\n"
         "Do not add new health claims.\n\n"
+        "RETENTION / RHYTHM REQUIREMENTS:\n"
+        "- Align each scene with a retention beat when possible.\n"
+        "- Add optional retention_function, rhythm_tag, and pattern_interrupt fields per scene.\n"
+        "- Avoid slide-deck feel; vary motion naturally.\n"
+        "- Use realistic Spanish supermarket/kitchen/home scenes as the base for lifestyle and health topics.\n"
+        "- Keep text overlays short and readable.\n\n"
         "NON-NEGOTIABLE LAYOUT BUDGET FOR THIS SHORT:\n"
         "This is a normal checklist/explainer Short, NOT graphic-led.\n"
         "You must output:\n"
@@ -742,7 +793,13 @@ def gemini_script_qa_prompt(
         '    "payoff": 0,\n'
         '    "funnel": 0,\n'
         '    "source_fidelity": 0,\n'
-        '    "safety": 0\n'
+        '    "safety": 0,\n'
+        '    "hook_specificity": 0,\n'
+        '    "micro_tension": 0,\n'
+        '    "human_naturalness": 0,\n'
+        '    "visual_rhythm": 0,\n'
+        '    "identity_resonance": 0,\n'
+        '    "commentability": 0\n'
         "  }\n"
         "}"
     )
@@ -775,6 +832,7 @@ def gemini_script_qa_prompt(
         "- Tone must be warm, direct, calm, and suitable for adults 45+.\n"
         "- Do not use \"ancianos\", \"abuelos\", \"seniors\", \"personas mayores\", or age-shaming language.\n"
         "- Source fidelity must be checked against SOURCE MAP when present.\n"
+        "- Score hook_specificity, micro_tension, human_naturalness, visual_rhythm, identity_resonance, and commentability on a 0-100 scale.\n"
         "- If SOURCE MAP is missing, do not invent support. Add a warning.\n\n"
         "IDEA COUNT FIDELITY:\n"
         "- If the selected original idea promises a number of items, the script must preserve that number unless adaptation_allowed is true.\n"
@@ -822,7 +880,8 @@ def gemini_script_qa_prompt(
         "- payoff: usefulness and placement before CTA\n"
         "- funnel: flow from hook to setup to payoff to CTA\n"
         "- source_fidelity: support from SOURCE MAP\n"
-        "- safety: absence of overclaims or unsafe framing\n\n"
+        "- safety: absence of overclaims or unsafe framing\n"
+        "- hook_specificity, micro_tension, human_naturalness, visual_rhythm, identity_resonance, commentability: 0-100 quality upgrade scores\n\n"
         f"RETURN JSON SCHEMA:\n{schema}\n"
     )
 
@@ -857,6 +916,14 @@ def gemini_scenes_qa_prompt(channel_config: dict, short_script: dict, short_scen
         '    "retention_pacing": 0,\n'
         '    "natural_spanish": 0,\n'
         '    "saveability": 0\n'
+        '  },\n'
+        '  "quality_scores": {\n'
+        '    "hook_specificity": 0,\n'
+        '    "micro_tension": 0,\n'
+        '    "human_naturalness": 0,\n'
+        '    "visual_rhythm": 0,\n'
+        '    "identity_resonance": 0,\n'
+        '    "commentability": 0\n'
         '  }\n'
         "}"
     )
@@ -882,6 +949,7 @@ def gemini_scenes_qa_prompt(channel_config: dict, short_script: dict, short_scen
         "- retention_pacing\n"
         "- natural_spanish\n"
         "- saveability\n\n"
+        "Also return quality_scores from 0 to 100: hook_specificity, micro_tension, human_naturalness, visual_rhythm, identity_resonance, and commentability.\n\n"
         "Scoring scale:\n"
         "10 = excellent for a Spain-first 45+ Shorts audience\n"
         "8 = strong and publishable\n"

@@ -219,6 +219,8 @@ def build_short_scenes(
     channel_config: dict,
     llm_fn: Callable[..., str],
     *,
+    retention_plan: dict | None = None,
+    spoken_humanization: dict | None = None,
     feedback: str = "",
     attempt: int = 1,
 ) -> dict[str, Any]:
@@ -227,7 +229,14 @@ def build_short_scenes(
     The deterministic ``normalize_short_scenes`` only fills missing fields and
     maps any legacy long-form layout names (backward compat); it must NOT
     overwrite layouts the LLM emitted."""
-    prompt = prompts.short_scene_prompt_v6(channel_config, short_plan, short_script, feedback=feedback)
+    prompt = prompts.short_scene_prompt_v6(
+        channel_config,
+        short_plan,
+        short_script,
+        feedback=feedback,
+        retention_plan=retention_plan,
+        spoken_humanization=spoken_humanization,
+    )
     log_llm_call(LLMCallLog(
         task="short_scene_builder", provider=PROVIDER,
         short_id=short_plan.get("short_id", "-"), attempt=attempt,

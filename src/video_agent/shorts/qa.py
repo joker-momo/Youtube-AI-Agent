@@ -396,6 +396,22 @@ PRODUCT_SCORE_KEYS = [
     "natural_spanish",
     "saveability",
 ]
+NEW_PRODUCT_SCORE_KEYS = [
+    "hook_specificity",
+    "micro_tension",
+    "human_naturalness",
+    "visual_rhythm",
+    "identity_resonance",
+    "commentability",
+]
+NEW_PRODUCT_SCORE_THRESHOLDS = {
+    "hook_specificity": {"pass": 75, "warn": 55, "fail": 54},
+    "micro_tension": {"pass": 70, "warn": 50, "fail": 49},
+    "human_naturalness": {"pass": 75, "warn": 55, "fail": 54},
+    "visual_rhythm": {"pass": 70, "warn": 50, "fail": 49},
+    "identity_resonance": {"pass": 70, "warn": 50, "fail": 49},
+    "commentability": {"pass": 65, "warn": 45, "fail": 44},
+}
 REQUIRED_PRODUCT_SCORE_THRESHOLDS = {
     "hook_strength": 9.0,
     "clarity": 9.0,

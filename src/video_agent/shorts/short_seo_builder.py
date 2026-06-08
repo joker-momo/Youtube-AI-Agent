@@ -94,14 +94,18 @@ def build_short_seo(
     channel_config: dict,
     llm_fn: Callable[..., str],
     long_video_url: str = "",
+    retention_plan: dict | None = None,
 ) -> dict[str, Any]:
-    prompt = prompts.short_seo_prompt(channel_config, short_plan, short_script, long_video_url)
+    prompt = prompts.short_seo_prompt(channel_config, short_plan, short_script, long_video_url, retention_plan=retention_plan)
     parsed = _parse(_invoke(llm_fn, "seo", prompt))
     funnel = (channel_config.get("shorts") or {}).get("funnel") or {}
     pinned_template = funnel.get("pinned_comment_template", "")
     pinned = parsed.get("pinned_comment") or (
         pinned_template.replace("{long_video_url}", long_video_url) if pinned_template else ""
     )
+    trigger_question = str(((retention_plan or {}).get("comment_trigger") or {}).get("question") or "").strip()
+    if trigger_question and "?" in trigger_question and not any(term in trigger_question.lower() for term in ("suscr", "urgente", "miedo", "cura")):
+        pinned = trigger_question
     hashtags = _normalize_hashtags(parsed.get("hashtags"))
     if not hashtags:
         hashtags = list(_DEFAULT_FALLBACK_HASHTAGS)

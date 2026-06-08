@@ -12,14 +12,19 @@ from pathlib import Path
 from typing import Any, Callable
 
 from video_agent.shorts import (
+    anti_ai,
+    humanization,
     llm_history,
+    performance_memory,
     paths,
     qa,
+    retention_plan as retention_plan_builder,
     short_scene_builder,
     short_script_builder,
     short_seo_builder,
     source_map,
     validate_scenes,
+    visual_rhythm,
 )
 from video_agent.shorts.idea_preservation import allowed_spoken_points_from_contract
 from video_agent.shorts.manifest import write_short_status
@@ -278,14 +283,19 @@ def build_short(
     }
 
     stages = [
+        {"name": "retention_plan", "label": "Retention Plan", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "script", "label": "Short Script", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "qa_script", "label": "QA Script", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
+        {"name": "spoken_humanization", "label": "Spoken Humanization", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "scenes", "label": "Short Scenes", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
+        {"name": "visual_rhythm_plan", "label": "Visual Rhythm Plan", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "qa_scenes", "label": "QA Scenes", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
+        {"name": "anti_ai_review", "label": "Anti-AI Review", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "seo", "label": "Short SEO", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "thumbnail", "label": "Thumbnail", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "audio", "label": "Audio TTS & Mix", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "render", "label": "Video & Cover Render", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
+        {"name": "performance_memory", "label": "Performance Memory", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
     ]
 
     started_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -348,6 +358,11 @@ def build_short(
     scenes_feedback = ""
     best_scene_candidate = None
     best_scene_candidate_qa = None
+    retention_plan: dict[str, Any] = {}
+    spoken_humanization: dict[str, Any] = {}
+    visual_rhythm_plan: dict[str, Any] = {}
+    anti_ai_review: dict[str, Any] = {}
+    anti_ai_regeneration_attempts = 0
 
     narration_wav = None
     duration_sec = 0.0
@@ -363,6 +378,28 @@ def build_short(
             "- Do not use unsafe/medical fear framing."
         ]
 
+    update_stage("retention_plan", "in_progress")
+    try:
+        check_stop()
+        retention_plan = retention_plan_builder.build_retention_plan(
+            long_job_dir,
+            plan_for_prompt,
+            channel_config,
+            llm_fn,
+            source_artifacts=source_artifacts,
+        )
+        update_stage(
+            "retention_plan",
+            "completed",
+            generation_mode=retention_plan.get("generation_mode"),
+            input_hash=retention_plan.get("input_hash"),
+        )
+    except Exception as exc:
+        update_stage("retention_plan", "failed", error=str(exc))
+        status["status"] = "failed"
+        write_short_status(long_job_dir, short_id, status)
+        raise exc
+
     # We use a while loop for script generation, allowing loop back on audio_fit failure
     while script_attempts < max_regen + 1:
         script_attempts += 1
@@ -375,6 +412,7 @@ def build_short(
             short_script = short_script_builder.build_short_script(
                 long_job_dir, plan_for_prompt, channel_config, llm_fn,
                 source_artifacts=source_artifacts,
+                retention_plan=retention_plan,
                 feedback=script_feedback, attempt=script_attempts,
             )
             update_stage("script", "completed")
@@ -441,6 +479,29 @@ def build_short(
             script_feedback = generate_cumulative_feedback(script_retry_memory, script_attempts + 1)
             continue
 
+        update_stage("spoken_humanization", "in_progress")
+        try:
+            check_stop()
+            spoken_humanization = humanization.build_spoken_humanization(
+                long_job_dir,
+                short_id,
+                short_script,
+                retention_plan,
+                channel_config,
+                llm_fn,
+            )
+            update_stage(
+                "spoken_humanization",
+                "completed",
+                generation_mode=spoken_humanization.get("generation_mode"),
+                rewrite_discarded=spoken_humanization.get("rewrite_discarded", False),
+            )
+        except Exception as exc:
+            update_stage("spoken_humanization", "failed", error=str(exc))
+            status["status"] = "failed"
+            write_short_status(long_job_dir, short_id, status)
+            raise exc
+
         # Script passed! Reset and run the Scenes loop
         state = ScenePipelineState()
         scene_memory_file = _jd / "scene_retry_memory.json"
@@ -490,6 +551,8 @@ def build_short(
                 check_stop()
                 short_scenes = short_scene_builder.build_short_scenes(
                     long_job_dir, plan_for_prompt, short_script, channel_config, llm_fn,
+                    retention_plan=retention_plan,
+                    spoken_humanization=spoken_humanization,
                     feedback=scenes_feedback, attempt=scenes_attempts,
                 )
                 update_stage("scenes", "completed")
@@ -559,6 +622,40 @@ def build_short(
             scenes = short_scenes.get("scenes") or []
             for scene in scenes:
                 validate_scenes.repair_scene_duration_if_possible(scene)
+
+            update_stage("visual_rhythm_plan", "in_progress")
+            try:
+                check_stop()
+                visual_rhythm_plan = visual_rhythm.build_visual_rhythm_plan(
+                    long_job_dir,
+                    short_id,
+                    short_scenes,
+                    retention_plan,
+                    channel_config,
+                )
+                rhythm_candidate = visual_rhythm.apply_visual_rhythm_to_scenes(short_scenes, visual_rhythm_plan)
+                rhythm_issues = validate_scenes.validate_scene_structure(
+                    rhythm_candidate.get("scenes") or [],
+                    scenes_doc=rhythm_candidate,
+                    script=short_script,
+                )
+                if validate_scenes.has_blocking_or_repairable(rhythm_issues):
+                    update_stage("visual_rhythm_plan", "completed", qa_verdict="WARN", discarded=True)
+                else:
+                    short_scenes = rhythm_candidate
+                    scenes = short_scenes.get("scenes") or []
+                    state.current_scenes_version += 1
+                    update_stage(
+                        "visual_rhythm_plan",
+                        "completed",
+                        qa_verdict="PASS",
+                        generation_mode=visual_rhythm_plan.get("generation_mode"),
+                    )
+            except Exception as exc:
+                update_stage("visual_rhythm_plan", "failed", error=str(exc))
+                status["status"] = "failed"
+                write_short_status(long_job_dir, short_id, status)
+                raise exc
 
             structure_issues = validate_scenes.validate_scene_structure(
                 scenes,
@@ -894,6 +991,121 @@ def build_short(
             write_short_status(long_job_dir, short_id, status)
             raise
 
+        update_stage("performance_memory", "in_progress")
+        try:
+            performance_memory.write_performance_memory(
+                long_job_dir,
+                short_id,
+                plan_for_prompt,
+                short_script,
+                short_scenes,
+                retention_plan,
+                status="scenes_ready",
+            )
+            update_stage("performance_memory", "completed", memory_status="scenes_ready")
+        except Exception as exc:
+            update_stage("performance_memory", "failed", error=str(exc))
+            status["status"] = "failed"
+            write_short_status(long_job_dir, short_id, status)
+            raise exc
+
+        update_stage("anti_ai_review", "in_progress")
+        try:
+            anti_ai_review = anti_ai.run_anti_ai_review(
+                long_job_dir,
+                short_id,
+                short_script,
+                short_scenes,
+                retention_plan,
+                channel_config,
+                gemini_fn=gemini_fn,
+            )
+            anti_verdict = anti_ai_review.get("verdict", "FAIL")
+            update_stage(
+                "anti_ai_review",
+                "completed" if anti_verdict in {"PASS", "WARN"} else "failed",
+                qa_verdict=anti_verdict,
+            )
+        except Exception as exc:
+            update_stage("anti_ai_review", "failed", error=str(exc))
+            status["status"] = "failed"
+            write_short_status(long_job_dir, short_id, status)
+            raise exc
+
+        if anti_ai_review.get("verdict") == "FAIL":
+            anti_ai_regeneration_attempts += 1
+            status["anti_ai_regeneration_attempts"] = anti_ai_regeneration_attempts
+            issue_text = "; ".join(
+                str(item)
+                for item in (
+                    anti_ai_review.get("recommended_changes")
+                    or anti_ai_review.get("robotic_patterns")
+                    or anti_ai_review.get("generic_phrases")
+                    or ["anti_ai_review_failed"]
+                )
+            )
+            issue_id = make_stable_issue_id("anti_ai_review", "global", "anti_ai_issue", issue_text)
+            add_or_update_issue(script_retry_memory, RetryIssue(
+                id=issue_id,
+                stage="anti_ai_review",
+                attempt=script_attempts,
+                scene_id="global",
+                type="anti_ai_issue",
+                severity="major",
+                detail=issue_text,
+                required_change=issue_text,
+                status="active",
+                first_seen_attempt=script_attempts,
+                last_seen_attempt=script_attempts,
+            ))
+            save_retry_memory(script_retry_memory, script_memory_file)
+            if anti_ai_regeneration_attempts <= 1 and script_attempts < max_regen + 1:
+                script_feedback = generate_cumulative_feedback(
+                    script_retry_memory,
+                    script_attempts + 1,
+                    candidate_summary=(
+                        "ANTI-AI REVIEW FAILED: regenerate/refine script and downstream scenes once "
+                        "while preserving the same short_id, source map, and idea contract."
+                    ),
+                )
+                for stage_name in (
+                    "script",
+                    "qa_script",
+                    "spoken_humanization",
+                    "scenes",
+                    "visual_rhythm_plan",
+                    "qa_scenes",
+                    "anti_ai_review",
+                ):
+                    update_stage(stage_name, "pending")
+                continue
+
+            performance_memory.write_performance_memory(
+                long_job_dir,
+                short_id,
+                plan_for_prompt,
+                short_script,
+                short_scenes,
+                retention_plan,
+                status="failed",
+                failure_stage="anti_ai_review",
+                failure_reason=issue_text,
+            )
+            update_stage("performance_memory", "completed", memory_status="failed")
+            status.update({
+                "status": "failed",
+                "rendered": False,
+                "uploaded": False,
+                "youtube_url": "",
+                "requires_user_review": True,
+                "qa_verdict": "FAIL",
+                "failure_stage": "anti_ai_review",
+                "failure_reason": issue_text,
+                "anti_ai_regeneration_attempts": anti_ai_regeneration_attempts,
+            })
+            write_short_status(long_job_dir, short_id, status)
+            return status
+
         # Stage 6: Audio TTS & exact audio_fit check
         update_stage("audio", "in_progress")
         try:
@@ -1020,7 +1232,8 @@ def build_short(
         try:
             check_stop()
             short_seo_builder.build_short_seo(
-                long_job_dir, short_id, plan_for_prompt, short_script, channel_config, llm_fn, long_video_url
+                long_job_dir, short_id, plan_for_prompt, short_script, channel_config, llm_fn, long_video_url,
+                retention_plan=retention_plan,
             )
             update_stage("seo", "completed")
         except Exception as exc:
@@ -1055,11 +1268,13 @@ def build_short(
         update_stage("thumbnail", "in_progress")
         try:
             check_stop()
-            thumb_result = thumbnail_fn(long_job_dir, short_id, channel_config)
-            if thumb_result:
-                update_stage("thumbnail", "completed")
-            else:
-                update_stage("thumbnail", "skipped")
+            update_stage(
+                "thumbnail",
+                "completed",
+                mode="disabled_for_shorts_render",
+                image_generation_called=False,
+                thumbnail_path=None,
+            )
         except Exception as exc:
             update_stage("thumbnail", "failed", error=str(exc))
 
@@ -1149,8 +1364,26 @@ def build_short(
         "requires_render_confirmation": False,
         "video_path": f"shorts/{short_id}/{paths.SHORT_OUTPUTS_SUBDIR}/{paths.SHORT_VIDEO_FILE}",
         "cover_path": f"shorts/{short_id}/{paths.SHORT_OUTPUTS_SUBDIR}/{paths.SHORT_COVER_FILE}",
+        "anti_ai_regeneration_attempts": anti_ai_regeneration_attempts,
     })
     write_short_status(long_job_dir, short_id, status)
+    update_stage("performance_memory", "in_progress")
+    performance_memory.write_performance_memory(
+        long_job_dir,
+        short_id,
+        plan_for_prompt,
+        short_script,
+        short_scenes,
+        retention_plan,
+        thumbnail_meta={
+            "status": "completed",
+            "mode": "disabled_for_shorts_render",
+            "image_generation_called": False,
+            "thumbnail_path": None,
+        },
+        status="rendered",
+    )
+    update_stage("performance_memory", "completed", memory_status="rendered")
     return status
 
 

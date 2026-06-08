@@ -26,10 +26,16 @@ def build_short_script(
     llm_fn: Callable[..., str],
     *,
     source_artifacts: dict | None = None,
+    retention_plan: dict | None = None,
     feedback: str = "",
     attempt: int = 1,
 ) -> dict[str, Any]:
-    prompt = prompts.short_script_prompt(channel_config, short_plan, source_artifacts or {})
+    prompt = prompts.short_script_prompt(
+        channel_config,
+        short_plan,
+        source_artifacts or {},
+        retention_plan=retention_plan,
+    )
     if feedback:
         prompt += f"\nFIX THESE QA ISSUES FROM THE PREVIOUS ATTEMPT:\n{feedback}\n"
     log_llm_call(LLMCallLog(

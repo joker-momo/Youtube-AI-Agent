@@ -592,6 +592,23 @@ def validate_scene_structure(
                 detail=f"First scene layout is {first_layout!r}; expected short_hook.",
                 repair_hint="Regenerate with the first scene as short_hook.",
             ))
+        first_motion = str(scenes[0].get("motion") or "").strip()
+        if first_motion not in {"push_in", "object_reveal", "face_cut", "text_pop", "crop_shift"}:
+            issues.append(SceneValidationIssue(
+                type="weak_hook_motion",
+                scene_id=_scene_id(scenes[0], 0),
+                severity="warning",
+                detail="First scene is missing a strong hook motion cue.",
+                repair_hint="Use push_in, object_reveal, face_cut, or text_pop for the hook scene.",
+            ))
+        if not str(scenes[0].get("retention_function") or "").strip():
+            issues.append(SceneValidationIssue(
+                type="missing_retention_function",
+                scene_id=_scene_id(scenes[0], 0),
+                severity="warning",
+                detail="First scene is missing retention_function metadata.",
+                repair_hint="Set first scene retention_function to hook.",
+            ))
         cta_text = str((script or {}).get("cta") or "").strip()
         has_cta = bool(cta_text) or any(str(scene.get("layout") or "") == "short_cta" for scene in scenes)
         if has_cta and str(scenes[-1].get("layout") or "") != "short_cta":
@@ -649,6 +666,9 @@ def validate_scene_structure(
 
     graphic_count = 0
     missing_graphic_candidates = 0
+    static_run = 0
+    text_heavy_run = 0
+    previous_text = None
     for index, scene in enumerate(scenes):
         sid = _scene_id(scene, index)
         layout = str(scene.get("layout") or "")
@@ -666,6 +686,52 @@ def validate_scene_structure(
 
         if layout.startswith("graphic_"):
             graphic_count += 1
+            if index == 0 or index == len(scenes) - 1:
+                issues.append(SceneValidationIssue(
+                    type="graphic_setup_or_cta",
+                    scene_id=sid,
+                    severity="repairable_error",
+                    detail=f"Graphic scene {sid} is used as setup or CTA.",
+                    repair_hint="Use realistic short_* footage for hook/setup/CTA; reserve graphics for proof/payoff moments.",
+                ))
+
+        motion = str(scene.get("motion") or "").strip()
+        if motion in {"", "none", "static"}:
+            static_run += 1
+        else:
+            static_run = 0
+        if static_run > 3:
+            issues.append(SceneValidationIssue(
+                type="repeated_static_scenes",
+                scene_id=sid,
+                severity="warning",
+                detail="More than 3 consecutive scenes are static or missing motion.",
+                repair_hint="Vary motion with crop_shift, push_in, object_reveal, text_pop, or cutaway.",
+            ))
+
+        on_screen_raw = str(scene.get("on_screen_text") or "").strip().lower()
+        if previous_text and on_screen_raw and on_screen_raw == previous_text:
+            issues.append(SceneValidationIssue(
+                type="repeated_on_screen_text",
+                scene_id=sid,
+                severity="warning",
+                detail=f"Scene {sid} repeats the previous on_screen_text structure.",
+                repair_hint="Change the overlay text or visual beat so the Short does not feel like a slideshow.",
+            ))
+        previous_text = on_screen_raw or previous_text
+
+        if count_spoken_words(str(scene.get("on_screen_text") or "")) > 6:
+            text_heavy_run += 1
+        else:
+            text_heavy_run = 0
+        if text_heavy_run > 2:
+            issues.append(SceneValidationIssue(
+                type="text_heavy_run",
+                scene_id=sid,
+                severity="warning",
+                detail="Too many consecutive text-heavy scenes.",
+                repair_hint="Shorten overlays and move detail to narration, caption, or a single graphic payoff.",
+            ))
 
         if dur > GLOBAL_SCENE_MAX_SEC:
             issues.append(SceneValidationIssue(

@@ -53,3 +53,22 @@
 | Task 51: Enforce Strict QA Thresholds in `qa.py` | [x] | Define REQUIRED_PRODUCT_SCORE_THRESHOLDS and update validation |
 | Task 52: Update Prompt Templates in `prompts.py` | [x] | Instruct ChatGPT and Gemini on new visual, pacing, and SEO rules |
 | Task 53: Verification & Test Execution | [x] | Verify all tests pass |
+| Task 54: Brainstorming: Explore project context (shorts QA and retry architecture) | [x] | Checked files, docs, and code for current retry policies and structures |
+| Task 55: Brainstorming: Ask clarifying questions | [x] | Asked clarifying questions on retry collapse behavior |
+| Task 56: Brainstorming: Propose 2-3 approaches | [x] | Proposed options for separating hard fail/soft warn, limits, collapse, budget summary, and retention repair |
+| Task 57: Brainstorming: Present design sections and get approval | [x] | Presented architecture, classes, and loops for user review |
+| Task 58: Brainstorming: Write design doc `docs/plans/2026-06-08-shorts-retry-budget-design.md` | [x] | Save design doc to git |
+| Task 59: Transition to implementation: Invoke writing-plans skill | [x] | Create detailed implementation plan |
+| Task 60: Executing Plan: Task 1 - Enforce limits, constants in `short_builder.py` | [x] | Implement MAX_QA_RETRIES_PER_STAGE, MAX_SCENE_REGEN_ATTEMPTS, etc. |
+| Task 61: Executing Plan: Task 2 - has_hard_fail, check_and_apply_auto_pass in `short_builder.py` | [x] | Implement auto-pass checking for script/scene QA |
+| Task 62: Executing Plan: Task 3 - Script collapse protection in `short_builder.py` | [x] | Implement script hashing and collapse check |
+| Task 63: Executing Plan: Task 4 - Unified provider retry wrapper in `short_builder.py` | [x] | Intercept provider errors/timeouts, retry up to 3 times, resolved regressions |
+| Task 64: Executing Plan: Task 5 - Deterministic retention repair in `retention_plan.py` | [x] | Repair Spanish grammar/topics deterministically |
+| Task 65: Executing Plan: Task 6 - Always-on call budget summary in `short_builder.py` | [x] | Ensure call_budget_summary is written on exits |
+| Task 66: Executing Plan: Task 7 - Write 14 acceptance tests | [x] | Write and run all 14 spec tests |
+| Task 67: Executing Plan: Task 8 - Verify all tests pass | [x] | Confirm entire test suite is green |
+| Task 68: Brainstorming: Explore project context (Retry Memory + QA loop) | [x] | Explore validate_scenes, retry_memory, and qa modules |
+| Task 69: Brainstorming: Ask clarifying questions | [x] | Ask clarifying question about suffix completion |
+| Task 70: Brainstorming: Propose 2-3 approaches | [x] | Propose Approach A and B, recommend A |
+| Task 71: Brainstorming: Write design doc `docs/plans/2026-06-08-shorts-retry-memory-qa-loop-fix-design.md` | [/] | Write and save design doc |
+| Task 72: Transition to implementation: Invoke writing-plans skill | [ ] | Create detailed implementation plan |

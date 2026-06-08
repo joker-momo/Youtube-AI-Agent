@@ -53,10 +53,10 @@ SUPPORTED_SCENE_LAYOUTS = SUPPORTED_SHORT_LAYOUTS | SUPPORTED_GRAPHIC_LAYOUTS
 LAYOUT_DURATION_TARGETS = {
     "short_hook": (1.8, 2.8, 3.0),
     "short_myth": (2.0, 3.0, 3.2),
-    "short_tip": (2.2, 4.2, 5.0),
+    "short_tip": (3.2, 4.0, 4.5),
     "short_checklist": (3.0, 4.5, 5.0),
     "short_pain": (3.2, 4.0, 4.5),
-    "short_cta": (2.4, 2.8, 2.8),
+    "short_cta": (2.0, 2.6, 2.8),
     "graphic_checklist": (4.2, 5.0, 5.0),
     "graphic_step_list": (3.0, 4.0, 4.5),
     "graphic_label_callout": (3.5, 5.0, 5.0),

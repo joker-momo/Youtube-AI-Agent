@@ -517,6 +517,8 @@ def short_scene_prompt_v6(
         "- For checklist/explainer Shorts, create 6–12 scenes when the idea contract needs it.\n"
         "- For simple hook-tip-CTA Shorts, create 4–6 scenes.\n"
         "- Never create a 7–12 sec scene to hit the target.\n"
+        "- Keep the CTA scene tight: 2.0–2.6 sec ideal, 2.8 sec hard max; a 3–5 word CTA should be 2.2–2.5 sec.\n"
+        "- Keep simple one-line tip scenes 3.2–4.0 sec ideal, 4.5 sec hard max; use 4.5 sec only when the visual action needs it.\n"
         "- Normal lifestyle scenes should be short: hook/opening 1.8–2.8 sec hard max 3.0; myth/setup 2.0–3.0 hard max 3.2; tip/lifestyle reinforcement 2.2–4.2 hard max 5.0; short_checklist 3.0–4.5 hard max 5.0; CTA 1.8–2.6 hard max 2.8.\n"
         "- If a narration beat is too long for one scene, split it into two scenes with different on_screen_text.\n"
         "- Do not repeat the same idea or title for too long.\n"

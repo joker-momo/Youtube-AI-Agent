@@ -1159,9 +1159,11 @@ def test_build_short_persists_auto_extended_scene_durations_before_gemini_qa(tmp
 
     assert res["status"] == "rendered"
     assert saved["scenes"][1]["duration_sec"] == 2.7
-    assert saved["total_duration_sec"] == 21.2
+    # v4 §4.3: short_tip hard max tightened 5.0 -> 4.5, so the tail repair can
+    # absorb a little less room here (total 20.7 instead of the old 21.2).
+    assert saved["total_duration_sec"] == 20.7
     assert '"duration_sec": 2.7' in captured["prompt"]
-    assert '"total_duration_sec": 21.2' in captured["prompt"]
+    assert '"total_duration_sec": 20.7' in captured["prompt"]
 
 
 def test_build_short_regenerates_then_needs_review_after_limit(tmp_path: Path):

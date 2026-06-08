@@ -845,6 +845,6 @@ def test_scene_retry_cap_and_memory():
     assert retry_issue.reason == "duration_normalized"
 
 
-
-
-
+def test_short_qa_decision_summary_file_path():
+    from video_agent.shorts import paths
+    assert paths.SHORT_QA_DECISION_SUMMARY_FILE == "qa_decision_summary.json"

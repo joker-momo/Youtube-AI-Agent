@@ -91,6 +91,6 @@
 | Task 89: Update issue classifications in normalize_qa_issue | [x] | Classify duration_pacing and total_duration_normalized |
 | Task 90: Pass attempt and populate RetryIssue fields in short_builder.py | [x] | Update loop, cap enforcement, and retry memory fields |
 | Task 91: Whitelist reasons and improve call budget classification | [x] | Whitelist and map classifications in call_budget.py |
-| Task 92: Add path constant in paths.py | [ ] | |
+| Task 92: Add path constant in paths.py | [x] | |
 | Task 93: Implement decision summary and update stage status in short_builder.py | [ ] | |
 | Task 94: Update web dashboard UI notice in shorts_studio.html | [ ] | |

@@ -40,6 +40,7 @@ SHORT_PERFORMANCE_MEMORY_FILE = "performance_memory.json"
 SHORT_AUDIO_SYNC_SUMMARY_FILE = "audio_sync_summary.json"
 SHORT_CALL_BUDGET_SUMMARY_FILE = "call_budget_summary.json"
 SHORT_FAILURE_REPORT_FILE = "short_failure_report.json"
+SHORT_QA_DECISION_SUMMARY_FILE = "qa_decision_summary.json"
 SHORT_RENDER_PROPS_FILE = "short_render_props.json"
 SHORT_LLM_HISTORY_FILE = "llm_history.jsonl"  # all ChatGPT + Gemini prompts/responses
 SHORT_COVER_FILE = "short_cover.jpg"

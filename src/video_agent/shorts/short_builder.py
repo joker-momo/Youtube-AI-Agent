@@ -1111,9 +1111,12 @@ def build_short(
         try:
             check_stop()
             assert_latest_scenes_ready(state)
-            approved_scene_durations = _snapshot_scene_durations(short_scenes)
+            # Shorts TTS runs with dynamic_sync=False (see shorts.audio): each
+            # scene's audio is padded to its planned duration_sec, so the single
+            # narration track stays aligned with the per-scene visual sequences.
+            # Keep the planned scene durations the renderer already uses — do NOT
+            # overwrite them with raw speech lengths, which desyncs audio/video.
             narration_wav = tts_fn(sd, short_scenes, channel_config)
-            _restore_scene_durations(short_scenes, approved_scene_durations)
             duration_sec = float(_scene_duration_sum(short_scenes) or short_scenes.get("total_duration_sec") or 0.0)
             short_scenes["total_duration_sec"] = round(duration_sec, 1)
             narration_audio_sec = validate_scenes.probe_audio_duration_sec(narration_wav)

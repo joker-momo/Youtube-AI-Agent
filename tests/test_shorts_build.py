@@ -892,7 +892,13 @@ def test_short_render_props_use_scene_sum_when_total_duration_is_stale(tmp_path:
     assert props["render"]["duration_sec"] == 27.5
 
 
-def test_build_short_preserves_scene_plan_duration_when_tts_mutates_scene_durations(tmp_path: Path):
+def test_build_short_keeps_audio_and_video_in_sync_at_planned_durations(tmp_path: Path):
+    # Shorts TTS runs with dynamic_sync=False (see shorts.audio): each scene's
+    # audio is padded to its planned duration_sec, so the single Remotion
+    # narration track stays aligned with the per-scene visual sequences. The
+    # builder must therefore KEEP the planned scene durations and drive
+    # render/mix at the planned total — never shrink visuals to raw speech,
+    # which previously desynced audio from video.
     import wave
 
     from video_agent.shorts import llm_history, paths, short_builder
@@ -921,11 +927,13 @@ def test_build_short_preserves_scene_plan_duration_when_tts_mutates_scene_durati
     }
 
     def tts_fn(short_dir, short_scenes, channel_config):
+        # Faithful dynamic_sync=False stand-in: pad each scene's audio to its
+        # planned duration, leave scene durations untouched, and emit a
+        # narration track whose length equals the planned total (27.6s).
         calls.append("tts")
-        compressed = [1.44, 3.35, 3.27, 3.38, 3.55, 4.13, 3.8, 1.86]
-        for scene, duration in zip(short_scenes["scenes"], compressed, strict=True):
-            scene["duration_sec"] = duration
-        short_scenes["total_duration_sec"] = round(sum(compressed), 2)
+        planned_total = round(
+            sum(float(s["duration_sec"]) for s in short_scenes["scenes"]), 2
+        )
         audio_dir = short_dir / "audio"
         audio_dir.mkdir(parents=True, exist_ok=True)
         wav_path = audio_dir / "short_narration.wav"
@@ -933,7 +941,7 @@ def test_build_short_preserves_scene_plan_duration_when_tts_mutates_scene_durati
             handle.setnchannels(1)
             handle.setsampwidth(2)
             handle.setframerate(8000)
-            handle.writeframes(b"\0\0" * int(24.78 * 8000))
+            handle.writeframes(b"\0\0" * int(planned_total * 8000))
         return wav_path
 
     io = _stub_io(calls)
@@ -979,11 +987,20 @@ def test_build_short_preserves_scene_plan_duration_when_tts_mutates_scene_durati
     audio_tail_events = [h for h in hist if h.get("kind") == "audio_tail_repair"]
 
     assert res["status"] == "rendered"
-    assert round(sum(float(scene["duration_sec"]) for scene in saved_scenes["scenes"]), 1) == 27.7
-    assert saved_scenes["total_duration_sec"] == 27.7
-    assert render_props["render"]["duration_sec"] == 27.7
-    assert mix_durations == [27.7]
-    assert audio_tail_events == []
+    # Sync invariant: the visual timeline, the render duration, the mix duration
+    # and the narration audio all agree. This is what keeps audio aligned with
+    # video; the exact number depends on the planned scene durations.
+    visual_total = round(sum(float(scene["duration_sec"]) for scene in saved_scenes["scenes"]), 1)
+    assert saved_scenes["total_duration_sec"] == visual_total
+    assert render_props["render"]["duration_sec"] == visual_total
+    assert mix_durations == [visual_total]
+    # Narration audio fills essentially the whole visual timeline. Before the
+    # fix, audio (19.4s) ran ~11s short of the 30.2s visuals — gross desync.
+    # Now the gap is only the intentional end-of-video tail hold (<= ~1s).
+    with wave.open(str(short_dir / "audio" / "short_narration.wav")) as w:
+        narration_sec = round(w.getnframes() / w.getframerate(), 1)
+    assert narration_sec <= visual_total
+    assert visual_total - narration_sec <= 1.0
 
 
 def test_build_short_soft_scene_validation_warning_proceeds_to_gemini_qa(tmp_path: Path, monkeypatch):

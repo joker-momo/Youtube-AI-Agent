@@ -32,6 +32,13 @@ def synthesize_short_narration(short_dir: Path, short_scenes: dict, channel_conf
         visuals["orientation"] = "portrait"
 
     tts_config = (channel_config.get("shorts") or {}).get("tts") or channel_config.get("tts")
+    # The Remotion ShortVideo renders ONE narration track at frame 0 while each
+    # scene is timed by its planned ``duration_sec``. Audio/video only stay in
+    # sync when every scene's audio block equals its planned duration, so the
+    # Shorts path must pad per-scene audio (dynamic_sync=False) rather than
+    # shrink scene durations to the raw speech length. Force it here, copy-on-
+    # write so the caller's config is untouched.
+    tts_config = {**(tts_config or {}), "dynamic_sync": False}
     channel_id = (channel_config.get("channel") or {}).get("id", "unknown-channel")
 
     prepare_assets(

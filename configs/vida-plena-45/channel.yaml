@@ -274,6 +274,10 @@ shorts:
     voice_id: "ef_dora"
     speed: 1.07
     pace_wpm: 130
+    # Shorts render one narration track over scenes timed by planned duration,
+    # so per-scene audio must be padded to the plan (not shrunk to raw speech).
+    # shorts/audio.py also forces this; set here for clarity.
+    dynamic_sync: false
     humanize:
       enabled: true
       pause_comma_ms: 160

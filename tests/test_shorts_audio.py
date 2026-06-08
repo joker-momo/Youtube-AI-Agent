@@ -93,3 +93,30 @@ def test_real_channel_music_tracks_resolve_to_existing_files():
     for track in ("shorts_movement", "shorts_daily_habit", "shorts_sleep_stress", "shorts_deep_calm"):
         p = audio_mixer.resolve_music_file(track, cfg)
         assert p is not None and p.exists(), track
+
+
+def test_synthesize_short_narration_forces_dynamic_sync_off(tmp_path: Path, monkeypatch):
+    """The Remotion ShortVideo plays ONE narration track at frame 0 while scenes
+    are timed by planned duration_sec. Sync therefore requires per-scene audio
+    padded to the planned duration (dynamic_sync=False), NOT audio-accurate
+    durations. Guard that the shorts audio path forces this regardless of config.
+    """
+    from video_agent.shorts import audio
+
+    captured: dict = {}
+
+    def fake_prepare_assets(*, job_dir, style_dna, scene_doc, visual_config, tts_config, channel_id):
+        captured["tts_config"] = tts_config
+        (job_dir / "assets").mkdir(parents=True, exist_ok=True)
+        (job_dir / "assets" / "narration.wav").write_bytes(b"\0\0")
+
+    monkeypatch.setattr("video_agent.stages.assets.prepare_assets", fake_prepare_assets)
+
+    short_dir = tmp_path / "short"
+    short_dir.mkdir()
+    cfg = {"shorts": {"tts": {"provider": "kokoro", "voice_id": "ef_dora", "speed": 1.07}}}
+    audio.synthesize_short_narration(short_dir, {"scenes": []}, cfg)
+
+    assert captured["tts_config"].get("dynamic_sync") is False
+    # must not mutate the caller's config object
+    assert "dynamic_sync" not in cfg["shorts"]["tts"]

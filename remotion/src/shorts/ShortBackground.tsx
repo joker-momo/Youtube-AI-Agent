@@ -6,7 +6,7 @@
  * (full darken + bottom gradient + center text scrim).
  */
 import React from 'react';
-import {AbsoluteFill, Img, Video, staticFile} from 'remotion';
+import {AbsoluteFill, Img, OffthreadVideo, staticFile} from 'remotion';
 import {SHORT_OVERLAYS, OverlayKey} from './ShortLayoutConstants';
 
 export type ShortBackgroundProps = {
@@ -45,7 +45,7 @@ export const ShortBackground: React.FC<ShortBackgroundProps> = ({src, kind, over
       {resolved ? (
         <AbsoluteFill style={{filter: 'blur(40px) brightness(0.55)', transform: 'scale(1.15)'}}>
           {actualKind === 'video' ? (
-            <Video src={resolved} style={{width: '100%', height: '100%', objectFit: 'cover'}} muted />
+            <OffthreadVideo src={resolved} style={{width: '100%', height: '100%', objectFit: 'cover'}} muted />
           ) : (
             <Img src={resolved} style={{width: '100%', height: '100%', objectFit: 'cover'}} />
           )}
@@ -56,7 +56,7 @@ export const ShortBackground: React.FC<ShortBackgroundProps> = ({src, kind, over
       {resolved ? (
         <AbsoluteFill>
           {actualKind === 'video' ? (
-            <Video src={resolved} style={{width: '100%', height: '100%', objectFit: 'cover'}} muted />
+            <OffthreadVideo src={resolved} style={{width: '100%', height: '100%', objectFit: 'cover'}} muted />
           ) : (
             <Img src={resolved} style={{width: '100%', height: '100%', objectFit: 'cover'}} />
           )}

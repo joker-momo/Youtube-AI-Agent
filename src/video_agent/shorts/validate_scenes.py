@@ -19,6 +19,10 @@ DEFAULT_SPANISH_WPS = 2.25
 AUDIO_TAIL_MARGIN_SEC = 0.6
 AUDIO_TAIL_EPSILON_SEC = 0.05
 AUDIO_TAIL_REPAIR_BUFFER_SEC = 0.1
+# Slack on top of the intentional tail margin+buffer so the sync PASS threshold
+# does not sit right on the deterministic tail size (avoids false WARN from
+# rounding). See audio_sync_summary().
+AUDIO_SYNC_EPSILON_SEC = 0.25
 MIN_SHORT_DURATION_SEC = 20.0
 MAX_SHORT_DURATION_SEC = 60.0
 IDEAL_MIN_SHORT_DURATION_SEC = 28.0
@@ -316,6 +320,45 @@ def probe_audio_duration_sec(path: Path) -> float | None:
             return handle.getnframes() / float(rate)
     except Exception:
         return None
+
+
+def audio_sync_summary(
+    render_duration_sec: float,
+    narration_audio_sec: float,
+    *,
+    tail_added_sec: float = 0.0,
+    per_scene_padding_sec: list[float] | None = None,
+) -> dict[str, Any]:
+    """Measurable audio/video sync verdict.
+
+    Thresholds are derived from the real tail-margin/buffer constants (plus a
+    small epsilon) so a healthy Short whose video intentionally outlasts the
+    narration by the tail margin still PASSes instead of a false WARN.
+    """
+    pass_delta = round(
+        AUDIO_TAIL_MARGIN_SEC + AUDIO_TAIL_REPAIR_BUFFER_SEC + AUDIO_SYNC_EPSILON_SEC,
+        3,
+    )
+    warn_delta = round(pass_delta + 0.5, 3)
+    delta = round(abs(float(render_duration_sec) - float(narration_audio_sec)), 3)
+    if delta <= pass_delta:
+        verdict = "PASS"
+    elif delta <= warn_delta:
+        verdict = "WARN"
+    else:
+        verdict = "FAIL"
+    return {
+        "render_duration_sec": round(float(render_duration_sec), 3),
+        "narration_audio_sec": round(float(narration_audio_sec), 3),
+        "audio_visual_delta_sec": delta,
+        "tail_added_sec": round(float(tail_added_sec), 3),
+        "tail_margin_sec": AUDIO_TAIL_MARGIN_SEC,
+        "tail_buffer_sec": AUDIO_TAIL_REPAIR_BUFFER_SEC,
+        "pass_delta_sec": pass_delta,
+        "warn_delta_sec": warn_delta,
+        "verdict": verdict,
+        "per_scene_padding_sec": list(per_scene_padding_sec or []),
+    }
 
 
 def _scene_id(scene: dict[str, Any], index: int) -> str:

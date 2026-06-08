@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from video_agent.shorts import (
     anti_ai,
+    call_budget,
     humanization,
     llm_history,
     performance_memory,
@@ -827,14 +828,17 @@ def build_short(
                 )
                 atomic_write_json(_jd / paths.SHORT_SCENES_QA_FILE, scenes_qa_result)
                 verdict = scenes_qa_result.get("verdict", "FAIL")
-                update_stage("qa_scenes", "completed" if verdict == "PASS" else "failed", qa_verdict=verdict)
+                # Fix C4: deterministic scene validation already passed before
+                # Gemini QA runs, so a soft WARN is an acceptable preference, not
+                # a regeneration trigger. Only FAIL loops back.
+                update_stage("qa_scenes", "completed" if verdict in ("PASS", "WARN") else "failed", qa_verdict=verdict)
             except Exception as exc:
                 update_stage("qa_scenes", "failed")
                 status["status"] = "failed"
                 write_short_status(long_job_dir, short_id, status)
                 raise exc
 
-            qa_pass = scenes_qa_result.get("verdict") == "PASS"
+            qa_pass = scenes_qa_result.get("verdict") in ("PASS", "WARN")
             scenes_qa_result["qa_pass"] = qa_pass
             scenes_qa_result["provider_call_ok"] = bool(
                 scenes_qa_result.get("provider_call_ok")
@@ -1120,11 +1124,13 @@ def build_short(
             duration_sec = float(_scene_duration_sum(short_scenes) or short_scenes.get("total_duration_sec") or 0.0)
             short_scenes["total_duration_sec"] = round(duration_sec, 1)
             narration_audio_sec = validate_scenes.probe_audio_duration_sec(narration_wav)
+            tail_added_total = 0.0
             if narration_audio_sec is not None:
                 tail_repair = validate_scenes.extend_scene_durations_for_audio_tail(
                     short_scenes,
                     narration_audio_sec
                 )
+                tail_added_total = float(tail_repair.get("added_sec") or 0.0)
                 if tail_repair.get("changed"):
                     duration_sec = float(_scene_duration_sum(short_scenes) or short_scenes.get("total_duration_sec") or duration_sec)
                     short_scenes["total_duration_sec"] = round(duration_sec, 1)
@@ -1159,6 +1165,20 @@ def build_short(
                         ok=True,
                     )
             
+            if narration_audio_sec is not None:
+                sync_summary = validate_scenes.audio_sync_summary(
+                    render_duration_sec=duration_sec,
+                    narration_audio_sec=narration_audio_sec,
+                    tail_added_sec=tail_added_total,
+                )
+                atomic_write_json(_jd / paths.SHORT_AUDIO_SYNC_SUMMARY_FILE, sync_summary)
+                _recorder.record_event(
+                    "deterministic",
+                    "audio_sync_summary",
+                    sync_summary,
+                    ok=sync_summary["verdict"] != "FAIL",
+                )
+
             audio_fit_passed = True
             audio_issue = None
             if narration_audio_sec is not None:
@@ -1313,8 +1333,10 @@ def build_short(
         # All stages completed successfully! Break out of outer loop.
         break
 
-    # If loops finished but script/scene QA didn't pass, handle review status
-    if script_qa_result["verdict"] != "PASS" or scenes_qa_result["verdict"] != "PASS":
+    # If loops finished but script/scene QA didn't pass, handle review status.
+    # Fix C4: a soft scene-QA WARN (deterministic validation already passed) is
+    # acceptable for render — only FAIL blocks.
+    if script_qa_result["verdict"] != "PASS" or scenes_qa_result["verdict"] not in ("PASS", "WARN"):
         # Mark remaining pending stages as skipped
         for s in status["stages"]:
             if s["status"] == "pending":
@@ -1387,6 +1409,17 @@ def build_short(
         status="rendered",
     )
     update_stage("performance_memory", "completed", memory_status="rendered")
+
+    # Fix C: reason-aware call/retry budget summary, derived from the recorded
+    # LLM history so transient provider errors are not blamed on the quality loop.
+    try:
+        budget_summary = call_budget.build_call_budget_summary(
+            llm_history.read_history(_jd / paths.SHORT_LLM_HISTORY_FILE)
+        )
+        atomic_write_json(_jd / paths.SHORT_CALL_BUDGET_SUMMARY_FILE, budget_summary)
+    except Exception:
+        pass
+
     return status
 
 

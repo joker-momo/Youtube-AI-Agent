@@ -83,3 +83,47 @@ def test_retention_plan_parses_llm_json_when_enabled(tmp_path: Path):
     assert plan["hook_pattern"] == "hidden_truth"
     assert plan["generation_mode"] == "llm"
 
+
+
+def _toast_plan() -> dict:
+    return {
+        "short_id": "short-05",
+        "source_long_job_id": "long-job",
+        "format": "top_tips",
+        "title": "3 piezas para que una tostada sacie más",
+        "hook_angle": "Pan y hambre enseguida",
+        "viewer_pain": "desayunar pan y tener hambre al rato",
+        "practical_payoff": "montar la tostada con 3 piezas",
+        "narration_seed": "No es solo el pan: son 3 piezas.",
+    }
+
+
+def test_retention_plan_tension_lines_are_distinct(tmp_path: Path):
+    from video_agent.shorts.retention_plan import build_retention_plan
+
+    plan = build_retention_plan(_job(tmp_path), _toast_plan(), {"shorts": {}})
+    beats = plan["retention_beats"]
+    assert len(beats) == 6
+    lines = [b["tension_line"] for b in beats]
+    assert len(set(lines)) >= 4, lines
+    # no single line repeated more than twice
+    from collections import Counter
+    assert max(Counter(lines).values()) <= 2, lines
+
+
+def test_retention_plan_expected_questions_vary(tmp_path: Path):
+    from video_agent.shorts.retention_plan import build_retention_plan
+
+    plan = build_retention_plan(_job(tmp_path), _toast_plan(), {"shorts": {}})
+    questions = [b["expected_viewer_question"] for b in plan["retention_beats"]]
+    assert len(set(questions)) >= 3, questions
+
+
+def test_retention_plan_comment_trigger_topic_match(tmp_path: Path):
+    from video_agent.shorts.retention_plan import build_retention_plan
+
+    plan = build_retention_plan(_job(tmp_path), _toast_plan(), {"shorts": {}})
+    q = plan["comment_trigger"]["question"].lower()
+    # must not fall back to the generic shopping trigger for a breakfast topic
+    assert "al comprar" not in q, q
+    assert q.strip()

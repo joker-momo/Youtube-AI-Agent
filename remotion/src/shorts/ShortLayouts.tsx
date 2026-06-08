@@ -54,10 +54,19 @@ const Zone: React.FC<{
 
 const textOrEmpty = (s?: string): string => (s && s.trim() ? s.trim() : '');
 
+/**
+ * Primary large text for a Shorts scene. The planned `on_screen_text` always
+ * wins; `layout_payload.title` is only a fallback when on_screen_text is empty.
+ * (Previously the priority was inverted, so the layout title overrode the plan.)
+ */
+export function getPrimarySceneText(on_screen_text?: string, layout_payload?: ShortLayoutPayload): string {
+  return textOrEmpty(on_screen_text) || textOrEmpty(layout_payload?.title);
+}
+
 // 8.1 short_hook ------------------------------------------------------------
 export const ShortHookLayout: React.FC<ShortSceneInput> = ({on_screen_text, layout_payload, accentColor}) => {
   const p = layout_payload || {};
-  const title = textOrEmpty(p.title || on_screen_text);
+  const title = getPrimarySceneText(on_screen_text, p);
   const subtitle = textOrEmpty(p.subtitle);
   return (
     <>
@@ -76,7 +85,7 @@ export const ShortHookLayout: React.FC<ShortSceneInput> = ({on_screen_text, layo
 // 8.2 short_pain ------------------------------------------------------------
 export const ShortPainLayout: React.FC<ShortSceneInput> = ({on_screen_text, caption, layout_payload, accentColor}) => {
   const p = layout_payload || {};
-  const title = textOrEmpty(p.title || on_screen_text);
+  const title = getPrimarySceneText(on_screen_text, p);
   const body = textOrEmpty(p.body);
   const cap = textOrEmpty(caption);
   return (
@@ -101,7 +110,7 @@ export const ShortPainLayout: React.FC<ShortSceneInput> = ({on_screen_text, capt
 // 8.3 short_tip -------------------------------------------------------------
 export const ShortTipLayout: React.FC<ShortSceneInput> = ({on_screen_text, caption, layout_payload, accentColor}) => {
   const p = layout_payload || {};
-  const title = textOrEmpty(p.title || on_screen_text);
+  const title = getPrimarySceneText(on_screen_text, p);
   const body = textOrEmpty(p.body);
   const cap = textOrEmpty(caption);
   return (
@@ -126,7 +135,7 @@ export const ShortTipLayout: React.FC<ShortSceneInput> = ({on_screen_text, capti
 // 8.4 short_checklist -------------------------------------------------------
 export const ShortChecklistLayout: React.FC<ShortSceneInput> = ({on_screen_text, layout_payload, accentColor}) => {
   const p = layout_payload || {};
-  const title = textOrEmpty(p.title || on_screen_text);
+  const title = getPrimarySceneText(on_screen_text, p);
   const bullets = (p.bullets || []).filter(Boolean).slice(0, 3);
   return (
     <>
@@ -145,7 +154,7 @@ export const ShortChecklistLayout: React.FC<ShortSceneInput> = ({on_screen_text,
 // 8.5 short_myth ------------------------------------------------------------
 export const ShortMythLayout: React.FC<ShortSceneInput> = ({on_screen_text, layout_payload, accentColor}) => {
   const p = layout_payload || {};
-  const title = textOrEmpty(p.title || on_screen_text);
+  const title = getPrimarySceneText(on_screen_text, p);
   const body = textOrEmpty(p.body);
   return (
     <>
@@ -164,7 +173,7 @@ export const ShortMythLayout: React.FC<ShortSceneInput> = ({on_screen_text, layo
 // 8.6 short_quote -----------------------------------------------------------
 export const ShortQuoteLayout: React.FC<ShortSceneInput> = ({on_screen_text, layout_payload, accentColor}) => {
   const p = layout_payload || {};
-  const title = textOrEmpty(p.title || on_screen_text);
+  const title = getPrimarySceneText(on_screen_text, p);
   const body = textOrEmpty(p.body);
   return (
     <Zone yMin={520} yMax={1000} width={920}>
@@ -191,7 +200,7 @@ export const ShortQuoteLayout: React.FC<ShortSceneInput> = ({on_screen_text, lay
 // 8.7 short_cta -------------------------------------------------------------
 export const ShortCtaLayout: React.FC<ShortSceneInput> = ({on_screen_text, layout_payload, accentColor}) => {
   const p = layout_payload || {};
-  const title = textOrEmpty(p.title || on_screen_text);
+  const title = getPrimarySceneText(on_screen_text, p);
   const cta = textOrEmpty(p.cta);
   return (
     <>

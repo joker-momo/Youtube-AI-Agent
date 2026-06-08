@@ -1002,6 +1002,18 @@ def test_build_short_keeps_audio_and_video_in_sync_at_planned_durations(tmp_path
     assert narration_sec <= visual_total
     assert visual_total - narration_sec <= 1.0
 
+    # Fix E: a measurable audio_sync_summary is written and passes.
+    sync = json.loads((short_dir / "json" / paths.SHORT_AUDIO_SYNC_SUMMARY_FILE).read_text(encoding="utf-8"))
+    assert sync["verdict"] == "PASS"
+    assert sync["pass_delta_sec"] > 0
+
+    # Fix C: a reason-aware call_budget_summary is written on success.
+    budget = json.loads((short_dir / "json" / paths.SHORT_CALL_BUDGET_SUMMARY_FILE).read_text(encoding="utf-8"))
+    assert budget["stage"] == "call_budget_summary"
+    assert "by_reason" in budget and "provider_error" in budget["by_reason"]
+    assert "by_provider" in budget and "retry_counts" in budget
+    assert budget["verdict"] in ("PASS", "WARN")
+
 
 def test_build_short_soft_scene_validation_warning_proceeds_to_gemini_qa(tmp_path: Path, monkeypatch):
     from video_agent.shorts import short_builder, validate_scenes
@@ -2497,3 +2509,66 @@ def test_short_scene_prompt_v6_layout_budget_ordering_and_selfcheck():
     # old verbatim-narration instruction is gone
     assert "Keep the narration faithful to the SCRIPT" not in p
     assert "do NOT copy long" in p
+
+
+def _scene_qa_scores() -> dict:
+    return {
+        "audience_fit_45_plus": 10, "hook_strength": 10, "visual_specificity": 10,
+        "clarity": 10, "retention_pacing": 9, "natural_spanish": 10, "saveability": 10,
+    }
+
+
+def test_soft_warning_does_not_trigger_excess_retry(tmp_path: Path):
+    """Fix C4: deterministic scene validation PASS + LLM QA WARN must not loop."""
+    from video_agent.shorts import short_builder
+    job = _long_job(tmp_path)
+    calls: list[str] = []
+    qa_calls = {"n": 0}
+
+    def gemini_fn(prompt: str, **kwargs):
+        if "Scenes QA reviewer" in prompt:
+            qa_calls["n"] += 1
+            return json.dumps({
+                "verdict": "WARN",
+                "issues": [],
+                "required_changes": [],
+                "warnings": ["Mild pacing preference, not blocking."],
+                "product_scores": _scene_qa_scores(),
+            })
+        return json.dumps({"verdict": "PASS", "issues": [], "required_changes": [], "warnings": []})
+
+    plan = {"short_id": "short-warn-noretry", "format": "pain_to_tip", "scene_ids": ["scene-09"],
+            "source_start_sec": 183.0, "source_end_sec": 199.0, "music_track": "shorts_sleep_stress",
+            "narration_seed": "Marca una hora de cierre."}
+    res = short_builder.build_short(job, plan, _cfg(), llm_fn=_llm_fn_factory(), gemini_fn=gemini_fn, **_stub_io(calls))
+
+    assert res["status"] == "rendered"
+    assert qa_calls["n"] == 1, "WARN scene QA must not trigger a regeneration loop"
+
+
+def test_short_scene_retry_cap_on_soft_issues(tmp_path: Path):
+    """Fix C4/C6#3: repeated soft QA warnings must not exceed 2 scene attempts."""
+    from video_agent.shorts import short_builder
+    job = _long_job(tmp_path)
+    calls: list[str] = []
+    qa_calls = {"n": 0}
+
+    def gemini_fn(prompt: str, **kwargs):
+        if "Scenes QA reviewer" in prompt:
+            qa_calls["n"] += 1
+            return json.dumps({
+                "verdict": "WARN",
+                "issues": [],
+                "required_changes": [],
+                "warnings": ["Soft preference."],
+                "product_scores": _scene_qa_scores(),
+            })
+        return json.dumps({"verdict": "PASS", "issues": [], "required_changes": [], "warnings": []})
+
+    plan = {"short_id": "short-cap", "format": "pain_to_tip", "scene_ids": ["scene-09"],
+            "source_start_sec": 183.0, "source_end_sec": 199.0, "music_track": "shorts_sleep_stress",
+            "narration_seed": "Marca una hora de cierre."}
+    res = short_builder.build_short(job, plan, _cfg(), llm_fn=_llm_fn_factory(), gemini_fn=gemini_fn, **_stub_io(calls))
+
+    assert res["status"] == "rendered"
+    assert qa_calls["n"] <= 2

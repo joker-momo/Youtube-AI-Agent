@@ -49,7 +49,14 @@ export function GraphicSceneRenderer({
   });
   const backgroundMode = payload.background_mode ?? defaultBackgroundByLayout[layout] ?? 'radial';
   const surfaceStyle = payload.surface_style ?? defaultSurfaceByLayout[layout] ?? 'soft_card';
-  const visualPayload = {...payload, variant, surface_style: surfaceStyle};
+  // Shorts text priority: the planned on_screen_text wins as the graphic's
+  // primary title/header; the parsed payload title is only the fallback.
+  const onScreen = (scene as {on_screen_text?: string}).on_screen_text;
+  const primaryTitle =
+    typeof onScreen === 'string' && onScreen.trim()
+      ? onScreen.trim()
+      : (payload as {title?: string}).title;
+  const visualPayload = {...payload, variant, surface_style: surfaceStyle, title: primaryTitle};
 
   return (
     <GraphicBackground variant={variant} backgroundMode={backgroundMode} backgroundSrc={backgroundSrc}>

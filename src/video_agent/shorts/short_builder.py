@@ -955,13 +955,96 @@ def _build_short_impl(
                 # report a clear failure.
                 cur_scene_hash = _normalized_scene_hash(short_scenes)
                 if prev_scene_hash is not None and cur_scene_hash == prev_scene_hash:
+                    # Run deterministic repairs first so they are present in final scenes
+                    scenes = short_scenes.get("scenes") or []
+                    for scene in scenes:
+                        validate_scenes.repair_scene_duration_if_possible(scene)
+                    validate_scenes.repair_weak_hook_motion(scenes)
+                    _idea_items = (
+                        short_script.get("idea_items")
+                        or short_script.get("points")
+                        or short_script.get("checklist")
+                        or []
+                    )
+                    if isinstance(_idea_items, list):
+                        for item in _idea_items:
+                            item_str = str(item).strip()
+                            if item_str:
+                                validate_scenes.repair_visual_only_unreadable(scenes, item_str)
+
                     collapse_issues = validate_scenes.validate_scene_structure(
-                        short_scenes.get("scenes") or [],
+                        scenes,
                         scenes_doc=short_scenes,
                         script=short_script,
                         attempt=scenes_attempts,
                     )
-                    renderable = not validate_scenes.has_blocking_or_repairable(collapse_issues)
+                    
+                    # Also check for active hard blockers in retry memory
+                    active_memory_blockers = [
+                        issue for issue in scene_retry_memory.active_issues.values()
+                        if issue.issue_class in {"hard_blocker", "repairable_blocker"}
+                        and issue.type != "slideshow_risk"
+                    ]
+                    active_memory_warnings = [
+                        issue for issue in scene_retry_memory.active_issues.values()
+                        if issue.issue_class == "soft_warning"
+                        or issue.type == "slideshow_risk"
+                    ]
+                    
+                    collapse_blockers = [
+                        i for i in collapse_issues
+                        if i.severity in ("blocking_error", "repairable_error")
+                        and i.type != "slideshow_risk"
+                    ]
+                    collapse_warnings = [
+                        i for i in collapse_issues
+                        if i.severity == "warning"
+                        or i.type == "slideshow_risk"
+                    ]
+                    
+                    remaining_blockers = active_memory_blockers + [
+                        {
+                            "type": b.type,
+                            "scene_id": b.scene_id,
+                            "detail": b.detail,
+                            "severity": b.severity,
+                            "issue_class": "repairable_blocker" if b.severity == "repairable_error" else "hard_blocker",
+                        }
+                        for b in collapse_blockers
+                    ]
+                    remaining_warnings = active_memory_warnings + [
+                        {
+                            "type": w.type,
+                            "scene_id": w.scene_id,
+                            "detail": w.detail,
+                            "severity": w.severity,
+                            "issue_class": "soft_warning",
+                        }
+                        for w in collapse_warnings
+                    ]
+                    
+                    renderable = len(remaining_blockers) == 0
+                    decision = "continued_with_warn" if renderable else "failed_hard_blocker"
+                    
+                    max_limit = min(2, max_regen + 1)
+                    max_allowed_attempts = max_limit
+                    if attempt_1_failed_layout_schema and max_regen >= 2:
+                        max_allowed_attempts = 3
+                        
+                    decision_summary = {
+                        "stage": "qa_scenes",
+                        "attempts_used": scenes_attempts,
+                        "max_attempts": max_allowed_attempts,
+                        "decision": decision,
+                        "renderable": renderable,
+                        "remaining_blockers": [b.to_dict() if hasattr(b, "to_dict") else b for b in remaining_blockers],
+                        "remaining_warnings": [w.to_dict() if hasattr(w, "to_dict") else w for w in remaining_warnings] + [
+                            {"type": "retry_collapse", "detail": "Identical scene output across retries; stopping loop."}
+                        ],
+                        "continued_to_render": renderable,
+                    }
+                    atomic_write_json(_jd / paths.SHORT_QA_DECISION_SUMMARY_FILE, decision_summary)
+                    
                     _recorder.record_event(
                         "deterministic",
                         "retry_collapse",
@@ -974,8 +1057,9 @@ def _build_short_impl(
                             "detail": "Identical scene output across retries; stopping loop.",
                             "reason": "retry_collapse",
                         },
-                        ok=False,
+                        ok=renderable,
                     )
+                    
                     if renderable:
                         best_scene_candidate = dict(short_scenes)
                         best_scene_candidate_qa = {"verdict": "WARN", "collapsed": True}
@@ -986,8 +1070,27 @@ def _build_short_impl(
                         state.latest_scene_qa_ok = True
                         state.latest_scene_qa_version = state.current_scenes_version
                         atomic_write_json(_jd / paths.SHORT_SCENES_FILE, short_scenes)
-                    scene_collapsed = True
-                    break
+                        update_stage("qa_scenes", "completed", qa_verdict="WARN")
+                        scene_collapsed = True
+                        save_retry_memory(scene_retry_memory, scene_memory_file)
+                        break
+                    else:
+                        scenes_passed = False
+                        update_stage("qa_scenes", "failed", qa_verdict="FAIL")
+                        status.update({
+                            "status": "needs_review",
+                            "rendered": False,
+                            "uploaded": False,
+                            "youtube_url": "",
+                            "requires_user_review": True,
+                            "qa_verdict": "FAIL",
+                            "failure_stage": "qa_scenes",
+                            "failure_reason": f"Scene QA retry collapse failed hard blocker: {[b.get('detail') if isinstance(b, dict) else getattr(b, 'detail', '') for b in remaining_blockers]}",
+                            "regeneration_attempts": total_regeneration_attempts,
+                        })
+                        write_short_status(long_job_dir, short_id, status)
+                        save_retry_memory(scene_retry_memory, scene_memory_file)
+                        return status
                 prev_scene_hash = cur_scene_hash
             except short_scene_builder.ChatGPTProviderError as exc:
                 # Provider/browser failure — NOT a creative scene-QA failure.
@@ -1195,11 +1298,43 @@ def _build_short_impl(
                         stop_scene_retries = True
 
                 if stop_scene_retries:
+                    active_memory_blockers = [
+                        issue for issue in scene_retry_memory.active_issues.values()
+                        if issue.issue_class in {"hard_blocker", "repairable_blocker"}
+                        and issue.type != "slideshow_risk"
+                    ]
+                    active_memory_warnings = [
+                        issue for issue in scene_retry_memory.active_issues.values()
+                        if issue.issue_class == "soft_warning"
+                        or issue.type == "slideshow_risk"
+                    ]
                     remaining_blockers = [
                         i for i in structure_issues
                         if i.severity in ("blocking_error", "repairable_error")
                         and i.type != "slideshow_risk"
-                    ]
+                    ] + active_memory_blockers
+                    remaining_warnings = [
+                        i for i in structure_issues
+                        if i.severity == "warning" or i.type == "slideshow_risk"
+                    ] + active_memory_warnings
+                    decision = "continued_with_warn" if not remaining_blockers else "failed_hard_blocker"
+                    renderable = not remaining_blockers
+                    
+                    max_allowed_attempts = max_limit
+                    if attempt_1_failed_layout_schema and max_regen >= 2:
+                        max_allowed_attempts = 3
+                    decision_summary = {
+                        "stage": "qa_scenes",
+                        "attempts_used": scenes_attempts,
+                        "max_attempts": max_allowed_attempts,
+                        "decision": decision,
+                        "renderable": renderable,
+                        "remaining_blockers": [b.to_dict() if hasattr(b, "to_dict") else b for b in remaining_blockers],
+                        "remaining_warnings": [w.to_dict() if hasattr(w, "to_dict") else w for w in remaining_warnings],
+                        "continued_to_render": decision == "continued_with_warn",
+                    }
+                    atomic_write_json(_jd / paths.SHORT_QA_DECISION_SUMMARY_FILE, decision_summary)
+                    
                     if not remaining_blockers:
                         # Downgrade slideshow_risk and warnings to WARN and continue
                         structure_blocked = False
@@ -1224,9 +1359,11 @@ def _build_short_impl(
                             },
                             ok=True
                         )
+                        save_retry_memory(scene_retry_memory, scene_memory_file)
                         break
                     else:
                         scenes_passed = False
+                        update_stage("qa_scenes", "failed", qa_verdict="FAIL")
                         status.update({
                             "status": "needs_review",
                             "rendered": False,
@@ -1234,7 +1371,8 @@ def _build_short_impl(
                             "youtube_url": "",
                             "requires_user_review": True,
                             "qa_verdict": "FAIL",
-                            "failure_reason": f"Scene validation failed hard blocker: {[b.detail for b in remaining_blockers]}",
+                            "failure_stage": "qa_scenes",
+                            "failure_reason": f"Scene validation failed hard blocker: {[b.get('detail') if isinstance(b, dict) else getattr(b, 'detail', '') for b in remaining_blockers]}",
                         })
                         write_short_status(long_job_dir, short_id, status)
                         save_retry_memory(scene_retry_memory, scene_memory_file)
@@ -1479,6 +1617,26 @@ def _build_short_impl(
                 state.latest_scene_qa_ok = True
                 state.latest_scene_qa_version = state.current_scenes_version
                 
+                max_limit = min(2, max_regen + 1)
+                max_allowed_attempts = max_limit
+                if attempt_1_failed_layout_schema and max_regen >= 2:
+                    max_allowed_attempts = 3
+                
+                scene_warnings = [n for n in normalized_scene_issues if n.issue_class == qa.IssueClass.SOFT_WARNING]
+                decision = "continued_with_warn" if scenes_qa_result.get("verdict") == "WARN" else "passed"
+                
+                decision_summary = {
+                    "stage": "qa_scenes",
+                    "attempts_used": scenes_attempts,
+                    "max_attempts": max_allowed_attempts,
+                    "decision": decision,
+                    "renderable": True,
+                    "remaining_blockers": [],
+                    "remaining_warnings": [w.to_dict() if hasattr(w, "to_dict") else w for w in scene_warnings],
+                    "continued_to_render": True,
+                }
+                atomic_write_json(_jd / paths.SHORT_QA_DECISION_SUMMARY_FILE, decision_summary)
+                
                 save_retry_memory(scene_retry_memory, scene_memory_file)
                 break
 
@@ -1544,10 +1702,12 @@ def _build_short_impl(
                 remaining_blockers = [
                     n for n in normalized_scene_issues
                     if n.issue_class in {qa.IssueClass.HARD_BLOCKER, qa.IssueClass.REPAIRABLE_BLOCKER}
+                    and n.issue_type != "slideshow_risk"
                 ]
                 remaining_warnings = [
                     n for n in normalized_scene_issues
                     if n.issue_class == qa.IssueClass.SOFT_WARNING
+                    or n.issue_type == "slideshow_risk"
                 ]
                 
                 decision = ""
@@ -1562,9 +1722,11 @@ def _build_short_impl(
                     state.latest_scene_qa_ok = True
                     state.latest_scene_qa_version = state.current_scenes_version
                     decision = "continued_with_warn"
+                    update_stage("qa_scenes", "completed", qa_verdict="WARN")
                 else:
                     scenes_passed = False
                     decision = "failed_hard_blocker"
+                    update_stage("qa_scenes", "failed", qa_verdict="FAIL")
                     
                 summary_report = {
                     "stage": "qa_scenes",
@@ -1578,6 +1740,22 @@ def _build_short_impl(
                     "best_candidate_available": best_scene_candidate is not None,
                 }
                 atomic_write_json(_jd / paths.SHORT_FAILURE_REPORT_FILE, summary_report)
+                
+                # Write qa_decision_summary.json
+                max_allowed_attempts = max_limit
+                if attempt_1_failed_layout_schema and not renderable and max_regen >= 2:
+                    max_allowed_attempts = 3
+                decision_summary = {
+                    "stage": "qa_scenes",
+                    "attempts_used": scenes_attempts,
+                    "max_attempts": max_allowed_attempts,
+                    "decision": decision,
+                    "renderable": renderable,
+                    "remaining_blockers": [b.to_dict() for b in remaining_blockers],
+                    "remaining_warnings": [w.to_dict() for w in remaining_warnings],
+                    "continued_to_render": decision == "continued_with_warn",
+                }
+                atomic_write_json(_jd / paths.SHORT_QA_DECISION_SUMMARY_FILE, decision_summary)
                 
                 print(f"Scene QA stopped after {scenes_attempts} attempts.\n"
                       f"Remaining blockers: {[b.detail for b in remaining_blockers]}\n"
@@ -1593,6 +1771,7 @@ def _build_short_impl(
                         "youtube_url": "",
                         "requires_user_review": True,
                         "qa_verdict": "FAIL",
+                        "failure_stage": "qa_scenes",
                         "failure_reason": f"Scene QA failed hard blocker: {[b.detail for b in remaining_blockers]}",
                     })
                     write_short_status(long_job_dir, short_id, status)

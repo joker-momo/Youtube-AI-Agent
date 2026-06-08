@@ -329,3 +329,12 @@ def test_severity_constants_exist():
     assert IssueClass.SOFT_WARNING == "soft_warning"
     assert IssueClass.STALE_OR_SUPPRESSED == "stale_or_suppressed"
 
+def test_get_short_rule_context():
+    from video_agent.shorts.qa import get_short_rule_context
+    idea = {"title": "La regla de compra para no equivocarte con el pan", "format": "checklist"}
+    script = {"hook": "GIRA EL PAQUETE"}
+    ctx = get_short_rule_context(idea, script)
+    assert ctx["is_bread_shopping_checklist"] is True
+    assert ctx["is_five_errors_bread_short"] is False
+
+

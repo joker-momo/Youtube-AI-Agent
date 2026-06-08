@@ -45,6 +45,62 @@ class NormalizedIssue:
     include_in_retry_feedback: bool = True
     trigger_regeneration: bool = True
 
+    def to_dict(self) -> dict:
+        d = {
+            "issue_class": self.issue_class,
+            "reason": self.reason,
+            "source": self.source,
+            "scene_id": self.scene_id,
+            "issue_type": self.issue_type,
+            "detail": self.detail,
+            "repair_hint": self.repair_hint,
+            "include_in_retry_feedback": self.include_in_retry_feedback,
+            "trigger_regeneration": self.trigger_regeneration,
+        }
+        if self.issue_class == IssueClass.STALE_OR_SUPPRESSED:
+            d["original_detail"] = self.detail
+        return d
+
+
+def get_short_rule_context(idea: dict, script: dict) -> dict:
+    title = str(idea.get("title") or "")
+    fmt = str(idea.get("format") or "")
+    hook = str(script.get("hook") or "")
+    viewer_pain = str(idea.get("viewer_pain") or "")
+    original_count = idea.get("original_count")
+
+    is_five_errors_bread_short = (
+        "5 errores" in title.lower()
+        or "cinco errores" in title.lower()
+        or (fmt in {"mistakes", "errors"} and original_count == 5)
+    )
+
+    is_bread_shopping_checklist = (
+        "compra" in title.lower()
+        or "paquete" in hook.lower()
+        or "etiqueta" in viewer_pain.lower()
+    ) and fmt == "checklist"
+
+    is_bread_topic = (
+        "pan" in title.lower()
+        or "pan" in hook.lower()
+        or "pan" in viewer_pain.lower()
+    )
+
+    is_toast_assembly = (
+        "tostada" in title.lower()
+        or "toast" in title.lower()
+    )
+
+    return {
+        "is_bread_topic": is_bread_topic,
+        "is_five_errors_bread_short": is_five_errors_bread_short,
+        "is_bread_shopping_checklist": is_bread_shopping_checklist,
+        "is_toast_assembly": is_toast_assembly,
+        "format": fmt,
+        "hook_text": hook,
+    }
+
 
 def normalize_qa_issue(
     issue: Any,
@@ -142,6 +198,31 @@ def normalize_qa_issue(
         issue_class = IssueClass.SOFT_WARNING
         trigger_regeneration = False
 
+    # Apply wrong context check
+    real_idea = idea or script.get("original_idea") or {}
+    context = get_short_rule_context(real_idea, script)
+    if not context["is_five_errors_bread_short"]:
+        suppress_patterns = [
+            "no es el pan",
+            "mira cómo lo usas",
+            "son 5 hábitos",
+            "son cinco hábitos",
+            "error 1",
+            "cena improvisada",
+            "guárdalo",
+            "generic error label",
+            "five-errors-rule",
+        ]
+        is_duration_rule = False
+        if "3.2" in detail_lower and "4" in detail_lower:
+            is_duration_rule = True
+
+        if any(p in detail_lower for p in suppress_patterns) or is_duration_rule:
+            issue_class = IssueClass.STALE_OR_SUPPRESSED
+            reason = "wrong_context_five_errors_rule"
+            trigger_regeneration = False
+            include_in_retry_feedback = False
+
     return NormalizedIssue(
         issue_class=issue_class,
         reason=reason,
@@ -153,6 +234,7 @@ def normalize_qa_issue(
         include_in_retry_feedback=include_in_retry_feedback,
         trigger_regeneration=trigger_regeneration,
     )
+
 
 
 _GREETINGS = ["hola", "bienvenid", "hoy vamos a", "en este short",

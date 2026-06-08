@@ -1546,3 +1546,45 @@ def repair_scene_duration_if_possible(scene: dict[str, Any]) -> str:
         return "must_split_or_compress"
 
     return "ok"
+
+
+def repair_weak_hook_motion(scenes: list[dict]) -> bool:
+    if not scenes:
+        return False
+    first_scene = scenes[0]
+    if not first_scene.get("motion") or str(first_scene.get("motion")).lower().strip() == "none":
+        first_scene["motion"] = "push_in"
+        first_scene["pattern_interrupt"] = "text_pop at 0.5s"
+        return True
+    return False
+
+
+def repair_visual_only_unreadable(scenes: list[dict], required_item: str) -> bool:
+    if not scenes or not required_item:
+        return False
+    
+    # Check if required_item is already present in any text field
+    for scene in scenes:
+        narration = str(scene.get("narration") or "").lower()
+        caption = str(scene.get("caption") or "").lower()
+        ost = str(scene.get("on_screen_text") or "").lower()
+        payload_str = str(scene.get("layout_payload") or "").lower()
+        if required_item.lower() in narration or required_item.lower() in caption or required_item.lower() in ost or required_item.lower() in payload_str:
+            return False
+            
+    for scene in scenes:
+        if "layout_payload" in scene and isinstance(scene["layout_payload"], dict):
+            items = scene["layout_payload"].get("items")
+            if isinstance(items, list):
+                items.append(required_item)
+                scene["layout_payload"]["items"] = items
+                return True
+                
+    first_scene = scenes[0]
+    orig_caption = first_scene.get("caption") or ""
+    if orig_caption:
+        first_scene["caption"] = f"{orig_caption} ({required_item})"
+    else:
+        first_scene["caption"] = required_item
+    return True
+

@@ -17,11 +17,16 @@ DEFAULT_BUDGET = {
 
 _REASONS = (
     "provider_error",
+    "qa_soft_warn",
+    "qa_hard_fail",
     "qa_retry",
     "schema_error",
     "scene_validation_fail",
     "audio_fit_fail",
     "renderer_contract_fail",
+    "wrong_context_suppressed",
+    "retention_grammar_repair",
+    "retry_collapse",
     "unknown",
 )
 
@@ -41,12 +46,13 @@ _PROVIDER_HINTS = (
 )
 
 _RETRY_STAGE_KINDS = {
+    "script_generation": ("script", "script_builder"),
     "scene_generation": ("scenes", "scene_builder"),
     "qa_script": ("qa_script",),
     "qa_scenes": ("qa_scenes", "qa"),
     "seo": ("seo",),
-    "thumbnail": ("thumbnail",),
     "audio": ("audio", "audio_fit", "audio_tail_repair", "audio_sync_summary"),
+    "render": ("render", "renderer"),
 }
 
 
@@ -69,6 +75,14 @@ def _classify(record: dict[str, Any]) -> str:
         return "renderer_contract_fail"
     if "schema" in error or "json" in error or "invalid" in error:
         return "schema_error"
+    if "wrong_context_suppressed" in kind or "wrong_context_suppressed" in error:
+        return "wrong_context_suppressed"
+    if "retry_collapse" in kind or "retry_collapse" in error:
+        return "retry_collapse"
+    if "qa_soft_warn" in kind or "qa_soft_warn" in error:
+        return "qa_soft_warn"
+    if "qa_hard_fail" in kind or "qa_hard_fail" in error:
+        return "qa_hard_fail"
     if kind.startswith("qa") or "qa" in kind:
         return "qa_retry"
     return "unknown"
@@ -81,6 +95,25 @@ def build_call_budget_summary(
 ) -> dict[str, Any]:
     budget = {**DEFAULT_BUDGET, **(budget or {})}
 
+    # Preprocess history to link classification events to their preceding QA calls
+    processed_history = []
+    last_qa_idx = -1
+    for rec in history:
+        rec_copy = dict(rec)
+        provider = rec_copy.get("provider")
+        kind = rec_copy.get("kind")
+        if provider == "gemini" and kind in ("qa_scenes", "qa_script", "qa"):
+            last_qa_idx = len(processed_history)
+        
+        if provider == "deterministic" and kind == "qa_classification":
+            reason = (rec_copy.get("payload") or {}).get("reason")
+            if reason and last_qa_idx != -1:
+                processed_history[last_qa_idx]["reason"] = reason
+            continue
+            
+        processed_history.append(rec_copy)
+
+    history = processed_history
     total_calls = len(history)
     by_provider: dict[str, int] = {}
     by_reason: dict[str, int] = {r: 0 for r in _REASONS}

@@ -1,0 +1,104 @@
+{
+  "short_id": "test",
+  "source_long_job_id": "",
+  "hook_pattern": "hidden_truth",
+  "viewer_pain": "perder una pista importante",
+  "curiosity_gap": "por qué perder una pista importante no se resuelve con la pista obvia",
+  "payoff_promise": "mirar el detalle correcto antes de decidir",
+  "retention_beats": [
+    {
+      "start_sec": 0.0,
+      "end_sec": 2.0,
+      "function": "hook",
+      "tension_line": "¿Te falla la pista?",
+      "visual_interrupt": "zoom",
+      "expected_viewer_question": "¿Por qué me pasa?"
+    },
+    {
+      "start_sec": 5.5,
+      "end_sec": 9.5,
+      "function": "tension",
+      "tension_line": "No siempre falla esto.",
+      "visual_interrupt": "crop_shift",
+      "expected_viewer_question": "¿Entonces qué falla?"
+    },
+    {
+      "start_sec": 11.0,
+      "end_sec": 15.0,
+      "function": "proof",
+      "tension_line": "Son 3 piezas.",
+      "visual_interrupt": "object_reveal",
+      "expected_viewer_question": "¿Cuáles son?"
+    },
+    {
+      "start_sec": 16.5,
+      "end_sec": 20.5,
+      "function": "payoff",
+      "tension_line": "No se comportan igual.",
+      "visual_interrupt": "text_change",
+      "expected_viewer_question": "¿Qué comparación importa?"
+    },
+    {
+      "start_sec": 22.0,
+      "end_sec": 26.0,
+      "function": "identity",
+      "tension_line": "Déjalo listo antes.",
+      "visual_interrupt": "face_cut",
+      "expected_viewer_question": "¿Cómo lo hago fácil?"
+    },
+    {
+      "start_sec": 27.5,
+      "end_sec": 31.5,
+      "function": "cta",
+      "tension_line": "¿Cómo lo haces tú?",
+      "visual_interrupt": "graphic_burst",
+      "expected_viewer_question": "¿Qué opción uso yo?"
+    }
+  ],
+  "pattern_interrupts": [
+    {
+      "at_sec": 2.5,
+      "type": "zoom",
+      "purpose": "reset visual para sostener curiosidad"
+    },
+    {
+      "at_sec": 5.0,
+      "type": "crop_shift",
+      "purpose": "reset visual para sostener curiosidad"
+    },
+    {
+      "at_sec": 8.0,
+      "type": "object_reveal",
+      "purpose": "reset visual para sostener curiosidad"
+    },
+    {
+      "at_sec": 11.0,
+      "type": "text_change",
+      "purpose": "reset visual para sostener curiosidad"
+    },
+    {
+      "at_sec": 14.0,
+      "type": "face_cut",
+      "purpose": "reset visual para sostener curiosidad"
+    },
+    {
+      "at_sec": 18.0,
+      "type": "graphic_burst",
+      "purpose": "reset visual para sostener curiosidad"
+    }
+  ],
+  "identity_resonance": {
+    "avoid_shame": true,
+    "affirmation": "sin culpa y con una pista práctica",
+    "audience_phrase": "después de los 45"
+  },
+  "comment_trigger": {
+    "question": "¿También te pasa?",
+    "type": "personal_experience"
+  },
+  "qa": {
+    "verdict": "PENDING"
+  },
+  "input_hash": "d6ac2f18d53a0637",
+  "generation_mode": "deterministic"
+}

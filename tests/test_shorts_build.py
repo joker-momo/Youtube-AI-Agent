@@ -1176,7 +1176,8 @@ def test_build_short_regenerates_then_needs_review_after_limit(tmp_path: Path):
     def llm_fn(kind, prompt):
         if kind == "script":
             attempts["n"] += 1
-            return json.dumps(bad_script)  # always greeting → always FAIL
+            # Vary hook slightly to avoid collapse protection
+            return json.dumps({**bad_script, "hook": f"Hola a todos {attempts['n']}"})
         if kind == "scenes":
             return json.dumps(_GOOD_SCENES)
         return json.dumps({"title": "t", "description": "d", "hashtags": [], "pinned_comment": "p"})
@@ -1198,6 +1199,21 @@ def test_build_short_exposes_qa_scenes_attempt_count(tmp_path: Path):
     job = _long_job(tmp_path)
     calls: list[str] = []
     qa_attempts = {"n": 0}
+    scene_attempts = {"n": 0}
+
+    def llm_fn(kind, prompt):
+        if kind == "script":
+            return json.dumps(_GOOD_SCRIPT)
+        if kind == "scenes":
+            scene_attempts["n"] += 1
+            v_scenes = dict(_GOOD_SCENES)
+            v_scenes["scenes"] = [dict(s) for s in _GOOD_SCENES["scenes"]]
+            v_scenes["scenes"][0]["caption"] = f"c{scene_attempts['n']}"
+            return json.dumps(v_scenes)
+        if kind == "seo":
+            return json.dumps({"title": "Dormir mejor 45+", "description": "d", "hashtags": ["#shorts"],
+                               "pinned_comment": "Mira el vídeo largo"})
+        return "{}"
 
     def gemini_fn(prompt: str, **kwargs):
         if "Scenes QA reviewer" in prompt:
@@ -1243,7 +1259,7 @@ def test_build_short_exposes_qa_scenes_attempt_count(tmp_path: Path):
         job,
         plan,
         _cfg(),
-        llm_fn=_llm_fn_factory(),
+        llm_fn=llm_fn,
         gemini_fn=gemini_fn,
         **_stub_io(calls),
     )
@@ -1287,13 +1303,13 @@ def test_gemini_scene_qa_fail_blocks_audio_seo_and_render(tmp_path: Path):
             "required_changes": ["Verify the visual is warm enough."],
             "warnings": [],
             "product_scores": {
-                "audience_fit_45_plus": 9,
-                "hook_strength": 9,
-                "visual_specificity": 9,
-                "clarity": 9,
-                "retention_pacing": 9,
-                "natural_spanish": 9,
-                "saveability": 9,
+                "audience_fit_45_plus": 5,
+                "hook_strength": 5,
+                "visual_specificity": 5,
+                "clarity": 5,
+                "retention_pacing": 5,
+                "natural_spanish": 5,
+                "saveability": 5,
             },
         })
 
@@ -1983,19 +1999,21 @@ def test_script_escalation_after_repeated_scene_failures(tmp_path: Path):
     calls: list[str] = []
     
     script_attempts = {"n": 0, "feedbacks": []}
+    scene_calls = {"n": 0}
     
     def llm_fn(kind, prompt):
         if kind == "script":
             script_attempts["n"] += 1
             return json.dumps(_GOOD_SCRIPT)
         if kind == "scenes":
+            scene_calls["n"] += 1
             # Hook duration 1.0s, but narration has 15 words -> requires 7.0s (exceeds 3.0s cap)
             bad_scenes = {
-                "channel_id": "vida-plena-45",
+                "channel_id": f"vida-plena-45-{scene_calls['n']}",
                 "short_id": "short-escalate",
                 "total_duration_sec": 1.0,
                 "scenes": [
-                    {"id": "s1", "duration_sec": 1.0, "layout": "short_hook", "narration": "Abre fuerte y mira esta increible etiqueta ahora mismo con mucho cuidado y atencion.", "on_screen_text": "x", "caption": "c"}
+                    {"id": "s1", "duration_sec": 1.0, "layout": "short_hook", "narration": "Abre fuerte y mira esta increible etiqueta ahora mismo con mucho cuidado y atencion.", "on_screen_text": f"x{scene_calls['n']}", "caption": "c"}
                 ]
             }
             return json.dumps(bad_scenes)
@@ -2578,3 +2596,168 @@ def test_short_scene_retry_cap_on_soft_issues(tmp_path: Path):
 
     assert res["status"] == "rendered"
     assert qa_calls["n"] <= 2
+
+
+def test_high_score_qa_fail_without_hard_issue_forces_warn(tmp_path: Path):
+    """Spec: a Gemini scene-QA FAIL with high product scores and only soft
+    suggestions must NOT trigger a regeneration storm — force WARN + render."""
+    from video_agent.shorts import short_builder
+    job = _long_job(tmp_path)
+    calls: list[str] = []
+    qa_calls = {"n": 0}
+
+    def gemini_fn(prompt: str, **kwargs):
+        if "Scenes QA reviewer" in prompt:
+            qa_calls["n"] += 1
+            return json.dumps({
+                "verdict": "FAIL",
+                "issues": [{"type": "hook_polish", "severity": "warning",
+                            "detail": "Hook could be a touch sharper."}],
+                "required_changes": [],
+                "warnings": ["Consider a sharper hook."],
+                "product_scores": _scene_qa_scores(),  # all >= 9
+            })
+        return json.dumps({"verdict": "PASS", "issues": [], "required_changes": [], "warnings": []})
+
+    plan = {"short_id": "short-hiscore-fail", "format": "pain_to_tip", "scene_ids": ["scene-09"],
+            "source_start_sec": 183.0, "source_end_sec": 199.0, "music_track": "shorts_sleep_stress",
+            "narration_seed": "Marca una hora de cierre."}
+    res = short_builder.build_short(job, plan, _cfg(), llm_fn=_llm_fn_factory(), gemini_fn=gemini_fn, **_stub_io(calls))
+
+    assert res["status"] == "rendered", res["status"]
+    assert qa_calls["n"] <= 2, qa_calls["n"]  # no regeneration storm
+
+
+def test_retry_hash_collapse_stops_loop(tmp_path: Path):
+    """Spec §8: if the scene generator keeps emitting the same normalized output
+    while QA keeps failing, stop the loop instead of burning the whole budget."""
+    from video_agent.shorts import short_builder
+    job = _long_job(tmp_path)
+    calls: list[str] = []
+    scene_gen = {"n": 0}
+    fixed_scenes = {**_GOOD_SCENES, "short_id": "short-collapse"}
+
+    def llm_fn(kind, prompt):
+        if kind == "script":
+            return json.dumps(_GOOD_SCRIPT)
+        if kind == "scenes":
+            scene_gen["n"] += 1
+            return json.dumps(fixed_scenes)  # identical every time
+        return json.dumps({"title": "t", "description": "d", "hashtags": [], "pinned_comment": "p"})
+
+    def gemini_fn(prompt: str, **kwargs):
+        if "Scenes QA reviewer" in prompt:
+            return json.dumps({
+                "verdict": "FAIL",
+                "issues": [{"type": "retention_pacing", "severity": "repairable_error",
+                            "detail": "Merge repeated scenes."}],
+                "required_changes": ["Merge repeated scenes."],
+                "product_scores": _scene_qa_scores(),
+            })
+        return json.dumps({"verdict": "PASS", "issues": [], "required_changes": [], "warnings": []})
+
+    plan = {"short_id": "short-collapse", "format": "pain_to_tip", "scene_ids": ["scene-09"],
+            "source_start_sec": 183.0, "source_end_sec": 199.0, "music_track": "shorts_sleep_stress",
+            "narration_seed": "Marca una hora de cierre."}
+    short_builder.build_short(job, plan, _cfg(), llm_fn=llm_fn, gemini_fn=gemini_fn, **_stub_io(calls))
+
+    # Identical output detected → loop collapses early instead of exhausting budget.
+    assert scene_gen["n"] <= 2, scene_gen["n"]
+
+
+def test_constants_exist():
+    import video_agent.shorts.short_builder as sb
+    assert sb.MAX_QA_RETRIES_PER_STAGE == 1
+    assert sb.MAX_SCENE_REGEN_ATTEMPTS == 2
+    assert sb.MAX_SCRIPT_REGEN_ATTEMPTS == 1
+    assert sb.MAX_PROVIDER_RETRIES_PER_CALL == 3
+
+
+def test_check_and_apply_auto_pass_forces_warn():
+    from video_agent.shorts.short_builder import check_and_apply_auto_pass
+    qa_result = {
+        "verdict": "FAIL",
+        "issues": [{"type": "product_quality_score_low", "detail": "retention pacing is 8.0", "severity": "minor"}],
+        "product_scores": {
+            "hook_strength": 9.0,
+            "clarity": 9.0,
+            "retention_pacing": 8.0,
+            "visual_specificity": 9.0,
+            "audience_fit_45_plus": 9.0,
+            "natural_spanish": 9.0,
+            "saveability": 9.0,
+        }
+    }
+    assert check_and_apply_auto_pass(qa_result) is True
+    assert qa_result["verdict"] == "WARN"
+
+
+def test_script_retry_hash_collapse_stops_loop(tmp_path: Path):
+    """Spec §8: if the script generator keeps emitting the same normalized output
+    while QA keeps failing, stop the loop instead of burning the whole budget."""
+    from video_agent.shorts import short_builder
+    job = _long_job(tmp_path)
+    calls: list[str] = []
+    script_gen = {"n": 0}
+    fixed_script = dict(_GOOD_SCRIPT)
+
+    def llm_fn(kind, prompt):
+        if kind == "script":
+            script_gen["n"] += 1
+            return json.dumps(fixed_script)  # identical every time
+        if kind == "scenes":
+            return json.dumps(_GOOD_SCENES)
+        return json.dumps({"title": "t", "description": "d", "hashtags": [], "pinned_comment": "p"})
+
+    def gemini_fn(prompt: str, **kwargs):
+        if "Script QA reviewer" in prompt:
+            return json.dumps({
+                "verdict": "FAIL",
+                "issues": [{"type": "safety", "severity": "major",
+                            "detail": "Safety issue detail"}],
+                "required_changes": ["Remove unsafe claim"],
+            })
+        return json.dumps({"verdict": "PASS", "issues": [], "required_changes": [], "warnings": []})
+
+    plan = {"short_id": "short-script-collapse", "format": "pain_to_tip", "scene_ids": ["scene-09"],
+            "source_start_sec": 183.0, "source_end_sec": 199.0, "music_track": "shorts_sleep_stress",
+            "narration_seed": "Marca una hora de cierre."}
+            
+    # Should stop after the second attempt due to collapse detection and fail
+    res = short_builder.build_short(job, plan, _cfg(), llm_fn=llm_fn, gemini_fn=gemini_fn, **_stub_io(calls))
+    assert res["status"] == "needs_review", res["status"]
+    assert script_gen["n"] <= 2, script_gen["n"]
+
+
+def test_provider_error_does_not_count_as_qa_retry(tmp_path: Path):
+    """Spec: provider errors must be retried up to 3 times, and provider retries
+    do NOT count as QA regeneration attempts."""
+    from video_agent.shorts import short_builder
+    job = _long_job(tmp_path)
+    calls: list[str] = []
+    
+    script_gen = {"n": 0}
+    
+    def llm_fn(kind, prompt):
+        if kind == "script":
+            script_gen["n"] += 1
+            if script_gen["n"] == 1:
+                # First attempt returns provider error text
+                return "Something went wrong, please contact us."
+            return json.dumps(_GOOD_SCRIPT)
+        if kind == "scenes":
+            return json.dumps(_GOOD_SCENES)
+        return json.dumps({"title": "t", "description": "d", "hashtags": [], "pinned_comment": "p"})
+
+    plan = {"short_id": "short-provider-fail", "format": "pain_to_tip", "scene_ids": ["scene-09"],
+            "source_start_sec": 183.0, "source_end_sec": 199.0, "music_track": "shorts_sleep_stress",
+            "narration_seed": "Marca una hora de cierre."}
+            
+    res = short_builder.build_short(job, plan, _cfg(), llm_fn=llm_fn, gemini_fn=None, **_stub_io(calls))
+    assert res["status"] == "rendered", res["status"]
+    # Total script QA attempts should be 1, because the provider error was retried internally
+    assert res["regeneration_attempts"] == 0
+
+
+
+

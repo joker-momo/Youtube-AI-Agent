@@ -175,7 +175,7 @@ def test_anti_ai_fail_blocks_render_and_updates_performance_memory(tmp_path: Pat
         job,
         _plan("short-fail"),
         _cfg(),
-        llm_fn=_llm(script_sequence=[_script("short-fail", generic=True), _script("short-fail", generic=True)], scenes_sequence=[_scenes("short-fail"), _scenes("short-fail")]),
+        llm_fn=_llm(script_sequence=[_script("short-fail", generic=True), {**_script("short-fail", generic=True), "hook": "Different generic hook."}], scenes_sequence=[_scenes("short-fail"), _scenes("short-fail")]),
         **_stub_io(calls),
     )
 

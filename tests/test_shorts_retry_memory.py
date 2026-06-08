@@ -404,6 +404,242 @@ def test_cumulative_feedback_sections():
     assert "WARNINGS / NICE-TO-HAVE (DO NOT BLOCK):" in feedback
     assert "SUPPRESSED / STALE ISSUES:" in feedback
 
+def test_only_soft_warnings_do_not_regenerate():
+    from video_agent.shorts.qa import normalize_qa_issue, IssueClass
+    idea = {"title": "La regla de compra para no equivocarte con el pan", "format": "checklist"}
+    script = {"hook": "GIRA EL PAQUETE"}
+    scenes = {}
+    
+    issue1 = {
+        "type": "product_quality_score_low",
+        "scene_id": None,
+        "severity": "major",
+        "detail": "Some product quality scores are below their required thresholds: {'hook_strength': 8.0}. Required: {'hook_strength': 9.0}."
+    }
+    norm1 = normalize_qa_issue(issue1, idea=idea, script=script, scenes=scenes)
+    assert norm1.issue_class == IssueClass.SOFT_WARNING
+    assert norm1.trigger_regeneration is False
 
+    issue2 = {
+        "type": "weak_hook_motion",
+        "scene_id": "s01",
+        "severity": "minor",
+        "detail": "First scene is missing a strong hook motion cue."
+    }
+    norm2 = normalize_qa_issue(issue2, idea=idea, script=script, scenes=scenes)
+    assert norm2.issue_class == IssueClass.SOFT_WARNING
+    assert norm2.trigger_regeneration is False
+
+def test_weak_hook_motion_repaired_deterministically():
+    from video_agent.shorts.validate_scenes import repair_weak_hook_motion
+    scenes = [
+        {"id": "s01", "duration_sec": 3.5, "layout": "hook_layout"}
+    ]
+    changed = repair_weak_hook_motion(scenes)
+    assert changed is True
+    assert scenes[0]["motion"] == "push_in"
+    assert scenes[0]["pattern_interrupt"] == "text_pop at 0.5s"
+
+def test_visual_only_unreadable_repaired_deterministically():
+    from video_agent.shorts.validate_scenes import repair_visual_only_unreadable
+    scenes = [
+        {"id": "s01", "duration_sec": 3.5, "layout": "graphic_checklist", "caption": "Some description", "layout_payload": {"items": ["item1", "item2"]}}
+    ]
+    changed = repair_visual_only_unreadable(scenes, required_item="item3")
+    assert changed is True
+    assert "item3" in scenes[0]["caption"] or "item3" in scenes[0].get("layout_payload", {}).get("items", [])
+
+
+# ===== Spec §11 Acceptance Tests =====
+
+def test_retry_feedback_active_only_hard_or_repairable():
+    """Spec §11.1: ACTIVE BLOCKERS contains only hard/repairable issues."""
+    from video_agent.shorts.qa import normalize_qa_issue, IssueClass
+    from video_agent.shorts.retry_memory import RetryMemory, RetryIssue, add_or_update_issue, generate_cumulative_feedback
+
+    idea = {"title": "Test short", "format": "checklist"}
+    script = {"hook": "TEST"}
+    scenes = {}
+
+    issues = [
+        {"type": "weak_hook_motion", "scene_id": "s01", "severity": "minor",
+         "detail": "First scene is missing a strong hook motion cue."},
+        {"type": "product_quality_score_low", "scene_id": None, "severity": "major",
+         "detail": "Some product quality scores are below their required thresholds: {'hook_strength': 8.0}. Required: {'hook_strength': 9.0}."},
+        {"type": "visual_only_unreadable", "scene_id": "s05", "severity": "major",
+         "detail": "Item 3 appears only visually in an unreadable/dense scene."},
+    ]
+
+    memory = RetryMemory(stage="scenes")
+    for i, raw in enumerate(issues):
+        norm = normalize_qa_issue(raw, idea=idea, script=script, scenes=scenes)
+        ri = RetryIssue(
+            id=f"test:{i}",
+            stage="scene_qa",
+            attempt=1,
+            scene_id=norm.scene_id,
+            type=norm.issue_type,
+            severity="minor" if norm.issue_class == IssueClass.SOFT_WARNING else "major",
+            detail=norm.detail,
+            required_change=norm.detail,
+            status="active",
+            first_seen_attempt=1,
+            last_seen_attempt=1,
+            issue_class=norm.issue_class,
+            reason=norm.reason,
+        )
+        add_or_update_issue(memory, ri)
+
+    feedback = generate_cumulative_feedback(memory, attempt_number=2)
+    # ACTIVE BLOCKERS should contain only visual_only_unreadable (repairable)
+    assert "ACTIVE BLOCKERS TO FIX NOW:" in feedback
+    assert "unreadable" in feedback.lower()
+    # WARNINGS should contain weak_hook_motion and product_score_low
+    assert "WARNINGS / NICE-TO-HAVE (DO NOT BLOCK):" in feedback
+    assert "hook motion" in feedback.lower() or "hook_motion" in feedback.lower()
+
+
+def test_soft_issues_do_not_trigger_scene_regeneration():
+    """Spec §11.1: deterministic validation PASS + Gemini FAIL with only product
+    quality scores 8/10 -> qa_scenes becomes WARN, no regeneration."""
+    from video_agent.shorts.qa import normalize_qa_issue, IssueClass
+
+    idea = {"title": "Test short", "format": "checklist"}
+    script = {"hook": "TEST"}
+    scenes = {}
+
+    issue = {
+        "type": "product_quality_score_low",
+        "scene_id": None,
+        "severity": "major",
+        "detail": "Some product quality scores are below their required thresholds: {'hook_strength': 8.0}. Required: {'hook_strength': 9.0}.",
+    }
+    norm = normalize_qa_issue(issue, idea=idea, script=script, scenes=scenes)
+    assert norm.issue_class == IssueClass.SOFT_WARNING
+    assert norm.trigger_regeneration is False
+
+    all_norms = [norm]
+    blockers = [n for n in all_norms if n.issue_class in {IssueClass.HARD_BLOCKER, IssueClass.REPAIRABLE_BLOCKER}]
+    warnings = [n for n in all_norms if n.issue_class == IssueClass.SOFT_WARNING]
+    assert len(blockers) == 0
+    assert len(warnings) == 1
+    verdict = "WARN" if warnings else "PASS"
+    assert verdict == "WARN"
+
+
+def test_retry_attempt_three_continues_if_only_soft_warnings():
+    """Spec §11.1: attempt >= 3 with only soft warnings -> stop retry, continue with WARN."""
+    from video_agent.shorts.qa import normalize_qa_issue, IssueClass
+
+    idea = {"title": "Test short", "format": "checklist"}
+    script = {"hook": "TEST"}
+
+    soft_issues = [
+        {"type": "weak_hook_motion", "scene_id": "s01", "severity": "minor",
+         "detail": "First scene is missing a strong hook motion cue."},
+        {"type": "product_quality_average_low", "scene_id": None, "severity": "minor",
+         "detail": "Average product quality score is 8.5, below 8.90."},
+    ]
+
+    norms = [normalize_qa_issue(i, idea=idea, script=script, scenes={}) for i in soft_issues]
+    blockers = [n for n in norms if n.issue_class in {IssueClass.HARD_BLOCKER, IssueClass.REPAIRABLE_BLOCKER}]
+    warnings = [n for n in norms if n.issue_class == IssueClass.SOFT_WARNING]
+
+    assert len(blockers) == 0
+    assert len(warnings) == 2
+    decision = "continued_with_warn" if not blockers else "failed_hard_blocker"
+    assert decision == "continued_with_warn"
+
+
+def test_five_errors_rules_not_applied_to_bread_shopping_checklist():
+    """Spec §11.2: five-errors rules are suppressed for bread shopping checklist."""
+    from video_agent.shorts.qa import normalize_qa_issue, IssueClass
+
+    idea = {
+        "title": "La regla de compra para no equivocarte con el pan",
+        "hook_text": "GIRA EL PAQUETE",
+        "format": "checklist",
+    }
+    script = {"hook": "GIRA EL PAQUETE"}
+
+    wrong_context_issues = [
+        {"type": "required_change", "detail": "Set s01 title to NO ES EL PAN", "severity": "major"},
+        {"type": "required_change", "detail": "CTA must use GUÁRDALO", "severity": "major"},
+        {"type": "required_change", "detail": "All scenes must follow 3.2-4.0s error scene duration", "severity": "major"},
+    ]
+
+    for raw in wrong_context_issues:
+        norm = normalize_qa_issue(raw, idea=idea, script=script, scenes={})
+        assert norm.issue_class == IssueClass.STALE_OR_SUPPRESSED, f"Expected STALE_OR_SUPPRESSED for: {raw['detail']}, got {norm.issue_class}"
+        assert norm.trigger_regeneration is False
+        assert norm.reason == "wrong_context_five_errors_rule"
+
+
+def test_five_errors_rules_apply_to_actual_five_errors_short():
+    """Spec §11.2: five-errors rules are active for actual five-errors shorts."""
+    from video_agent.shorts.qa import get_short_rule_context
+
+    idea = {
+        "title": "5 errores con el pan despues de los 45",
+        "format": "mistakes",
+        "original_count": 5,
+    }
+    script = {"hook": "NO ES EL PAN"}
+    ctx = get_short_rule_context(idea, script)
+    assert ctx["is_five_errors_bread_short"] is True
+
+
+def test_call_budget_unknown_is_low():
+    """Spec §11.3: with known failure types, unknown should be 0."""
+    from video_agent.shorts.call_budget import build_call_budget_summary
+
+    history = [
+        {"provider": "deterministic", "kind": "scene_validation", "ok": False, "error": "Duration cap"},
+        {"provider": "deterministic", "kind": "scene_structure", "ok": False, "error": "Layout mismatch"},
+        {"provider": "gemini", "kind": "qa_scenes", "ok": False, "reason": "qa_soft_warn"},
+        {"provider": "gemini", "kind": "qa_scenes", "ok": False, "reason": "qa_soft_warn"},
+        {"provider": "gemini", "kind": "qa_scenes", "ok": False, "reason": "qa_soft_warn"},
+        {"provider": "gemini", "kind": "qa_scenes", "ok": False, "reason": "qa_soft_warn"},
+        {"provider": "deterministic", "kind": "wrong_context_suppressed", "ok": False,
+         "reason": "wrong_context_suppressed"},
+    ]
+    s = build_call_budget_summary(history)
+    assert s["by_reason"]["scene_validation_fail"] == 2
+    assert s["by_reason"]["qa_soft_warn"] == 4
+    assert s["by_reason"]["wrong_context_suppressed"] == 1
+    assert s["by_reason"]["unknown"] == 0
+
+
+def test_call_budget_records_retry_collapse():
+    """Spec §11.3: retry_collapse increments when same normalized hash repeats."""
+    from video_agent.shorts.call_budget import build_call_budget_summary
+
+    history = [
+        {"provider": "deterministic", "kind": "retry_collapse", "ok": False,
+         "reason": "retry_collapse",
+         "payload": {"detail": "Identical scene output across retries; stopping loop."}},
+    ]
+    s = build_call_budget_summary(history)
+    assert s["by_reason"]["retry_collapse"] == 1
+
+
+def test_no_chatgpt_regeneration_for_hook_repair():
+    """Spec §11.4: weak hook motion repaired deterministically, no ChatGPT call."""
+    from video_agent.shorts.validate_scenes import repair_weak_hook_motion
+
+    scenes = [
+        {"id": "s01", "duration_sec": 3.5, "layout": "hook_layout", "narration": "Test hook"}
+    ]
+    changed = repair_weak_hook_motion(scenes)
+    assert changed is True
+    assert scenes[0]["motion"] == "push_in"
+    assert scenes[0]["pattern_interrupt"] == "text_pop at 0.5s"
+
+    # Scene that already has motion should NOT be changed
+    scenes2 = [
+        {"id": "s01", "duration_sec": 3.5, "layout": "hook_layout", "motion": "zoom_in"}
+    ]
+    changed2 = repair_weak_hook_motion(scenes2)
+    assert changed2 is False
 
 

@@ -208,6 +208,117 @@ def _valid(plan: dict[str, Any]) -> bool:
     )
 
 
+def deterministic_repair_retention_plan(plan: dict[str, Any], short_plan: dict[str, Any]) -> dict[str, Any]:
+    # 1. Grammar repairs across all text fields in plan
+    def repair_text(text: str) -> str:
+        if not isinstance(text, str):
+            return text
+        # Spanish grammar fixes
+        import re
+        replacements = [
+            (r"\b[eE]l acompañamientos\b", "los acompañamientos"),
+            (r"\b[lL]a acompañamientos\b", "los acompañamientos"),
+            (r"\b[lL]a pan\b", "el pan"),
+            (r"\b[eE]l tostada\b", "la tostada"),
+        ]
+        for pattern, repl in replacements:
+            text = re.sub(pattern, repl, text)
+        
+        # Suffix completion for truncated hook lines/sentences
+        completions = {
+            "bu": "bueno",
+            "sa": "sano",
+            "integ": "integral",
+            "acompaña": "acompañamiento",
+            "nutri": "nutritivo",
+            "saluda": "saludable",
+            "diabe": "diabetes",
+            "sac": "sacia",
+            "tost": "tostada",
+        }
+        words = text.split()
+        if words:
+            last_word = words[-1].lower().strip(".,;:¿?¡!()\"'")
+            for prefix, full in completions.items():
+                if last_word == prefix:
+                    punctuation = words[-1][len(last_word):]
+                    leading_punct = words[-1][:-len(last_word)] if words[-1].startswith(("¿", "¡")) else ""
+                    words[-1] = leading_punct + full + punctuation
+                    text = " ".join(words)
+                    break
+        return text
+
+    # Recursively repair all strings in the plan dict
+    def repair_dict(d: Any) -> Any:
+        if isinstance(d, dict):
+            return {k: repair_dict(v) for k, v in d.items()}
+        elif isinstance(d, list):
+            return [repair_dict(item) for item in d]
+        elif isinstance(d, str):
+            return repair_text(d)
+        return d
+
+    plan = repair_dict(plan)
+
+    # 2. Awkward comment trigger repair
+    comment_trigger = plan.get("comment_trigger") or {}
+    q = comment_trigger.get("question") or ""
+    
+    # Determine topic keywords
+    text_context = " ".join([
+        str(short_plan.get("title") or ""),
+        str(short_plan.get("hook_angle") or ""),
+        str(short_plan.get("viewer_pain") or ""),
+        str(short_plan.get("practical_payoff") or ""),
+        str(short_plan.get("narration_seed") or ""),
+    ]).lower()
+    
+    is_bread_shopping = "pan" in text_context and ("compra" in text_context or "etiqueta" in text_context or "frontal" in text_context or "ingredientes" in text_context or "paquete" in text_context)
+    is_toast_assembly = "tostada" in text_context or ("pan" in text_context and ("desayuno" in text_context or "monta" in text_context or "sacia" in text_context))
+
+    is_awkward = (
+        "montas tú la compra" in q.lower()
+        or "montas tú la acompañamientos" in q.lower()
+        or "acompañamientos" in q.lower()
+        or q == ""
+    )
+
+    if is_awkward or is_bread_shopping or is_toast_assembly:
+        # Preferred options
+        bread_shopping_options = [
+            "¿Tantos panes? Mira esto.",
+            "Gira el paquete.",
+            "No mires solo el frontal.",
+            "¿Tú qué miras primero?",
+            "¿También giras el paquete?",
+        ]
+        toast_assembly_options = [
+            "¿Pan y hambre otra vez?",
+            "No siempre falla el pan.",
+            "¿Cómo montas tú la tostada?",
+        ]
+        neutral_fallbacks = [
+            "No siempre falla esto.",
+            "¿Tú qué miras primero?",
+            "¿También te pasa?",
+        ]
+
+        if is_bread_shopping:
+            chosen = "¿También giras el paquete?" if "paquete" in text_context or "gira" in text_context else "No mires solo el frontal."
+            if chosen not in bread_shopping_options:
+                chosen = bread_shopping_options[0]
+            comment_trigger["question"] = chosen
+        elif is_toast_assembly:
+            chosen = "¿Cómo montas tú la tostada?" if "tostada" in text_context or "montas" in text_context else "No siempre falla el pan."
+            if chosen not in toast_assembly_options:
+                chosen = toast_assembly_options[0]
+            comment_trigger["question"] = chosen
+        elif is_awkward:
+            comment_trigger["question"] = neutral_fallbacks[0]
+
+    return plan
+
+
 def build_retention_plan(
     long_job_dir: Path,
     short_plan: dict,
@@ -234,6 +345,9 @@ def build_retention_plan(
         if _valid(parsed):
             plan.update(parsed)
             mode = "llm"
+
+    plan = deterministic_repair_retention_plan(plan, short_plan)
+
     plan["input_hash"] = input_hash
     plan["generation_mode"] = mode
     artifact.parent.mkdir(parents=True, exist_ok=True)

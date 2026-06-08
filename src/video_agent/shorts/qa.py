@@ -147,6 +147,12 @@ def normalize_qa_issue(
     issue_type_lower = issue_type.lower()
     detail_lower = detail.lower()
 
+    severity_lower = ""
+    if isinstance(issue, dict):
+        severity_lower = str(issue.get("severity") or "").lower()
+    elif issue is not None:
+        severity_lower = str(getattr(issue, "severity", "") or "").lower()
+
     # Determine Issue Class and Reason
     issue_class = IssueClass.HARD_BLOCKER
     reason = issue_type or "unknown_issue"
@@ -171,9 +177,11 @@ def normalize_qa_issue(
 
     # Aesthetic suggestion, weak hook motion (if first scene renderable), product scores 7-8 -> SOFT_WARNING
     is_soft = False
-    if issue_type_lower in ["weak_hook_motion", "hook_motion", "aesthetic", "visual_rhythm", "rhythm", "product_quality_average_low"]:
+    if severity_lower in ("warning", "minor", "suggestion", "info"):
         is_soft = True
-    elif "weak_hook_motion" in detail_lower or "hook motion" in detail_lower or "aesthetic" in detail_lower or "visual rhythm" in detail_lower:
+    elif issue_type_lower in ["weak_hook_motion", "hook_motion", "aesthetic", "visual_rhythm", "rhythm", "product_quality_average_low", "hook_polish", "polish", "visual", "visual_polish", "pacing_polish"]:
+        is_soft = True
+    elif any(k in detail_lower for k in ["weak_hook_motion", "hook motion", "aesthetic", "visual rhythm", "polish", "pacing", "pacing preference", "could consolidate", "near limit", "verify", "ensure"]):
         is_soft = True
     elif "product quality scores are below" in detail_lower:
         is_soft = True

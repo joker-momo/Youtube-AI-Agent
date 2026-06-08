@@ -70,5 +70,12 @@
 | Task 68: Brainstorming: Explore project context (Retry Memory + QA loop) | [x] | Explore validate_scenes, retry_memory, and qa modules |
 | Task 69: Brainstorming: Ask clarifying questions | [x] | Ask clarifying question about suffix completion |
 | Task 70: Brainstorming: Propose 2-3 approaches | [x] | Propose Approach A and B, recommend A |
-| Task 71: Brainstorming: Write design doc `docs/plans/2026-06-08-shorts-retry-memory-qa-loop-fix-design.md` | [/] | Write and save design doc |
-| Task 72: Transition to implementation: Invoke writing-plans skill | [ ] | Create detailed implementation plan |
+| Task 71: Brainstorming: Write design doc `docs/plans/2026-06-08-shorts-retry-memory-qa-loop-fix-design.md` | [x] | Write and save design doc |
+| Task 72: Transition to implementation: Invoke writing-plans skill | [x] | Create detailed implementation plan |
+| Task 73: Task 1 - Severity classes & normalizer in `qa.py` | [x] | Implement IssueClass, NormalizedIssue, and normalize_qa_issue in qa.py |
+| Task 74: Task 2 - Rule context & wrong-context filtering | [x] | Implement get_short_rule_context and template context filtering in qa.py |
+| Task 75: Task 3 - Retry feedback formatting in `retry_memory.py` | [x] | Restructure retry memory prompt layout |
+| Task 76: Task 4 - Loop gating & exit report in `short_builder.py` | [x] | Implement severity-gated loop decisions and summary exit reporting |
+| Task 77: Task 5 - Deterministic repair functions for hook/unreadable | [/] | Implement deterministic repairs for weak hook motion and unreadable items |
+| Task 78: Task 6 - Expand reasons in `call_budget.py` | [ ] | Add and classify new reasons in call budget |
+| Task 79: Task 7 - Write 8 new spec acceptance tests | [ ] | Add acceptance tests and verify full suite passes |

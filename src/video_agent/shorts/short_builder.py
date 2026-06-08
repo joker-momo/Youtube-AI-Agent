@@ -694,8 +694,9 @@ def _build_short_impl(
                     "attempt": script_attempts,
                     "renderable": renderable,
                     "detail": "Identical script output across retries; stopping loop.",
+                    "reason": "retry_collapse",
                 },
-                ok=renderable,
+                ok=False,
             )
             if renderable:
                 script_qa_result["verdict"] = "WARN"
@@ -770,6 +771,28 @@ def _build_short_impl(
             atomic_write_json(_jd / paths.SHORT_SCRIPT_QA_FILE, script_qa_result)
             verdict = script_qa_result.get("verdict", "FAIL")
             update_stage("qa_script", "completed" if verdict in ("PASS", "WARN") else "failed", qa_verdict=verdict)
+            
+            # Record classification and wrong context suppression for script QA
+            if verdict == "FAIL":
+                _recorder.record_event(
+                    "deterministic",
+                    "qa_classification",
+                    {
+                        "reason": "qa_soft_warn" if not script_blockers else "qa_hard_fail",
+                    },
+                    ok=True
+                )
+            for norm in normalized_script_issues:
+                if norm.reason == "wrong_context_five_errors_rule":
+                    _recorder.record_event(
+                        "deterministic",
+                        "wrong_context_suppressed",
+                        {
+                            "reason": "wrong_context_suppressed",
+                            "detail": norm.detail,
+                        },
+                        ok=False
+                    )
         except Exception as exc:
             update_stage("qa_script", "failed")
             status["status"] = "failed"
@@ -921,8 +944,9 @@ def _build_short_impl(
                             "attempt": scenes_attempts,
                             "renderable": renderable,
                             "detail": "Identical scene output across retries; stopping loop.",
+                            "reason": "retry_collapse",
                         },
-                        ok=renderable,
+                        ok=False,
                     )
                     if renderable:
                         best_scene_candidate = dict(short_scenes)
@@ -996,6 +1020,28 @@ def _build_short_impl(
             scenes = short_scenes.get("scenes") or []
             for scene in scenes:
                 validate_scenes.repair_scene_duration_if_possible(scene)
+
+            # Deterministic repair: weak hook motion (spec §10.1)
+            if validate_scenes.repair_weak_hook_motion(scenes):
+                state.current_scenes_version += 1
+                state.latest_scene_validation_ok = False
+                state.latest_scene_validation_version = None
+
+            # Deterministic repair: visual_only_unreadable (spec §10.2)
+            # Extract required idea items from the script
+            _idea_items = (
+                short_script.get("idea_items")
+                or short_script.get("points")
+                or short_script.get("checklist")
+                or []
+            )
+            if isinstance(_idea_items, list):
+                for item in _idea_items:
+                    item_str = str(item).strip()
+                    if item_str and validate_scenes.repair_visual_only_unreadable(scenes, item_str):
+                        state.current_scenes_version += 1
+                        state.latest_scene_validation_ok = False
+                        state.latest_scene_validation_version = None
 
             update_stage("visual_rhythm_plan", "in_progress")
             try:
@@ -1233,6 +1279,28 @@ def _build_short_impl(
                 verdict = scenes_qa_result.get("verdict", "FAIL")
                 atomic_write_json(_jd / paths.SHORT_SCENES_QA_FILE, scenes_qa_result)
                 update_stage("qa_scenes", "completed" if verdict in ("PASS", "WARN") else "failed", qa_verdict=verdict)
+                
+                # Record classification and wrong context suppression for scene QA
+                if verdict == "FAIL":
+                    _recorder.record_event(
+                        "deterministic",
+                        "qa_classification",
+                        {
+                            "reason": "qa_soft_warn" if not scene_blockers else "qa_hard_fail",
+                        },
+                        ok=True
+                    )
+                for norm in normalized_scene_issues:
+                    if norm.reason == "wrong_context_five_errors_rule":
+                        _recorder.record_event(
+                            "deterministic",
+                            "wrong_context_suppressed",
+                            {
+                                "reason": "wrong_context_suppressed",
+                                "detail": norm.detail,
+                            },
+                            ok=False
+                        )
             except Exception as exc:
                 update_stage("qa_scenes", "failed")
                 status["status"] = "failed"
@@ -1306,8 +1374,9 @@ def _build_short_impl(
                 n.issue_class == qa.IssueClass.HARD_BLOCKER for n in normalized_scene_issues
             )
             
-            if scenes_attempts >= 2:
-                if scenes_attempts == 2 and attempt_1_failed_layout_schema and not renderable:
+            max_limit = min(2, max_regen + 1)
+            if scenes_attempts >= max_limit:
+                if scenes_attempts == 2 and attempt_1_failed_layout_schema and not renderable and max_regen >= 2:
                     pass
                 else:
                     stop_scene_retries = True
@@ -1345,6 +1414,9 @@ def _build_short_impl(
                     "remaining_warnings": [w.to_dict() for w in remaining_warnings],
                     "renderable": renderable,
                     "decision": decision,
+                    "latest_scene_qa_ok": state.latest_scene_qa_ok,
+                    "latest_scene_qa_version": state.latest_scene_qa_version,
+                    "best_candidate_available": best_scene_candidate is not None,
                 }
                 atomic_write_json(_jd / paths.SHORT_FAILURE_REPORT_FILE, summary_report)
                 
@@ -1356,7 +1428,7 @@ def _build_short_impl(
                       
                 if decision == "failed_hard_blocker":
                     status.update({
-                        "status": "failed",
+                        "status": "needs_review",
                         "rendered": False,
                         "uploaded": False,
                         "youtube_url": "",

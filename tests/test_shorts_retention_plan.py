@@ -210,3 +210,76 @@ import tempfile as _tempfile
 
 def tmp_path_factory_dir():
     return pathlib.Path(_tempfile.mkdtemp())
+
+
+def test_retention_bad_article_noun_repaired(tmp_path: Path):
+    from video_agent.shorts.retention_plan import deterministic_repair_retention_plan
+    plan = {
+        "viewer_pain": "el acompañamientos y la pan",
+        "payoff_promise": "la acompañamientos y el tostada",
+        "comment_trigger": {
+            "question": "¿Cómo montas tú la acompañamientos?",
+        }
+    }
+    repaired = deterministic_repair_retention_plan(plan, {})
+    assert repaired["viewer_pain"] == "los acompañamientos y el pan"
+    assert repaired["payoff_promise"] == "los acompañamientos y la tostada"
+    assert repaired["comment_trigger"]["question"] in (
+        "No siempre falla esto.",
+        "¿Tú qué miras primero?",
+        "¿También te pasa?",
+    )
+
+
+def test_retention_truncated_hook_repaired(tmp_path: Path):
+    from video_agent.shorts.retention_plan import deterministic_repair_retention_plan
+    plan = {
+        "viewer_pain": "el pan integ",
+        "retention_beats": [
+            {"tension_line": "¿Es esto bu?"}
+        ]
+    }
+    repaired = deterministic_repair_retention_plan(plan, {})
+    assert repaired["viewer_pain"] == "el pan integral"
+    assert repaired["retention_beats"][0]["tension_line"] == "¿Es esto bueno?"
+
+
+def test_retention_bread_shopping_comment_trigger(tmp_path: Path):
+    from video_agent.shorts.retention_plan import deterministic_repair_retention_plan
+    short_plan = {
+        "title": "Ingredientes del pan",
+        "hook_angle": "Gira el paquete",
+        "viewer_pain": "comprar pan malo",
+    }
+    plan = {
+        "comment_trigger": {
+            "question": "¿Cómo montas tú la compra?"
+        }
+    }
+    repaired = deterministic_repair_retention_plan(plan, short_plan)
+    assert repaired["comment_trigger"]["question"] in (
+        "¿Tantos panes? Mira esto.",
+        "Gira el paquete.",
+        "No mires solo el frontal.",
+        "¿Tú qué miras primero.",
+        "¿También giras el paquete?",
+    )
+
+
+def test_retention_toast_assembly_comment_trigger(tmp_path: Path):
+    from video_agent.shorts.retention_plan import deterministic_repair_retention_plan
+    short_plan = {
+        "title": "Tostada saludable para el desayuno",
+        "hook_angle": "Pan y hambre enseguida",
+    }
+    plan = {
+        "comment_trigger": {
+            "question": "¿Cómo montas tú la compra?"
+        }
+    }
+    repaired = deterministic_repair_retention_plan(plan, short_plan)
+    assert repaired["comment_trigger"]["question"] in (
+        "¿Pan y hambre otra vez?",
+        "No siempre falla el pan.",
+        "¿Cómo montas tú la tostada?",
+    )

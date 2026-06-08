@@ -1,0 +1,22 @@
+{
+  "short_id": "test",
+  "verdict": "FAIL",
+  "generic_phrases": [],
+  "robotic_patterns": [],
+  "over_explaining": false,
+  "listicle_feel_risk": "low",
+  "recommended_changes": [
+    "too_many_static_scenes",
+    "weak_hook_motion"
+  ],
+  "scores": {
+    "hook_specificity": 82,
+    "micro_tension": 45,
+    "human_naturalness": 88,
+    "visual_rhythm": 45,
+    "identity_resonance": 78,
+    "commentability": 72
+  },
+  "input_hash": "4c27c6401cbdd2fe",
+  "generation_mode": "deterministic"
+}

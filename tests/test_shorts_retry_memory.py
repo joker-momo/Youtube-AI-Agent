@@ -321,3 +321,11 @@ def test_scene_validation_fail_active_issues_length():
     from video_agent.shorts.retry_memory import suppress_issue_by_id
     suppress_issue_by_id(memory, issue_id1)
     assert len(memory.active_issues) == 0
+
+def test_severity_constants_exist():
+    from video_agent.shorts.qa import IssueClass
+    assert IssueClass.HARD_BLOCKER == "hard_blocker"
+    assert IssueClass.REPAIRABLE_BLOCKER == "repairable_blocker"
+    assert IssueClass.SOFT_WARNING == "soft_warning"
+    assert IssueClass.STALE_OR_SUPPRESSED == "stale_or_suppressed"
+

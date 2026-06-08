@@ -13,8 +13,10 @@ checks first per §13 (which doesn't forbid pre-filtering).
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 from pathlib import Path
+import re
 from typing import Any, Callable
 
 from video_agent.shorts import paths, prompts, validate_scenes
@@ -22,6 +24,136 @@ from video_agent.shorts.idea_preservation import validate_script_idea_contract
 from video_agent.shorts.llm import LLMCallLog, log_llm_call
 
 LLM_PROVIDER = "gemini"
+
+
+class IssueClass:
+    HARD_BLOCKER = "hard_blocker"
+    REPAIRABLE_BLOCKER = "repairable_blocker"
+    SOFT_WARNING = "soft_warning"
+    STALE_OR_SUPPRESSED = "stale_or_suppressed"
+
+
+@dataclass
+class NormalizedIssue:
+    issue_class: str
+    reason: str
+    source: str  # scene_validation | gemini_scene_qa | script_qa | renderer | audio
+    scene_id: str | None
+    issue_type: str
+    detail: str
+    repair_hint: str | None = None
+    include_in_retry_feedback: bool = True
+    trigger_regeneration: bool = True
+
+
+def normalize_qa_issue(
+    issue: Any,
+    *,
+    idea: dict,
+    script: dict,
+    scenes: dict,
+    deterministic_validation: dict | None = None,
+    source: str | None = None,
+) -> NormalizedIssue:
+    if isinstance(issue, NormalizedIssue):
+        return issue
+
+    issue_type = ""
+    scene_id = None
+    detail = ""
+    repair_hint = None
+    inferred_source = source or "unknown"
+
+    if isinstance(issue, str):
+        issue_type = issue
+        detail = issue
+        m = re.search(r'\b(s\d+)\b', issue)
+        if m:
+            scene_id = m.group(1)
+    elif isinstance(issue, dict):
+        issue_type = issue.get("type") or issue.get("issue_type") or ""
+        scene_id = issue.get("scene_id")
+        detail = issue.get("detail") or issue.get("required_change") or issue.get("description") or ""
+        repair_hint = issue.get("repair_hint") or issue.get("hint")
+        if "source" in issue:
+            inferred_source = issue["source"]
+    else:
+        # e.g. SceneValidationIssue object
+        issue_type = getattr(issue, "type", "") or ""
+        scene_id = getattr(issue, "scene_id", None)
+        detail = getattr(issue, "detail", "") or getattr(issue, "description", "") or ""
+        repair_hint = getattr(issue, "repair_hint", None)
+        if hasattr(issue, "source") and getattr(issue, "source"):
+            inferred_source = getattr(issue, "source")
+        elif issue.__class__.__name__ == "SceneValidationIssue":
+            inferred_source = "scene_validation"
+
+    issue_type_lower = issue_type.lower()
+    detail_lower = detail.lower()
+
+    # Determine Issue Class and Reason
+    issue_class = IssueClass.HARD_BLOCKER
+    reason = issue_type or "unknown_issue"
+    trigger_regeneration = True
+    include_in_retry_feedback = True
+
+    # Safety, source fidelity/support, health claim, contract -> HARD_BLOCKER
+    is_hard = False
+    if any(k in issue_type_lower for k in ["safety", "disclaimer", "overclaim", "fidelity", "support", "contract", "source_map", "empty_narration", "music_not_selected", "greeting"]):
+        is_hard = True
+    elif any(k in detail_lower for k in ["safety", "disclaimer", "overclaim", "fidelity", "support", "contract", "source_map", "empty_narration", "music_not_selected", "greeting"]):
+        is_hard = True
+
+    # Missing required checklist point, unreadable required item, malformed graphic payload, duration -> REPAIRABLE_BLOCKER
+    is_repairable = False
+    if any(k in issue_type_lower for k in ["checklist_point", "unreadable", "duration_cap", "graphic_payload", "malformed_graphic"]):
+        is_repairable = True
+    elif any(k in detail_lower for k in ["checklist point", "unreadable", "duration cap", "graphic payload", "malformed graphic"]):
+        is_repairable = True
+    elif issue_type_lower == "visual_only_unreadable":
+        is_repairable = True
+
+    # Aesthetic suggestion, weak hook motion (if first scene renderable), product scores 7-8 -> SOFT_WARNING
+    is_soft = False
+    if issue_type_lower in ["weak_hook_motion", "hook_motion", "aesthetic", "visual_rhythm", "rhythm", "product_quality_average_low"]:
+        is_soft = True
+    elif "weak_hook_motion" in detail_lower or "hook motion" in detail_lower or "aesthetic" in detail_lower or "visual rhythm" in detail_lower:
+        is_soft = True
+    elif "product quality scores are below" in detail_lower:
+        is_soft = True
+        scores = re.findall(r'(\d+(?:\.\d+)?)', detail_lower)
+        for s_str in scores:
+            try:
+                s_val = float(s_str)
+                if s_val <= 6.0:
+                    is_soft = False
+                    is_hard = True
+                    break
+            except ValueError:
+                pass
+    elif "average product quality" in detail_lower:
+        is_soft = True
+
+    if is_hard:
+        issue_class = IssueClass.HARD_BLOCKER
+    elif is_repairable:
+        issue_class = IssueClass.REPAIRABLE_BLOCKER
+    elif is_soft:
+        issue_class = IssueClass.SOFT_WARNING
+        trigger_regeneration = False
+
+    return NormalizedIssue(
+        issue_class=issue_class,
+        reason=reason,
+        source=inferred_source,
+        scene_id=scene_id,
+        issue_type=issue_type,
+        detail=detail,
+        repair_hint=repair_hint,
+        include_in_retry_feedback=include_in_retry_feedback,
+        trigger_regeneration=trigger_regeneration,
+    )
+
 
 _GREETINGS = ["hola", "bienvenid", "hoy vamos a", "en este short",
               "en este vídeo", "en este video", "buenas"]

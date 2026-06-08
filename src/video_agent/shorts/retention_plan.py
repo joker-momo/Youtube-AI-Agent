@@ -21,76 +21,94 @@ ALLOWED_HOOK_PATTERNS = {
 _BEAT_FUNCTIONS = ["hook", "tension", "proof", "payoff", "identity", "cta"]
 _INTERRUPTS = ["zoom", "crop_shift", "object_reveal", "text_change", "face_cut", "graphic_burst"]
 
-# Words skipped when guessing the topic noun from a title/seed.
-_TOPIC_STOPWORDS = {
-    "para", "que", "una", "uno", "los", "las", "del", "con", "más", "mas",
-    "por", "sin", "como", "cómo", "este", "esta", "esto", "pasos", "piezas",
-    "errores", "cosas", "trucos", "claves", "antes", "despues", "después",
-    "tu", "tus", "the", "and", "for",
+# Known, grammatically-tagged topic objects. Only these produce article+noun
+# lines; anything else falls back to neutral templates so the planner never
+# emits broken Spanish like "el acompañamientos".
+_TOPIC_OBJECTS: dict[str, dict[str, str]] = {
+    "tostada": {"singular": "tostada", "plural": "tostadas", "article_singular": "la", "article_plural": "las", "kind": "food_object"},
+    "pan": {"singular": "pan", "plural": "panes", "article_singular": "el", "article_plural": "los", "kind": "food_object"},
+    "desayuno": {"singular": "desayuno", "plural": "desayunos", "article_singular": "el", "article_plural": "los", "kind": "meal"},
+    "plato": {"singular": "plato", "plural": "platos", "article_singular": "el", "article_plural": "los", "kind": "food_object"},
+    "cena": {"singular": "cena", "plural": "cenas", "article_singular": "la", "article_plural": "las", "kind": "meal"},
+    "compra": {"singular": "compra", "plural": "compras", "article_singular": "la", "article_plural": "las", "kind": "activity"},
+    "etiqueta": {"singular": "etiqueta", "plural": "etiquetas", "article_singular": "la", "article_plural": "las", "kind": "object"},
+    "sueño": {"singular": "sueño", "plural": "sueños", "article_singular": "el", "article_plural": "los", "kind": "state"},
+    "rutina": {"singular": "rutina", "plural": "rutinas", "article_singular": "la", "article_plural": "las", "kind": "activity"},
+    "proteína": {"singular": "proteína", "plural": "proteínas", "article_singular": "la", "article_plural": "las", "kind": "food_object"},
+}
+
+_NEUTRAL_TOPIC = {
+    "singular": None, "plural": None, "article_singular": None, "article_plural": None,
+    "kind": "neutral", "safe_comment_phrase": None, "safe_action_phrase": None,
 }
 
 
-def _topic_token(short_plan: dict[str, Any]) -> str:
-    """Best-effort topic noun from the idea title / narration seed.
+def _tokens(text: str) -> list[str]:
+    return [w.strip(".,;:¿?¡!()\"'").lower() for w in str(text or "").split()]
 
-    Picks the longest meaningful word so comment triggers and beat lines stay
-    on-topic (e.g. "tostada" for a breakfast Short) instead of a generic
-    shopping phrase.
+
+def safe_topic(short_plan: dict[str, Any]) -> dict[str, Any]:
+    """Structured, grammar-safe topic object.
+
+    Scans the title/hook first, then viewer pain, for a KNOWN object. Never
+    guesses an article for an unknown long noun (that produced "el
+    acompañamientos"); unknown topics return a neutral object instead.
     """
-    text = " ".join(
-        str(short_plan.get(k) or "")
-        for k in ("title", "narration_seed", "hook_angle", "viewer_pain")
-    )
-    words = [w.strip(".,;:¿?¡!()\"'").lower() for w in text.split()]
-    candidates = [
-        w for w in words
-        if w.isalpha() and len(w) >= 5 and w not in _TOPIC_STOPWORDS
-    ]
-    if not candidates:
-        return "esto"
-    # Deterministic: longest, then earliest occurrence on ties.
-    return max(candidates, key=lambda w: (len(w), -words.index(w)))
+    for field in ("title", "hook_angle"):
+        for tok in _tokens(short_plan.get(field)):
+            if tok in _TOPIC_OBJECTS:
+                obj = _TOPIC_OBJECTS[tok]
+                return {
+                    **obj,
+                    "safe_action_phrase": f"{obj['article_singular']} {obj['singular']}",
+                    "safe_comment_phrase": f"{obj['article_plural']} {obj['plural']}",
+                }
+    for tok in _tokens(short_plan.get("viewer_pain")):
+        if tok in _TOPIC_OBJECTS:
+            obj = _TOPIC_OBJECTS[tok]
+            return {
+                **obj,
+                "safe_action_phrase": f"{obj['article_singular']} {obj['singular']}",
+                "safe_comment_phrase": f"{obj['article_plural']} {obj['plural']}",
+            }
+    return dict(_NEUTRAL_TOPIC)
+
+
+def _pain_short(short_plan: dict[str, Any]) -> str:
+    pain = str(short_plan.get("viewer_pain") or short_plan.get("hook_angle") or "te falla la pista").strip().rstrip(".")
+    words = pain.split()
+    if len(words) > 8:
+        pain = " ".join(words[:8])
+    return pain[0].upper() + pain[1:] if pain else "Te falla la pista"
+
+
+def _piece_count(short_plan: dict[str, Any]) -> str:
+    import re
+    text = f"{short_plan.get('title') or ''} {short_plan.get('narration_seed') or ''}"
+    m = re.search(r"\d+", text)
+    return m.group(0) if m else "3"
 
 
 def _retention_beats(short_plan: dict[str, Any]) -> list[dict[str, Any]]:
-    """Deterministic, beat-distinct retention curve.
+    """Deterministic, beat-distinct, grammar-safe retention curve."""
+    topic = safe_topic(short_plan)
+    pain = _pain_short(short_plan)
+    count = _piece_count(short_plan)
+    known = topic["kind"] != "neutral"
+    action = topic.get("safe_action_phrase")  # e.g. "la tostada"
 
-    Each beat gets a distinct tension_line and expected_viewer_question derived
-    from the idea fields, so the plan stops repeating the title on every beat.
-    """
-    topic = _topic_token(short_plan)
-    pain = str(short_plan.get("viewer_pain") or short_plan.get("hook_angle") or "perder una pista").strip().rstrip(".")
-    payoff = str(short_plan.get("practical_payoff") or short_plan.get("payoff") or "mirar el detalle correcto").strip().rstrip(".")
-    fmt = str(short_plan.get("format") or "").lower()
+    reframe = f"No siempre falla {action}." if known else "No siempre falla esto."
+    comment = f"¿Cómo montas tú {action}?" if known else "¿Cómo lo haces tú?"
 
-    # (function, tension_line, expected_viewer_question)
-    if fmt in {"mistake_list", "mistakes"}:
-        shape = [
-            ("hook", f"¿{pain.capitalize()} otra vez?", "¿Por qué me pasa?"),
-            ("tension", "No es lo que crees.", "¿Entonces qué falla?"),
-            ("proof", "Mira los fallos comunes.", "¿Cuáles son?"),
-            ("payoff", f"Mejor: {payoff}.", "¿Cómo lo arreglo?"),
-            ("identity", "Sin culpa, con un cambio.", "¿Lo puedo hacer yo?"),
-            ("cta", f"¿Cuál te pasa con {topic}?", "¿Cuál marco yo?"),
-        ]
-    elif fmt in {"myth", "myth_or_contradiction"}:
-        shape = [
-            ("hook", f"¿Y si {pain} fuera un mito?", "¿Es verdad esto?"),
-            ("tension", "Lo que te contaron falla.", "¿Por qué falla?"),
-            ("proof", "La realidad es otra.", "¿Qué dice la realidad?"),
-            ("payoff", f"Haz esto: {payoff}.", "¿Cómo lo aplico?"),
-            ("identity", "No es culpa tuya.", "¿Me incluye a mí?"),
-            ("cta", f"¿Tú también lo creías con {topic}?", "¿Qué pensaba yo?"),
-        ]
-    else:  # top_tips / routine / comparison / default
-        shape = [
-            ("hook", f"¿{pain.capitalize()}?", "¿Por qué me pasa?"),
-            ("tension", f"No siempre falla el {topic}.", "¿Entonces qué falla?"),
-            ("proof", "No se comportan igual.", "¿Qué comparación importa?"),
-            ("payoff", f"Mejor: {payoff}.", "¿Cómo lo hago fácil?"),
-            ("identity", "Sin complicarte después de los 45.", "¿Lo puedo hacer yo?"),
-            ("cta", f"¿Cómo montas tú la {topic}?", "¿Qué opción uso yo?"),
-        ]
+    # (function, tension_line, expected_viewer_question) — short lines only.
+    shape = [
+        ("hook", f"¿{pain}?", "¿Por qué me pasa?"),
+        ("tension", reframe, "¿Entonces qué falla?"),
+        ("proof", f"Son {count} piezas.", "¿Cuáles son?"),
+        ("payoff", "No se comportan igual.", "¿Qué comparación importa?"),
+        ("identity", "Déjalo listo antes.", "¿Cómo lo hago fácil?"),
+        ("cta", comment, "¿Qué opción uso yo?"),
+    ]
 
     beats: list[dict[str, Any]] = []
     for idx, (fn, line, question) in enumerate(shape):
@@ -100,7 +118,7 @@ def _retention_beats(short_plan: dict[str, Any]) -> list[dict[str, Any]]:
             "start_sec": 0.0 if idx == 0 else start,
             "end_sec": end,
             "function": fn,
-            "tension_line": line[:140],
+            "tension_line": line[:60],
             "visual_interrupt": _INTERRUPTS[idx % len(_INTERRUPTS)],
             "expected_viewer_question": question,
         })
@@ -112,8 +130,11 @@ def _comment_trigger(short_plan: dict[str, Any]) -> dict[str, Any]:
     if explicit:
         question = explicit
     else:
-        topic = _topic_token(short_plan)
-        question = f"¿Cómo lo haces tú con {topic}?"
+        topic = safe_topic(short_plan)
+        if topic["kind"] != "neutral":
+            question = f"¿Cómo montas tú {topic['safe_action_phrase']}?"
+        else:
+            question = "¿También te pasa?"
     return {
         "question": question,
         "type": str(short_plan.get("comment_trigger_type") or "personal_experience"),

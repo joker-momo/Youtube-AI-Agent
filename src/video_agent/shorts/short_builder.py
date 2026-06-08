@@ -1125,12 +1125,14 @@ def build_short(
             short_scenes["total_duration_sec"] = round(duration_sec, 1)
             narration_audio_sec = validate_scenes.probe_audio_duration_sec(narration_wav)
             tail_added_total = 0.0
+            tail_distribution: list[dict[str, Any]] = []
             if narration_audio_sec is not None:
                 tail_repair = validate_scenes.extend_scene_durations_for_audio_tail(
                     short_scenes,
                     narration_audio_sec
                 )
                 tail_added_total = float(tail_repair.get("added_sec") or 0.0)
+                tail_distribution = list(tail_repair.get("tail_repair_distribution") or [])
                 if tail_repair.get("changed"):
                     duration_sec = float(_scene_duration_sum(short_scenes) or short_scenes.get("total_duration_sec") or duration_sec)
                     short_scenes["total_duration_sec"] = round(duration_sec, 1)
@@ -1170,6 +1172,7 @@ def build_short(
                     render_duration_sec=duration_sec,
                     narration_audio_sec=narration_audio_sec,
                     tail_added_sec=tail_added_total,
+                    tail_repair_distribution=tail_distribution,
                 )
                 atomic_write_json(_jd / paths.SHORT_AUDIO_SYNC_SUMMARY_FILE, sync_summary)
                 _recorder.record_event(
@@ -1417,6 +1420,13 @@ def build_short(
             llm_history.read_history(_jd / paths.SHORT_LLM_HISTORY_FILE)
         )
         atomic_write_json(_jd / paths.SHORT_CALL_BUDGET_SUMMARY_FILE, budget_summary)
+        # v4 §2.2: surface the budget as a stage in the LLM history/log.
+        _recorder.record_event(
+            "deterministic",
+            "call_budget_summary",
+            budget_summary,
+            ok=budget_summary["verdict"] != "FAIL",
+        )
     except Exception:
         pass
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import pathlib
 from pathlib import Path
 
 
@@ -127,3 +128,85 @@ def test_retention_plan_comment_trigger_topic_match(tmp_path: Path):
     # must not fall back to the generic shopping trigger for a breakfast topic
     assert "al comprar" not in q, q
     assert q.strip()
+
+
+def _acompanamientos_trap_plan() -> dict:
+    # Payoff contains a long non-topic noun the old extractor would wrongly pick.
+    return {
+        "short_id": "short-05",
+        "source_long_job_id": "long-job",
+        "format": "top_tips",
+        "title": "3 piezas para que una tostada sacie más",
+        "hook_angle": "Pan y hambre enseguida",
+        "viewer_pain": "desayunar pan y tener hambre al rato",
+        "practical_payoff": "añadir proteína y acompañamientos frescos a la tostada",
+        "narration_seed": "No es solo el pan: son 3 piezas.",
+    }
+
+_BAD_PAIR_RE = [
+    r"\bel acompañamientos\b", r"\bla acompañamientos\b", r"\bla pan\b",
+    r"\bel tostada\b", r"\bel proteína\b", r"\blos tostada\b", r"\blas pan\b",
+]
+
+
+def test_retention_topic_extracts_tostada():
+    from video_agent.shorts.retention_plan import safe_topic
+    t = safe_topic(_acompanamientos_trap_plan())
+    assert t["singular"] == "tostada"
+    assert t["article_singular"] == "la"
+    assert t["plural"] == "tostadas"
+    assert t["article_plural"] == "las"
+
+
+def test_retention_plan_no_bad_article_noun_pairs():
+    import re
+    from video_agent.shorts.retention_plan import build_retention_plan
+    plan = build_retention_plan(_job(tmp_path_factory_dir()), _acompanamientos_trap_plan(), {"shorts": {}})
+    full = json.dumps(plan, ensure_ascii=False).lower()
+    # No grammar-broken article+noun pairs anywhere.
+    for pat in _BAD_PAIR_RE:
+        assert not re.search(pat, full), pat
+    # The mis-extracted noun must not leak into the rendered tension lines or the
+    # comment trigger (it may remain in payoff_promise as legitimate prose).
+    surfaced = " ".join(b["tension_line"] for b in plan["retention_beats"]).lower()
+    surfaced += " " + plan["comment_trigger"]["question"].lower()
+    assert "acompañamientos" not in surfaced, surfaced
+
+
+def test_retention_comment_trigger_topic_match_v4():
+    from video_agent.shorts.retention_plan import build_retention_plan
+    plan = build_retention_plan(_job(tmp_path_factory_dir()), _acompanamientos_trap_plan(), {"shorts": {}})
+    q = plan["comment_trigger"]["question"]
+    assert q in ("¿Cómo montas tú la tostada?", "¿También te pasa con las tostadas?"), q
+
+
+def test_retention_fallback_unknown_topic_is_neutral():
+    from video_agent.shorts.retention_plan import safe_topic, build_retention_plan
+    abstract = {
+        "short_id": "short-x", "source_long_job_id": "long-job", "format": "top_tips",
+        "title": "Una idea para sentirte mejor", "hook_angle": "algo cambia",
+        "viewer_pain": "no avanzar", "practical_payoff": "hacerlo distinto",
+        "narration_seed": "Cambia el enfoque.",
+    }
+    t = safe_topic(abstract)
+    assert t["kind"] == "neutral"
+    assert t["singular"] is None
+    plan = build_retention_plan(_job(tmp_path_factory_dir()), abstract, {"shorts": {}})
+    text = json.dumps(plan, ensure_ascii=False)
+    # neutral lines, no forced article+noun guess
+    assert "esto" in text or "lo haces" in text
+
+
+def test_retention_plan_no_long_payoff_as_tension_line():
+    from video_agent.shorts.retention_plan import build_retention_plan
+    plan = build_retention_plan(_job(tmp_path_factory_dir()), _acompanamientos_trap_plan(), {"shorts": {}})
+    for beat in plan["retention_beats"]:
+        line = beat["tension_line"]
+        assert not line.startswith("Mejor:"), line
+        assert len(line) <= 60, line
+
+
+import tempfile as _tempfile
+
+def tmp_path_factory_dir():
+    return pathlib.Path(_tempfile.mkdtemp())

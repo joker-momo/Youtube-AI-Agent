@@ -285,8 +285,10 @@ def extend_scene_durations_for_audio_tail(
 
     remaining = shortage
     notes: list[str] = []
-    # Prefer extending later scenes so the hook stays tight. Respect per-layout
-    # hard caps and the global hard cap; target-range warnings are acceptable.
+    distribution: list[dict[str, Any]] = []
+    # Prefer extending the final scene(s) first so the hook stays tight; only
+    # walk backward into earlier scenes once the later ones hit their hard cap.
+    # Respect per-layout hard caps and the global hard cap.
     for scene in reversed(scenes):
         if remaining <= 0:
             break
@@ -300,15 +302,18 @@ def extend_scene_durations_for_audio_tail(
         add = min(room, remaining)
         scene["duration_sec"] = round(dur + add, 1)
         remaining = round(remaining - add, 3)
-        notes.append(f"Extended {scene.get('id') or scene.get('scene_id') or '?'} by {add:.1f}s for audio tail.")
+        sid = scene.get("id") or scene.get("scene_id") or "?"
+        added_here = round(scene["duration_sec"] - dur, 1)
+        distribution.append({"scene_id": sid, "added_sec": added_here})
+        notes.append(f"Extended {sid} by {added_here:.1f}s for audio tail.")
 
     added = round(shortage - max(remaining, 0.0), 3)
     new_total = round(sum(_duration(scene) for scene in scenes), 1)
     scenes_doc["scenes"] = scenes
     scenes_doc["total_duration_sec"] = new_total
     if remaining > 0:
-        return {"changed": added > 0, "added_sec": added, "reason": "insufficient_scene_room", "shortage_sec": shortage, "notes": notes}
-    return {"changed": True, "added_sec": added, "reason": "extended_for_audio_tail", "notes": notes}
+        return {"changed": added > 0, "added_sec": added, "reason": "insufficient_scene_room", "shortage_sec": shortage, "notes": notes, "tail_repair_distribution": distribution}
+    return {"changed": True, "added_sec": added, "reason": "extended_for_audio_tail", "notes": notes, "tail_repair_distribution": distribution}
 
 
 def probe_audio_duration_sec(path: Path) -> float | None:
@@ -328,6 +333,7 @@ def audio_sync_summary(
     *,
     tail_added_sec: float = 0.0,
     per_scene_padding_sec: list[float] | None = None,
+    tail_repair_distribution: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Measurable audio/video sync verdict.
 
@@ -358,6 +364,7 @@ def audio_sync_summary(
         "warn_delta_sec": warn_delta,
         "verdict": verdict,
         "per_scene_padding_sec": list(per_scene_padding_sec or []),
+        "tail_repair_distribution": list(tail_repair_distribution or []),
     }
 
 

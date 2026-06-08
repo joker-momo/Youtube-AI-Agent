@@ -1013,6 +1013,10 @@ def test_build_short_keeps_audio_and_video_in_sync_at_planned_durations(tmp_path
     assert "by_reason" in budget and "provider_error" in budget["by_reason"]
     assert "by_provider" in budget and "retry_counts" in budget
     assert budget["verdict"] in ("PASS", "WARN")
+    # v4 §2.2: the stage must also appear in the LLM history/log.
+    from video_agent.shorts import llm_history as _llm_hist
+    hist = _llm_hist.read_history(short_dir / "json" / paths.SHORT_LLM_HISTORY_FILE)
+    assert any((h.get("kind") or h.get("event")) == "call_budget_summary" for h in hist)
 
 
 def test_build_short_soft_scene_validation_warning_proceeds_to_gemini_qa(tmp_path: Path, monkeypatch):

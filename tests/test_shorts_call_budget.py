@@ -65,3 +65,20 @@ def test_quality_hash_reused_not_reimplemented():
     for f in src:
         text = open(f, encoding="utf-8").read()
         assert "quality_hash" in text, f"{f} must reuse quality_hash"
+
+
+def test_call_budget_warn_when_total_exceeds_target_30():
+    from video_agent.shorts.call_budget import build_call_budget_summary
+    # 31 successful calls: under old 35 threshold but over the 30 target → WARN.
+    history = [{"provider": "deterministic", "kind": "x", "ok": True} for _ in range(31)]
+    s = build_call_budget_summary(history)
+    assert s["total_calls"] == 31
+    assert s["failed_calls"] == 0
+    assert s["verdict"] == "WARN"
+
+
+def test_call_budget_pass_at_exactly_30():
+    from video_agent.shorts.call_budget import build_call_budget_summary
+    history = [{"provider": "deterministic", "kind": "x", "ok": True} for _ in range(30)]
+    s = build_call_budget_summary(history)
+    assert s["verdict"] == "PASS"

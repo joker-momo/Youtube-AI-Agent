@@ -105,9 +105,11 @@ def build_call_budget_summary(
 
     non_provider_failed = failed - by_reason["provider_error"]
 
+    # Spec v4 §2.3: PASS requires staying at/under the target call count; the
+    # higher warn_total_calls value only marks the upper edge of the WARN band.
     verdict = "PASS"
     if (
-        total_calls > budget["warn_total_calls"]
+        total_calls > budget["target_total_calls"]
         or failed > budget["warn_failed_calls"]
         or non_provider_failed > budget["warn_non_provider_failed_calls"]
     ):

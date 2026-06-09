@@ -455,7 +455,17 @@ def short_scene_prompt_v6(
     spoken_humanization: dict | None = None,
 ) -> str:
     """Spec v6 §2.4 / §9.3 — ChatGPT chooses each scene's layout."""
-    script_json = json.dumps(short_script, ensure_ascii=False)[:2000]
+    scene_script_context = {
+        "short_id": short_script.get("short_id"),
+        "short_format": short_script.get("short_format"),
+        "hook": short_script.get("hook"),
+        "narration": short_script.get("narration"),
+        "cta": short_script.get("cta"),
+        "idea_contract": short_script.get("idea_contract"),
+        "idea_items": short_script.get("idea_items"),
+        "source_mapped_flow": short_script.get("source_mapped_flow"),
+    }
+    script_json = json.dumps(scene_script_context, ensure_ascii=False)
     retention_json = json.dumps(retention_plan or {}, ensure_ascii=False)[:2000]
     humanization_json = json.dumps(spoken_humanization or {}, ensure_ascii=False)[:1600]
     feedback_block = feedback.strip() if feedback else "(none)"

@@ -92,3 +92,42 @@ def test_retry_feedback_accumulation():
     assert "EXACT ITEM MAPPING REQUIRED" in feedback
     assert "1. Point A" in feedback
     assert "Missing point 4" in feedback
+
+
+def test_scene_prompt_includes_source_mapped_flow_even_for_long_script():
+    # F. scene prompt must contain source_mapped_flow even when narration is very long
+    # (guards against the old [:2000] truncation that silently dropped source_mapped_flow)
+    short_script = {
+        "short_id": "short-05_idea-06_test",
+        "short_format": "checklist",
+        "hook": "¿Sabes qué pan comprar en el super?",
+        "narration": "x" * 5000,  # simulate a very dense narration that would have eaten the 2000-char budget
+        "cta": "Guarda esto para el súper.",
+        "idea_contract": {
+            "preserved": True,
+            "original_count": 4,
+            "final_count": 4,
+            "adaptation_used": False,
+            "adaptation_reason": ""
+        },
+        "idea_items": [
+            {"item_id": 1, "label": "harina integral", "spoken_or_visual_role": "narration", "source_support": ["kp1"], "required": True},
+            {"item_id": 2, "label": "gusto", "spoken_or_visual_role": "narration", "source_support": ["kp2"], "required": True},
+            {"item_id": 3, "label": "estrategia semanal", "spoken_or_visual_role": "narration", "source_support": ["kp3"], "required": True},
+            {"item_id": 4, "label": "frontal", "spoken_or_visual_role": "on_screen_text", "source_support": ["kp4"], "required": True},
+        ],
+        "source_mapped_flow": [
+            {"item_id": 1, "source_support": ["kp1"], "spoken_summary": "Busca harina integral como primer ingrediente.", "visual_role": "narration"},
+            {"item_id": 2, "source_support": ["kp2"], "spoken_summary": "Confía en el gusto, no en el color.", "visual_role": "narration"},
+            {"item_id": 3, "source_support": ["kp3"], "spoken_summary": "Planifica tu estrategia semanal.", "visual_role": "narration"},
+            {"item_id": 4, "source_support": ["kp4"], "spoken_summary": "Lee siempre el frontal del paquete.", "visual_role": "on_screen_text"},
+        ],
+    }
+
+    prompt = prompts.short_scene_prompt_v6({}, {}, short_script)
+
+    assert "source_mapped_flow" in prompt, "source_mapped_flow must appear in scene prompt"
+    assert "harina integral" in prompt, "item label 'harina integral' must survive in scene prompt"
+    assert "gusto" in prompt, "item label 'gusto' must survive in scene prompt"
+    assert "estrategia semanal" in prompt, "item label 'estrategia semanal' must survive in scene prompt"
+    assert "frontal" in prompt, "item label 'frontal' must survive in scene prompt"

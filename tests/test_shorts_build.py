@@ -1913,7 +1913,7 @@ def test_action_specific_repair_hints():
     assert "Current narration is too long for a single graphic_label_callout" in inst
     assert "Quote narration is too long" in inst
     assert "CTA narration is too long" in inst
-    assert "Condense narration or increase scene duration" in inst
+    assert "one short sentence" in inst
 
 
 def test_defensive_product_scores_validation():

@@ -15,11 +15,34 @@ from video_agent.shorts.validate_scenes import (
     SceneValidationIssue,
     estimate_spanish_narration_sec,
     estimate_fits,
+    scene_hard_cap,
     try_mechanical_split,
     try_micro_condense,
     deterministic_scene_fit_repair,
     build_scene_repair_plan,
 )
+
+
+def test_short_myth_cap_fits_a_natural_two_sentence_myth():
+    # short_myth's 3.2s cap only allowed ~7 words, so a natural myth line
+    # ("Don't chase the perfect bread. Look at the label.") always overflowed
+    # and could not be repaired mechanically. The cap now gives it room.
+    assert scene_hard_cap("short_myth") >= 4.0
+    myth = "No busques el pan perfecto. Mira la etiqueta."
+    assert estimate_fits(myth, scene_hard_cap("short_myth"))
+
+
+def test_repair_plan_gives_concrete_shrink_target_for_myth_fit():
+    issue = SceneValidationIssue(
+        type="scene_narration_fit", scene_id="s02", severity="repairable_error",
+        detail="Scene s02 narration estimates 5.2s for 3.0s scene (exceeds 0.3s tolerance).",
+    )
+    scenes = [{"id": "s02", "layout": "short_myth", "duration_sec": 3.0,
+               "narration": "No busques el pan perfecto. Usa esta regla simple antes de comprar."}]
+    plan = build_scene_repair_plan(scenes, [issue], script={})  # non-checklist
+    text = " ".join(plan["instructions"]).lower()
+    assert "short sentence" in text
+    assert "next scene" in text or "adjacent" in text
 
 
 def _checklist_script():

@@ -52,7 +52,7 @@ SUPPORTED_SCENE_LAYOUTS = SUPPORTED_SHORT_LAYOUTS | SUPPORTED_GRAPHIC_LAYOUTS
 
 LAYOUT_DURATION_TARGETS = {
     "short_hook": (1.8, 2.8, 3.0),
-    "short_myth": (2.0, 3.0, 3.2),
+    "short_myth": (2.0, 4.0, 4.2),
     "short_tip": (3.2, 4.0, 4.5),
     "short_checklist": (3.0, 4.5, 5.0),
     "short_pain": (3.2, 4.0, 4.5),
@@ -997,7 +997,7 @@ def build_scene_repair_plan(
                     ])
                 else:
                     issue_instrs.append(f"- Fix {issue.scene_id}: {issue.detail}")
-                    issue_instrs.append("- Condense narration or increase scene duration within layout cap. Do not exceed hard cap.")
+                    issue_instrs.append("- Cut this scene's narration to one short sentence (about 6-8 spoken words), or move the extra sentence into the next scene. Do not exceed the layout cap.")
                 # An over-long scene on a checklist Short usually means the model
                 # crammed several items into one scene (which also drops other
                 # items' coverage). Force a 1-item-per-scene layout.

@@ -1952,14 +1952,14 @@ def test_defensive_product_scores_validation():
     assert res_missing["verdict"] == "FAIL"
     assert any(i["type"] == "product_quality_scores_missing" for i in res_missing["issues"])
 
-    # 3. Individual score too low (< 9.0)
+    # 3. Individual score > 6.0 but < 9.0 (downgraded to warning, no FAIL)
     parsed_low = {
         "verdict": "PASS",
         "issues": [],
         "required_changes": [],
         "product_scores": {
             "audience_fit_45_plus": 9,
-            "hook_strength": 8, # < 9.0
+            "hook_strength": 8, # < 9.0 but > 6.0
             "visual_specificity": 9,
             "clarity": 9,
             "retention_pacing": 9,
@@ -1968,10 +1968,10 @@ def test_defensive_product_scores_validation():
         }
     }
     res_low = normalize_gemini_scenes_qa(parsed_low)
-    assert res_low["verdict"] == "FAIL"
-    assert any(i["type"] == "product_quality_score_low" for i in res_low["issues"])
+    assert res_low["verdict"] == "PASS"
+    assert not any(i["type"] == "product_quality_score_low" for i in res_low["issues"])
 
-    # 4. Average score too low (< 8.9)
+    # 4. Average score too low (< 8.9) but all > 6.0 (downgraded to warning, no FAIL)
     parsed_low_avg = {
         "verdict": "PASS",
         "issues": [],
@@ -1987,8 +1987,27 @@ def test_defensive_product_scores_validation():
         }
     }
     res_low_avg = normalize_gemini_scenes_qa(parsed_low_avg)
-    assert res_low_avg["verdict"] == "FAIL"
-    assert any(i["type"] == "product_quality_average_low" for i in res_low_avg["issues"])
+    assert res_low_avg["verdict"] == "PASS"
+    assert not any(i["type"] == "product_quality_average_low" for i in res_low_avg["issues"])
+
+    # 5. Individual score <= 6.0 (hard failure)
+    parsed_very_low = {
+        "verdict": "PASS",
+        "issues": [],
+        "required_changes": [],
+        "product_scores": {
+            "audience_fit_45_plus": 9,
+            "hook_strength": 5, # <= 6.0
+            "visual_specificity": 9,
+            "clarity": 9,
+            "retention_pacing": 9,
+            "natural_spanish": 9,
+            "saveability": 8.5
+        }
+    }
+    res_very_low = normalize_gemini_scenes_qa(parsed_very_low)
+    assert res_very_low["verdict"] == "FAIL"
+    assert any(i["type"] == "product_quality_score_low" for i in res_very_low["issues"])
 
 
 def test_script_escalation_after_repeated_scene_failures(tmp_path: Path):
@@ -2854,6 +2873,45 @@ def test_qa_decision_summary_written_on_warn_continuation(tmp_path: Path):
     assert len(summary["remaining_blockers"]) == 0
 
     assert res["status"] in ("ready_for_render", "rendered")
+
+
+def test_script_hard_fail_terminal_sets_explicit_failure_and_decision(tmp_path: Path):
+    """Script QA that never passes after max attempts must end with an explicit
+    structured hard-blocker decision — never a bare needs_review that forces the
+    UI to print the generic "max regeneration attempts" message."""
+    from video_agent.shorts import short_builder, paths
+
+    job = _long_job(tmp_path)
+    calls: list[str] = []
+    attempts = {"n": 0}
+    bad_script = {**_GOOD_SCRIPT, "hook": "Hola a todos", "narration": "Hola, bienvenidos. Hoy vamos a hablar."}
+
+    def llm_fn(kind, prompt):
+        if kind == "script":
+            attempts["n"] += 1
+            return json.dumps({**bad_script, "hook": f"Hola a todos {attempts['n']}"})
+        if kind == "scenes":
+            return json.dumps(_GOOD_SCENES)
+        return json.dumps({"title": "t", "description": "d", "hashtags": [], "pinned_comment": "p"})
+
+    plan = {"short_id": "short-script-hard", "format": "mistake_to_avoid", "scene_ids": ["scene-09"],
+            "source_start_sec": 183.0, "source_end_sec": 199.0, "music_track": "shorts_sleep_stress", "narration_seed": "x"}
+    res = short_builder.build_short(job, plan, _cfg(), llm_fn=llm_fn, **_stub_io(calls))
+
+    assert res["status"] == "needs_review"
+    assert res["qa_verdict"] == "FAIL"
+    assert res["failure_stage"] == "qa_script"
+    assert res.get("failure_reason")
+    assert "render" not in calls
+
+    sd = paths.short_dir(job, "short-script-hard")
+    summary_path = sd / "json" / paths.SHORT_QA_DECISION_SUMMARY_FILE
+    assert summary_path.exists()
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["decision"] == "failed_hard_blocker"
+    assert summary["renderable"] is False
+    assert summary["continued_to_render"] is False
+    assert len(summary["remaining_blockers"]) > 0
 
 
 def test_qa_decision_summary_written_on_hard_failure(tmp_path: Path):

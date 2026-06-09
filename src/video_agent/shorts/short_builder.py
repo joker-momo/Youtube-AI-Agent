@@ -252,6 +252,37 @@ def has_hard_fail(result: dict[str, Any]) -> bool:
     return False
 
 
+def _qa_blocker_details(result: dict[str, Any]) -> list[str]:
+    """Human-readable details for the hard blockers in a QA result.
+
+    Used to build an explicit ``failure_reason`` for terminal hard failures so
+    the UI can show the actual blocker instead of a generic
+    "QA failed after max regeneration attempts" message. ``slideshow_risk`` and
+    plain ``warning`` severities are quality preferences, not blockers, so they
+    are excluded here.
+    """
+    details: list[str] = []
+    for item in (result.get("issues") or []):
+        if isinstance(item, str):
+            details.append(item)
+            continue
+        if not isinstance(item, dict):
+            continue
+        severity = str(item.get("severity") or "").lower()
+        itype = str(item.get("type") or "").lower()
+        if itype == "slideshow_risk" or severity == "warning":
+            continue
+        if severity in {"blocking_error", "repairable_error", "major", "critical"} or (
+            severity not in {"", "minor", "info"}
+        ):
+            details.append(str(item.get("detail") or item.get("type") or "issue"))
+    for rc in (result.get("required_changes") or []):
+        rc_str = rc if isinstance(rc, str) else str(rc)
+        if rc_str and rc_str not in details:
+            details.append(rc_str)
+    return details
+
+
 def check_and_apply_auto_pass(qa_result: dict[str, Any]) -> bool:
     verdict = qa_result.get("verdict", "FAIL")
     if verdict in {"PASS", "WARN"}:
@@ -594,6 +625,8 @@ def _build_short_impl(
 
     script_qa_result: dict[str, Any] = {"verdict": "FAIL", "issues": ["not_generated"]}
     short_script: dict[str, Any] = {}
+    normalized_script_issues: list[Any] = []
+    normalized_scene_issues: list[Any] = []
     script_feedback = ""
     script_attempts = 0
     scenes_attempts = 0
@@ -710,6 +743,24 @@ def _build_short_impl(
                     pass
                 break
             else:
+                blocker_details = _qa_blocker_details(script_qa_result)
+                failure_reason = (
+                    "qa_script hard blocker (identical script across retries): "
+                    + "; ".join(blocker_details)
+                    if blocker_details
+                    else "qa_script produced an identical, non-renderable script across retries."
+                )
+                decision_summary = {
+                    "stage": "qa_script",
+                    "attempts_used": script_attempts,
+                    "max_attempts": max_regen + 1,
+                    "decision": "failed_hard_blocker",
+                    "renderable": False,
+                    "remaining_blockers": [{"detail": d} for d in blocker_details],
+                    "remaining_warnings": [],
+                    "continued_to_render": False,
+                }
+                atomic_write_json(_jd / paths.SHORT_QA_DECISION_SUMMARY_FILE, decision_summary)
                 for s in status["stages"]:
                     if s["status"] == "pending":
                         s["status"] = "skipped"
@@ -720,6 +771,8 @@ def _build_short_impl(
                     "youtube_url": "",
                     "requires_user_review": True,
                     "qa_verdict": "FAIL",
+                    "failure_stage": "qa_script",
+                    "failure_reason": failure_reason,
                     "regeneration_attempts": script_attempts,
                 })
                 write_short_status(long_job_dir, short_id, status)
@@ -923,6 +976,8 @@ def _build_short_impl(
         # Hard ceiling guards against a pathological loop where neither budget
         # increments; in practice every iteration consumes structural or product.
         _scenes_loop_ceiling = max_structural_attempts + max_product_attempts + 2
+        visual_repair_tracker = {}
+        skip_generation = False
         while scenes_attempts < _scenes_loop_ceiling:
             scenes_attempts += 1
             total_regeneration_attempts = (script_attempts - 1) + (scenes_attempts - 1)
@@ -930,16 +985,21 @@ def _build_short_impl(
             write_short_status(long_job_dir, short_id, status)
 
             # --- Stage 3: Scenes ---
-            update_stage("scenes", "in_progress")
             try:
-                check_stop()
-                short_scenes = short_scene_builder.build_short_scenes(
-                    long_job_dir, plan_for_prompt, short_script, channel_config, llm_fn,
-                    retention_plan=retention_plan,
-                    spoken_humanization=spoken_humanization,
-                    feedback=scenes_feedback, attempt=scenes_attempts,
-                )
-                update_stage("scenes", "completed")
+                if not skip_generation:
+                    update_stage("scenes", "in_progress")
+                    check_stop()
+                    short_scenes = short_scene_builder.build_short_scenes(
+                        long_job_dir, plan_for_prompt, short_script, channel_config, llm_fn,
+                        retention_plan=retention_plan,
+                        spoken_humanization=spoken_humanization,
+                        feedback=scenes_feedback, attempt=scenes_attempts,
+                    )
+                    update_stage("scenes", "completed")
+                else:
+                    skip_generation = False
+                    update_stage("scenes", "completed")
+
                 state.current_scenes_version += 1
                 state.latest_scene_validation_ok = False
                 state.latest_scene_validation_version = None
@@ -960,17 +1020,6 @@ def _build_short_impl(
                     for scene in scenes:
                         validate_scenes.repair_scene_duration_if_possible(scene)
                     validate_scenes.repair_weak_hook_motion(scenes)
-                    _idea_items = (
-                        short_script.get("idea_items")
-                        or short_script.get("points")
-                        or short_script.get("checklist")
-                        or []
-                    )
-                    if isinstance(_idea_items, list):
-                        for item in _idea_items:
-                            item_str = str(item).strip()
-                            if item_str:
-                                validate_scenes.repair_visual_only_unreadable(scenes, item_str)
 
                     collapse_issues = validate_scenes.validate_scene_structure(
                         scenes,
@@ -1158,22 +1207,6 @@ def _build_short_impl(
                 state.latest_scene_validation_ok = False
                 state.latest_scene_validation_version = None
 
-            # Deterministic repair: visual_only_unreadable (spec §10.2)
-            # Extract required idea items from the script
-            _idea_items = (
-                short_script.get("idea_items")
-                or short_script.get("points")
-                or short_script.get("checklist")
-                or []
-            )
-            if isinstance(_idea_items, list):
-                for item in _idea_items:
-                    item_str = str(item).strip()
-                    if item_str and validate_scenes.repair_visual_only_unreadable(scenes, item_str):
-                        state.current_scenes_version += 1
-                        state.latest_scene_validation_ok = False
-                        state.latest_scene_validation_version = None
-
             update_stage("visual_rhythm_plan", "in_progress")
             try:
                 check_stop()
@@ -1222,8 +1255,13 @@ def _build_short_impl(
                 if i.severity in ("blocking_error", "repairable_error")
                 and i.type in HARD_SCENE_VALIDATION_TYPES
             ]
-            if hard_errors and all(i.type in ("duration_cap", "scene_narration_fit") for i in hard_errors):
+            # Run deterministic fit-repair whenever ANY duration/narration-fit
+            # hard error exists — even alongside other hard errors (e.g.
+            # missing_item_coverage). Repairing the fixable fit issues here keeps
+            # them from blocking the run; remaining errors still drive regen.
+            if any(i.type in ("duration_cap", "scene_narration_fit") for i in hard_errors):
                 repaired_any = False
+                # First try simple per-scene duration clamp/extend (handles duration_cap).
                 for issue in hard_errors:
                     if issue.scene_id:
                         scene_to_fix = next((s for s in scenes if str(s.get("id") or s.get("scene_id") or "") == issue.scene_id), None)
@@ -1231,6 +1269,21 @@ def _build_short_impl(
                             res = validate_scenes.repair_scene_duration_if_possible(scene_to_fix)
                             if res in ("auto_shortened", "auto_extended", "auto_shortened_cta"):
                                 repaired_any = True
+                # Then run deterministic scene-fit repair (extend -> split ->
+                # micro-condense) for any remaining narration overflow, BEFORE
+                # spending an LLM regeneration. No regen_fn: an unfixable scene
+                # falls through to the existing regeneration path below.
+                fit_result = validate_scenes.deterministic_scene_fit_repair(scenes, short_script)
+                if any(mode != "regen_required" for mode in fit_result["modes"]):
+                    repaired_any = True
+                    short_scenes["scenes"] = fit_result["scenes"]
+                    scenes = fit_result["scenes"]
+                    short_scenes["total_duration_sec"] = fit_result["total_duration_sec"]
+                for entry in fit_result["logs"]:
+                    _recorder.record_event(
+                        "deterministic", "scene_narration_fit_repair", entry,
+                        ok=entry["repair_mode_attempted"] != "regen_required",
+                    )
                 if repaired_any:
                     state.current_scenes_version += 1
                     state.latest_scene_validation_ok = False
@@ -1244,6 +1297,56 @@ def _build_short_impl(
                     )
 
             atomic_write_json(_jd / paths.SHORT_SCENES_FILE, short_scenes)
+            
+            # Intercept visual_only_unreadable for deterministic repair and downgrade logic
+            visual_issues = [i for i in structure_issues if i.type == "visual_only_unreadable"]
+            did_visual_repair = False
+            for vi in visual_issues:
+                import re
+                m = re.match(r"Item (\w+) appears", str(vi.detail))
+                if m:
+                    item_id = m.group(1)
+                    tracker = visual_repair_tracker.get(item_id, {"repairs": 0, "regens": 0})
+                    
+                    if tracker["repairs"] < 1:
+                        # Attempt deterministic repair
+                        _idea_items = short_script.get("idea_items") or short_script.get("points") or short_script.get("checklist") or []
+                        item_str = item_id
+                        for it in _idea_items:
+                            if isinstance(it, dict) and str(it.get("id", "")) == item_id:
+                                item_str = it
+                                break
+                        
+                        if validate_scenes.repair_visual_only_unreadable(scenes, item_str):
+                            did_visual_repair = True
+                            tracker["repairs"] += 1
+                            visual_repair_tracker[item_id] = tracker
+                            
+                            _recorder.record_event(
+                                "deterministic", 
+                                "qa_classification", 
+                                {"reason": "deterministic_repair", "item_id": item_id}, 
+                                ok=True
+                            )
+                    else:
+                        # We already tried deterministic repair. This is a ChatGPT regen attempt.
+                        tracker["regens"] += 1
+                        visual_repair_tracker[item_id] = tracker
+                        if tracker["regens"] > 1:
+                            # Already regenerated once, give up and downgrade
+                            vi.severity = "warning"
+                            vi.detail = f"(Downgraded) {vi.detail}"
+                            _recorder.record_event(
+                                "deterministic", 
+                                "qa_classification", 
+                                {"reason": "visual_repair_downgraded", "item_id": item_id}, 
+                                ok=True
+                            )
+            
+            if did_visual_repair:
+                atomic_write_json(_jd / paths.SHORT_SCENES_FILE, short_scenes)
+                skip_generation = True
+                continue
 
             # Check for scene_narration_fit failures
             has_fit_failure = any(
@@ -2198,7 +2301,41 @@ def _build_short_impl(
     # If loops finished but script/scene QA didn't pass, handle review status.
     # Fix C4: a soft scene-QA WARN (deterministic validation already passed) is
     # acceptable for render — only FAIL blocks.
+    #
+    # "Max attempts reached" is NOT automatically fatal: this terminal gate must
+    # separate a genuine hard blocker (safety / source / schema / render
+    # contract) from leftover warnings or capped repairable quality issues. Only
+    # a hard blocker stops the pipeline with an explicit, reviewable reason; the
+    # generic "QA failed after max regeneration attempts" message is never the
+    # source of truth — the structured decision below is.
     if script_qa_result["verdict"] != "PASS" or scenes_qa_result["verdict"] not in ("PASS", "WARN"):
+        if script_qa_result["verdict"] not in ("PASS", "WARN"):
+            fail_stage = "qa_script"
+            blocker_details = _qa_blocker_details(script_qa_result)
+        else:
+            fail_stage = "qa_scenes"
+            blocker_details = _qa_blocker_details(scenes_qa_result)
+
+        decision = "failed_hard_blocker"
+        failure_reason = (
+            f"{fail_stage} hard blocker after {total_regeneration_attempts + 1} attempt(s): "
+            + "; ".join(blocker_details)
+            if blocker_details
+            else f"{fail_stage} did not pass after the maximum regeneration attempts."
+        )
+
+        decision_summary = {
+            "stage": fail_stage,
+            "attempts_used": total_regeneration_attempts + 1,
+            "max_attempts": max_regen + 1,
+            "decision": decision,
+            "renderable": False,
+            "remaining_blockers": [{"detail": d} for d in blocker_details],
+            "remaining_warnings": [],
+            "continued_to_render": False,
+        }
+        atomic_write_json(_jd / paths.SHORT_QA_DECISION_SUMMARY_FILE, decision_summary)
+
         # Mark remaining pending stages as skipped
         for s in status["stages"]:
             if s["status"] == "pending":
@@ -2210,6 +2347,8 @@ def _build_short_impl(
             "youtube_url": "",
             "requires_user_review": True,
             "qa_verdict": "FAIL",
+            "failure_stage": fail_stage,
+            "failure_reason": failure_reason,
             "duration_sec": round(duration_sec, 1),
             "regeneration_attempts": total_regeneration_attempts,
             "qa_scenes_attempts": scenes_attempts,

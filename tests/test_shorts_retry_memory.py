@@ -447,7 +447,7 @@ def test_visual_only_unreadable_repaired_deterministically():
     ]
     changed = repair_visual_only_unreadable(scenes, required_item="item3")
     assert changed is True
-    assert "item3" in scenes[0]["caption"] or "item3" in scenes[0].get("layout_payload", {}).get("items", [])
+    assert "item3" in scenes[0].get("narration", "") or "item3" in scenes[0].get("caption", "") or "item3" in scenes[0].get("layout_payload", {}).get("items", [])
 
 
 # ===== Spec §11 Acceptance Tests =====

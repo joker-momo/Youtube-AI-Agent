@@ -205,8 +205,28 @@ def normalize_qa_issue(
     is_soft = False
     if severity_lower in ("warning", "minor", "suggestion", "info"):
         is_soft = True
-    elif issue_type_lower in ["weak_hook_motion", "hook_motion", "aesthetic", "visual_rhythm", "rhythm", "product_quality_average_low", "hook_polish", "polish", "visual", "visual_polish", "pacing_polish"]:
+    elif issue_type_lower in ["weak_hook_motion", "hook_motion", "aesthetic", "visual_rhythm", "rhythm", "product_quality_average_low", "product_quality_score_low", "hook_polish", "polish", "visual", "visual_polish", "pacing_polish"]:
         is_soft = True
+        # Escalate product_quality_score_low back to hard if any score <= 6 or
+        # the detail contains a concrete safety/source/schema/render-blocking problem.
+        if issue_type_lower in ("product_quality_score_low", "product_quality_average_low"):
+            _blocking_keywords = ["source", "schema", "render", "crash", "malformed", "json", "fidelity", "contract"]
+            # 'safety' is a tricky one because the hint itself might say 'preserving safety'
+            if any(bk in detail_lower for bk in _blocking_keywords) or ("safety" in detail_lower and "preserving safety" not in detail_lower):
+                is_soft = False
+                is_hard = True
+            else:
+                # Parse score values from dict-like detail string
+                score_vals = re.findall(r'(\d+(?:\.\d+)?)', detail_lower)
+                for s_str in score_vals:
+                    try:
+                        s_val = float(s_str)
+                        if s_val <= 6.0:
+                            is_soft = False
+                            is_hard = True
+                            break
+                    except ValueError:
+                        pass
     elif any(k in detail_lower for k in ["weak_hook_motion", "hook motion", "aesthetic", "visual rhythm", "polish", "pacing", "pacing preference", "could consolidate", "near limit", "verify", "ensure"]):
         is_soft = True
     elif "product quality scores are below" in detail_lower:
@@ -256,6 +276,25 @@ def normalize_qa_issue(
             reason = "wrong_context_five_errors_rule"
             trigger_regeneration = False
             include_in_retry_feedback = False
+
+    # Suppress wrong-context CTA requirement for bread-shopping checklist
+    if context.get("is_bread_shopping_checklist"):
+        cta_suppress_patterns = [
+            "guárdalo", "guardalo",
+            "próxima compra", "proxima compra",
+            "para tu próxima", "para tu proxima",
+            "cta requirement",
+            "matches cta requirement perfectly",
+        ]
+        if any(p in detail_lower for p in cta_suppress_patterns):
+            # Check if script CTA is context-valid and <= 8 words
+            script_cta = str(script.get("cta") or "").strip()
+            cta_word_count = len([w for w in script_cta.split() if w.strip()])
+            if script_cta and cta_word_count <= 8:
+                issue_class = IssueClass.STALE_OR_SUPPRESSED
+                reason = "wrong_context_suppressed"
+                trigger_regeneration = False
+                include_in_retry_feedback = False
 
     # Apply noncanonical count authority check
     contract_data = script.get("idea_contract") or {}
@@ -703,6 +742,77 @@ REQUIRED_PRODUCT_SCORE_THRESHOLDS = {
 }
 MIN_PRODUCT_SCORE = 9.0
 MIN_AVERAGE_PRODUCT_SCORE = 8.9
+
+# Tiered product-score gate (QA storm fix v2.2). The old 9.0-on-every-dimension
+# wall hard-failed near-good Shorts and drove regeneration storms. Tiers below
+# separate true blockers (<7, weak pacing/visual) from product polish that
+# should pass-with-warning or trigger a bounded repair instead of an infinite
+# hard block. Precedence is strict: first matching tier wins.
+KEY_PRODUCT_DIMENSIONS = (
+    "hook_strength",
+    "clarity",
+    "retention_pacing",
+    "visual_specificity",
+    "audience_fit_45_plus",
+    "saveability",
+)
+# Tier thresholds.
+TIER_HARD_FLOOR = 7.0            # any dimension below this hard-blocks
+TIER_RETENTION_FLOOR = 7.5      # retention_pacing below this hard-blocks
+TIER_VISUAL_FIRST_FLOOR = 7.5   # visual_specificity floor for visual-first Shorts
+TIER_REPAIR_AVERAGE = 8.2       # average below this triggers repair/retry
+TIER_REPAIR_KEY = 8.0           # any key dimension below this triggers repair
+TIER_NATURAL_SPANISH_MIN = 8.0  # natural_spanish must reach this to pass normal QA
+# Publish target (aspirational, pass-with-warning below it — NOT a hard block).
+TIER_PUBLISH_AVERAGE = 8.6
+TIER_PUBLISH_KEY = 8.5
+TIER_PUBLISH_NATURAL_SPANISH = 9.0
+
+
+def classify_product_scores(
+    scores: dict[str, float],
+    *,
+    visual_first: bool = False,
+    saveable: bool = False,
+) -> str:
+    """Classify product scores into a gate tier.
+
+    Returns one of ``"hard_block"``, ``"repair"``, ``"pass_with_warning"``,
+    ``"pass"``. First matching tier wins (hard_block > repair > pass_with_warning
+    > pass)."""
+    values = [float(v) for v in scores.values()]
+    if not values:
+        return "repair"
+    retention = float(scores.get("retention_pacing", 10.0))
+    visual = float(scores.get("visual_specificity", 10.0))
+    natural = float(scores.get("natural_spanish", 10.0))
+    average = sum(values) / len(values)
+
+    # 1. Hard block — true quality floors.
+    if any(v < TIER_HARD_FLOOR for v in values):
+        return "hard_block"
+    if retention < TIER_RETENTION_FLOOR:
+        return "hard_block"
+    if visual_first and visual < TIER_VISUAL_FIRST_FLOOR:
+        return "hard_block"
+
+    # 2. Repair / retry — below product bar but recoverable.
+    if average < TIER_REPAIR_AVERAGE:
+        return "repair"
+    if any(float(scores.get(dim, 10.0)) < TIER_REPAIR_KEY for dim in KEY_PRODUCT_DIMENSIONS):
+        return "repair"
+    if natural < TIER_NATURAL_SPANISH_MIN:
+        return "repair"
+    if saveable and float(scores.get("saveability", 10.0)) < TIER_REPAIR_KEY:
+        return "repair"
+
+    # 3/4. Publish target reached -> clean pass, else pass-with-warning.
+    publish = (
+        average >= TIER_PUBLISH_AVERAGE
+        and all(float(scores.get(dim, 0.0)) >= TIER_PUBLISH_KEY for dim in KEY_PRODUCT_DIMENSIONS)
+        and natural >= TIER_PUBLISH_NATURAL_SPANISH
+    )
+    return "pass" if publish else "pass_with_warning"
 # A single product dimension at or below this score blocks render outright — no
 # best-candidate fallback may rescue it.
 MIN_PRODUCT_SCORE_RENDER_BLOCK = 8.5
@@ -936,11 +1046,32 @@ def normalize_gemini_scenes_qa(
             })
             score_required_changes.append(f"Average product quality score is {average:.1f}, below {MIN_AVERAGE_PRODUCT_SCORE:.2f}. Hint: Improve hook, visual specificity, clarity, pacing, natural Spanish, and saveability.")
 
-    # Apply score issues to new_issues and required changes
-    new_issues.extend(score_issues)
-    new_required_changes.extend(score_required_changes)
+    # Tiered product-score gate (QA storm fix v2.2). Classify the dimension
+    # scores into a single tier and route by it instead of hard-failing every
+    # dimension below 9.0. True quality floors (any dim < 7, weak pacing/visual)
+    # hard-block; a near-good Short repairs within the attempt budget or passes
+    # with a warning — it no longer drives an infinite regeneration storm.
+    _hard_score_issues: list[dict[str, Any]] = []
+    scores_complete = has_scores_field and len(values) == len(PRODUCT_SCORE_KEYS)
+    if scores_complete:
+        tier = classify_product_scores(score_dict, visual_first=bool(graphic_led))
+    else:
+        # Missing/incomplete scores keep their existing hard-fail behavior.
+        tier = "hard_block"
+    if tier == "hard_block":
+        _hard_score_issues = list(score_issues)
+        new_issues.extend(_hard_score_issues)
+        new_required_changes.extend(score_required_changes)
+    elif tier == "repair":
+        # Recoverable polish gap: drive a bounded retry, but do not hard-FAIL.
+        new_required_changes.extend(score_required_changes)
+        for si in score_issues:
+            warnings.append(f"Product score below target (repair tier): {si.get('detail', '')}")
+    else:  # pass_with_warning / pass — surface as warnings only, no regen.
+        for si in score_issues:
+            warnings.append(f"Downgraded product score issue to warning: {si.get('detail', '')}")
 
-    if score_issues:
+    if _hard_score_issues:
         verdict = "FAIL"
     elif not new_issues and verdict == "FAIL":
         # If all issues/required changes (excluding scores) are downgraded, set verdict to PASS

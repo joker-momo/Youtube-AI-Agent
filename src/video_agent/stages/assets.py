@@ -102,16 +102,55 @@ def _find_asset_refs_primary(scene: dict[str, Any], job_dir: Path) -> Path | Non
     return candidate if candidate.exists() else None
 
 
-def _write_placeholder_image(path: Path, scene: dict[str, Any], color: tuple[int, int, int], palette: dict[str, str]) -> None:
-    image = Image.new("RGB", (1920, 1080), color)
-    draw = ImageDraw.Draw(image)
-    draw.rectangle((0, 760, 1920, 1080), fill=_hex_to_rgb(palette["text"]))
-    draw.text((96, 820), scene["on_screen_text"], fill=_hex_to_rgb(palette["accent"]))
-    image.save(path, quality=92)
+def _write_placeholder_image(
+    path: Path,
+    scene: dict[str, Any],
+    index: int,
+    palette: dict[str, str],
+    is_portrait: bool = False
+) -> None:
+    width, height = (1080, 1920) if is_portrait else (1920, 1080)
+    
+    # Warm brand color pairings for gradient
+    color_pairs = [
+        ((74, 93, 77), (110, 128, 113)),   # #4A5D4D to #6E8071 (Muted Olive)
+        ((92, 77, 60), (126, 110, 92)),    # #5C4D3C to #7E6E5C (Warm Brown)
+        ((140, 79, 62), (172, 111, 94))    # #8C4F3E to #AC6F5E (Muted Terracotta)
+    ]
+    color1, color2 = color_pairs[index % len(color_pairs)]
+    
+    is_standard = not (scene.get("layout") or "").startswith("graphic_")
+    
+    if is_standard:
+        # Create a smooth gradient using upscale bilinear filtering
+        base = Image.new("RGB", (1, 2))
+        base.putpixel((0, 0), color1)
+        base.putpixel((0, 1), color2)
+        image = base.resize((width, height), resample=Image.Resampling.BILINEAR)
+        
+        # Soft paper texture: grid of tiny dots with very low opacity (~3.5%)
+        texture = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(texture)
+        dot_color = (47, 42, 36, 9)
+        for x in range(0, width, 7):
+            for y in range(0, height, 7):
+                draw.point((x, y), fill=dot_color)
+        image.paste(texture, (0, 0), texture)
+        image.save(path, quality=92)
+    else:
+        # Original behavior for graphic layouts (flat color + bottom text box + text)
+        image = Image.new("RGB", (width, height), color1)
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((0, int(height * 0.7), width, height), fill=_hex_to_rgb(palette["text"]))
+        text_content = scene.get("on_screen_text", "")
+        if text_content:
+            draw.text((int(width * 0.05), int(height * 0.76)), text_content, fill=_hex_to_rgb(palette["accent"]))
+        image.save(path, quality=92)
 
 
-def _write_video_from_image(image_path: Path, output_path: Path, duration_sec: float) -> None:
+def _write_video_from_image(image_path: Path, output_path: Path, duration_sec: float, is_portrait: bool = False) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    vf_filter = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920" if is_portrait else "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080"
     cmd = [
         "ffmpeg",
         "-y",
@@ -122,7 +161,7 @@ def _write_video_from_image(image_path: Path, output_path: Path, duration_sec: f
         "-t",
         f"{max(1.0, float(duration_sec)):.2f}",
         "-vf",
-        "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080",
+        vf_filter,
         "-r",
         "30",
         "-c:v",
@@ -138,11 +177,18 @@ def _write_video_from_image(image_path: Path, output_path: Path, duration_sec: f
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def _write_placeholder_video(path: Path, scene: dict[str, Any], color: tuple[int, int, int], palette: dict[str, str], duration_sec: float) -> None:
+def _write_placeholder_video(
+    path: Path,
+    scene: dict[str, Any],
+    index: int,
+    palette: dict[str, str],
+    duration_sec: float,
+    is_portrait: bool = False,
+) -> None:
     temp_image = path.with_suffix(".jpg")
-    _write_placeholder_image(temp_image, scene, color, palette)
+    _write_placeholder_image(temp_image, scene, index, palette, is_portrait=is_portrait)
     try:
-        _write_video_from_image(temp_image, path, duration_sec)
+        _write_video_from_image(temp_image, path, duration_sec, is_portrait=is_portrait)
     finally:
         try:
             temp_image.unlink()
@@ -260,6 +306,13 @@ def prepare_assets(
     palette = style_dna["palette"]
     colors = [_hex_to_rgb(palette["background"]), _hex_to_rgb(palette["primary"]), _hex_to_rgb(palette["secondary"])]
     visual_config = visual_config or {}
+    
+    # Determine portrait default dynamically
+    is_portrait = (visual_config.get("orientation") == "portrait")
+    if not is_portrait:
+        if "shorts" in job_dir.parts or visual_config.get("format") == "short":
+            is_portrait = True
+
     source_dir = _resolve_source_dir(visual_config.get("source_dir"))
     stock_service = (
         StockAssetService(
@@ -299,7 +352,7 @@ def prepare_assets(
                 if local_image.resolve() != image_path.resolve():
                     shutil.copy2(local_image, image_path)
             else:
-                _write_video_from_image(local_image, image_path, scene_dur)
+                _write_video_from_image(local_image, image_path, scene_dur, is_portrait=is_portrait)
             source = (
                 "asset_refs_primary" if primary_asset is not None else "local_directory"
             )
@@ -317,7 +370,7 @@ def prepare_assets(
             if library_path.suffix.lower() == ".mp4":
                 shutil.copy2(library_path, image_path)
             else:
-                _write_video_from_image(library_path, image_path, scene_dur)
+                _write_video_from_image(library_path, image_path, scene_dur, is_portrait=is_portrait)
             source = "asset_library"
             source_path = str(library_path.resolve())
             extra_manifest = {
@@ -334,9 +387,10 @@ def prepare_assets(
             _write_placeholder_video(
                 image_path,
                 scene,
-                colors[index % len(colors)],
+                index,
                 palette,
                 scene_dur,
+                is_portrait=is_portrait,
             )
             source = "generated_placeholder"
             source_path = None
@@ -360,8 +414,9 @@ def prepare_assets(
         scene["asset_refs"]["background"] = public_ref
         
         if stock_asset and stock_asset.get("provider") == "graphic_fallback":
-            scene["asset_refs"]["background"] = ""
-            scene["background_mode"] = "paper"
+            if (scene.get("layout") or "").startswith("graphic_"):
+                scene["asset_refs"]["background"] = ""
+                scene["background_mode"] = "paper"
         scene_asset = {
             "scene_id": scene["id"],
             "background": str(image_path.resolve()),

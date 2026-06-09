@@ -158,3 +158,249 @@ def test_prepare_assets_regression_weak_match_contradictory_blocked():
     }
     asset = svc.get_scene_asset(contradictory_scene, channel_id="ch", job_id="job")
     assert asset is None
+
+
+def test_standard_layout_retains_placeholder_on_fallback(tmp_path):
+    from video_agent.stages.assets import prepare_assets
+    
+    scene_doc = {
+        "total_duration_sec": 3,
+        "scenes": [
+            {
+                "id": "s01",
+                "layout": "short_hook",
+                "on_screen_text": "GIRA EL PAQUETE",
+                "visual_prompt": "some prompt",
+                "asset_refs": {}
+            }
+        ]
+    }
+    
+    palette = {
+        "palette": {
+            "background": "#F6F1E8",
+            "primary": "#2F6B57",
+            "secondary": "#D98C5F",
+            "accent": "#F5C24B",
+            "text": "#26332F"
+        }
+    }
+    
+    class GraphicFallbackStockClient:
+        def search(self, provider, query, filters):
+            return {}
+        def normalize(self, provider, response):
+            return []
+            
+    job_dir = tmp_path / "jobs" / "job-std-fallback"
+    
+    manifest = prepare_assets(
+        job_dir=job_dir,
+        style_dna=palette,
+        scene_doc=scene_doc,
+        visual_config={
+            "strategy": "stock_photo_api",
+            "providers": ["pexels"],
+            "query_cache_path": str(tmp_path / "caches" / "query_cache.db"),
+            "asset_library_path": str(tmp_path / "asset_library"),
+        },
+        stock_client=GraphicFallbackStockClient(),
+        image_gen_fn=lambda p, o: None
+    )
+    
+    scene = manifest["scenes"][0]
+    assert scene["background"] != ""
+    assert scene["source"] == "generated_placeholder"
+    assert "graphic_fallback" in scene["provider"]
+    assert scene_doc["scenes"][0]["asset_refs"]["background"] != ""
+
+
+def test_graphic_layout_clears_background_on_fallback(tmp_path):
+    from video_agent.stages.assets import prepare_assets
+    
+    scene_doc = {
+        "total_duration_sec": 3,
+        "scenes": [
+            {
+                "id": "s01",
+                "layout": "graphic_label_callout",
+                "on_screen_text": "GIRA EL PAQUETE",
+                "visual_prompt": "some prompt",
+                "asset_refs": {}
+            }
+        ]
+    }
+    
+    palette = {
+        "palette": {
+            "background": "#F6F1E8",
+            "primary": "#2F6B57",
+            "secondary": "#D98C5F",
+            "accent": "#F5C24B",
+            "text": "#26332F"
+        }
+    }
+    
+    class GraphicFallbackStockClient:
+        def search(self, provider, query, filters):
+            return {}
+        def normalize(self, provider, response):
+            return []
+            
+    job_dir = tmp_path / "jobs" / "job-graph-fallback"
+    
+    manifest = prepare_assets(
+        job_dir=job_dir,
+        style_dna=palette,
+        scene_doc=scene_doc,
+        visual_config={
+            "strategy": "stock_photo_api",
+            "providers": ["pexels"],
+            "query_cache_path": str(tmp_path / "caches" / "query_cache.db"),
+            "asset_library_path": str(tmp_path / "asset_library"),
+        },
+        stock_client=GraphicFallbackStockClient(),
+        image_gen_fn=lambda p, o: None
+    )
+    
+    scene = manifest["scenes"][0]
+    assert scene_doc["scenes"][0]["asset_refs"]["background"] == ""
+    assert scene_doc["scenes"][0]["background_mode"] == "paper"
+
+
+def test_placeholder_image_meets_aesthetic_targets(tmp_path):
+    from PIL import Image
+    import numpy as np
+    from video_agent.stages.assets import _write_placeholder_image
+    
+    tmp_img_path = tmp_path / "test_placeholder_aesthetic.jpg"
+    palette = {
+        "background": "#F6F1E8",
+        "primary": "#2F6B57",
+        "secondary": "#D98C5F",
+        "accent": "#F5C24B",
+        "text": "#26332F"
+    }
+    scene = {"layout": "short_hook", "on_screen_text": "GIRA EL PAQUETE"}
+    
+    _write_placeholder_image(tmp_img_path, scene, index=0, palette=palette, is_portrait=True)
+    
+    img = Image.open(tmp_img_path)
+    assert img.size == (1080, 1920), f"Image size {img.size} is not 1080x1920"
+    
+    gray = img.convert("L")
+    pixels = np.array(gray)
+    
+    mean_lum = pixels.mean()
+    black_ratio = (pixels < 25).sum() / pixels.size
+    near_black_ratio = (pixels < 35).sum() / pixels.size
+    
+    assert mean_lum >= 60, f"Mean luminance {mean_lum} is too dark (target >= 60)"
+    assert black_ratio < 0.05, f"Black pixel ratio {black_ratio} is too high (target < 5%)"
+    assert near_black_ratio < 0.10, f"Near-black pixel ratio {near_black_ratio} is too high (target < 10%)"
+
+
+def test_placeholder_video_frame_meets_aesthetic_targets(tmp_path):
+    from PIL import Image
+    import numpy as np
+    import subprocess
+    from video_agent.stages.assets import _write_placeholder_video
+    
+    tmp_vid_path = tmp_path / "test_placeholder_aesthetic.mp4"
+    tmp_frame_path = tmp_path / "test_placeholder_aesthetic_frame.jpg"
+    palette = {
+        "background": "#F6F1E8",
+        "primary": "#2F6B57",
+        "secondary": "#D98C5F",
+        "accent": "#F5C24B",
+        "text": "#26332F"
+    }
+    scene = {"layout": "short_hook", "on_screen_text": "GIRA EL PAQUETE"}
+    
+    _write_placeholder_video(tmp_vid_path, scene, index=0, palette=palette, duration_sec=1.0, is_portrait=True)
+    
+    cmd = [
+        "ffmpeg", "-y", "-i", str(tmp_vid_path),
+        "-vframes", "1", "-f", "image2", str(tmp_frame_path)
+    ]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    
+    img = Image.open(tmp_frame_path)
+    assert img.size == (1080, 1920), f"Video frame size {img.size} is not 1080x1920"
+    
+    gray = img.convert("L")
+    pixels = np.array(gray)
+    
+    mean_lum = pixels.mean()
+    black_ratio = (pixels < 25).sum() / pixels.size
+    near_black_ratio = (pixels < 35).sum() / pixels.size
+    
+    assert mean_lum >= 60, f"Mean luminance {mean_lum} is too dark (target >= 60)"
+    assert black_ratio < 0.05, f"Black pixel ratio {black_ratio} is too high (target < 5%)"
+    assert near_black_ratio < 0.10, f"Near-black pixel ratio {near_black_ratio} is too high (target < 10%)"
+
+
+def test_missing_orientation_metadata_defaults_to_portrait_for_shorts(tmp_path):
+    from video_agent.stages.assets import prepare_assets
+    
+    scene_doc = {
+        "total_duration_sec": 3,
+        "scenes": [
+            {
+                "id": "s01",
+                "layout": "short_hook",
+                "on_screen_text": "GIRA EL PAQUETE",
+                "visual_prompt": "some prompt",
+                "asset_refs": {}
+            }
+        ]
+    }
+    
+    palette = {
+        "palette": {
+            "background": "#F6F1E8",
+            "primary": "#2F6B57",
+            "secondary": "#D98C5F",
+            "accent": "#F5C24B",
+            "text": "#26332F"
+        }
+    }
+    
+    class GraphicFallbackStockClient:
+        def search(self, provider, query, filters):
+            return {}
+        def normalize(self, provider, response):
+            return []
+            
+    job_dir = tmp_path / "shorts" / "short-05"
+    
+    manifest = prepare_assets(
+        job_dir=job_dir,
+        style_dna=palette,
+        scene_doc=scene_doc,
+        visual_config={
+            "strategy": "stock_photo_api",
+            "providers": ["pexels"],
+            "query_cache_path": str(tmp_path / "caches" / "query_cache.db"),
+            "asset_library_path": str(tmp_path / "asset_library"),
+        },
+        stock_client=GraphicFallbackStockClient(),
+        image_gen_fn=lambda p, o: None
+    )
+    
+    bg_path = Path(manifest["scenes"][0]["background"])
+    assert bg_path.exists()
+    
+    tmp_frame_path = tmp_path / "shorts" / "temp_frame.jpg"
+    tmp_frame_path.parent.mkdir(parents=True, exist_ok=True)
+    import subprocess
+    cmd = [
+        "ffmpeg", "-y", "-i", str(bg_path),
+        "-vframes", "1", "-f", "image2", str(tmp_frame_path)
+    ]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    
+    from PIL import Image
+    img = Image.open(tmp_frame_path)
+    assert img.size == (1080, 1920), f"Short fallback size {img.size} is not 1080x1920"
+

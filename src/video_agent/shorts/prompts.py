@@ -133,6 +133,14 @@ def short_script_prompt(
         '      "required": true\n'
         "    }\n"
         "  ],\n"
+        '  "source_mapped_flow": [\n'
+        "    {\n"
+        '      "item_id": 1,\n'
+        '      "source_support": ["key_point_1"],\n'
+        '      "spoken_summary": "string",\n'
+        '      "visual_role": "string"\n'
+        "    }\n"
+        "  ],\n"
         '  "qa": {\n'
         '    "verdict": "PENDING_SHORTS_QA"\n'
         "  }\n"
@@ -205,7 +213,8 @@ def short_script_prompt(
         "idea_contract is authoritative. narration_seed functions as supportive context, not a strict ordinal override.\n\n"
         "COUNT AUTHORITY:\n"
         "Do NOT infer checklist count from narration_seed ordinal words (e.g. Primero, Segundo). "
-        "Use ONLY idea_contract.original_count for the required checklist count.\n\n"
+        "Use ONLY idea_contract.original_count for the required checklist count.\n"
+        "The source_mapped_flow array must contain exactly as many items as defined in idea_contract.original_count unless adaptation is explicitly allowed.\n\n"
         "CREATIVE FLEXIBILITY RULES:\n"
         "You may experiment with hooks, transitions, and emotional framing to maximize retention flow.\n"
         "For checklists/explainers: maintain logical progression.\n"
@@ -882,6 +891,7 @@ def gemini_script_qa_prompt(
         "- FAIL with idea_fidelity if original idea says 5 errores but script only covers 2 errores, or 3 pasos becomes 2 pasos.\n"
         "- Do not suggest reducing the count as the first repair. Suggest micro-compressing each item, moving detail to on-screen text, content-led duration, or split_recommended.\n"
         "- Source support must be explicit: each promised item needs at least one valid source_support reference and labels must be meaningfully different.\n"
+        "- The source_mapped_flow array must contain exactly as many items as defined in idea_contract.original_count unless adaptation is explicitly allowed.\n"
         "- Do not trust only preserved=true; verify final_count, idea_items length, and planned narration/visual representation.\n\n"
         "COUNT AUTHORITY:\n"
         "- Use ONLY idea_contract.original_count as the required checklist count when present.\n"
@@ -1089,7 +1099,8 @@ def gemini_scenes_qa_prompt(channel_config: dict, short_script: dict, short_scen
         "- Do not require visual complexity if a graphic_fallback/card is clearer for the viewer.\n"
         "- Hard-fail only when flow is genuinely disconnected or key visual context is missing.\n\n"
         "VIDA PLENA 45+ BREAD/5 ERRORS SHORT POLISHING QA RULES:\n"
-        "If this Short is a 5-error bread Short for Vida Plena 45+, you MUST enforce these strict quality criteria and FAIL the verdict if any are violated:\n"
+        "If this Short is a 5-error bread Short for Vida Plena 45+ (e.g. title/hook mentions '5 errores' or 'pan'), apply these strict quality criteria.\n"
+        "Use these as polish targets, not unconditional FAIL thresholds. Actual hard block is decided by Python tiered gates:\n"
         "1. Hook scene:\n"
         "   - Must use two-line hook format: title \"NO ES EL PAN\" and subtitle \"MIRA CÓMO LO USAS\" or \"SON 5 HÁBITOS\".\n"
         "   - First visual must clearly show bread in kitchen/table context.\n"
@@ -1110,7 +1121,7 @@ def gemini_scenes_qa_prompt(channel_config: dict, short_script: dict, short_scen
         "   - Must use on_screen_text \"GUÁRDALO\" and caption \"PARA TU PRÓXIMA CENA\" (duration 2.4-2.8s).\n"
         "8. Visual Styling:\n"
         "   - Footage must feel warm and bright (cream/olive wellness tone). Reject heavy dark cinematic overlays.\n"
-        "9. Strict Product Score Thresholds (FAIL the verdict if any score is below these):\n"
+        "9. Strict Product Score Thresholds (Polish Targets):\n"
         "   - hook_strength: >= 9\n"
         "   - clarity: >= 9\n"
         "   - retention_pacing: >= 9\n"

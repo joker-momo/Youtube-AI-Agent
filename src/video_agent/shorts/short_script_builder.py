@@ -48,6 +48,18 @@ def build_short_script(
     script = _parse(raw)
     script.setdefault("source_mapped_flow", [])
     script = ensure_script_idea_fields(script, short_plan)
+    
+    if not script.get("source_mapped_flow") and script.get("idea_items"):
+        script["source_mapped_flow"] = [
+            {
+                "item_id": item.get("item_id"),
+                "source_support": item.get("source_support", []),
+                "spoken_summary": f"Fallback derived for {item.get('label', '')}",
+                "visual_role": item.get("spoken_or_visual_role", "narration")
+            }
+            for item in script["idea_items"]
+        ]
+        script.setdefault("planner_warnings", []).append("ChatGPT omitted source_mapped_flow; fallback generated.")
     jd = paths.short_json_dir(long_job_dir, short_plan["short_id"])
     jd.mkdir(parents=True, exist_ok=True)
     atomic_write_json(jd / paths.SHORT_SCRIPT_FILE, script)

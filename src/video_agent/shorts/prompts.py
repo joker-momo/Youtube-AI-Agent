@@ -239,6 +239,7 @@ def short_seo_prompt(
     long_video_url: str = "",
     *,
     retention_plan: dict | None = None,
+    retry_feedback: str = "",
 ) -> str:
     hook = str(short_script.get("hook") or "").strip()
     narration = str(short_script.get("narration") or "").strip()
@@ -266,7 +267,12 @@ def short_seo_prompt(
         "}"
     )
 
+    feedback_block = (
+        f"{retry_feedback.strip()}\n\n" if str(retry_feedback or "").strip() else ""
+    )
+
     return (
+        f"{feedback_block}"
         "You are the SEO copywriter for a Spain-first wellness channel for adults aged 45+.\n\n"
         "Write the YouTube Short metadata in Spain Spanish (es-ES). Every field MUST match the actual content of the script below. "
         "Off-topic hashtags will get the Short shown to the wrong audience, kill retention, and stop YouTube from recommending the channel — so accuracy beats keyword volume.\n\n"
@@ -298,7 +304,8 @@ def short_seo_prompt(
         "- Keep Spain intent subtle and natural: Spain Spanish vocabulary, adults 45+, and everyday Spain-compatible phrasing; do not add fake geography if the script does not mention it.\n\n"
         "TITLE RULES:\n"
         "- Maximum 60 characters including spaces.\n"
-        "- For bread/pan-related Shorts for Vida Plena 45+, you MUST use exactly one of these two titles: \"5 errores con el pan después de los 45\" or \"Pan después de los 45: 5 errores comunes\".\n"
+        "- For bread/pan-related Shorts, the title MUST match the final script format and viewer promise. Use an \"errores\"/mistake-list title ONLY when short_format is \"mistake_list\" OR the final hook/narration explicitly promises errores, and the video actually covers them.\n"
+        "- For checklist / label-reading / purchase-rule / comparison bread Shorts, do NOT use an \"errores\" title. Prefer action/topic titles such as \"Gira el paquete: regla para comprar pan\", \"Pan después de los 45: mira la etiqueta\", or \"Qué mirar al comprar pan después de los 45\".\n"
         "- Name the actual pain or payoff from the script (e.g. \"carga mental\", \"insomnio\", \"sarcopenia\") AND the 45+ frame.\n"
         "- Put the chosen broad keyword near the beginning when it reads naturally, then qualify it with the specific pain/payoff or 45+ frame.\n"
         "- No clickbait (\"increíble\", \"NADIE te dijo\", \"el truco que…\"), no all-caps screaming.\n"
@@ -309,7 +316,7 @@ def short_seo_prompt(
         "- No links to other channels, no sponsor text, no calls to subscribe.\n\n"
         "HASHTAG RULES:\n"
         "- 3 to 5 hashtags, all lowercase, no spaces, each starting with '#'.\n"
-        "- For bread/pan-related Shorts for Vida Plena 45+, you MUST use exactly these hashtags: #alimentacionsaludable, #comerpan, #nutricion, #vida45plus, #shorts.\n"
+        "- For bread/pan-related Shorts, hashtags MUST match the actual script topic. Use 3-5 tags; base options are #alimentacionsaludable, #comerpan, #vida45plus, #shorts. Pick the remaining tag from the real content: label-reading/package/ingredient list => #panintegral, #etiquetanutricional or #comprasaludable; plate/complete meal => #platosaludable; general nutrition => #nutricion. Do NOT force #nutricion when a more specific tag better matches the Short.\n"
         "- Every hashtag MUST be semantically tied to the actual script topic (mental health, sleep, nutrition, joints, balance, etc.).\n"
         "- FORBIDDEN unless the script is genuinely about that exact topic: #gym, #fitness, #workout, #crossfit, #musculacion, #pesas, #cardio, #abs, #motivation, #mindset, #shortsviral, #fyp, #parati, #viral, #foryou, #trending.\n"
         "- Prefer specific, topical Spain-Spanish wellness tags such as #saludmental, #bienestar, #descanso, #sueño, #mindfulness, #estres, #ansiedad, #alimentacionsaludable, #platosaludable, #nutricion, #vida45plus, #saludable, #autocuidado — but ONLY if they actually match the script.\n"

@@ -450,9 +450,110 @@ def validate_scene_idea_coverage(
     return issues
 
 
+# --- SEO context-leak guards (spec v1.2) -----------------------------------
+# A bread/pan title/hashtag must match the actual Short format, not a hardcoded
+# "5 errores" framing. These checks run regardless of idea-count preservation.
+
+_ERROR_TITLE_RE = re.compile(
+    r"\b(\d+|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\s+"
+    r"(errores|error|fallos|equivocaciones)\b",
+    re.IGNORECASE,
+)
+_ERROR_PROMISE_TERMS = ("errores", "fallos", "equivocaciones", "cosas que haces mal")
+_ERROR_COUNT_LABELS = {"errores", "error", "fallos", "equivocaciones"}
+# Terms that mark a Short as a label-reading / purchase-rule bread Short.
+_LABEL_READING_TERMS = (
+    "gira", "paquete", "etiqueta", "ingrediente", "ingredientes",
+    "harina", "fibra", "comprar pan", "pan integral",
+)
+# Title is considered to name the core action when it contains one of these.
+_LABEL_TITLE_TERMS = (
+    "gira", "paquete", "etiqueta", "ingrediente", "harina", "fibra",
+    "comprar pan", "pan integral",
+)
+
+
+def _seo_script_text(script: dict[str, Any]) -> str:
+    return f"{script.get('hook') or ''} {script.get('narration') or ''}".lower()
+
+
+def _is_error_based_short(script: dict[str, Any]) -> bool:
+    fmt = str(script.get("short_format") or script.get("format") or "").lower()
+    if fmt == "mistake_list":
+        return True
+    contract = script.get("idea_contract") or {}
+    label = str(contract.get("count_label") or contract.get("label") or "").lower()
+    if label in _ERROR_COUNT_LABELS:
+        return True
+    text = _seo_script_text(script)
+    return any(term in text for term in _ERROR_PROMISE_TERMS)
+
+
+def _is_label_reading_short(script: dict[str, Any]) -> bool:
+    text = _seo_script_text(script)
+    found = {term for term in _LABEL_READING_TERMS if term in text}
+    return len(found) >= 2
+
+
+def _seo_format_alignment_issues(seo: dict[str, Any], script: dict[str, Any]) -> list[SceneValidationIssue]:
+    title = str(seo.get("title") or "")
+    if _ERROR_TITLE_RE.search(title) and not _is_error_based_short(script):
+        return [SceneValidationIssue(
+            type="seo_title_wrong_format_error_promise",
+            scene_id=None,
+            severity="repairable_error",
+            detail="SEO title promises errores, but the final Short is not an error/mistake-list Short.",
+            repair_hint="Regenerate SEO with a title matching the actual checklist / label-reading action, e.g. 'Gira el paquete: regla para comprar pan'.",
+        )]
+    return []
+
+
+def _seo_core_action_issues(seo: dict[str, Any], script: dict[str, Any]) -> list[SceneValidationIssue]:
+    if _is_error_based_short(script) or not _is_label_reading_short(script):
+        return []
+    title = str(seo.get("title") or "").lower()
+    if any(term in title for term in _LABEL_TITLE_TERMS):
+        return []
+    return [SceneValidationIssue(
+        type="seo_title_misses_core_action",
+        scene_id=None,
+        severity="repairable_error",
+        detail="SEO title does not mention the core purchase/label-reading action of the Short.",
+        repair_hint="Use a title such as 'Gira el paquete: regla para comprar pan'.",
+    )]
+
+
+def _seo_hashtag_topic_issues(seo: dict[str, Any], script: dict[str, Any]) -> list[SceneValidationIssue]:
+    hashtags = [str(h).lower() for h in (seo.get("hashtags") or [])]
+    if not hashtags:
+        return []
+    if not _is_error_based_short(script) and any("error" in tag for tag in hashtags):
+        return [SceneValidationIssue(
+            type="seo_hashtag_topic_mismatch",
+            scene_id=None,
+            severity="repairable_error",
+            detail="SEO hashtags promise errores, but the final Short is not an error/mistake-list Short.",
+            repair_hint="Use topic-specific tags such as #panintegral or #comprasaludable instead of error tags.",
+        )]
+    return []
+
+
 def validate_seo_idea_consistency(seo: dict[str, Any] | None, script: dict[str, Any] | None) -> list[SceneValidationIssue]:
     seo = seo or {}
     script = script or {}
+    issues: list[SceneValidationIssue] = []
+
+    # Format/topic alignment must run regardless of idea-count preservation,
+    # otherwise a checklist Short with no count contract leaks an error title.
+    issues.extend(_seo_format_alignment_issues(seo, script))
+    issues.extend(_seo_core_action_issues(seo, script))
+    issues.extend(_seo_hashtag_topic_issues(seo, script))
+
+    issues.extend(_seo_count_preservation_issues(seo, script))
+    return issues
+
+
+def _seo_count_preservation_issues(seo: dict[str, Any], script: dict[str, Any]) -> list[SceneValidationIssue]:
     contract = script.get("idea_contract") or {}
     if not contract.get("must_preserve_count"):
         return []

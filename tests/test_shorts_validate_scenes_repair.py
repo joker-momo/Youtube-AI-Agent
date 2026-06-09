@@ -32,3 +32,16 @@ def test_repair_visual_only_unreadable_already_covered():
     req = {"id": "3", "label": "Third item"}
     # Already in narration, so it should just return False (no repair needed)
     assert repair_visual_only_unreadable(scenes, req) is False
+
+def test_repair_visual_only_unreadable_item_id_and_integer_covers():
+    scenes = [
+        {"id": "s01", "duration_sec": 3.0, "narration": "First scene", "covers_items": [1]},
+        {"id": "s02", "duration_sec": 3.0, "narration": "Second scene", "covers_items": [3]},
+    ]
+    req = {"item_id": 3, "label": "Third item"}
+    # Should locate scene s02 which covers item 3 (integer) using the item_id (integer -> string '3')
+    assert repair_visual_only_unreadable(scenes, req) is True
+    # It should inject into scene s02's narration (since target_scene is s02)
+    assert "Prepara un pan base antes del hambre" in scenes[1]["narration"]
+    assert 3 in scenes[1]["covers_items"]
+

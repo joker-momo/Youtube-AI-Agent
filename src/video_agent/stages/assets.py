@@ -24,6 +24,21 @@ from video_agent.utils.json_io import write_json
 
 SUPPORTED_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp")
 
+def _default_sync_image_gen(prompt: str, out_path: str | Path) -> None:
+    import asyncio
+    import os
+    from video_agent.orchestrator.browser_client import BrowserClient
+
+    browser_worker_url = os.environ.get("BROWSER_WORKER_URL", "http://browser-worker:8001")
+    client = BrowserClient(browser_worker_url)
+    asyncio.run(
+        client.generate_image(
+            prompt=prompt,
+            project_name="fallback",
+            out_path=str(out_path),
+            aspect_ratio="9:16",
+        )
+    )
 
 def _hex_to_rgb(value: str) -> tuple[int, int, int]:
     value = value.lstrip("#")
@@ -224,9 +239,11 @@ def prepare_assets(
     job_dir: Path,
     style_dna: dict[str, Any],
     scene_doc: dict[str, Any],
+    *,
     visual_config: dict[str, Any] | None = None,
     tts_config: dict[str, Any] | None = None,
     channel_id: str = "unknown-channel",
+    image_gen_fn: Any | None = None,
     stock_client: Any | None = None,
     download_client: Any | None = None,
     tts_client: Any | None = None,
@@ -245,7 +262,12 @@ def prepare_assets(
     visual_config = visual_config or {}
     source_dir = _resolve_source_dir(visual_config.get("source_dir"))
     stock_service = (
-        StockAssetService(visual_config, stock_client=stock_client, download_client=download_client)
+        StockAssetService(
+            visual_config,
+            stock_client=stock_client,
+            download_client=download_client,
+            image_gen_fn=image_gen_fn or _default_sync_image_gen,
+        )
         if visual_config.get("strategy") in {"auto", "stock_photo_api"}
         else None
     )
@@ -283,8 +305,15 @@ def prepare_assets(
             )
             source_path = str(local_image.resolve())
             extra_manifest = {}
-        elif stock_asset:
-            library_path = stock_service.library.root / stock_asset["file_path"]
+        elif stock_asset and stock_asset.get("provider") != "graphic_fallback":
+            # ai_generated or standard stock API asset
+            if "file_path" in stock_asset:
+                library_path = stock_service.library.root / stock_asset["file_path"]
+            elif "local_path" in stock_asset:
+                library_path = Path(stock_asset["local_path"])
+            else:
+                library_path = Path(stock_asset.get("url", "")) # Should not happen
+
             if library_path.suffix.lower() == ".mp4":
                 shutil.copy2(library_path, image_path)
             else:
@@ -292,11 +321,12 @@ def prepare_assets(
             source = "asset_library"
             source_path = str(library_path.resolve())
             extra_manifest = {
-                "asset_id": stock_asset["asset_id"],
-                "provider": stock_asset["provider"],
-                "provider_asset_id": stock_asset["provider_asset_id"],
-                "source_url": stock_asset["original_url"],
-                "attribution": stock_asset["attribution"],
+                "asset_id": stock_asset.get("asset_id"),
+                "provider": stock_asset.get("provider"),
+                "provider_asset_id": stock_asset.get("provider_asset_id"),
+                "source_url": stock_asset.get("original_url"),
+                "attribution": stock_asset.get("attribution"),
+                "asset_tier": stock_asset.get("asset_tier"),
                 "asset_selection": stock_asset.get("asset_selection"),
             }
             record_scene_selection(diversity_run, scene=scene, selected_asset=stock_asset)
@@ -310,12 +340,28 @@ def prepare_assets(
             )
             source = "generated_placeholder"
             source_path = None
-            extra_manifest = {"stock_errors": stock_service.last_errors} if stock_service else {}
+            extra_manifest = {}
+            if stock_asset and stock_asset.get("provider") == "graphic_fallback":
+                extra_manifest = {
+                    "asset_id": stock_asset.get("asset_id"),
+                    "provider": stock_asset.get("provider"),
+                    "provider_asset_id": stock_asset.get("provider_asset_id"),
+                    "source_url": None,
+                    "attribution": stock_asset.get("attribution"),
+                    "asset_tier": stock_asset.get("asset_tier"),
+                    "asset_selection": stock_asset.get("asset_selection"),
+                }
+            elif stock_service:
+                extra_manifest = {"stock_errors": stock_service.last_errors}
             record_scene_selection(diversity_run, scene=scene, selected_asset=None, is_placeholder=True)
         public_image_path = public_assets_dir / image_path.name
         shutil.copy2(image_path, public_image_path)
         public_ref = f"jobs/{job_dir.name}/assets/{image_path.name}"
         scene["asset_refs"]["background"] = public_ref
+        
+        if stock_asset and stock_asset.get("provider") == "graphic_fallback":
+            scene["asset_refs"]["background"] = ""
+            scene["background_mode"] = "paper"
         scene_asset = {
             "scene_id": scene["id"],
             "background": str(image_path.resolve()),

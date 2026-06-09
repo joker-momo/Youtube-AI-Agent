@@ -209,6 +209,18 @@ def _load_style(channel_config: dict) -> dict:
     return read_json(repo_root() / channel_config["style_dna"]["path"])
 
 
+def _is_key_scene(scene: dict) -> bool:
+    layout = scene.get("layout") or ""
+    if layout in {"short_hook", "short_cta", "graphic_label_callout", "graphic_comparison", "graphic_checklist"}:
+        return True
+    if scene.get("retention_function") in {"hook", "proof", "payoff", "cta"}:
+        return True
+    prompt = (scene.get("visual_prompt") or "").lower()
+    key_terms = {"package", "label", "ingredients", "fibra", "harina", "compare", "turn", "rotate", "back label"}
+    if any(term in prompt for term in key_terms):
+        return True
+    return False
+
 def _scene_visual_issues(scene: dict) -> list[dict]:
     issues = []
     source = scene.get("source")
@@ -260,10 +272,81 @@ def _scene_visual_issues(scene: dict) -> list[dict]:
                 "message": "Stock asset has no selection metadata.",
             }
         )
+        
+    asset_match_status = selection.get("asset_match_status") or ("weak_match" if selection.get("weak_match") else "unknown")
+    
+    # Skip match-quality checks for non-stock sources (local_directory, generated_placeholder
+    # without stock API, graphic_fallback). These sources don't involve stock search matching.
+    if source in {"local_directory", "generated_placeholder"} and not selection:
+        if asset_key:
+            scene["asset_key"] = asset_key
+        return issues
+    if asset_match_status == "graphic_fallback":
+        if asset_key:
+            scene["asset_key"] = asset_key
+        return issues
+    
+    # Detailed Context for Errors
+    context_str = f"Scene ID: {scene.get('scene_id')} | Layout: '{scene.get('layout')}' | Prompt: '{scene.get('visual_prompt')}'"
+    if selection:
+        context_str += f" | Selected Asset: {selection.get('selected_asset_title', '')} ({selection.get('source_url', '')})"
+        if selection.get("failed_required_terms"):
+            context_str += f" | Failed Terms: {selection.get('failed_required_terms')}"
+        if selection.get("fallback_reason"):
+            context_str += f" | Fallback Reason: {selection.get('fallback_reason')}"
+            
+    if _is_key_scene(scene):
+        if asset_match_status == "weak_match":
+            issues.append(
+                {
+                    "type": "WEAK_MATCH_ON_CRITICAL_SCENE",
+                    "severity": "error",
+                    "message": f"Weak match fallback is not allowed for critical scene. {context_str}",
+                }
+            )
+        elif asset_match_status in {"no_match", "unknown", "", None}:
+            issues.append(
+                {
+                    "type": "NO_SAFE_VISUAL_ASSET",
+                    "severity": "error",
+                    "message": f"No safe visual asset could be found for key scene. {context_str}",
+                }
+            )
+    else:
+        # Non-key scene
+        if asset_match_status == "weak_match":
+            if _is_contradictory(scene, selection):
+                issues.append(
+                    {
+                        "type": "CONTRADICTORY_WEAK_MATCH",
+                        "severity": "error",
+                        "message": f"Contradictory weak match is not allowed. {context_str}",
+                    }
+                )
+            else:
+                issues.append(
+                    {
+                        "type": "WEAK_MATCH_ON_NON_CRITICAL_SCENE",
+                        "severity": "warning",
+                        "message": f"Weak match fallback accepted for non-critical scene. {context_str}",
+                    }
+                )
+            
     if asset_key:
         scene["asset_key"] = asset_key
     return issues
 
+
+def _is_contradictory(scene: dict, asset_selection: dict) -> bool:
+    prompt = (scene.get("visual_prompt") or "").lower()
+    tags = set(str(t).lower() for t in asset_selection.get("candidate_tags", []))
+    if "supermarket" in prompt or "store" in prompt:
+        if "sleep" in tags or "bed" in tags or "sleeping" in tags:
+            return True
+    if ("turn" in prompt or "read" in prompt) and "label" in prompt:
+        if "slice" in tags or "cutting" in tags:
+            return True
+    return False
 
 def _add_visual_qa(review: dict) -> dict:
     seen_assets = {}
@@ -297,16 +380,22 @@ def _write_visual_review(job_dir: Path, job_id: str, assets: dict, scene_doc: di
         )
     scenes = []
     for scene_asset, scene in zip(asset_scenes, doc_scenes):
+        selection = scene_asset.get("asset_selection") or {}
         scenes.append(
             {
                 "scene_id": scene_asset["scene_id"],
+                "layout": scene.get("layout"),
+                "retention_function": scene.get("retention_function"),
+                "visual_prompt": scene.get("visual_prompt"),
                 "on_screen_text": scene.get("on_screen_text"),
                 "source": scene_asset.get("source"),
                 "provider": scene_asset.get("provider"),
                 "provider_asset_id": scene_asset.get("provider_asset_id"),
                 "source_url": scene_asset.get("source_url"),
-                "query": (scene_asset.get("asset_selection") or {}).get("query"),
-                "selection": scene_asset.get("asset_selection"),
+                "asset_tier": scene_asset.get("asset_tier"),
+                "asset_match_status": selection.get("asset_match_status"),
+                "query": selection.get("query"),
+                "selection": selection,
                 "stock_errors": scene_asset.get("stock_errors") or [],
                 "background": scene_asset.get("background"),
             }
@@ -338,6 +427,20 @@ def _write_visual_review(job_dir: Path, job_id: str, assets: dict, scene_doc: di
     review["contact_sheet"] = ARTIFACT_VISUAL_CONTACT_SHEET
     write_json(job_dir / ARTIFACT_VISUAL_REVIEW, review)
     return review
+
+
+def _validate_visual_review(visual_review: dict) -> None:
+    has_critical_error = any(
+        issue.get("severity") == "error"
+        for scene in visual_review.get("scenes", [])
+        for issue in scene.get("qa", {}).get("issues", [])
+    )
+    if has_critical_error:
+        from video_agent.orchestrator.stages import StageInputMissingError
+        raise StageInputMissingError(
+            "QA validation failed: Weak match on critical scenes (hook/CTA). "
+            "Please check visual_review.json for details."
+        )
 
 
 def _write_report(
@@ -470,6 +573,7 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
     validate_json(render_props, root / "schemas/render-props.schema.json")
     visual_review = _write_visual_review(job_dir, job_id, assets, scene_doc)
     create_visual_contact_sheet(job_dir, visual_review)
+    _validate_visual_review(visual_review)
 
     video_path = None
     if options.render:
@@ -757,6 +861,7 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
     validate_json(render_props, root / "schemas/render-props.schema.json")
     visual_review = _write_visual_review(job_dir, job_id, assets, scene_doc)
     create_visual_contact_sheet(job_dir, visual_review)
+    _validate_visual_review(visual_review)
 
     video_path = None
     if options.render:

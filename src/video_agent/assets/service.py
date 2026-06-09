@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import sys
+import os
 import tempfile
 import re
 from pathlib import Path
@@ -311,10 +312,29 @@ class StockAssetService:
         visual_config: dict[str, Any],
         stock_client: StockPhotoClient | None = None,
         download_client: DownloadClient | None = None,
+        image_gen_fn: Any = None,
     ) -> None:
         self.visual_config = visual_config
         self.providers = list(visual_config.get("providers") or ["pexels", "pixabay"])
         self.fallback_providers = list(visual_config.get("fallback_providers") or [])
+        # Photo tier of the cascade: when no video provider yields a strict
+        # (action-relevant) match we retry as stills. Default is derived from the
+        # video providers (pexels_video -> pexels); explicit config overrides.
+        configured_photo = list(visual_config.get("photo_providers") or [])
+        if configured_photo:
+            self.photo_providers = configured_photo
+        else:
+            derived: list[str] = []
+            for p in self.providers:
+                if "_video" in p:
+                    still = p.replace("_video", "")
+                    if still not in derived and still not in self.providers:
+                        derived.append(still)
+            self.photo_providers = derived
+        # Optional last-resort tier: callable(prompt: str, out_path: Path) -> None
+        # that renders an AI image for the scene's visual_prompt. When None the
+        # cascade skips AI generation and uses an anti-blank weak stock match.
+        self.image_gen_fn = image_gen_fn
         self.cache = QueryCache(
             _resolve_project_path(visual_config.get("query_cache_path"), "caches/query_cache.db")
         )
@@ -400,6 +420,7 @@ class StockAssetService:
             "score": best_score,
             "reasons": ["library_cache_hit", *best_scoring["reasons"]],
             "matched_terms": best_scoring["matched_terms"],
+            "candidate_tags": list(best_asset.get("tags", [])),
         }
         return best_asset
 
@@ -423,6 +444,35 @@ class StockAssetService:
         """
         tokens = set(re.findall(r"[a-z]+", query.lower()))
         return bool(tokens & self._DEMOGRAPHIC_KEYWORDS)
+
+    def _is_key_scene(self, scene: dict[str, Any]) -> bool:
+        layout = scene.get("layout") or ""
+        if layout in {"short_hook", "short_cta", "graphic_label_callout", "graphic_comparison", "graphic_checklist"}:
+            return True
+        if scene.get("retention_function") in {"hook", "proof", "payoff", "cta"}:
+            return True
+        prompt = (scene.get("visual_prompt") or "").lower()
+        key_terms = {"package", "label", "ingredients", "fibra", "harina", "compare", "turn", "rotate", "back label"}
+        if any(term in prompt for term in key_terms):
+            return True
+        return False
+
+    def _is_contradictory(self, scene: dict[str, Any], ranked_candidate: dict[str, Any]) -> bool:
+        prompt = (scene.get("visual_prompt") or "").lower()
+        candidate = ranked_candidate.get("candidate", {})
+        tags = set(str(t).lower() for t in candidate.get("tags", []))
+        
+        # If the scene explicitly asks for supermarket/store and the asset tags have "sleep" or "bed", it's contradictory.
+        if "supermarket" in prompt or "store" in prompt:
+            if "sleep" in tags or "bed" in tags or "sleeping" in tags:
+                return True
+                
+        # If the scene asks for reading/turning label, and asset is purely "slicing bread", it's contradictory.
+        if ("turn" in prompt or "read" in prompt) and "label" in prompt:
+            if "slice" in tags or "cutting" in tags:
+                return True
+                
+        return False
 
     def get_scene_asset(self, scene: dict[str, Any], channel_id: str, job_id: str) -> dict[str, Any] | None:
         raw_query = scene.get("visual_prompt") or scene.get("on_screen_text") or ""
@@ -448,31 +498,158 @@ class StockAssetService:
                 return cached
 
         self.last_errors = []
-        asset = self._search_and_download(
-            providers=self.providers,
-            query=query,
-            filters=filters,
-            ttl_hours=ttl_hours,
-            scene=scene,
-            channel_id=channel_id,
-            job_id=job_id,
-        )
-        if asset is not None:
-            return asset
-        if self.fallback_providers:
-            asset = self._search_and_download(
-                providers=self.fallback_providers,
+
+        def _search(providers: list[str], *, require_strict: bool, is_fallback: bool = False):
+            if not providers:
+                return None
+            return self._search_and_download(
+                providers=providers,
                 query=query,
                 filters=filters,
                 ttl_hours=ttl_hours,
                 scene=scene,
                 channel_id=channel_id,
                 job_id=job_id,
-                is_fallback=True,
+                is_fallback=is_fallback,
+                require_strict=require_strict,
             )
+
+        # 5-tier cascade: a strict (action-relevant) match wins at the highest
+        # available fidelity.
+        
+        # Tier 1 — stock video, strict only.
+        asset = _search(self.providers, require_strict=True)
+        if asset is not None:
+            asset["asset_tier"] = "pexels_video"
+            asset["asset_selection"]["asset_match_status"] = "strong_match"
+            return asset
+            
+        # Tier 2 — stock photo, strict only.
+        asset = _search(self.photo_providers, require_strict=True)
+        if asset is not None:
+            asset["asset_tier"] = "pexels_photo"
+            asset["asset_selection"]["asset_match_status"] = "strong_match"
+            return asset
+            
+        # Tier 3 — AI-generated image for the scene's visual_prompt.
+        enable_ai_fallback = str(os.environ.get("ENABLE_AI_IMAGE_FALLBACK", "true")).lower() == "true"
+        if enable_ai_fallback and self.image_gen_fn is not None:
+            asset = self._ai_generate_scene_asset(scene, query, channel_id, job_id)
             if asset is not None:
+                asset["asset_tier"] = "ai_image"
+                asset["asset_selection"]["asset_match_status"] = "ai_generated"
                 return asset
+                
+        is_key = self._is_key_scene(scene)
+        
+        # Tier 4a — Graphic/text-led fallback for key scenes
+        if is_key:
+            return {
+                "provider": "graphic_fallback",
+                "asset_id": f"graphic_{job_id}_{scene['id']}",
+                "provider_asset_id": f"graphic_{job_id}_{scene['id']}",
+                "media_type": "generated",
+                "local_path": None, # Will be replaced by generated_placeholder in assets.py
+                "attribution": "Graphic Fallback",
+                "asset_tier": "graphic_fallback",
+                "asset_selection": {
+                    "query": query,
+                    "source": "graphic_fallback",
+                    "weak_match": False,
+                    "asset_match_status": "graphic_fallback",
+                    "reasons": ["graphic_fallback_for_key_scene"],
+                    "matched_terms": [],
+                },
+            }
+            
+        # Tier 4b — Weak Pexels allowed only for non-key scenes
+        asset = _search(self.providers, require_strict=False)
+        if asset is not None:
+            asset["asset_tier"] = "weak_pexels"
+            asset["asset_selection"]["asset_match_status"] = "weak_match"
+            return asset
+        if self.fallback_providers:
+            asset = _search(self.fallback_providers, require_strict=False, is_fallback=True)
+            if asset is not None:
+                asset["asset_tier"] = "weak_pexels"
+                asset["asset_selection"]["asset_match_status"] = "weak_match"
+                return asset
+                
+        # Tier 5 — block + review (returns None)
         return None
+
+    def _ai_generate_scene_asset(
+        self, scene: dict[str, Any], query: str, channel_id: str, job_id: str
+    ) -> dict[str, Any] | None:
+        """Last-resort tier: render an AI image from the scene's visual_prompt."""
+        import hashlib
+        
+        prompt = str(scene.get("visual_prompt") or query or "").strip()
+        if not prompt:
+            return None
+            
+        aspect_ratio = "9:16"
+        style_version = "v1"
+        model_name = "dall-e-3"
+        prompt_hash = hashlib.sha256(f"{prompt}_{aspect_ratio}_{style_version}_{model_name}".encode()).hexdigest()[:16]
+        
+        out_dir = Path(self.library.root) / "ai_generated"
+        out_path = out_dir / f"{job_id}_{scene['id']}_{prompt_hash}.png"
+        
+        # Cache check
+        if not (out_path.exists() and out_path.stat().st_size > 1024):
+            try:
+                out_dir.mkdir(parents=True, exist_ok=True)
+                # Attempt generation with 1 retry
+                for attempt in range(2):
+                    try:
+                        self.image_gen_fn(prompt, out_path)
+                        break
+                    except Exception as e:
+                        if attempt == 1:
+                            raise e
+            except Exception as exc:  # pragma: no cover - defensive
+                self.last_errors.append(
+                    {"provider": "ai_generated", "error_type": exc.__class__.__name__, "message": str(exc), "stage": "ai_gen"}
+                )
+                return None
+                
+        # Sanity Checks
+        if not out_path.exists():
+            return None
+        if out_path.stat().st_size < 1024:
+            # File exists but is too small (blank/corrupt)
+            return None
+            
+        # Optional: check aspect ratio or if it's all black/white if PIL is available
+        # (Assuming file size > 1KB is a basic sanity check for non-blank for now)
+            
+        asset_id = f"ai_{job_id}_{scene['id']}"
+        try:
+            self.library.record_usage(
+                asset_id, channel_id=channel_id, job_id=job_id,
+                scene_id=scene["id"], scene_intent=scene.get("motion"),
+            )
+        except Exception:  # pragma: no cover - library is best-effort here
+            pass
+            
+        return {
+            "provider": "ai_generated",
+            "asset_id": asset_id,
+            "provider_asset_id": asset_id,
+            "media_type": "image",
+            "local_path": str(out_path),
+            "attribution": "AI-generated (ChatGPT image)",
+            "asset_tier": "ai_image",
+            "asset_selection": {
+                "query": prompt,
+                "source": "ai_generated",
+                "weak_match": False,
+                "asset_match_status": "ai_generated",
+                "reasons": ["ai_generated"],
+                "matched_terms": [],
+            },
+        }
 
     def _search_and_download(
         self,
@@ -485,6 +662,7 @@ class StockAssetService:
         channel_id: str,
         job_id: str,
         is_fallback: bool = False,
+        require_strict: bool = False,
     ) -> dict[str, Any] | None:
         ranked_candidates: list[dict[str, Any]] = []
         for provider_order, provider in enumerate(providers, start=1):
@@ -516,14 +694,14 @@ class StockAssetService:
                 )
                 ranked_candidates.extend(candidates)
             except Exception as exc:
-                self.last_errors.append(
-                    {
-                        "provider": provider,
-                        "error_type": exc.__class__.__name__,
-                        "message": str(exc),
-                        "stage": "fallback" if is_fallback else "primary",
-                    }
-                )
+                err = {
+                    "provider": provider,
+                    "error_type": exc.__class__.__name__,
+                    "message": str(exc),
+                    "stage": "fallback" if is_fallback else "primary",
+                }
+                if err not in self.last_errors:
+                    self.last_errors.append(err)
                 # Surface provider failures to stderr so debugging stale
                 # ``last_errors`` payloads is easier when the manifest already
                 # captures them.
@@ -541,7 +719,35 @@ class StockAssetService:
             if item["score"] < self._MIN_LIBRARY_CACHE_SCORE:
                 return False
             reasons = set(item.get("reasons") or [])
-            matched = item.get("matched_terms") or []
+            matched = set(item.get("matched_terms") or [])
+            
+            # Check label reading strict context
+            prompt = query.lower()
+            key_terms = {"package", "label", "ingredients", "fibra", "harina", "compare", "turn", "rotate", "flip", "back label", "back"}
+            if any(term in prompt for term in key_terms):
+                objects = {"bread", "package", "label", "ingredient"}
+                contexts = {"supermarket", "grocery", "store", "aisle", "shelf", "shopping", "basket", "market", "checkout", "kitchen", "table"}
+                
+                turning_terms = {"turn", "rotate", "flip", "back", "turning", "rotating", "flipping"}
+                reading_terms = {"read", "show", "reading", "showing"}
+                
+                has_obj = any(o in matched for o in objects)
+                has_ctx = any(c in matched for c in contexts)
+                
+                has_turning_evidence = any(a in matched for a in turning_terms)
+                has_reading_evidence = any(a in matched for a in reading_terms)
+                
+                requires_turning = any(term in prompt for term in turning_terms) or "back label" in prompt
+                
+                if requires_turning:
+                    has_act = has_turning_evidence
+                else:
+                    has_act = has_turning_evidence or has_reading_evidence
+                
+                if not (has_obj and has_act and has_ctx):
+                    item["failed_required_terms"] = "Missing object/action/context for label reading/turning"
+                    return False
+                    
             return ("strong_scene_term_match" in reasons or len(matched) >= 2)
 
         unused_ranked_candidates = [
@@ -559,8 +765,15 @@ class StockAssetService:
             key = (candidate["provider"], str(candidate["provider_asset_id"]))
             if key in self.used_provider_ids:
                 continue
-            if any_strict and not _passes_strict_gate(ranked_candidate):
+            is_strict = _passes_strict_gate(ranked_candidate)
+            if require_strict and not is_strict:
                 continue
+            if any_strict and not is_strict:
+                continue
+            if not require_strict and not is_strict:
+                if self._is_contradictory(scene, ranked_candidate):
+                    # Skip contradictory weak candidates
+                    continue
             try:
                 asset = self._ensure_asset(candidate, query)
             except Exception:
@@ -576,15 +789,20 @@ class StockAssetService:
             )
             asset["asset_selection"] = {
                 "query": query,
+                "source": "provider_search",
                 "candidate_rank": rank,
                 "provider_rank": ranked_candidate["provider_order"],
                 "provider_candidate_rank": ranked_candidate["provider_candidate_rank"],
                 "searched_providers": providers,
                 "candidate_count": len(ranked_candidates),
                 "score": ranked_candidate["score"],
-                "reasons": ranked_candidate["reasons"],
-                "matched_terms": ranked_candidate["matched_terms"],
+                "reasons": ranked_candidate.get("reasons") or [],
+                "matched_terms": ranked_candidate.get("matched_terms") or [],
                 "fallback": is_fallback,
+                "weak_match": not is_strict,
+                "failed_required_terms": ranked_candidate.get("failed_required_terms"),
+                "fallback_reason": ranked_candidate.get("fallback_reason"),
+                "candidate_tags": list(candidate.get("tags", [])),
             }
             return asset
         return None

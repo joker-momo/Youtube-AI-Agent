@@ -263,9 +263,10 @@ class StockPhotoClient:
         api_key = os.environ.get("PEXELS_API_KEY")
         if not api_key:
             raise RuntimeError("PEXELS_API_KEY is required for provider=pexels")
+        kw_query = keywordize_query(query, max_terms=6)
         params = urlencode(
             {
-                "query": query,
+                "query": kw_query,
                 "orientation": filters.get("orientation", "landscape"),
                 "per_page": filters.get("per_page", 10),
             }
@@ -277,9 +278,10 @@ class StockPhotoClient:
         if not api_key:
             raise RuntimeError("PEXELS_API_KEY is required for provider=pexels_video")
         min_dur = int(filters.get("min_duration_sec", 10))
+        kw_query = keywordize_query(query, max_terms=6)
         params = urlencode(
             {
-                "query": query,
+                "query": kw_query,
                 "orientation": filters.get("orientation", "landscape"),
                 "per_page": filters.get("per_page", 10),
                 "min_duration": min_dur,

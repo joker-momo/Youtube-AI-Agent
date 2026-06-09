@@ -1313,7 +1313,7 @@ def _build_short_impl(
                         _idea_items = short_script.get("idea_items") or short_script.get("points") or short_script.get("checklist") or []
                         item_str = item_id
                         for it in _idea_items:
-                            if isinstance(it, dict) and str(it.get("id", "")) == item_id:
+                            if isinstance(it, dict) and str(it.get("item_id") or it.get("id") or "") == item_id:
                                 item_str = it
                                 break
                         

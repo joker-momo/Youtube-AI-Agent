@@ -101,9 +101,9 @@ def test_prepare_assets_records_stock_errors_when_falling_back_to_placeholder(tm
             "strategy": "auto",
             "query_cache_path": str(tmp_path / "caches" / "query_cache.db"),
             "asset_library_path": str(tmp_path / "asset_library"),
-            "providers": ["pexels", "pixabay"],
         },
         stock_client=MissingKeyStockClient(),
+        image_gen_fn=lambda p, o: None,
     )
 
     scene = manifest["scenes"][0]
@@ -354,9 +354,13 @@ class VideoMissingKeyFallbackStockClient:
         self.searched_providers.append(provider)
         if provider == "pexels_video":
             raise RuntimeError("PEXELS_API_KEY is required for provider=pexels_video")
-        return {"photos": [{"id": "pexels-fallback"}]}
+        if provider == "pexels":
+            return {"photos": [{"id": "pexels-fallback"}]}
+        return {}
 
     def normalize(self, provider, response):
+        if provider != "pexels":
+            return []
         return [
             {
                 "provider": "pexels",
@@ -389,6 +393,7 @@ def test_prepare_assets_uses_fallback_providers_when_primary_fails(tmp_path):
         visual_config={
             "strategy": "stock_photo_api",
             "providers": ["pexels_video"],
+            "photo_providers": ["none"],
             "fallback_providers": ["pexels"],
             "query_cache_path": str(tmp_path / "caches" / "query_cache.db"),
             "asset_library_path": str(tmp_path / "asset_library"),
@@ -399,7 +404,7 @@ def test_prepare_assets_uses_fallback_providers_when_primary_fails(tmp_path):
     )
 
     scene = manifest["scenes"][0]
-    assert stock_client.searched_providers == ["pexels_video", "pexels"]
+    assert stock_client.searched_providers == ["pexels_video", "none", "pexels_video", "pexels"]
     assert scene["source"] == "asset_library"
     assert scene["provider"] == "pexels"
     assert scene["provider_asset_id"] == "pexels-fallback"
@@ -514,9 +519,9 @@ def test_prepare_assets_falls_back_to_placeholder_when_stock_provider_fails(tmp_
             "strategy": "stock_photo_api",
             "providers": ["pexels"],
             "query_cache_path": str(tmp_path / "caches" / "query_cache.db"),
-            "asset_library_path": str(tmp_path / "asset_library"),
         },
         channel_id="vida-plena-45",
+        image_gen_fn=lambda p, o: None,
     )
 
     assert Path(manifest["scenes"][0]["background"]).exists()

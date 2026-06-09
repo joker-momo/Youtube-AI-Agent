@@ -1824,7 +1824,7 @@ def repair_visual_only_unreadable(scenes: list[dict], required_item: Any) -> boo
     item_label = ""
     
     if isinstance(required_item, dict):
-        item_id = str(required_item.get("id", ""))
+        item_id = str(required_item.get("item_id") or required_item.get("id") or "")
         item_label = str(required_item.get("label") or required_item.get("point") or "")
     elif isinstance(required_item, str):
         try:
@@ -1860,9 +1860,13 @@ def repair_visual_only_unreadable(scenes: list[dict], required_item: Any) -> boo
             # Enforce covers_items
             if item_id:
                 covers = set(scene.get("covers_items") or [])
-                if item_id not in covers:
-                    covers.add(item_id)
-                    scene["covers_items"] = sorted(list(covers))
+                try:
+                    cid = int(item_id)
+                except ValueError:
+                    cid = item_id
+                if cid not in covers and str(cid) not in covers:
+                    covers.add(cid)
+                    scene["covers_items"] = sorted(list(covers), key=lambda x: (isinstance(x, str), x))
                     return True
             return False
 
@@ -1870,7 +1874,11 @@ def repair_visual_only_unreadable(scenes: list[dict], required_item: Any) -> boo
     target_scene = None
     for scene in scenes:
         covers = set(scene.get("covers_items") or [])
-        if item_id and item_id in covers:
+        try:
+            cid = int(item_id)
+        except ValueError:
+            cid = item_id
+        if item_id and (cid in covers or str(item_id) in covers):
             target_scene = scene
             break
         ost = str(scene.get("on_screen_text") or "").lower()
@@ -1905,9 +1913,13 @@ def repair_visual_only_unreadable(scenes: list[dict], required_item: Any) -> boo
         
     if item_id:
         covers = set(target_scene.get("covers_items") or [])
-        if item_id not in covers:
-            covers.add(item_id)
-            target_scene["covers_items"] = sorted(list(covers))
+        try:
+            cid = int(item_id)
+        except ValueError:
+            cid = item_id
+        if cid not in covers and str(cid) not in covers:
+            covers.add(cid)
+            target_scene["covers_items"] = sorted(list(covers), key=lambda x: (isinstance(x, str), x))
             
     return True
 

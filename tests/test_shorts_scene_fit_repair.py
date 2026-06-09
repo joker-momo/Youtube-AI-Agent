@@ -141,27 +141,78 @@ def test_each_split_segment_fits_timing():
         assert estimate_fits(p["narration"], p["duration_sec"])
 
 
-# --- Split must not duplicate a real visual across two adjacent scenes ----------
+# --- Split rules around a real visual_prompt -----------------------------------
 
-def test_split_rejected_when_scene_has_visual_prompt():
-    # A footage scene carries one visual_prompt; splitting would copy the SAME
-    # visual + motion to both halves, producing two redundant adjacent scenes
-    # (Gemini flags this and clarity/retention crater). Reject the split.
+def test_split_rejected_for_graphic_scene_with_visual_prompt():
+    # A GRAPHIC scene carries one rendered card; splitting would copy the SAME
+    # graphic to both halves (redundant + double-counts the graphic cap) and a
+    # distinct graphic cannot be invented. Reject the split for graphic layouts.
     scene = _scene(
-        visual_prompt="Vertical 9:16 supermarket close-up of a bread package, hand turning it.",
+        layout="graphic_checklist",
+        visual_prompt="Vertical 9:16 checklist card with three bread-label rules.",
         motion="Slow crop shift from front claims to back label.",
     )
     assert try_mechanical_split(scene) is None
 
 
-def test_repair_falls_back_to_regen_for_single_visual_overflow():
-    # The real-world storm case: 8 words in a 3.0s short_myth that carries a
-    # visual_prompt. Cannot extend (over cap), cannot split (would duplicate
-    # visual), no filler to condense -> defer to LLM regeneration, no new scene.
+def test_split_allowed_for_footage_scene_with_visual_prompt():
+    # Real-world s06 storm case: a 2-sentence short_tip footage scene that carries
+    # a visual_prompt and overflows its cap. Footage scenes CAN split — both halves
+    # share the same b-roll location; the second beat just gets a distinct camera
+    # motion so the pair isn't a static slideshow. This kills the recurring
+    # scene_narration_fit hard blocker (no LLM regen needed).
+    scene = _scene(
+        layout="short_tip",
+        duration_sec=3.8,
+        narration="Si no te gusta, no dura. Prepara un pan base antes del hambre.",
+        on_screen_text="QUE TE GUSTE",
+        visual_prompt="Vertical 9:16 warm kitchen, adult 45+ tasting toast with tomato.",
+        motion="Face cut from toast close-up to a small approving reaction.",
+        covers_items=[3],
+    )
+    parts = try_mechanical_split(scene)
+    assert parts is not None and len(parts) == 2
+    # Each half fits its cap, all narration preserved, coverage kept on both.
+    for p in parts:
+        assert estimate_fits(p["narration"], p["duration_sec"])
+        assert p["covers_items"] == [3]
+    assert parts[0]["narration"] == "Si no te gusta, no dura."
+    assert parts[1]["narration"] == "Prepara un pan base antes del hambre."
+    # Both halves keep the same b-roll visual; the second beat gets a DISTINCT
+    # motion so adjacent scenes don't read as a static slideshow.
+    assert parts[0]["visual_prompt"] == parts[1]["visual_prompt"]
+    assert parts[1]["motion"] != parts[0]["motion"]
+
+
+def test_repair_splits_footage_overflow_without_calling_llm():
+    # The 2-sentence footage overflow now resolves by mechanical split before any
+    # LLM regeneration: a new scene is added and the LLM is never called.
+    scenes = [
+        {"id": "s01", "layout": "short_hook", "duration_sec": 2.4, "narration": "¿Lo eliges por delante?"},
+        {"id": "s02", "layout": "short_tip", "duration_sec": 3.8,
+         "narration": "Si no te gusta, no dura. Prepara un pan base antes del hambre.",
+         "visual_prompt": "Vertical 9:16 warm kitchen, adult 45+ tasting toast.",
+         "covers_items": [3], "source_scene_ids": ["scene-46"]},
+        {"id": "s03", "layout": "short_cta", "duration_sec": 2.6, "narration": "Guárdalo."},
+    ]
+    before = len(scenes)
+    calls, regen_fn = _calls_list()
+    result = deterministic_scene_fit_repair(scenes, regen_fn=regen_fn)
+    assert "split" in result["modes"]
+    assert result["regen_called"] is False
+    assert calls == []
+    assert len(result["scenes"]) == before + 1
+    for sc in result["scenes"]:
+        assert estimate_fits(sc.get("narration", ""), sc["duration_sec"])
+
+
+def test_repair_falls_back_to_regen_for_single_sentence_visual_overflow():
+    # A single-sentence footage overflow cannot be split (one sentence) and has no
+    # whitelisted filler to condense -> defer to LLM regeneration, no new scene.
     scenes = [
         {"id": "s01", "layout": "short_hook", "duration_sec": 2.4, "narration": "¿Lo eliges por delante?"},
         {"id": "s02", "layout": "short_myth", "duration_sec": 3.0,
-         "narration": "No busques el pan perfecto. Mira la etiqueta del paquete.",
+         "narration": "No busques nunca el pan perfecto del supermercado tradicional moderno.",
          "visual_prompt": "Vertical supermarket close-up of a bread package.",
          "covers_items": [1], "source_scene_ids": ["scene-46"]},
         {"id": "s03", "layout": "short_cta", "duration_sec": 2.6, "narration": "Guárdalo."},

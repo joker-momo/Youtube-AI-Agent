@@ -59,3 +59,20 @@ def test_gemini_qa_prompts_include_new_quality_scores():
         assert expected in script_prompt
         assert expected in scene_prompt
 
+def test_prompt_flow_cohesion_and_count_authority():
+    from video_agent.shorts import prompts
+    
+    script_prompt = prompts.short_script_prompt({}, {}, {}).lower()
+    assert "count authority" in script_prompt
+    assert "priority order" in script_prompt
+    assert "source-mapped scripting rules" in script_prompt
+    
+    scene_prompt = prompts.short_scene_prompt_v6({}, {}, {}).lower()
+    assert "scene flow cohesion rules" in scene_prompt
+    assert "transition_from_previous" in scene_prompt
+
+def test_gemini_qa_count_warnings():
+    from video_agent.shorts import prompts
+    qa_prompt = prompts.gemini_script_qa_prompt({}, {}).lower()
+    assert "count authority" in qa_prompt
+    assert "produce a warn" in qa_prompt

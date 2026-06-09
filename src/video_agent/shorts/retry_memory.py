@@ -86,7 +86,7 @@ def suppress_issue_by_id(memory: RetryMemory, issue_id: str) -> None:
         memory.suppressed_issues[issue_id] = issue
         del memory.active_issues[issue_id]
 
-def generate_cumulative_feedback(memory: RetryMemory, attempt_number: int, candidate_summary: str = "") -> str:
+def generate_cumulative_feedback(memory: RetryMemory, attempt_number: int, candidate_summary: str = "", exact_mapping_context: str = "") -> str:
     blockers_lines = []
     warnings_lines = []
     
@@ -151,12 +151,13 @@ def generate_cumulative_feedback(memory: RetryMemory, attempt_number: int, candi
         
     suppressed_str = "\n".join(suppressed_lines) if suppressed_lines else "None."
     
+    exact_mapping_str = f"\nEXACT ITEM MAPPING REQUIRED:\n{exact_mapping_context}\n" if exact_mapping_context else ""
     return f"""RETRY FEEDBACK — CUMULATIVE
 
 This is retry attempt {attempt_number}.
 Only HARD/REPAIRABLE blockers below must be fixed.
 Do not regress hard invariants.
-
+{exact_mapping_str}
 ACTIVE BLOCKERS TO FIX NOW:
 {active_issues_str}
 

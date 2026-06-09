@@ -909,7 +909,10 @@ def _build_short_impl(
                     resolve_issue_by_id(script_retry_memory, issue_id)
             
             save_retry_memory(script_retry_memory, script_memory_file)
-            script_feedback = generate_cumulative_feedback(script_retry_memory, script_attempts + 1)
+            from video_agent.shorts.idea_preservation import derive_idea_items
+            exact_mapping_items = short_plan.get("idea_items") or derive_idea_items(short_plan)
+            exact_mapping_context = "\n".join(f"{i+1}. {item.get('label') or item.get('topic') or item}" for i, item in enumerate(exact_mapping_items)) if exact_mapping_items else ""
+            script_feedback = generate_cumulative_feedback(script_retry_memory, script_attempts + 1, exact_mapping_context=exact_mapping_context)
             continue
 
 
@@ -1603,12 +1606,25 @@ def _build_short_impl(
                     escalate_to_script = True
                     break
                 if structural_attempts >= max_structural_attempts:
+                    save_retry_memory(scene_retry_memory, scene_memory_file)
+                    from video_agent.shorts.idea_preservation import derive_idea_items
+                    exact_mapping_items = short_plan.get("idea_items") or derive_idea_items(short_plan)
+                    exact_mapping_context = "\n".join(f"{i+1}. {item.get('label') or item.get('topic') or item}" for i, item in enumerate(exact_mapping_items)) if exact_mapping_items else ""
+                    scenes_feedback = generate_cumulative_feedback(
+                        scene_retry_memory, scenes_attempts + 1,
+                        candidate_summary=f"Scenes attempt {scenes_attempts} failed deterministic validation.",
+                        exact_mapping_context=exact_mapping_context
+                    )
                     break
 
                 save_retry_memory(scene_retry_memory, scene_memory_file)
+                from video_agent.shorts.idea_preservation import derive_idea_items
+                exact_mapping_items = short_plan.get("idea_items") or derive_idea_items(short_plan)
+                exact_mapping_context = "\n".join(f"{i+1}. {item.get('label') or item.get('topic') or item}" for i, item in enumerate(exact_mapping_items)) if exact_mapping_items else ""
                 scenes_feedback = generate_cumulative_feedback(
                     scene_retry_memory, scenes_attempts + 1,
-                    candidate_summary=f"Scenes attempt {scenes_attempts} failed deterministic validation."
+                    candidate_summary=f"Scenes attempt {scenes_attempts} failed deterministic validation.",
+                    exact_mapping_context=exact_mapping_context
                 )
                 continue
 
@@ -1901,9 +1917,11 @@ def _build_short_impl(
                 )
 
             save_retry_memory(scene_retry_memory, scene_memory_file)
+            from video_agent.shorts.idea_preservation import derive_idea_items
+            exact_mapping_items = short_plan.get("idea_items") or derive_idea_items(short_plan)
+            exact_mapping_context = "\n".join(f"{i+1}. {item.get('label') or item.get('topic') or item}" for i, item in enumerate(exact_mapping_items)) if exact_mapping_items else ""
             scenes_feedback = generate_cumulative_feedback(
-                scene_retry_memory, scenes_attempts + 1,
-                candidate_summary=candidate_summary
+                scene_retry_memory, scenes_attempts + 1, candidate_summary=candidate_summary, exact_mapping_context=exact_mapping_context
             )
 
 
@@ -2026,13 +2044,11 @@ def _build_short_impl(
             ))
             save_retry_memory(script_retry_memory, script_memory_file)
             if anti_ai_regeneration_attempts <= 1 and script_attempts < max_regen + 1:
+                from video_agent.shorts.idea_preservation import derive_idea_items
+                exact_mapping_items = short_plan.get("idea_items") or derive_idea_items(short_plan)
+                exact_mapping_context = "\n".join(f"{i+1}. {item.get('label') or item.get('topic') or item}" for i, item in enumerate(exact_mapping_items)) if exact_mapping_items else ""
                 script_feedback = generate_cumulative_feedback(
-                    script_retry_memory,
-                    script_attempts + 1,
-                    candidate_summary=(
-                        "ANTI-AI REVIEW FAILED: regenerate/refine script and downstream scenes once "
-                        "while preserving the same short_id, source map, and idea contract."
-                    ),
+                    script_retry_memory, script_attempts + 1, exact_mapping_context=exact_mapping_context
                 )
                 for stage_name in (
                     "script",

@@ -46,6 +46,7 @@ def build_short_script(
     ))
     raw = _invoke(llm_fn, "script", prompt)
     script = _parse(raw)
+    script.setdefault("source_mapped_flow", [])
     script = ensure_script_idea_fields(script, short_plan)
     jd = paths.short_json_dir(long_job_dir, short_plan["short_id"])
     jd.mkdir(parents=True, exist_ok=True)

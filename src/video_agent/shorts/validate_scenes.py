@@ -1609,6 +1609,20 @@ def _fit_duration(narration: str, cap: float) -> float:
     return round(min(cap, max(est + SCENE_FIT_TOLERANCE, 1.5)), 1)
 
 
+# Canonical camera motions used to differentiate the second half of a split
+# footage scene from the first. Ordered by preference; the picker returns the
+# first token not already present in the original motion description.
+_SECONDARY_MOTIONS = ("crop_shift", "push_in", "object_reveal", "text_pop")
+
+
+def _alternate_motion(original: str) -> str:
+    low = (original or "").lower()
+    for cand in _SECONDARY_MOTIONS:
+        if cand not in low:
+            return cand
+    return "crop_shift"
+
+
 def try_mechanical_split(scene: dict[str, Any]) -> list[dict[str, Any]] | None:
     """Split a scene at an existing sentence boundary into two scenes that each
     fit the layout cap. Returns ``None`` if no clean split makes every segment
@@ -1617,14 +1631,21 @@ def try_mechanical_split(scene: dict[str, Any]) -> list[dict[str, Any]] | None:
     sentences = split_narration_sentences(narration)
     if len(sentences) < 2:
         return None
-    # A scene that carries a concrete visual_prompt cannot be split mechanically:
-    # both halves would inherit the SAME visual + motion, producing two redundant
-    # adjacent scenes (clarity/retention crater, Gemini flags it). Giving each
-    # half a distinct visual would require inventing one, which is forbidden — so
-    # defer to micro-condense / LLM regeneration instead.
-    if str(scene.get("visual_prompt") or "").strip():
-        return None
     layout = str(scene.get("layout") or "")
+    # A GRAPHIC scene that carries a concrete visual_prompt cannot be split: both
+    # halves inherit the SAME rendered graphic card, producing two redundant
+    # adjacent graphics (and double-counting against the graphic cap). Inventing a
+    # distinct graphic for the second half is forbidden — defer those to
+    # micro-condense / LLM regeneration instead.
+    #
+    # Real-footage short_* layouts CAN split even with a visual_prompt: both halves
+    # share the same b-roll location, which is acceptable scene continuation (a
+    # common pattern in real Shorts). We hand the second half a DISTINCT camera
+    # motion below so the two beats don't read as a static slideshow. This closes
+    # the recurring scene_narration_fit hard blocker where a 2-sentence footage
+    # scene overflowed its cap but could not be repaired (bug-301/303/306 family).
+    if layout in SUPPORTED_GRAPHIC_LAYOUTS and str(scene.get("visual_prompt") or "").strip():
+        return None
     cap = scene_hard_cap(layout)
     for i in range(1, len(sentences)):
         left = " ".join(sentences[:i]).strip()
@@ -1643,6 +1664,11 @@ def try_mechanical_split(scene: dict[str, Any]) -> list[dict[str, Any]] | None:
             second["on_screen_text"] = ""
             second["caption"] = ""
             second.pop("layout_payload", None)
+            # When both halves share the same b-roll visual_prompt, give the
+            # second beat a distinct camera motion so the pair does not read as a
+            # static slideshow. Pure motion change — invents no visual content.
+            if str(scene.get("visual_prompt") or "").strip():
+                second["motion"] = _alternate_motion(str(scene.get("motion") or ""))
             # Preserve coverage + provenance on both halves.
             covers = list(scene.get("covers_items") or [])
             first["covers_items"] = list(covers)

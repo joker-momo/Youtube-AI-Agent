@@ -172,6 +172,8 @@ def normalize_short_scenes(scenes_doc: dict, short_script: dict) -> dict[str, An
         sc.setdefault("planner_warnings", [])
         sc.setdefault("audio_offset_sec", 0.0)
         sc.setdefault("duration_sec", 3.0)
+        sc.setdefault("transition_from_previous", "")
+        sc.setdefault("retention_function", "")
         norm_scenes.append(sc)
 
     # Guarantee a closing short_cta scene whenever the script declared a CTA

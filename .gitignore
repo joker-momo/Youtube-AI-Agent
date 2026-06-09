@@ -46,3 +46,4 @@ remotion/src/*.js
 .worktrees/
 /docs/plans
 queue.db
+/.serena

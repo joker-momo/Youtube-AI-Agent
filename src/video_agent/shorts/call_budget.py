@@ -30,6 +30,7 @@ _REASONS = (
     "retry_collapse",
     "duration_normalized",
     "deterministic_repair",
+    "visual_repair_downgraded",
     "unknown",
 )
 
@@ -74,6 +75,8 @@ def _classify(record: dict[str, Any]) -> str:
         return "audio_fit_fail"
     if "weak_hook_motion" in kind or "weak_hook_motion" in error or explicit == "weak_hook_motion":
         return "deterministic_repair"
+    if "visual_repair_downgraded" in kind or "visual_repair_downgraded" in error or explicit == "visual_repair_downgraded":
+        return "visual_repair_downgraded"
     if "duration_pacing" in kind or "duration_pacing" in error or explicit == "duration_pacing":
         return "qa_soft_warn"
     if "total_duration_normalized" in kind or "total_duration_normalized" in error or explicit == "total_duration_normalized" or explicit == "duration_normalized":

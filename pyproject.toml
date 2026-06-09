@@ -23,6 +23,7 @@ dependencies = [
   "openai-whisper==20250625",
   "torch==2.5.1",
   "websockets==16.0",
+  "headroom-ai>=0.23.0",
 ]
 
 [project.optional-dependencies]

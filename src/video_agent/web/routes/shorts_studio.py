@@ -284,6 +284,14 @@ def get_shorts_studio_drafts(job_id: str, jobs_root: Path = Depends(get_jobs_roo
         merged.update(status_doc)
         if "qa_verdict" not in merged and qa_doc.get("qa_verdict"):
             merged["qa_verdict"] = qa_doc.get("qa_verdict")
+        # Surface the structured terminal decision so the UI can show
+        # "continued with WARN" vs an explicit hard blocker instead of the
+        # generic "QA failed after max regeneration attempts" message.
+        _decision = _read_json(
+            shorts_paths.resolve_short_json(short_dir, shorts_paths.SHORT_QA_DECISION_SUMMARY_FILE)
+        )
+        if _decision:
+            merged["qa_decision"] = _decision
         merged["title"] = seo_doc.get("title") or entry.get("hook") or status_doc.get("hook") or ""
         merged["source_scene_ids"] = (
             merged.get("source_scene_ids")
@@ -353,6 +361,11 @@ def get_shorts_studio_drafts(job_id: str, jobs_root: Path = Depends(get_jobs_roo
                 "cover_path": status_doc.get("cover_path"),
             }
             merged.update(status_doc)
+            _decision = _read_json(
+                shorts_paths.resolve_short_json(short_dir, shorts_paths.SHORT_QA_DECISION_SUMMARY_FILE)
+            )
+            if _decision:
+                merged["qa_decision"] = _decision
             merged["title"] = (seo_doc.get("title") if seo_doc else None) or status_doc.get("hook") or ""
             if seo_doc:
                 merged["seo"] = {

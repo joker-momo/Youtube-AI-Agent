@@ -976,6 +976,7 @@
   .short-stage-summary > summary::before { content:'▸'; font-size:10px; transition:transform 140ms; display:inline-block; }
   .short-stage-summary[open] > summary::before { transform:rotate(90deg); }
   .short-needs-review-notice { font-size:12px; color:var(--amber); padding:10px 12px; background:#fffbeb; border:1px solid #fcd34d; border-radius:6px; margin-top:12px; line-height:1.5; }
+  .short-warn-notice { font-size:12px; color:#065f46; padding:10px 12px; background:#ecfdf5; border:1px solid #6ee7b7; border-radius:6px; margin-top:12px; line-height:1.5; }
   /* ---- end Shorts Studio Page ---- */
 </style>
 </head>
@@ -3825,6 +3826,48 @@ function renderShortStep(jobId, shortId, s, idx) {
   `;
 }
 
+// Terminal review notice for a needs_review Short. Reads the structured QA
+// decision (qa_decision_summary.json) + status fields instead of always showing
+// the generic "QA failed after max regeneration attempts" message. A
+// continued-with-WARN result is publishable; only a hard blocker shows the
+// retry/regenerate prompt, and then with the explicit blocker text.
+function renderShortReviewNotice(d) {
+  const decision = (d.qa_decision && d.qa_decision.decision) || '';
+  const verdict = (d.qa_verdict || '').toUpperCase();
+  const isWarn = decision === 'continued_with_warn'
+    || (verdict === 'WARN' && decision !== 'failed_hard_blocker');
+
+  if (isWarn) {
+    const warns = ((d.qa_decision && d.qa_decision.remaining_warnings) || [])
+      .map(w => (w && (w.detail || w.type)) || String(w)).filter(Boolean);
+    const list = warns.length
+      ? `<ul style="margin:6px 0 0;padding-left:18px">${warns.map(w => `<li>${escapeHtml(w)}</li>`).join('')}</ul>`
+      : '';
+    return `
+      <div class="short-warn-notice">
+        ✓ Publishable with warnings — scenes are renderable and source-safe; the pipeline continued with WARN.${list}
+      </div>`;
+  }
+
+  // Hard blocker: show the explicit reason, not the generic message.
+  const blockers = ((d.qa_decision && d.qa_decision.remaining_blockers) || [])
+    .map(b => (b && (b.detail || b.type)) || String(b)).filter(Boolean);
+  const stage = (d.failure_stage || (d.qa_decision && d.qa_decision.stage) || '').replace('qa_', 'QA ');
+  const reason = d.failure_reason
+    || (blockers.length ? blockers.join('; ') : '');
+  const stagePrefix = stage ? `${escapeHtml(stage)} hard blocker. ` : '';
+  const detail = reason
+    ? `<div style="margin-top:4px">${stagePrefix}${escapeHtml(reason)}</div>`
+    : (stagePrefix ? `<div style="margin-top:4px">${stagePrefix}</div>` : '');
+  const blockerList = blockers.length
+    ? `<ul style="margin:6px 0 0;padding-left:18px">${blockers.map(b => `<li>${escapeHtml(b)}</li>`).join('')}</ul>`
+    : '';
+  return `
+    <div class="short-needs-review-notice">
+      QA stopped on a hard blocker. Review the generated script or scenes and try Regenerate.${detail}${blockerList}
+    </div>`;
+}
+
 function renderShortStepsTimeline(jobId, draft) {
   const activeStages = draft.stages || inferRenderStages(draft).map(s => {
     let statusVal = 'pending';
@@ -4213,10 +4256,7 @@ function renderSingleCardHtml(jobId, d, idx, shortsSeoData, isOpen) {
           ${stages.map(s => `<div class="render-stage ${s.cls}" title="${s.label}"></div>`).join('')}
         </div>
         ${renderShortStepsTimeline(jobId, d)}
-        ${st === 'needs_review' ? `
-          <div class="short-needs-review-notice">
-            QA failed after max regeneration attempts. Review the generated script or scenes and try Regenerate.
-          </div>` : ''}
+        ${st === 'needs_review' ? renderShortReviewNotice(d) : ''}
       `}
 
       <div class="rc-actions" style="margin-top:14px;display:flex;gap:8px;border-top:1px solid var(--line);padding-top:12px;align-items:center">

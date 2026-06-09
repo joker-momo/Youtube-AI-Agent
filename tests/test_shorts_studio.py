@@ -206,6 +206,50 @@ def test_shorts_studio_drafts_reads_manifest_and_short_status(client: TestClient
     assert body["drafts"][0]["source_scene_ids"] == ["scene-12", "scene-13"]
 
 
+def test_shorts_studio_drafts_surfaces_qa_decision_and_failure(client: TestClient, tmp_path: Path):
+    """A needs_review Short must surface its structured terminal decision +
+    explicit failure reason so the UI can avoid the generic max-regen message."""
+    job_dir = _write_job(tmp_path, "job-d")
+    short_dir = shorts_paths.short_dir(job_dir, "short-01")
+    (short_dir / "json").mkdir(parents=True, exist_ok=True)
+    (short_dir / "json" / shorts_paths.SHORT_QA_DECISION_SUMMARY_FILE).write_text(
+        json.dumps({
+            "stage": "qa_scenes",
+            "decision": "failed_hard_blocker",
+            "renderable": False,
+            "continued_to_render": False,
+            "remaining_blockers": [{"detail": "unsupported health claim"}],
+            "remaining_warnings": [],
+            "attempts_used": 3,
+            "max_attempts": 3,
+        }),
+        encoding="utf-8",
+    )
+    (short_dir / shorts_paths.SHORT_STATUS_FILE).write_text(
+        json.dumps({
+            "short_id": "short-01",
+            "status": "needs_review",
+            "qa_verdict": "FAIL",
+            "failure_stage": "qa_scenes",
+            "failure_reason": "qa_scenes hard blocker: unsupported health claim",
+            "requires_user_review": True,
+        }),
+        encoding="utf-8",
+    )
+    shorts_paths.manifest_path(job_dir).parent.mkdir(parents=True, exist_ok=True)
+    shorts_paths.manifest_path(job_dir).write_text(
+        json.dumps({"status": "drafts_ready", "shorts": [{"short_id": "short-01", "status": "needs_review"}]}),
+        encoding="utf-8",
+    )
+
+    body = client.get("/shorts-studio/jobs/job-d/drafts").json()
+    draft = body["drafts"][0]
+    assert draft["qa_decision"]["decision"] == "failed_hard_blocker"
+    assert draft["qa_decision"]["remaining_blockers"][0]["detail"] == "unsupported health claim"
+    assert draft["failure_stage"] == "qa_scenes"
+    assert "unsupported health claim" in draft["failure_reason"]
+
+
 def test_shorts_studio_prepare_returns_409_when_busy(client: TestClient, tmp_path: Path):
     _write_job(tmp_path, "job-1")
     queue = JobQueue(tmp_path / "queue.db")

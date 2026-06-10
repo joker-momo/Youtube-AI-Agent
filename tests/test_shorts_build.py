@@ -782,6 +782,13 @@ def _llm_fn_factory(script=_GOOD_SCRIPT, scenes=_GOOD_SCENES):
 
 
 def _stub_io(calls):
+    def background_fn(short_dir, short_scenes, channel_config, on_scene_resolved=None):
+        calls.append("background")
+        scenes = short_scenes.get("scenes") or []
+        for i, sc in enumerate(scenes):
+            sc.setdefault("asset_refs", {})["background"] = f"jobs/x/assets/{sc['id']}.mp4"
+            if on_scene_resolved:
+                on_scene_resolved({"index": i, "total": len(scenes), "scene_id": sc["id"], "background_source": "Pexels video"})
     def tts_fn(short_dir, short_scenes, channel_config):
         calls.append("tts"); (short_dir / "audio").mkdir(parents=True, exist_ok=True)
         (short_dir / "audio" / "short_narration.wav").write_bytes(b"w"); return short_dir / "audio" / "short_narration.wav"
@@ -795,7 +802,7 @@ def _stub_io(calls):
         calls.append("cover"); (short_dir / "outputs").mkdir(parents=True, exist_ok=True)
         out = short_dir / "outputs" / "short_cover.jpg"
         out.write_bytes(b"j"); return out
-    return dict(tts_fn=tts_fn, mix_fn=mix_fn, render_fn=render_fn, cover_fn=cover_fn)
+    return dict(background_fn=background_fn, tts_fn=tts_fn, mix_fn=mix_fn, render_fn=render_fn, cover_fn=cover_fn)
 
 
 def test_short_stage_retry_clears_stale_completion_and_error():
@@ -839,7 +846,7 @@ def test_build_short_pass_renders_and_writes_artifacts(tmp_path: Path):
         assert (sd / "json" / f).exists(), f
     for f in ("short.mp4", "short_cover.jpg"):
         assert (sd / "outputs" / f).exists(), f
-    assert calls == ["tts", "mix", "render", "cover"]
+    assert calls == ["background", "tts", "mix", "render", "cover"]
     assert res["music_track"] == "shorts_sleep_stress"
 
 
@@ -1379,7 +1386,7 @@ def test_build_short_prepare_mode_stops_before_render(tmp_path: Path):
     assert res["status"] == "ready_for_render"
     assert res["rendered"] is False
     assert res["requires_render_confirmation"] is True
-    assert calls == ["tts"]
+    assert calls == ["background", "tts"]
 
 
 def test_audio_fit_guard_runs_after_tts_before_mix_and_render(tmp_path: Path):
@@ -1435,7 +1442,7 @@ def test_audio_fit_guard_runs_after_tts_before_mix_and_render(tmp_path: Path):
 
     assert res["status"] == "needs_review"
     assert res["qa_verdict"] == "FAIL"
-    assert calls == ["tts"]
+    assert calls == ["background", "tts"]
     assert "audio_fit" in json.dumps(res).lower()
 
 
@@ -1850,7 +1857,7 @@ def test_audio_fit_failure_surfaces_without_regenerating_script(tmp_path: Path):
         assert res["status"] == "needs_review"
         assert res["qa_verdict"] == "FAIL"
         assert script_attempts["n"] == 1
-        assert calls == ["tts"]
+        assert calls == ["background", "tts"]
         assert not any("AUDIO-FIT" in f or "narration audio exceeds" in f for f in script_attempts["feedbacks"])
         assert "audio_fit" in json.dumps(res).lower()
 

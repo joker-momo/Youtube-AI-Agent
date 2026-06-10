@@ -68,8 +68,25 @@ class LLMHistoryRecorder:
     def __init__(self, history_path: Path) -> None:
         self.path = Path(history_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._seq = 0
+        # Seed the sequence from any existing lines so a second recorder bound to
+        # the same file (e.g. the image-gen recorder created in the assets stage)
+        # continues numbering instead of restarting at 1 and colliding.
+        self._seq = self._count_existing_lines()
         self._lock = threading.Lock()
+        # One-shot kind override for the next wrapped call. Lets a caller that
+        # owns the recorder (e.g. the SEO builder's retry loop) tag the upcoming
+        # LLM entry as ``seo:attempt-2`` instead of the generic ``seo`` guess, so
+        # legitimate self-correction retries are not mistaken for duplicate runs.
+        self._kind_hint: str | None = None
+
+    def _count_existing_lines(self) -> int:
+        try:
+            if not self.path.exists():
+                return 0
+            with self.path.open("r", encoding="utf-8") as fh:
+                return sum(1 for line in fh if line.strip())
+        except OSError:  # pragma: no cover - defensive
+            return 0
 
     def _append(self, record: dict[str, Any]) -> None:
         line = json.dumps(record, ensure_ascii=False)
@@ -97,6 +114,53 @@ class LLMHistoryRecorder:
             "payload": payload,
         })
 
+    def set_kind_hint(self, kind: str | None) -> None:
+        """Tag the NEXT wrapped LLM call with ``kind`` (consumed once)."""
+        with self._lock:
+            self._kind_hint = kind
+
+    def _consume_kind_hint(self) -> str | None:
+        with self._lock:
+            hint = self._kind_hint
+            self._kind_hint = None
+            return hint
+
+    def record_image_gen(
+        self,
+        prompt: str,
+        *,
+        provider: str = "chatgpt",
+        kind: str = "image_gen",
+        ok: bool = True,
+        error: str | None = None,
+        duration_ms: int = 0,
+        response: str = "",
+    ) -> None:
+        """Append an image-generation call to the same history stream.
+
+        The browser image-gen path does not flow through ``wrap`` (its callable
+        has shape ``fn(prompt, out_path) -> None``), so this records the full
+        prompt sent to ChatGPT for the AI image fallback explicitly.
+        """
+        with self._lock:
+            self._seq += 1
+            seq = self._seq
+        prompt_str = prompt or ""
+        resp_str = response or ""
+        self._append({
+            "seq": seq,
+            "ts": _now_iso(),
+            "provider": provider,
+            "kind": kind,
+            "prompt_chars": len(prompt_str),
+            "prompt": prompt_str,
+            "response_chars": len(resp_str),
+            "response": resp_str if ok else None,
+            "duration_ms": int(duration_ms),
+            "ok": bool(ok),
+            "error": error,
+        })
+
     def wrap(
         self,
         fn: Callable[..., str],
@@ -120,7 +184,7 @@ class LLMHistoryRecorder:
                 return fn(*args)
 
             prompt_str = "" if prompt is None else str(prompt)
-            label = kind or _guess_kind(provider, prompt_str)
+            label = self._consume_kind_hint() or kind or _guess_kind(provider, prompt_str)
             with self._lock:
                 self._seq += 1
                 seq = self._seq

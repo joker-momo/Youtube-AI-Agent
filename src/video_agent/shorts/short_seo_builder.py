@@ -119,6 +119,7 @@ def build_short_seo(
     llm_fn: Callable[..., str],
     long_video_url: str = "",
     retention_plan: dict | None = None,
+    history_recorder: Any = None,
 ) -> dict[str, Any]:
     funnel = (channel_config.get("shorts") or {}).get("funnel") or {}
     pinned_template = funnel.get("pinned_comment_template", "")
@@ -131,6 +132,14 @@ def build_short_seo(
             channel_config, short_plan, short_script, long_video_url,
             retention_plan=retention_plan, retry_feedback=retry_feedback,
         )
+        # Tag the history entry with the attempt number so a self-correction
+        # regen reads as ``seo:attempt-2`` instead of a second generic ``seo``
+        # that looks like a duplicate run.
+        if history_recorder is not None:
+            try:
+                history_recorder.set_kind_hint(f"seo:attempt-{attempt + 1}")
+            except Exception:  # pragma: no cover - tagging must never break SEO
+                pass
         parsed = _parse(_invoke(llm_fn, "seo", prompt))
         pinned = parsed.get("pinned_comment") or (
             pinned_template.replace("{long_video_url}", long_video_url) if pinned_template else ""

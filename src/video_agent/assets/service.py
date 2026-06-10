@@ -313,6 +313,8 @@ class StockAssetService:
         stock_client: StockPhotoClient | None = None,
         download_client: DownloadClient | None = None,
         image_gen_fn: Any = None,
+        image_gen_recorder: Any = None,
+        vision_qa_fn: Any = None,
     ) -> None:
         self.visual_config = visual_config
         self.providers = list(visual_config.get("providers") or ["pexels", "pixabay"])
@@ -335,6 +337,10 @@ class StockAssetService:
         # that renders an AI image for the scene's visual_prompt. When None the
         # cascade skips AI generation and uses an anti-blank weak stock match.
         self.image_gen_fn = image_gen_fn
+        # Optional LLMHistoryRecorder: when set, every AI image-gen prompt sent to
+        # ChatGPT is logged to the Short's prompt history (success + failure).
+        self.image_gen_recorder = image_gen_recorder
+        self.vision_qa_fn = vision_qa_fn
         self.cache = QueryCache(
             _resolve_project_path(visual_config.get("query_cache_path"), "caches/query_cache.db")
         )
@@ -514,36 +520,42 @@ class StockAssetService:
                 require_strict=require_strict,
             )
 
-        # 5-tier cascade: a strict (action-relevant) match wins at the highest
-        # available fidelity.
-        
-        # Tier 1 — stock video, strict only.
-        asset = _search(self.providers, require_strict=True)
-        if asset is not None:
-            asset["asset_tier"] = "pexels_video"
-            asset["asset_selection"]["asset_match_status"] = "strong_match"
-            return asset
-            
-        # Tier 2 — stock photo, strict only.
-        asset = _search(self.photo_providers, require_strict=True)
-        if asset is not None:
-            asset["asset_tier"] = "pexels_photo"
-            asset["asset_selection"]["asset_match_status"] = "strong_match"
-            return asset
-            
-        # Tier 3 — AI-generated image for the scene's visual_prompt.
+        strategy = scene.get("asset_strategy", "stock_ok")
+        visual_importance = scene.get("visual_importance", "normal")
+        is_key = visual_importance == "critical" or self._is_key_scene(scene)
+
+        # 5-tier cascade based on asset_strategy
+
+        # Tier 1 & 2: Strict Stock Search (always attempted first if not graphic_fallback)
+        if strategy != "graphic_fallback":
+            # Tier 1 — stock video, strict only.
+            asset = _search(self.providers, require_strict=True)
+            if asset is not None:
+                asset["asset_tier"] = "pexels_video"
+                asset["asset_selection"]["asset_match_status"] = "strong_match"
+                return asset
+                
+            # Tier 2 — stock photo, strict only.
+            asset = _search(self.photo_providers, require_strict=True)
+            if asset is not None:
+                asset["asset_tier"] = "pexels_photo"
+                asset["asset_selection"]["asset_match_status"] = "strong_match"
+                return asset
+
+        # Tier 3 — AI-generated image fallback
+        # Triggered if strategy is ai_image_preferred OR if it's a critical scene where strict stock failed
         enable_ai_fallback = str(os.environ.get("ENABLE_AI_IMAGE_FALLBACK", "true")).lower() == "true"
-        if enable_ai_fallback and self.image_gen_fn is not None:
+        ai_triggered = (strategy == "ai_image_preferred") or (is_key and strategy != "graphic_fallback")
+        if ai_triggered and enable_ai_fallback and self.image_gen_fn is not None:
+            # max retries logic is handled inside _ai_generate_scene_asset
             asset = self._ai_generate_scene_asset(scene, query, channel_id, job_id)
             if asset is not None:
                 asset["asset_tier"] = "ai_image"
                 asset["asset_selection"]["asset_match_status"] = "ai_generated"
                 return asset
-                
-        is_key = self._is_key_scene(scene)
-        
-        # Tier 4a — Graphic/text-led fallback for key scenes
-        if is_key:
+
+        # Tier 4a — Graphic/text-led fallback
+        if strategy == "graphic_fallback" or (is_key and not enable_ai_fallback):
             return {
                 "provider": "graphic_fallback",
                 "asset_id": f"graphic_{job_id}_{scene['id']}",
@@ -557,26 +569,47 @@ class StockAssetService:
                     "source": "graphic_fallback",
                     "weak_match": False,
                     "asset_match_status": "graphic_fallback",
-                    "reasons": ["graphic_fallback_for_key_scene"],
+                    "reasons": [f"graphic_fallback_strategy_{strategy}"],
                     "matched_terms": [],
                 },
             }
             
-        # Tier 4b — Weak Pexels allowed only for non-key scenes
-        asset = _search(self.providers, require_strict=False)
-        if asset is not None:
-            asset["asset_tier"] = "weak_pexels"
-            asset["asset_selection"]["asset_match_status"] = "weak_match"
-            return asset
-        if self.fallback_providers:
-            asset = _search(self.fallback_providers, require_strict=False, is_fallback=True)
+        # Tier 4b — Weak Pexels allowed only for non-key scenes if strategy is stock_ok
+        if strategy == "stock_ok" and not is_key:
+            asset = _search(self.providers, require_strict=False)
             if asset is not None:
                 asset["asset_tier"] = "weak_pexels"
                 asset["asset_selection"]["asset_match_status"] = "weak_match"
                 return asset
+            if self.fallback_providers:
+                asset = _search(self.fallback_providers, require_strict=False, is_fallback=True)
+                if asset is not None:
+                    asset["asset_tier"] = "weak_pexels"
+                    asset["asset_selection"]["asset_match_status"] = "weak_match"
+                    return asset
                 
         # Tier 5 — block + review (returns None)
         return None
+
+    def _record_image_gen(
+        self, prompt: str, scene: dict[str, Any], attempt: int, *,
+        ok: bool, duration_ms: int = 0, error: str | None = None,
+    ) -> None:
+        """Log one AI image-gen prompt to the Short's history (no-op if unset)."""
+        rec = self.image_gen_recorder
+        if rec is None:
+            return
+        try:
+            rec.record_image_gen(
+                prompt,
+                kind=f"image_gen:scene-{scene.get('id', '?')}:attempt-{attempt + 1}",
+                ok=ok,
+                duration_ms=duration_ms,
+                error=error,
+                response="image generated" if ok else "",
+            )
+        except Exception:  # pragma: no cover - logging must never break gen
+            pass
 
     def _ai_generate_scene_asset(
         self, scene: dict[str, Any], query: str, channel_id: str, job_id: str
@@ -600,12 +633,39 @@ class StockAssetService:
         if not (out_path.exists() and out_path.stat().st_size > 1024):
             try:
                 out_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Prepend the portrait image gen instruction
+                image_gen_instruction = (
+                    "Generate one photorealistic image at exactly 1080x1920 pixels "
+                    "(Full HD, 9:16 portrait orientation). Fill the entire 1080x1920 frame — "
+                    "no borders, no padding, no commentary, no watermark."
+                )
+                full_prompt = f"{image_gen_instruction}\n\n{prompt}"
+                
+                # Browser-worker refuses to write outside the 'jobs/' directory.
+                # So we must tell it to write to a temp file inside the job dir, then move it.
+                temp_path = Path(f"jobs/{job_id}/assets/ai_temp_{scene['id']}_{prompt_hash}.png").resolve()
+                temp_path.parent.mkdir(parents=True, exist_ok=True)
+                
                 # Attempt generation with 1 retry
+                import time as _time
                 for attempt in range(2):
+                    _t0 = _time.monotonic()
                     try:
-                        self.image_gen_fn(prompt, out_path)
+                        self.image_gen_fn(full_prompt, temp_path)
+                        import shutil
+                        if temp_path.exists():
+                            shutil.move(str(temp_path), str(out_path))
+                        self._record_image_gen(
+                            full_prompt, scene, attempt, ok=True,
+                            duration_ms=int((_time.monotonic() - _t0) * 1000),
+                        )
                         break
                     except Exception as e:
+                        self._record_image_gen(
+                            full_prompt, scene, attempt, ok=False, error=f"{type(e).__name__}: {e}",
+                            duration_ms=int((_time.monotonic() - _t0) * 1000),
+                        )
                         if attempt == 1:
                             raise e
             except Exception as exc:  # pragma: no cover - defensive
@@ -720,9 +780,17 @@ class StockAssetService:
                 return False
             reasons = set(item.get("reasons") or [])
             matched = set(item.get("matched_terms") or [])
+            prompt = query.lower()
+            
+            # Demographic strict enforcement
+            demo_terms = {"senior", "elderly", "mature", "older", "50s", "60s", "aging", "grandfather", "grandmother", "grandparent", "55+"}
+            if any(term in prompt for term in demo_terms):
+                has_demo = any(d in matched for d in demo_terms)
+                if not has_demo:
+                    item["failed_required_terms"] = "Missing demographic terms (senior/elderly) for a demographic-specific query"
+                    return False
             
             # Check label reading strict context
-            prompt = query.lower()
             key_terms = {"package", "label", "ingredients", "fibra", "harina", "compare", "turn", "rotate", "flip", "back label", "back"}
             if any(term in prompt for term in key_terms):
                 objects = {"bread", "package", "label", "ingredient"}
@@ -778,6 +846,30 @@ class StockAssetService:
                 asset = self._ensure_asset(candidate, query)
             except Exception:
                 continue
+
+            # --- Post-Asset Vision QA ---
+            # If vision QA is provided, the scene is critical, and we have a local_path, run QA
+            if self.vision_qa_fn is not None and asset.get("local_path"):
+                visual_importance = scene.get("visual_importance", "normal")
+                if visual_importance == "critical":
+                    qa_result = self.vision_qa_fn(scene, asset["local_path"])
+                    if qa_result.get("verdict") == "FAIL":
+                        # Record failure reasons to asset_selection payload for transparency
+                        asset_selection = asset.get("asset_selection") or {}
+                        asset_selection["qa_failed"] = True
+                        asset_selection["qa_missing_evidence"] = qa_result.get("missing_evidence", [])
+                        asset_selection["qa_forbidden_violations"] = qa_result.get("forbidden_violations", [])
+                        asset_selection["qa_reason"] = qa_result.get("reason", "")
+                        # Save the failed asset in case we want to debug, but DO NOT return it
+                        # we move to the next candidate
+                        self.last_errors.append({
+                            "provider": asset.get("provider"),
+                            "error_type": "VisionQAFailure",
+                            "message": f"QA Failed: {qa_result.get('reason')}",
+                            "stage": "post_asset_qa"
+                        })
+                        continue
+
             self.used_provider_ids.add(key)
             self.used_asset_ids.add((asset["provider"], asset["asset_id"]))
             self.library.record_usage(

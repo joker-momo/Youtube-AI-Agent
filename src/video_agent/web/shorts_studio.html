@@ -2045,14 +2045,84 @@ function renderShortPipelineCard(jobId, short) {
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:6px;margin-top:10px">
           ${steps.map(step => renderShortSubstep(step)).join('')}
         </div>
+        ${renderBackgroundLive(short.background_live)}
         <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">
           ${video ? `<a class="action-btn primary" href="${video}" target="_blank">Play Short</a>` : ''}
           ${video ? `<a class="action-btn" href="${video}" download>Download MP4</a>` : ''}
           <button class="action-btn" onclick="openShortDetail('${escapeHtml(jobId)}','${escapeHtml(sid)}')">Details</button>
+          <button class="action-btn" onclick="spViewBackgroundSources('${escapeHtml(jobId)}','${escapeHtml(sid)}', this)">🎬 Background sources</button>
           <button class="action-btn" onclick="regenShort('${escapeHtml(jobId)}','${escapeHtml(sid)}')">Regenerate</button>
         </div>
+        <div class="bg-sources-panel" style="display:none;margin-top:10px"></div>
       </div>
     </div>`;
+}
+
+// Color per background source so an operator can scan, at a glance, which scenes
+// used Pexels video vs photo vs ChatGPT-generated images vs placeholders.
+function bgSourceBadgeStyle(source) {
+  const s = String(source || '').toLowerCase();
+  if (s.includes('pexels video')) return 'background:#dbeafe;color:#1e40af';
+  if (s.includes('pexels photo') || s.includes('pixabay')) return 'background:#cffafe;color:#155e63';
+  if (s.includes('chatgpt')) return 'background:#dcfce7;color:#166534';
+  if (s.includes('placeholder')) return 'background:#fee2e2;color:#991b1b';
+  if (s.includes('graphic')) return 'background:#fef9c3;color:#854d0e';
+  if (s.includes('local')) return 'background:#ede9fe;color:#5b21b6';
+  return 'background:#f3f4f6;color:#374151';
+}
+
+// Live banner shown while the Background Assets stage resolves each scene's
+// source. Streams "scene X/N · <source>" so the operator can watch sourcing
+// happen in realtime (the card re-renders on each shorts-timeline refresh).
+function renderBackgroundLive(bl) {
+  if (!bl || bl.status !== 'in_progress') return '';
+  const cur = bl.current_scene, tot = bl.total_scenes;
+  const counter = (cur && tot) ? `scene ${cur}/${tot}` : 'starting…';
+  const src = bl.last_source
+    ? ` · <span style="font-weight:700;border-radius:999px;padding:1px 8px;${bgSourceBadgeStyle(bl.last_source)}">${escapeHtml(bl.last_source)}</span>`
+    : '';
+  const sid = bl.last_scene_id ? ` <span style="color:var(--muted)">(${escapeHtml(bl.last_scene_id)})</span>` : '';
+  return `
+    <div style="margin-top:12px;padding:16px 20px;border:4px solid #dc2626;border-radius:12px;background:#fef2f2;font-size:22px;display:flex;align-items:center;gap:12px;color:#b91c1c;box-shadow:0 6px 16px rgba(220,38,38,0.4)">
+      <span class="ws-dot live" style="width:16px;height:16px;background-color:#dc2626;box-shadow:0 0 8px #dc2626"></span>
+      <span style="font-weight:900">🎬 ĐANG LẤY ẢNH NỀN — ${counter}${sid}</span><span style="font-size:18px">${src}</span>
+    </div>`;
+}
+
+async function spViewBackgroundSources(jobId, shortId, btn) {
+  const panel = btn.closest('div').parentElement.querySelector('.bg-sources-panel');
+  if (!panel) return;
+  if (panel.style.display !== 'none') { panel.style.display = 'none'; return; }
+  panel.style.display = 'block';
+  panel.innerHTML = '<div style="color:var(--muted);font-size:12px">Loading background sources…</div>';
+  const path = 'shorts/' + shortId + '/json/background_report.json';
+  const url = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(path) + '&t=' + Date.now();
+  try {
+    const r = await fetch(url);
+    if (!r.ok) { panel.innerHTML = '<div style="color:var(--muted);font-size:12px">No background report yet for this Short.</div>'; return; }
+    const data = JSON.parse(await r.text());
+    const scenes = Array.isArray(data.scenes) ? data.scenes : [];
+    if (!scenes.length) { panel.innerHTML = '<div style="color:var(--muted);font-size:12px">No scenes in background report.</div>'; return; }
+    const rows = scenes.map(s => {
+      const src = s.background_source || 'Unknown';
+      const motion = s.motion ? ` · <span style="color:var(--muted)">${escapeHtml(s.motion)}</span>` : '';
+      const q = s.query ? `<div style="font-size:11px;color:var(--muted-2,#94a3b8);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(s.query)}">${escapeHtml((s.query || '').slice(0, 90))}</div>` : '';
+      const lnk = s.source_url ? `<div style="font-size:11px;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(s.source_url)}"><a href="${escapeHtml(s.source_url)}" target="_blank" style="color:var(--blue);text-decoration:none">🔗 ${escapeHtml(s.source_url)}</a></div>` : '';
+      return `
+        <div style="border:1px solid var(--line);border-radius:8px;padding:7px 9px;background:#fff">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-weight:700;font-size:12px;min-width:38px">${escapeHtml(s.scene_id || '')}</span>
+            <span style="font-size:11px;font-weight:700;border-radius:999px;padding:2px 9px;${bgSourceBadgeStyle(src)}">${escapeHtml(src)}</span>
+            <span style="font-size:11px">${motion}</span>
+          </div>
+          ${q}
+          ${lnk}
+        </div>`;
+    }).join('');
+    panel.innerHTML = `<div style="font-weight:700;font-size:12px;margin-bottom:6px">🎬 Per-scene background sources</div><div style="display:grid;gap:6px">${rows}</div>`;
+  } catch (e) {
+    panel.innerHTML = '<div style="color:var(--muted);font-size:12px">Failed to load background report.</div>';
+  }
 }
 
 function renderQaScenesAttempts(short) {
@@ -3349,6 +3419,7 @@ function renderShortsCards(jobId, data) {
 	            ${cover ? `<a class="action-btn" href="${cover}" download>⬇ Cover</a>` : ''}
 	            <button class="action-btn" onclick="copyShortSeo('${escapeHtml(jobId)}','${escapeHtml(sid)}')">Copy SEO</button>
 	            <button class="action-btn primary" onclick="openShortDrawer('${escapeHtml(jobId)}','${escapeHtml(sid)}')">Details</button>
+	            <button class="action-btn" onclick="spViewBackgroundSources('${escapeHtml(jobId)}','${escapeHtml(sid)}', this)">🎬 Background sources</button>
 	            <a class="action-btn" href="${artifact('short_source_map.json')}" target="_blank">Source Map</a>
 	            <a class="action-btn" href="${artifact('short_qa.json')}" target="_blank">View QA</a>
 	            ${needsReview
@@ -3357,6 +3428,7 @@ function renderShortsCards(jobId, data) {
                  <button class="action-btn" onclick="markShortUploaded('${escapeHtml(jobId)}','${escapeHtml(sid)}')">Mark uploaded</button>`}
           </div>
         </div>
+        <div class="bg-sources-panel" style="display:none;margin-top:10px;grid-column:1/-1"></div>
       </div>`;
   }).join('');
 }
@@ -4258,14 +4330,18 @@ function renderSingleCardHtml(jobId, d, idx, shortsSeoData, isOpen) {
         ${renderShortStepsTimeline(jobId, d)}
         ${st === 'needs_review' ? renderShortReviewNotice(d) : ''}
       `}
+      
+      ${renderBackgroundLive(d.background_live || (d.stages || []).find(s => s.name === 'background'))}
 
       <div class="rc-actions" style="margin-top:14px;display:flex;gap:8px;border-top:1px solid var(--line);padding-top:12px;align-items:center">
         <button class="action-btn warn" onclick="spStopShort('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', this)" ${isRunning ? '' : 'disabled'}>Stop</button>
         <button class="action-btn" onclick="spResumeShort('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', '${escapeHtml(st)}', this)" ${isStoppedOrFailed ? '' : 'disabled'}>Resume</button>
         <button class="action-btn" onclick="spViewPromptHistory('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', this)">📜 Prompt history</button>
+        <button class="action-btn" onclick="spViewBackgroundSources('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', this)">🎬 Background sources</button>
         <div style="flex:1"></div>
         <button class="action-btn danger" onclick="spDeleteShort('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', this)" ${isRunning ? 'disabled' : ''}>Delete</button>
       </div>
+      <div class="bg-sources-panel" style="display:none;margin-top:10px;grid-column:1/-1"></div>
     </div>
   </div>`;
 }

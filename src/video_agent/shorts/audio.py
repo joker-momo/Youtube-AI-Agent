@@ -7,17 +7,16 @@ mini-job for the Remotion renderer. Uses the Shorts faster voice preset
 """
 from __future__ import annotations
 
-import os
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from video_agent.shorts import paths
 
 
-def synthesize_short_narration(short_dir: Path, short_scenes: dict, channel_config: dict) -> Path:
+def _short_asset_context(short_dir: Path, channel_config: dict) -> dict[str, Any]:
+    """Common style/visual/tts kwargs shared by the background + TTS passes."""
     from video_agent.contracts import repo_root
-    from video_agent.stages.assets import prepare_assets
     from video_agent.utils.json_io import read_json
 
     style_dna_path = (channel_config.get("style_dna") or {}).get("path")
@@ -40,14 +39,54 @@ def synthesize_short_narration(short_dir: Path, short_scenes: dict, channel_conf
     # write so the caller's config is untouched.
     tts_config = {**(tts_config or {}), "dynamic_sync": False}
     channel_id = (channel_config.get("channel") or {}).get("id", "unknown-channel")
+    return {
+        "style_dna": style_dna,
+        "visual_config": visuals,
+        "tts_config": tts_config,
+        "channel_id": channel_id,
+    }
+
+
+def synthesize_short_backgrounds(
+    short_dir: Path,
+    short_scenes: dict,
+    channel_config: dict,
+    on_scene_resolved: Callable[[dict[str, Any]], None] | None = None,
+) -> None:
+    """Resolve every scene's background (Pexels video/photo, ChatGPT image, or
+    placeholder) WITHOUT synthesizing audio. Runs as its own pipeline stage so the
+    UI can report, scene-by-scene, which source was used."""
+    from video_agent.stages.assets import prepare_assets
+
+    ctx = _short_asset_context(short_dir, channel_config)
+    # Log AI image-gen prompts to the Short's prompt history (same JSONL the
+    # ChatGPT/Gemini calls write to). short_dir is this Short's folder, so the
+    # history file is json/llm_history.jsonl inside it.
+    llm_history_path = short_dir / paths.SHORT_JSON_SUBDIR / paths.SHORT_LLM_HISTORY_FILE
 
     prepare_assets(
         job_dir=short_dir,
-        style_dna=style_dna,
         scene_doc=short_scenes,
-        visual_config=visuals,
-        tts_config=tts_config,
-        channel_id=channel_id,
+        render_backgrounds=True,
+        render_tts=False,
+        on_scene_resolved=on_scene_resolved,
+        llm_history_path=llm_history_path,
+        **ctx,
+    )
+
+
+def synthesize_short_narration(short_dir: Path, short_scenes: dict, channel_config: dict) -> Path:
+    """Synthesize the Short's narration track. Backgrounds are resolved earlier by
+    ``synthesize_short_backgrounds`` (separate stage), so this pass skips visuals."""
+    from video_agent.stages.assets import prepare_assets
+
+    ctx = _short_asset_context(short_dir, channel_config)
+    prepare_assets(
+        job_dir=short_dir,
+        scene_doc=short_scenes,
+        render_backgrounds=False,
+        render_tts=True,
+        **ctx,
     )
 
     src = short_dir / "assets" / "narration.wav"

@@ -159,6 +159,12 @@ def _default_llm_fn(kind: str, prompt: str) -> str:  # pragma: no cover - needs 
     raise NotImplementedError("llm_fn must be injected (browser ChatGPT sender).")
 
 
+def _default_background_fn(short_dir: Path, short_scenes: dict, channel_config: dict, on_scene_resolved=None) -> None:
+    from video_agent.shorts.audio import synthesize_short_backgrounds
+
+    synthesize_short_backgrounds(short_dir, short_scenes, channel_config, on_scene_resolved=on_scene_resolved)
+
+
 def _default_tts_fn(short_dir: Path, short_scenes: dict, channel_config: dict) -> Path:
     from video_agent.shorts.audio import synthesize_short_narration
 
@@ -181,11 +187,6 @@ def _default_cover_fn(short_dir: Path, channel_config: dict) -> Path:
     from video_agent.shorts.renderer import render_short_cover
 
     return render_short_cover(short_dir, channel_config)
-
-
-def _default_thumbnail_fn(long_job_dir: Path, short_id: str, channel_config: dict) -> Path | None:
-    """No-op default: skip thumbnail generation unless an image_fn is injected."""
-    return None
 
 
 # Average product score (0-10) at/above which a soft-only scene-QA FAIL is
@@ -443,11 +444,11 @@ def build_short(
     *,
     llm_fn: Callable[..., str] = _default_llm_fn,
     gemini_fn: Callable[[str], str] | None = None,
+    background_fn: Callable[..., None] = _default_background_fn,
     tts_fn: Callable[..., Path] = _default_tts_fn,
     mix_fn: Callable[..., Path] = _default_mix_fn,
     render_fn: Callable[..., Path] = _default_render_fn,
     cover_fn: Callable[..., Path] = _default_cover_fn,
-    thumbnail_fn: Callable[..., Path | None] = _default_thumbnail_fn,
     long_video_url: str = "",
     require_render_confirmation: bool = False,
     source_artifacts: dict | None = None,
@@ -462,11 +463,11 @@ def build_short(
             channel_config,
             llm_fn=llm_fn,
             gemini_fn=gemini_fn,
+            background_fn=background_fn,
             tts_fn=tts_fn,
             mix_fn=mix_fn,
             render_fn=render_fn,
             cover_fn=cover_fn,
-            thumbnail_fn=thumbnail_fn,
             long_video_url=long_video_url,
             require_render_confirmation=require_render_confirmation,
             source_artifacts=source_artifacts,
@@ -497,11 +498,11 @@ def _build_short_impl(
     *,
     llm_fn: Callable[..., str] = _default_llm_fn,
     gemini_fn: Callable[[str], str] | None = None,
+    background_fn: Callable[..., None] = _default_background_fn,
     tts_fn: Callable[..., Path] = _default_tts_fn,
     mix_fn: Callable[..., Path] = _default_mix_fn,
     render_fn: Callable[..., Path] = _default_render_fn,
     cover_fn: Callable[..., Path] = _default_cover_fn,
-    thumbnail_fn: Callable[..., Path | None] = _default_thumbnail_fn,
     long_video_url: str = "",
     require_render_confirmation: bool = False,
     source_artifacts: dict | None = None,
@@ -571,9 +572,9 @@ def _build_short_impl(
         {"name": "visual_rhythm_plan", "label": "Visual Rhythm Plan", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "qa_scenes", "label": "QA Scenes", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "anti_ai_review", "label": "Anti-AI Review", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
-        {"name": "seo", "label": "Short SEO", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
-        {"name": "thumbnail", "label": "Thumbnail", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
+        {"name": "background", "label": "Background Assets", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "audio", "label": "Audio TTS & Mix", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
+        {"name": "seo", "label": "Short SEO", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "render", "label": "Video & Cover Render", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "performance_memory", "label": "Performance Memory", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
     ]
@@ -2088,6 +2089,37 @@ def _build_short_impl(
             write_short_status(long_job_dir, short_id, status)
             return status
 
+        # Stage: Background assets — resolve each scene's background (Pexels
+        # video/photo, ChatGPT image, or placeholder) BEFORE audio, reporting the
+        # source scene-by-scene so the UI shows exactly where each came from.
+        update_stage("background", "in_progress")
+        try:
+            check_stop()
+            assert_latest_scenes_ready(state)
+            bg_sources: list[dict[str, Any]] = []
+
+            def _on_scene_bg(info: dict[str, Any]) -> None:
+                bg_sources.append({
+                    "scene_id": info.get("scene_id"),
+                    "background_source": info.get("background_source"),
+                })
+                update_stage(
+                    "background",
+                    "in_progress",
+                    current_scene=(int(info.get("index", 0)) + 1),
+                    total_scenes=info.get("total"),
+                    last_scene_id=info.get("scene_id"),
+                    last_source=info.get("background_source"),
+                )
+
+            background_fn(sd, short_scenes, channel_config, on_scene_resolved=_on_scene_bg)
+            update_stage("background", "completed", per_scene=bg_sources)
+        except Exception as exc:
+            update_stage("background", "failed", error=str(exc))
+            status["status"] = "failed"
+            write_short_status(long_job_dir, short_id, status)
+            raise exc
+
         # Stage 6: Audio TTS & exact audio_fit check
         update_stage("audio", "in_progress")
         try:
@@ -2238,6 +2270,7 @@ def _build_short_impl(
             short_seo_builder.build_short_seo(
                 long_job_dir, short_id, plan_for_prompt, short_script, channel_config, llm_fn, long_video_url,
                 retention_plan=retention_plan,
+                history_recorder=_recorder,
             )
             update_stage("seo", "completed")
         except Exception as exc:
@@ -2267,20 +2300,6 @@ def _build_short_impl(
             "qa_scenes_product_attempts": product_attempts,
         })
         write_short_status(long_job_dir, short_id, status)
-
-        # Stage 5b: Thumbnail
-        update_stage("thumbnail", "in_progress")
-        try:
-            check_stop()
-            update_stage(
-                "thumbnail",
-                "completed",
-                mode="disabled_for_shorts_render",
-                image_generation_called=False,
-                thumbnail_path=None,
-            )
-        except Exception as exc:
-            update_stage("thumbnail", "failed", error=str(exc))
 
         if require_render_confirmation:
             _write_render_props(sd, short_scenes, channel_config, music_track)

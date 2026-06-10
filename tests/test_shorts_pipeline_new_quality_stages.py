@@ -96,6 +96,14 @@ def _llm(script_sequence: list[dict] | None = None, scenes_sequence: list[dict] 
 
 
 def _stub_io(calls: list[str]) -> dict:
+    def background_fn(short_dir, short_scenes, channel_config, on_scene_resolved=None):
+        calls.append("background")
+        scenes = short_scenes.get("scenes") or []
+        for i, sc in enumerate(scenes):
+            sc.setdefault("asset_refs", {})["background"] = f"jobs/x/assets/{sc['id']}.mp4"
+            if on_scene_resolved:
+                on_scene_resolved({"index": i, "total": len(scenes), "scene_id": sc["id"], "background_source": "Pexels video"})
+
     def tts_fn(short_dir, short_scenes, channel_config):
         calls.append("tts")
         (short_dir / "audio").mkdir(parents=True, exist_ok=True)
@@ -123,28 +131,28 @@ def _stub_io(calls: list[str]) -> dict:
         out.write_bytes(b"j")
         return out
 
-    return {"tts_fn": tts_fn, "mix_fn": mix_fn, "render_fn": render_fn, "cover_fn": cover_fn}
+    return {"background_fn": background_fn, "tts_fn": tts_fn, "mix_fn": mix_fn, "render_fn": render_fn, "cover_fn": cover_fn}
 
 
-def test_build_short_writes_quality_artifacts_and_completed_thumbnail_noop(tmp_path: Path):
+def test_build_short_writes_quality_artifacts_and_background_stage(tmp_path: Path):
     from video_agent.shorts import paths, short_builder
 
     job = _long_job(tmp_path)
     calls: list[str] = []
-    thumb_calls: list[str] = []
 
     status = short_builder.build_short(
         job,
         _plan(),
         _cfg(),
         llm_fn=_llm(),
-        thumbnail_fn=lambda *_args, **_kwargs: thumb_calls.append("thumbnail"),
         **_stub_io(calls),
     )
 
     stage_names = [stage["name"] for stage in status["stages"]]
-    for expected in ("retention_plan", "spoken_humanization", "visual_rhythm_plan", "anti_ai_review", "performance_memory", "thumbnail"):
+    for expected in ("retention_plan", "spoken_humanization", "visual_rhythm_plan", "anti_ai_review", "background", "performance_memory"):
         assert expected in stage_names
+    # Thumbnail stage was removed from the Shorts pipeline.
+    assert "thumbnail" not in stage_names
 
     jd = paths.short_json_dir(job, "short-01")
     for filename in (
@@ -156,11 +164,10 @@ def test_build_short_writes_quality_artifacts_and_completed_thumbnail_noop(tmp_p
     ):
         assert (jd / filename).exists()
 
-    thumb_stage = next(stage for stage in status["stages"] if stage["name"] == "thumbnail")
-    assert thumb_stage["status"] == "completed"
-    assert thumb_stage["mode"] == "disabled_for_shorts_render"
-    assert thumb_stage["image_generation_called"] is False
-    assert thumb_calls == []
+    bg_stage = next(stage for stage in status["stages"] if stage["name"] == "background")
+    assert bg_stage["status"] == "completed"
+    assert [s["scene_id"] for s in bg_stage["per_scene"]]  # per-scene source report present
+    assert "background" in calls
     assert status["cover_path"] == "shorts/short-01/outputs/short_cover.jpg"
     assert "cover" in calls
 

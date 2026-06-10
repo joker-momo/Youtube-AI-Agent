@@ -492,6 +492,23 @@ def _shorts_timeline_stage(job_dir: Path) -> dict | None:
         status_name = entry.get("status") or "pending"
         rendered = status_name == "rendered"
         needs_review = status_name == "needs_review"
+
+        # Live background-acquisition state from the short's status.json (merged
+        # into the manifest entry by summarize_shorts). Lets the card stream
+        # "scene X/N · <source>" while backgrounds are being resolved.
+        stage_list = entry.get("stages") or []
+        bg_stage = next((s for s in stage_list if s.get("name") == "background"), {})
+        bg_status = bg_stage.get("status")
+        background_live = {
+            "status": bg_status,
+            "current_scene": bg_stage.get("current_scene"),
+            "total_scenes": bg_stage.get("total_scenes"),
+            "last_scene_id": bg_stage.get("last_scene_id"),
+            "last_source": bg_stage.get("last_source"),
+            "per_scene": bg_stage.get("per_scene") or [],
+        }
+        bg_step_status = bg_status or ("completed" if rendered else ("skipped" if needs_review else "pending"))
+
         steps = [
             {"name": "idea", "status": "completed"},
             {"name": "script", "status": "completed"},
@@ -499,6 +516,7 @@ def _shorts_timeline_stage(job_dir: Path) -> dict | None:
             {"name": "source_map", "status": "completed"},
             {"name": "seo", "status": "completed"},
             {"name": "qa", "status": "completed" if qa == "PASS" or needs_review else "pending", "label": f"QA {qa}"},
+            {"name": "background", "status": bg_step_status, "label": "Background"},
             {"name": "audio_mix", "status": "completed" if rendered else ("skipped" if needs_review else "pending")},
             {"name": "render", "status": "completed" if rendered else ("skipped" if needs_review else "pending")},
         ]
@@ -511,6 +529,7 @@ def _shorts_timeline_stage(job_dir: Path) -> dict | None:
                 "video_path": entry.get("video_path", ""),
                 "cover_path": entry.get("cover_path", ""),
                 "steps": steps,
+                "background_live": background_live,
             }
         )
 

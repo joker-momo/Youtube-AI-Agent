@@ -105,7 +105,7 @@ def test_synthesize_short_narration_forces_dynamic_sync_off(tmp_path: Path, monk
 
     captured: dict = {}
 
-    def fake_prepare_assets(*, job_dir, style_dna, scene_doc, visual_config, tts_config, channel_id):
+    def fake_prepare_assets(*, job_dir, scene_doc, tts_config, **kwargs):
         captured["tts_config"] = tts_config
         (job_dir / "assets").mkdir(parents=True, exist_ok=True)
         (job_dir / "assets" / "narration.wav").write_bytes(b"\0\0")

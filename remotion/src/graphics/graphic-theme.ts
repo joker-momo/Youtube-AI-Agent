@@ -93,126 +93,92 @@ function withLegacyAliases(roles: SemanticGraphicColorRoles): GraphicColorRoles 
   };
 }
 
+// C1 (taste refresh): the palette is consolidated to THREE calm bases —
+// `calm` (cream/olive), `warm` (soft clay/terracotta) and `evening` (muted
+// green-brown). The five historical variant names are preserved as KEYS so
+// existing payloads/test-props never break; they now resolve onto one of the
+// three bases (backward-compatible aliasing).
+const calmPalette = withLegacyAliases({
+  background: '#F6EFE4',
+  surface: '#FFF8EE',
+  surfaceAlt: '#EFE5D4',
+  surfaceElevated: 'rgba(255, 248, 238, 0.92)',
+  textPrimary: '#2F2A24',
+  titleStrong: '#4F5D30',
+  textMuted: '#6E6255',
+  textInverse: '#FFF8EE',
+  accent: '#D99A4E',
+  accentSoft: '#F2DEC3',
+  positive: '#7C8A4A',
+  positiveSoft: '#E3E8D0',
+  caution: '#D99A4E',
+  cautionSoft: '#F2DEC3',
+  info: '#8C7355',
+  infoSoft: '#E8D9C4',
+  line: 'rgba(47, 42, 36, 0.10)',
+  lineStrong: 'rgba(47, 42, 36, 0.20)',
+  shadow: 'rgba(47, 42, 36, 0.14)',
+  shadowSoft: 'rgba(47, 42, 36, 0.08)',
+  overlay: 'rgba(246, 239, 228, 0.82)',
+});
+
+const warmPalette = withLegacyAliases({
+  background: '#F6EFE4',
+  surface: '#FFF5E8',
+  surfaceAlt: '#F0DCC2',
+  surfaceElevated: 'rgba(255, 245, 232, 0.92)',
+  textPrimary: '#302821',
+  titleStrong: '#6F4B2A',
+  textMuted: '#6F5F50',
+  textInverse: '#FFF8EE',
+  accent: '#D99A4E',
+  accentSoft: '#F2DEC3',
+  positive: '#7C8A4A',
+  positiveSoft: '#E3E8D0',
+  caution: '#C9823F',
+  cautionSoft: '#F0D4B4',
+  info: '#8C7355',
+  infoSoft: '#E8D9C4',
+  line: 'rgba(48, 40, 33, 0.10)',
+  lineStrong: 'rgba(48, 40, 33, 0.20)',
+  shadow: 'rgba(48, 40, 33, 0.14)',
+  shadowSoft: 'rgba(48, 40, 33, 0.08)',
+  overlay: 'rgba(246, 239, 228, 0.82)',
+});
+
+const eveningPalette = withLegacyAliases({
+  background: '#F0E8DC',
+  surface: '#FFF6EA',
+  surfaceAlt: '#E4DACB',
+  surfaceElevated: 'rgba(255, 246, 234, 0.92)',
+  textPrimary: '#2E2A25',
+  titleStrong: '#4F5B35',
+  textMuted: '#6A6258',
+  textInverse: '#FFF8EE',
+  accent: '#6F7D47',
+  accentSoft: '#DEE5CA',
+  positive: '#6F7D47',
+  positiveSoft: '#DEE5CA',
+  caution: '#C98F4A',
+  cautionSoft: '#EFD7B8',
+  info: '#7D6B58',
+  infoSoft: '#E3D6C6',
+  line: 'rgba(46, 42, 37, 0.10)',
+  lineStrong: 'rgba(46, 42, 37, 0.20)',
+  shadow: 'rgba(46, 42, 37, 0.14)',
+  shadowSoft: 'rgba(46, 42, 37, 0.08)',
+  overlay: 'rgba(240, 232, 220, 0.84)',
+});
+
 export const graphicVariants: Record<GraphicVariant, GraphicColorRoles> = {
-  brand_default: withLegacyAliases({
-    background: '#F6EFE4',
-    surface: '#FFF8EE',
-    surfaceAlt: '#EFE5D4',
-    surfaceElevated: 'rgba(255, 248, 238, 0.92)',
-    textPrimary: '#2F2A24',
-    titleStrong: '#4F5D30',
-    textMuted: '#6E6255',
-    textInverse: '#FFF8EE',
-    accent: '#D99A4E',
-    accentSoft: '#F2DEC3',
-    positive: '#7C8A4A',
-    positiveSoft: '#E3E8D0',
-    caution: '#D99A4E',
-    cautionSoft: '#F2DEC3',
-    info: '#8C7355',
-    infoSoft: '#E8D9C4',
-    line: 'rgba(47, 42, 36, 0.12)',
-    lineStrong: 'rgba(47, 42, 36, 0.22)',
-    shadow: 'rgba(47, 42, 36, 0.18)',
-    shadowSoft: 'rgba(47, 42, 36, 0.10)',
-    overlay: 'rgba(246, 239, 228, 0.82)',
-  }),
-
-  warm_olive: withLegacyAliases({
-    background: '#F6EFE4',
-    surface: '#FFF8EE',
-    surfaceAlt: '#EDF0DA',
-    surfaceElevated: 'rgba(255, 248, 238, 0.92)',
-    textPrimary: '#2F2A24',
-    titleStrong: '#4F5D30',
-    textMuted: '#6E6255',
-    textInverse: '#FFF8EE',
-    accent: '#7C8A4A',
-    accentSoft: '#E3E8D0',
-    positive: '#7C8A4A',
-    positiveSoft: '#E3E8D0',
-    caution: '#D99A4E',
-    cautionSoft: '#F2DEC3',
-    info: '#8C7355',
-    infoSoft: '#E8D9C4',
-    line: 'rgba(47, 42, 36, 0.12)',
-    lineStrong: 'rgba(47, 42, 36, 0.22)',
-    shadow: 'rgba(47, 42, 36, 0.18)',
-    shadowSoft: 'rgba(47, 42, 36, 0.10)',
-    overlay: 'rgba(246, 239, 228, 0.82)',
-  }),
-
-  soft_clay: withLegacyAliases({
-    background: '#F6EFE4',
-    surface: '#FFF5E8',
-    surfaceAlt: '#F0DCC2',
-    surfaceElevated: 'rgba(255, 245, 232, 0.92)',
-    textPrimary: '#302821',
-    titleStrong: '#6F4B2A',
-    textMuted: '#6F5F50',
-    textInverse: '#FFF8EE',
-    accent: '#D99A4E',
-    accentSoft: '#F2DEC3',
-    positive: '#7C8A4A',
-    positiveSoft: '#E3E8D0',
-    caution: '#C9823F',
-    cautionSoft: '#F0D4B4',
-    info: '#8C7355',
-    infoSoft: '#E8D9C4',
-    line: 'rgba(48, 40, 33, 0.12)',
-    lineStrong: 'rgba(48, 40, 33, 0.22)',
-    shadow: 'rgba(48, 40, 33, 0.18)',
-    shadowSoft: 'rgba(48, 40, 33, 0.10)',
-    overlay: 'rgba(246, 239, 228, 0.82)',
-  }),
-
-  cream_focus: withLegacyAliases({
-    background: '#F6EFE4',
-    surface: '#FFF9F0',
-    surfaceAlt: '#EFE5D4',
-    surfaceElevated: 'rgba(255, 249, 240, 0.92)',
-    textPrimary: '#2F2A24',
-    titleStrong: '#4F5D30',
-    textMuted: '#6E6255',
-    textInverse: '#FFF8EE',
-    accent: '#D99A4E',
-    accentSoft: '#F2DEC3',
-    positive: '#7C8A4A',
-    positiveSoft: '#E3E8D0',
-    caution: '#D99A4E',
-    cautionSoft: '#F2DEC3',
-    info: '#8C7355',
-    infoSoft: '#E8D9C4',
-    line: 'rgba(47, 42, 36, 0.12)',
-    lineStrong: 'rgba(47, 42, 36, 0.22)',
-    shadow: 'rgba(47, 42, 36, 0.18)',
-    shadowSoft: 'rgba(47, 42, 36, 0.10)',
-    overlay: 'rgba(246, 239, 228, 0.82)',
-  }),
-
-  evening_calm: withLegacyAliases({
-    background: '#F0E8DC',
-    surface: '#FFF6EA',
-    surfaceAlt: '#E4DACB',
-    surfaceElevated: 'rgba(255, 246, 234, 0.92)',
-    textPrimary: '#2E2A25',
-    titleStrong: '#4F5B35',
-    textMuted: '#6A6258',
-    textInverse: '#FFF8EE',
-    accent: '#6F7D47',
-    accentSoft: '#DEE5CA',
-    positive: '#6F7D47',
-    positiveSoft: '#DEE5CA',
-    caution: '#C98F4A',
-    cautionSoft: '#EFD7B8',
-    info: '#7D6B58',
-    infoSoft: '#E3D6C6',
-    line: 'rgba(46, 42, 37, 0.12)',
-    lineStrong: 'rgba(46, 42, 37, 0.22)',
-    shadow: 'rgba(46, 42, 37, 0.18)',
-    shadowSoft: 'rgba(46, 42, 37, 0.10)',
-    overlay: 'rgba(240, 232, 220, 0.84)',
-  }),
+  // calm base
+  brand_default: calmPalette,
+  cream_focus: calmPalette,
+  warm_olive: calmPalette,
+  // warm base
+  soft_clay: warmPalette,
+  // evening base
+  evening_calm: eveningPalette,
 };
 
 export const toneToVariant: Record<GraphicVisualTone, GraphicVariant> = {
@@ -268,12 +234,15 @@ export const defaultVariantByLayout: Record<string, GraphicVariant> = {
 };
 
 export const defaultSurfaceByLayout: Record<string, GraphicSurfaceStyle> = {
+  // C1 declutter: list-style graphics no longer sit inside a wrapping surface
+  // card (the card-in-card "Canva template" look). Only the plate ratio keeps a
+  // dedicated focus surface. Per-item cards are removed later in C3–C7.
   graphic_plate_ratio: 'plate_focus',
-  graphic_checklist: 'soft_card',
-  graphic_step_list: 'editorial',
-  graphic_label_callout: 'soft_card',
-  graphic_comparison: 'soft_card',
-  graphic_routine_split: 'editorial',
+  graphic_checklist: 'none',
+  graphic_step_list: 'none',
+  graphic_label_callout: 'none',
+  graphic_comparison: 'none',
+  graphic_routine_split: 'none',
 };
 
 export const defaultBackgroundByLayout: Record<string, GraphicBackgroundMode> = {
@@ -342,9 +311,10 @@ export const graphicLayout = {
     pill: 999,
   },
   shadow: {
-    soft: '0 14px 36px rgba(47, 42, 36, 0.10)',
-    card: '0 24px 70px rgba(47, 42, 36, 0.14)',
-    plate: '0 28px 80px rgba(47, 42, 36, 0.16)',
+    // Softer, single-focal depth instead of heavy Canva drop shadows.
+    soft: '0 10px 28px rgba(47, 42, 36, 0.07)',
+    card: '0 14px 40px rgba(47, 42, 36, 0.09)',
+    plate: '0 18px 52px rgba(47, 42, 36, 0.12)',
   },
 };
 
@@ -354,9 +324,11 @@ export const radius = {
 };
 
 export const spacing = {
-  safeX: 80,
-  safeTop: 170,
-  safeBottom: 260,
+  safeX: 88,
+  // Rebalanced: less dead space top/bottom, content sits a touch higher than
+  // dead-centre so the hero title leads and the body breathes.
+  safeTop: 150,
+  safeBottom: 210,
   xs: 8,
   sm: 14,
   md: 24,
@@ -373,6 +345,17 @@ export const graphicMotion = {
     fast: 10,
     normal: 14,
     slow: 20,
+  },
+  // C1 adds cinematic timing tokens consumed by C2+ (hero settle <0.5s, fast
+  // item cascade so the whole idea reads by ~1s, gentle depth settle scale).
+  heroDelaySec: 0.0,
+  heroSettleScale: 1.03,
+  itemStartSec: 0.32,
+  itemStaggerSec: 0.16,
+  settleSpring: {
+    damping: 26,
+    mass: 0.9,
+    stiffness: 120,
   },
 };
 

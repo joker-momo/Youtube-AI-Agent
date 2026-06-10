@@ -66,7 +66,12 @@ export const ShortVideo: React.FC<RenderProps> = (props) => {
         return (
           <Sequence key={scene.id || i} from={from} durationInFrames={durFrames} name={scene.id || `scene-${i + 1}`}>
             <AbsoluteFill>
-              <ShortBackground src={bg} overlay={pickOverlayKey(scene)} />
+              <ShortBackground
+                src={bg}
+                overlay={pickOverlayKey(scene)}
+                motion={scene.motion}
+                durationInFrames={durFrames}
+              />
               <Layout
                 on_screen_text={scene.on_screen_text}
                 caption={scene.caption}

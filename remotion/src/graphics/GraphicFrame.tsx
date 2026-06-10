@@ -19,7 +19,19 @@ import {
 
 const {font, fontSize, spacing} = graphicTheme;
 
-/** Calm fade-up reveal that starts at ``delaySec`` into the scene. */
+/**
+ * Sentence-case a (often all-caps) title for a calmer, less shouty feel.
+ * Spanish sentence case = capitalise the first letter only. Render-only, no
+ * payload/schema change.
+ */
+export function toSentenceCase(text: string): string {
+  const t = (text || '').trim();
+  if (!t) return t;
+  const lower = t.toLocaleLowerCase('es');
+  return lower.charAt(0).toLocaleUpperCase('es') + lower.slice(1);
+}
+
+/** Calm fade-up reveal with a faint depth settle, starting at ``delaySec``. */
 export function useReveal(delaySec: number): React.CSSProperties {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
@@ -28,11 +40,33 @@ export function useReveal(delaySec: number): React.CSSProperties {
     frame: frame - delayFrames,
     fps,
     config: graphicMotion.spring,
+    durationInFrames: Math.round(fps * 0.42),
+  });
+  const opacity = interpolate(progress, [0, 1], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
+  const translateY = interpolate(progress, [0, 1], [18, 0]);
+  // Faint scale settle adds depth without any bounce.
+  const scale = interpolate(progress, [0, 1], [0.992, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
+  return {opacity, transform: `translateY(${translateY}px) scale(${scale})`};
+}
+
+/**
+ * Hero reveal for the scene title: a gentle settle (scale 1.03 -> 1.0) that
+ * lands within the first ~0.5s so the dominant idea reads immediately. No
+ * punchy/TikTok motion — a soft spring only.
+ */
+export function useHeroReveal(): React.CSSProperties {
+  const frame = useCurrentFrame();
+  const {fps} = useVideoConfig();
+  const progress = spring({
+    frame: frame - Math.round(graphicMotion.heroDelaySec * fps),
+    fps,
+    config: graphicMotion.settleSpring,
     durationInFrames: Math.round(fps * 0.5),
   });
   const opacity = interpolate(progress, [0, 1], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
-  const translateY = interpolate(progress, [0, 1], [26, 0]);
-  return {opacity, transform: `translateY(${translateY}px)`};
+  const translateY = interpolate(progress, [0, 1], [14, 0]);
+  const scale = interpolate(progress, [0, 1], [graphicMotion.heroSettleScale, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
+  return {opacity, transform: `translateY(${translateY}px) scale(${scale})`, transformOrigin: 'center top'};
 }
 
 export const GraphicTitle: React.FC<{
@@ -42,25 +76,26 @@ export const GraphicTitle: React.FC<{
 }> = ({
   children,
   colors = graphicTheme.colors,
-  delaySec = 0,
 }) => {
-  const reveal = useReveal(delaySec);
+  const reveal = useHeroReveal();
+  // Sentence-case the title when it arrives as a plain string (the common case).
+  const content = typeof children === 'string' ? toSentenceCase(children) : children;
   return (
     <div
       style={{
         ...reveal,
         fontFamily: font.family,
         fontSize: fontSize.title,
-        fontWeight: 800,
-        lineHeight: 1.05,
-        letterSpacing: 0,
-        color: colors.oliveDark,
-        textTransform: 'uppercase',
+        fontWeight: 700,
+        lineHeight: 1.08,
+        letterSpacing: -0.5,
+        color: colors.titleStrong,
+        textTransform: 'none',
         textAlign: 'center',
         maxWidth: 1080 - spacing.safeX * 2,
       }}
     >
-      {children}
+      {content}
     </div>
   );
 };

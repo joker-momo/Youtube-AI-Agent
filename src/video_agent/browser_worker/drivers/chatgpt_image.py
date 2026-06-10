@@ -229,7 +229,7 @@ class ChatGPTImageDriver:
         if expanded != "true":
             try:
                 await human_click(header, hover_pause_min_ms=80, hover_pause_max_ms=180)
-                await human_pause(self.page, min_ms=600, max_ms=1100)
+                await human_pause(self.page, min_ms=200, max_ms=400)
             except Exception:
                 pass  # best effort — may already be expanded
 
@@ -514,8 +514,8 @@ class ChatGPTImageDriver:
             )
             if src:
                 return src
-            # Detect a "stop" button still present (model is generating).
-            await self.page.wait_for_timeout(1_500)
+            # Poll fast so we return promptly once the image lands.
+            await self.page.wait_for_timeout(600)
             now = int(time.monotonic())
             if now - last_logged >= 10:
                 last_logged = now
@@ -673,7 +673,7 @@ class ChatGPTImageDriver:
                 
             # Click the options button
             await human_click(target_btn)
-            await human_pause(self.page, min_ms=500, max_ms=1000)
+            await human_pause(self.page, min_ms=150, max_ms=300)
             
             # Find and click the Delete project option (support English, Spanish, Vietnamese)
             opts = await self.page.locator("[role='menuitem'], [role='menu'] button, [role='menu'] div").all()
@@ -689,7 +689,7 @@ class ChatGPTImageDriver:
                 return
                 
             await human_click(delete_opt)
-            await human_pause(self.page, min_ms=800, max_ms=1500)
+            await human_pause(self.page, min_ms=200, max_ms=400)
             
             # Wait for and click the confirmation button
             confirm_buttons = await self.page.locator(
@@ -708,7 +708,7 @@ class ChatGPTImageDriver:
                 
             await human_click(confirm_btn)
             # Wait for modal to disappear and UI to update
-            await human_pause(self.page, min_ms=1500, max_ms=2500)
+            await human_pause(self.page, min_ms=300, max_ms=600)
             print(f"Successfully deleted project: '{project_name}'")
         except Exception as exc:
             # Catch all errors during deletion to make it best-effort and prevent blocking

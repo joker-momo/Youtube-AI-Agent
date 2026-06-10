@@ -577,20 +577,10 @@ class ChatGPTImageDriver:
             await human_pause(self.page, min_ms=500, max_ms=1200)
             await self._click_send()
 
-            # Wait for the stop button to disappear (best-effort), then for
-            # an assistant image.
-            try:
-                for sel in STOP_BUTTON_SELECTORS:
-                    stop = self.page.locator(sel).first
-                    try:
-                        if await stop.is_visible(timeout=2_000):
-                            await stop.wait_for(state="hidden", timeout=response_timeout_ms)
-                            break
-                    except Exception:
-                        continue
-            except Exception:
-                pass
-
+            # We do NOT wait for the stop button to disappear. ChatGPT often writes
+            # a massive text explanation after the image is drawn, and waiting for
+            # the stop button to hide can add 60-120 seconds of unnecessary delay.
+            # We just wait directly for the image to appear.
             src = await self._wait_for_image(response_timeout_ms)
             await self._download_image(src, out_path)
             return {
@@ -638,19 +628,10 @@ class ChatGPTImageDriver:
                 await human_pause(self.page, min_ms=500, max_ms=1200)
                 await self._click_send()
 
-                # Wait for the stop button to disappear (best-effort), then for
-                # an assistant image.
-                try:
-                    for sel in STOP_BUTTON_SELECTORS:
-                        stop = self.page.locator(sel).first
-                        try:
-                            if await stop.is_visible(timeout=2_000):
-                                await stop.wait_for(state="hidden", timeout=response_timeout_ms)
-                                break
-                        except Exception:
-                            continue
-                except Exception:
-                    pass
+                # We do NOT wait for the stop button to disappear. ChatGPT often writes
+                # a massive text explanation after the image is drawn, and waiting for
+                # the stop button to hide can add 60-120 seconds of unnecessary delay.
+                # We just wait directly for the image to appear.
 
                 src = await self._wait_for_image(response_timeout_ms, exclude_urls=exclude_urls)
                 await self._download_image(src, out_path)

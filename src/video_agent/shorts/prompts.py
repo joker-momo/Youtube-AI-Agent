@@ -3,8 +3,38 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from video_agent.contracts import TopicFamily, resolve_topic_family
 
 from video_agent.shorts.idea_preservation import derive_idea_contract, derive_idea_items
+
+
+def _get_topic_family_rules(topic: TopicFamily) -> str:
+    if topic == TopicFamily.NUTRITION:
+        return (
+            "VIDA PLENA 45+ NUTRITION/BREAD POLISHING RULES:\n"
+            "If this Short discusses bread, ingredients, or food habits:\n"
+            "1. Hook scene:\n"
+            "   - First scene visual_prompt MUST clearly show the food in a kitchen/table context.\n"
+            "   - Reject abstract close-ups or generic footage.\n"
+            "2. Visual Specificity:\n"
+            "   - EVERY scene must clearly show the food or eating behavior.\n"
+            "   - Reject generic cooking/eating footage without the specific food visible.\n"
+            "3. Graphics:\n"
+            "   - Prefer exactly 1-2 graphics. Use graphic_label_callout for ingredients and graphic_comparison for choices.\n"
+        )
+    elif topic == TopicFamily.MOVEMENT:
+        return (
+            "VIDA PLENA 45+ MOVEMENT/EXERCISE POLISHING RULES:\n"
+            "1. Scene Evidence:\n"
+            "   - Provide structured required_visual_evidence per scene.\n"
+            "   - Example required_actions: ['standing', 'gentle stretching'], required_objects: ['chair', 'trainers visible'].\n"
+            "2. Visual Rejections:\n"
+            "   - Add strict forbidden_pose/context (e.g., ['lying in bed', 'seated silhouette only', 'frail portrayal']).\n"
+            "3. Asset Strategy:\n"
+            "   - For critical exercise action scenes, set asset_strategy = 'stock_ok' and visual_importance = 'critical'.\n"
+            "   - Ensure source_scene_ids mapping is strictly populated from the source support if covers_items is present. DO NOT output [] for action scenes.\n"
+        )
+    return ""
 
 _OUTPUT_RULES = (
     "OUTPUT RULES:\n"
@@ -453,6 +483,7 @@ def short_scene_prompt_v6(
     *,
     retention_plan: dict | None = None,
     spoken_humanization: dict | None = None,
+    topic: TopicFamily = TopicFamily.GENERAL,
 ) -> str:
     """Spec v6 §2.4 / §9.3 — ChatGPT chooses each scene's layout."""
     scene_script_context = {
@@ -496,7 +527,18 @@ def short_scene_prompt_v6(
         "      },\n"
         "      \"transition_from_previous\": \"string\",\n"
         "      \"covers_items\": [1],\n"
-        "      \"source_scene_ids\": []\n"
+        "      \"source_scene_ids\": [],\n"
+        '      "visual_importance": "critical | normal | bridge",\n'
+        '      "asset_strategy": "stock_ok | ai_image_preferred | graphic_fallback",\n'
+        '      "required_visual_evidence": {\n'
+        '        "required_actions": ["string"],\n'
+        '        "required_objects": ["string"],\n'
+        '        "subject_pose": ["string"],\n'
+        '        "visibility": ["string"],\n'
+        '        "forbidden_pose": ["string"],\n'
+        '        "forbidden_context": ["string"],\n'
+        '        "forbidden_mood": ["string"]\n'
+        "      }\n"
         "    }\n"
         "  ],\n"
         "  \"qa\": {\n"
@@ -515,6 +557,10 @@ def short_scene_prompt_v6(
         "Create scene-by-scene visual instructions for a vertical YouTube Short.\n"
         "Do not rewrite the core message.\n"
         "Do not add new health claims.\n\n"
+        "VISUAL QUALITY FIELDS (required per scene):\n"
+        "- visual_importance: 'critical' for hook/payoff/key-item scenes, 'bridge' for connective scenes, else 'normal'.\n"
+        "- asset_strategy: 'stock_ok' (default), 'ai_image_preferred' for hard-to-find specific visuals, 'graphic_fallback' for data/lists.\n"
+        "- required_visual_evidence: for critical scenes, fill required_actions/required_objects/subject_pose/visibility plus forbidden_pose/forbidden_context/forbidden_mood. Leave lists empty when not relevant.\n\n"
         "RETENTION / RHYTHM REQUIREMENTS:\n"
         "- Align each scene with a retention beat when possible.\n"
         "- Add optional retention_function, rhythm_tag, and pattern_interrupt fields per scene.\n"
@@ -739,38 +785,7 @@ def short_scene_prompt_v6(
         "- source_scene_ids must only contain IDs already present in the SCRIPT or source references.\n"
         "- If no source_scene_ids are available, use [].\n"
         "- Do not invent source_scene_ids.\n\n"
-        "VIDA PLENA 45+ BREAD/5 ERRORS SHORT POLISHING RULES:\n"
-        "If this Short is a 5-error bread Short for Vida Plena 45+, you MUST follow these strict quality rules:\n"
-        "1. Hook scene:\n"
-        "   - Use a two-line hook format:\n"
-        "     Title (on_screen_text): \"NO ES EL PAN\"\n"
-        "     Subtitle (caption): \"MIRA CÓMO LO USAS\" or \"SON 5 HÁBITOS\"\n"
-        "   - First scene visual_prompt MUST clearly show bread in a kitchen/table context (e.g. 'vertical close-up of a rustic whole wheat sourdough loaf on a warm wooden kitchen table'). Reject abstract close-ups or generic footage.\n"
-        "2. Pacing & Durations:\n"
-        "   - Final actual total duration must be between 26.0s and 30.0s (never under 25.5s).\n"
-        "   - Keep each of the 5 error scenes (short_pain layout) between 3.2s and 4.0s.\n"
-        "   - Keep the payoff scene (graphic_checklist layout) between 4.2s and 5.0s.\n"
-        "   - Keep the CTA scene (short_cta layout) between 2.4s and 2.8s.\n"
-        "3. Error Scene Labels (on_screen_text):\n"
-        "   - Do NOT use generic text like 'ERROR 1/2/3...'. Replace with these specific uppercase labels exactly matching the error:\n"
-        "     - Error 1: \"DE PIE\"\n"
-        "     - Error 2: \"SUMAR SIN DECIDIR\"\n"
-        "     - Error 3: \"BARRA A LA VISTA\"\n"
-        "     - Error 4: \"CANSANCIO\"\n"
-        "     - Error 5: \"CENA IMPROVISADA\"\n"
-        "4. Payoff Scene (s07 / scene before CTA):\n"
-        "   - MUST use layout 'graphic_checklist' to render a readable saveable checklist card.\n"
-        "   - layout_payload MUST be exactly:\n"
-        "     {\"title\": \"MEJOR ASÍ\", \"items\": [\"Porción visible\", \"Plato pequeño\", \"Comida completa\"]}\n"
-        "   - Do NOT use plate ratio.\n"
-        "5. Visual Specificity:\n"
-        "   - EVERY scene must clearly show bread or bread-related behavior (e.g., slicing bread, bread on a table, holding bread, etc.). Reject generic cooking/eating footage without bread visible.\n"
-        "6. Caption Safe Zone:\n"
-        "   - Keep all captions (subtitle-style text) short, under 9 words, and ensure they are mobile-readable.\n"
-        "7. CTA Scene:\n"
-        "   - MUST use on_screen_text: \"GUÁRDALO\" and caption: \"PARA TU PRÓXIMA CENA\".\n"
-        "   - Duration must be 2.4-2.8s.\n\n"
-        "FINAL SELF-CHECK BEFORE RETURNING JSON:\n"
+        f"{_get_topic_family_rules(topic)}\n"        "FINAL SELF-CHECK BEFORE RETURNING JSON:\n"
         "- scenes.length is between 5 and 8 for this normal checklist Short.\n"
         "- graphic scene count is 0, 1, or 2. Never 3+.\n"
         "- bread-label setup/recap scenes are realistic short_* scenes, not graphic_checklist.\n"
@@ -1010,6 +1025,12 @@ def gemini_scenes_qa_prompt(channel_config: dict, short_script: dict, short_scen
         "No trailing commas.\n"
         "All strings must be valid JSON strings.\n\n"
         "QA RULES:\n"
+        "VISUAL QUALITY FIELDS:\n"
+        "Each scene should carry visual_importance (critical|normal|bridge), asset_strategy "
+        "(stock_ok|ai_image_preferred|graphic_fallback) and, for critical scenes, a structured "
+        "required_visual_evidence dict (required_actions/required_objects/subject_pose/visibility/"
+        "forbidden_pose/forbidden_context/forbidden_mood). Flag a 'visual' issue when a critical "
+        "scene is missing usable required_visual_evidence or its visual_prompt contradicts it.\n\n"
         "PRODUCT QUALITY SCORES:\n"
         "Return product_scores with integer scores from 0 to 10:\n"
         "- audience_fit_45_plus\n"
@@ -1169,5 +1190,35 @@ def gemini_scenes_qa_prompt(channel_config: dict, short_script: dict, short_scen
         "- visual_specificity: concrete topic visuals instead of generic stock\n"
         "- clarity_45_plus: readable, calm, easy to follow\n"
         "- audio_fit_risk: whether narration density appears likely to overflow the planned duration\n\n"
+        f"RETURN JSON SCHEMA:\n{schema}\n"
+    )
+
+
+def gemini_vision_qa_prompt(scene: dict) -> str:
+    """Vision QA prompt: validate one asset frame against the scene's
+    required_visual_evidence. Strict PASS/FAIL JSON schema (plan Task 5)."""
+    evidence = scene.get("required_visual_evidence") or {}
+    evidence_json = json.dumps(evidence, ensure_ascii=False, indent=2)
+    schema = (
+        "{\n"
+        '  "verdict": "PASS | FAIL",\n'
+        '  "missing_evidence": ["string"],\n'
+        '  "forbidden_violations": ["string"],\n'
+        '  "confidence": 0.0,\n'
+        '  "reason": "string"\n'
+        "}"
+    )
+    return (
+        "You are a strict visual QA reviewer for a Spain-first wellness channel (audience 45+).\n"
+        "Inspect the attached image frame, which is a candidate background for one Short scene.\n\n"
+        f"SCENE visual_prompt:\n{scene.get('visual_prompt') or ''}\n\n"
+        f"REQUIRED VISUAL EVIDENCE:\n{evidence_json}\n\n"
+        "RULES:\n"
+        "- FAIL if any required_actions / required_objects / subject_pose / visibility entry is not clearly visible.\n"
+        "- FAIL if any forbidden_pose / forbidden_context / forbidden_mood entry IS visible.\n"
+        "- List every missing requirement in missing_evidence and every violated forbidden entry in forbidden_violations.\n"
+        "- confidence is your 0.0-1.0 certainty in the verdict.\n\n"
+        "OUTPUT RULES:\n"
+        "Return exactly ONE raw valid JSON object. No markdown fences. No commentary.\n\n"
         f"RETURN JSON SCHEMA:\n{schema}\n"
     )

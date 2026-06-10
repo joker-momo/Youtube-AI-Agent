@@ -79,6 +79,9 @@ def _scene(scene_id: str, covers_items, *, layout: str = "short_tip", duration: 
         "visual_prompt": "Spain kitchen, vertical",
         "layout_payload": {"items": payload_items or []},
         "covers_items": covers_items,
+        # The strict mapping validator requires source_scene_ids on any scene
+        # that covers idea items (see validate_scene_structure).
+        "source_scene_ids": [f"source_scene_{i:02d}" for i in (covers_items or [])],
     }
 
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import enum
+import logging
 from pathlib import Path
 
 ARTIFACT_SCRIPT = "json/script.json"
@@ -20,6 +22,56 @@ ARTIFACT_APPROVALS = "json/approvals.json"
 ARTIFACT_REVIEW = "json/review.json"
 ARTIFACT_AUDIO_QA = "json/audio_qa.json"
 ARTIFACT_PERSONA_EVAL = "json/persona_eval.json"
+
+
+class TopicFamily(str, enum.Enum):
+    MOVEMENT = "MOVEMENT"
+    NUTRITION = "NUTRITION"
+    SLEEP = "SLEEP"
+    MENTAL_LOAD = "MENTAL_LOAD"
+    GENERAL = "GENERAL"
+
+
+def resolve_topic_family(script_dict: dict) -> TopicFamily:
+    """Precedence: explicit -> mapped pillar -> text classifier -> GENERAL."""
+    # a) Explicit
+    explicit = script_dict.get("topic_family") or script_dict.get("topic")
+    if explicit:
+        try:
+            return TopicFamily(str(explicit).strip().upper())
+        except ValueError:
+            pass
+
+    # b) Mapped pillar
+    pillar = str(script_dict.get("pillar", "")).strip().upper()
+    if pillar in ("PAN", "BREAD", "NUTRITION", "ALIMENTACION", "ALIMENTACIÓN", "DIET"):
+        return TopicFamily.NUTRITION
+    if pillar in ("EJERCICIO", "MOVEMENT", "FITNESS", "MOVIMIENTO"):
+        return TopicFamily.MOVEMENT
+    if pillar in ("SLEEP", "SUENO", "SUEÑO", "DORMIR", "DESCANSO"):
+        return TopicFamily.SLEEP
+    if pillar in ("MENTAL_LOAD", "STRESS", "MENTAL", "ESTRES", "ESTRÉS", "CARGA_MENTAL"):
+        return TopicFamily.MENTAL_LOAD
+        
+    # c) Deterministic classifier
+    text = " ".join([
+        str(script_dict.get("hook", "")),
+        str(script_dict.get("narration", "")),
+        str(script_dict.get("title", ""))
+    ]).lower()
+    
+    if any(k in text for k in ["ejercicio", "movimiento", "sentadilla", "caminar", "entrenar"]):
+        return TopicFamily.MOVEMENT
+    if any(k in text for k in ["pan ", "alimentación", "comida", "desayuno", "cena", "dieta"]):
+        return TopicFamily.NUTRITION
+    if any(k in text for k in ["dormir", "sueño", "descanso", "insomnio"]):
+        return TopicFamily.SLEEP
+    if any(k in text for k in ["estrés", "carga mental", "ansiedad", "relajarse"]):
+        return TopicFamily.MENTAL_LOAD
+
+    # d) GENERAL
+    logging.getLogger(__name__).warning("Could not determine TopicFamily; defaulting to GENERAL.")
+    return TopicFamily.GENERAL
 
 
 def repo_root() -> Path:

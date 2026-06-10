@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from typing import Any, Callable
 
+from video_agent.contracts import resolve_topic_family
 from video_agent.shorts import paths, prompts
 from video_agent.shorts.idea_preservation import normalize_covers_items
 from video_agent.shorts.llm import LLMCallLog, log_llm_call
@@ -120,13 +121,15 @@ def _chunk(seq: list, n: int) -> list[list]:
     return [seq[i * k // n : (i + 1) * k // n] for i in range(n)]
 
 
-def normalize_short_scenes(scenes_doc: dict, short_script: dict) -> dict[str, Any]:
+def normalize_short_scenes(scenes_doc: dict, short_script: dict) -> dict:
     """Make Short scenes compatible with the long-form render/TTS pipeline.
 
     - rename ``scene_id`` → ``id`` (renderer/prepare_assets read ``id``)
     - guarantee each scene has non-empty ``narration`` (Kokoro TTS needs it):
       reuse existing per-scene narration, else distribute the script narration
       across scenes by sentence, falling back to on_screen_text.
+    - fill safe defaults for the visual-quality fields (visual_importance,
+      asset_strategy, required_visual_evidence) when the LLM omits them.
     """
     out = dict(scenes_doc or {})
     scenes = list(out.get("scenes") or [])
@@ -173,6 +176,18 @@ def normalize_short_scenes(scenes_doc: dict, short_script: dict) -> dict[str, An
         sc.setdefault("audio_offset_sec", 0.0)
         sc.setdefault("duration_sec", 3.0)
         sc.setdefault("transition_from_previous", "")
+        sc.setdefault("visual_importance", "normal")
+        sc.setdefault("asset_strategy", "stock_ok")
+        sc.setdefault("required_visual_evidence", {})
+        if sc["layout"] in ("short_hook", "short_cta") and sc["visual_importance"] == "normal":
+            sc["visual_importance"] = "critical"
+        elif "bridge" in sc["layout"] and sc["visual_importance"] == "normal":
+            sc["visual_importance"] = "bridge"
+        # Scenes that cover idea items must carry a source_scene_ids list (the
+        # strict mapping validator rejects a missing field; [] is its explicit
+        # "no support found" value the repair loop then fills).
+        if sc.get("covers_items"):
+            sc.setdefault("source_scene_ids", [])
         sc.setdefault("retention_function", "")
         norm_scenes.append(sc)
 
@@ -231,6 +246,7 @@ def build_short_scenes(
     The deterministic ``normalize_short_scenes`` only fills missing fields and
     maps any legacy long-form layout names (backward compat); it must NOT
     overwrite layouts the LLM emitted."""
+    topic = resolve_topic_family(short_script)
     prompt = prompts.short_scene_prompt_v6(
         channel_config,
         short_plan,
@@ -238,6 +254,7 @@ def build_short_scenes(
         feedback=feedback,
         retention_plan=retention_plan,
         spoken_humanization=spoken_humanization,
+        topic=topic,
     )
     log_llm_call(LLMCallLog(
         task="short_scene_builder", provider=PROVIDER,

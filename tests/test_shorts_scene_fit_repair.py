@@ -389,3 +389,31 @@ def test_visual_first_blocks_low_visual_specificity():
     assert qa.classify_product_scores(scores, visual_first=True) == "hard_block"
     # Same scores on a non-visual-first Short only need repair, not hard block.
     assert qa.classify_product_scores(scores, visual_first=False) != "hard_block"
+
+def test_repair_visual_only_unreadable_does_not_corrupt_narration_fit():
+    from video_agent.shorts.validate_scenes import repair_visual_only_unreadable, deterministic_scene_fit_repair
+    
+    scene = {
+        "id": "s04",
+        "layout": "short_tip",
+        "duration_sec": 3.6,
+        "narration": "Elige uno que te guste.",
+        "caption": "Si no gusta, no dura.",
+        "on_screen_text": "EL GUSTO CUENTA",
+        "covers_items": [2]
+    }
+    idea_item = {"id": 2, "label": "El gusto también importa, porque comer mejor necesita placer suficiente para sostenerse."}
+    
+    # Run the coverage repair which previously corrupted scene["narration"]
+    repair_visual_only_unreadable([scene], idea_item)
+    
+    # 1. Spoken text should remain exactly what it was (no label appended)
+    assert scene["narration"] == "Elige uno que te guste."
+    
+    # 2. Run deterministic fit repair to verify estimation
+    res = deterministic_scene_fit_repair([scene])
+    
+    # 3. Must not trigger any regeneration or overflow because 5 words fits easily in 3.6s
+    assert res["regen_required"] is False
+    assert len(res["logs"]) == 0, "No repair should be attempted since duration fits narration perfectly"
+

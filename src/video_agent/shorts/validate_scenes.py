@@ -841,6 +841,28 @@ def validate_scene_structure(
                 repair_hint="Use GUARDA ESTA LISTA, GUÁRDALO PARA LA COMPRA, MÍRALO ANTES DE COMPRAR PAN, or ÚSALO EN EL SÚPER.",
             ))
 
+        # validate source_scene_ids vs covers_items
+        covers = scene.get('covers_items') or []
+        source_ids = scene.get('source_scene_ids') or []
+        if covers and not source_ids and layout not in ('short_hook', 'short_cta', 'short_quote'):
+            issues.append(SceneValidationIssue(
+                type='missing_source_scene_ids',
+                scene_id=sid,
+                severity='repairable_error',
+                detail=f'Scene {sid} covers items but has empty source_scene_ids.',
+                repair_hint='If a scene covers an idea item, it must reference the supporting source_scene_ids.'
+            ))
+        if source_ids and script:
+            valid_ids = {s.get('source_scene_id') for s in (script.get('source_mapped_flow') or []) if s.get('source_scene_id')}
+            invalid_ids = [sid for sid in source_ids if valid_ids and sid not in valid_ids]
+            if invalid_ids:
+                issues.append(SceneValidationIssue(
+                    type='invalid_source_scene_ids',
+                    scene_id=sid,
+                    severity='repairable_error',
+                    detail=f'Scene {sid} references invalid source_scene_ids: {invalid_ids}',
+                    repair_hint='Use only valid source_scene_ids provided in the SCRIPT context.'
+                ))
         if _missing_graphic_candidate(scene):
             missing_graphic_candidates += 1
 
@@ -1923,19 +1945,17 @@ def repair_visual_only_unreadable(scenes: list[dict], required_item: Any) -> boo
     elif item_id == "4":
         inject_text = "Vuelve a harina, fibra e ingredientes."
         
-    current_narration = target_scene.get("narration") or ""
-    current_words = len(current_narration.split())
-    inject_words = len(inject_text.split())
-    
-    if current_words + inject_words <= 30:
-        target_scene["narration"] = f"{current_narration} {inject_text}".strip()
-    else:
-        current_caption = target_scene.get("caption") or ""
-        combined = f"{current_caption} {inject_text}".strip()
-        words = combined.split()
-        if len(words) > 12:
-            combined = " ".join(words[:12]) + "..."
-        target_scene["caption"] = combined
+    # Do not inject the item label into target_scene["narration"]!
+    # Narration-fit timing must use only the actual TTS-spoken fields.
+    # Injecting the source key_point meaning into the spoken audio estimate
+    # creates a false hard blocker (scene_narration_fit exceeds tolerance).
+    # We keep coverage validation separate from spoken-duration validation.
+    current_caption = target_scene.get("caption") or ""
+    combined = f"{current_caption} {inject_text}".strip()
+    words = combined.split()
+    if len(words) > 12:
+        combined = " ".join(words[:12]) + "..."
+    target_scene["caption"] = combined
         
     if item_id:
         covers = set(target_scene.get("covers_items") or [])

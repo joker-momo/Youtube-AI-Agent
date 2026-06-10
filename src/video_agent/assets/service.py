@@ -13,6 +13,36 @@ from urllib.request import Request, urlopen
 from video_agent.assets.library import AssetLibrary
 from video_agent.assets.providers import DEFAULT_HEADERS, StockPhotoClient
 
+_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
+
+
+def extract_asset_frame(asset_path: str | Path, out_path: str | Path, *, at_sec: float = 0.5) -> Path | None:
+    """Extract a representative still frame from an asset for Vision QA.
+
+    Images are copied as-is; videos get one frame at ``at_sec`` via ffmpeg.
+    Returns the frame path, or None when extraction fails (QA then skips —
+    a broken probe must never block asset selection).
+    """
+    import subprocess
+
+    src = Path(asset_path)
+    dst = Path(out_path)
+    if not src.exists():
+        return None
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if src.suffix.lower() in _IMAGE_SUFFIXES:
+        shutil.copy2(src, dst)
+        return dst
+    cmd = [
+        "ffmpeg", "-y", "-ss", f"{max(0.0, at_sec):.2f}", "-i", str(src),
+        "-frames:v", "1", "-q:v", "2", str(dst),
+    ]
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        return None
+    return dst if dst.exists() else None
+
 
 def _assert_safe_http_url(url: str) -> None:
     """Reject non-http(s) schemes and link-local / loopback / RFC1918 hosts.
@@ -341,6 +371,9 @@ class StockAssetService:
         # ChatGPT is logged to the Short's prompt history (success + failure).
         self.image_gen_recorder = image_gen_recorder
         self.vision_qa_fn = vision_qa_fn
+        # Retry memory: every Vision-QA rejection (scene, asset, missing evidence,
+        # forbidden violations) — consumed by reports and later attempts.
+        self.vision_rejections: list[dict[str, Any]] = []
         self.cache = QueryCache(
             _resolve_project_path(visual_config.get("query_cache_path"), "caches/query_cache.db")
         )
@@ -554,8 +587,11 @@ class StockAssetService:
                 asset["asset_selection"]["asset_match_status"] = "ai_generated"
                 return asset
 
-        # Tier 4a — Graphic/text-led fallback
-        if strategy == "graphic_fallback" or (is_key and not enable_ai_fallback):
+        # Tier 4a — Graphic/text-led fallback. Reaching this point means every
+        # higher tier (stock, AI) was skipped or failed, so for key scenes the
+        # graphic is the last usable net — a key scene must never fall through
+        # to a blank Tier-5 block merely because the AI tier was attempted.
+        if strategy == "graphic_fallback" or is_key:
             return {
                 "provider": "graphic_fallback",
                 "asset_id": f"graphic_{job_id}_{scene['id']}",
@@ -860,8 +896,17 @@ class StockAssetService:
                         asset_selection["qa_missing_evidence"] = qa_result.get("missing_evidence", [])
                         asset_selection["qa_forbidden_violations"] = qa_result.get("forbidden_violations", [])
                         asset_selection["qa_reason"] = qa_result.get("reason", "")
-                        # Save the failed asset in case we want to debug, but DO NOT return it
-                        # we move to the next candidate
+                        # Retry memory: never offer this asset again in this run,
+                        # and keep the structured rejection for later attempts.
+                        self.used_provider_ids.add(key)
+                        self.vision_rejections.append({
+                            "scene_id": scene.get("id"),
+                            "provider": asset.get("provider"),
+                            "provider_asset_id": str(candidate.get("provider_asset_id")),
+                            "missing_evidence": qa_result.get("missing_evidence", []),
+                            "forbidden_violations": qa_result.get("forbidden_violations", []),
+                            "reason": qa_result.get("reason", ""),
+                        })
                         self.last_errors.append({
                             "provider": asset.get("provider"),
                             "error_type": "VisionQAFailure",

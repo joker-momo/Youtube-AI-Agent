@@ -313,7 +313,12 @@ def _background_source_label(scene_asset: dict[str, Any]) -> str:
     return provider.title() or "Unknown"
 
 
-def _write_background_report(json_dir: Path, scene_assets: list[dict[str, Any]], scene_doc: dict[str, Any]) -> None:
+def _write_background_report(
+    json_dir: Path,
+    scene_assets: list[dict[str, Any]],
+    scene_doc: dict[str, Any],
+    vision_rejections: list[dict[str, Any]] | None = None,
+) -> None:
     """Per-scene background sourcing report consumed by the Shorts Studio UI."""
     motion_by_id = {s.get("id"): s.get("motion") for s in (scene_doc.get("scenes") or [])}
     entries = []
@@ -332,7 +337,10 @@ def _write_background_report(json_dir: Path, scene_assets: list[dict[str, Any]],
             "motion": motion_by_id.get(sid),
         })
     json_dir.mkdir(parents=True, exist_ok=True)
-    write_json(json_dir / "background_report.json", {"scenes": entries})
+    report: dict[str, Any] = {"scenes": entries}
+    if vision_rejections:
+        report["vision_rejections"] = vision_rejections
+    write_json(json_dir / "background_report.json", report)
 
 
 def _synthesize_narration_and_mix(
@@ -487,6 +495,7 @@ def prepare_assets(
     render_backgrounds: bool = True,
     render_tts: bool = True,
     on_scene_resolved: Callable[[dict[str, Any]], None] | None = None,
+    vision_qa_fn: Callable[[dict[str, Any], str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     assets_dir = job_dir / "assets"
     assets_dir.mkdir(parents=True, exist_ok=True)
@@ -524,6 +533,7 @@ def prepare_assets(
             download_client=download_client,
             image_gen_fn=image_gen_fn or _default_sync_image_gen,
             image_gen_recorder=image_gen_recorder,
+            vision_qa_fn=vision_qa_fn,
         )
         if visual_config.get("strategy") in {"auto", "stock_photo_api"}
         else None
@@ -652,7 +662,10 @@ def prepare_assets(
         # Persist asset_refs + the per-scene background sourcing report so the
         # Shorts Studio UI can show which source each scene used.
         write_json(job_dir / ARTIFACT_SCENES, scene_doc)
-        _write_background_report(job_dir / "json", scene_assets, scene_doc)
+        _write_background_report(
+            job_dir / "json", scene_assets, scene_doc,
+            vision_rejections=(stock_service.vision_rejections if stock_service else None),
+        )
 
     audio_metadata: dict[str, Any] = {}
     public_narration_ref: str | None = None

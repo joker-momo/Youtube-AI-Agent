@@ -1,12 +1,16 @@
 /**
- * Time-block routine graphic for practical routines such as 10 + 10 + 10 min.
+ * Time-block routine — calm editorial timeline (taste refresh C5).
+ *
+ * No time pills or block cards: each row is an accent time on the left and the
+ * action text on the right, sharing a thin guide line so the time split scans
+ * instantly as a vertical rhythm. Action text stays dominant.
  */
 import React from 'react';
 import {getGraphicColors, graphicTheme, type GraphicColorRoles} from './graphic-theme';
 import {GraphicRoutineSplitPayload} from './graphic-payloads';
 import {GraphicFrame, useReveal} from './GraphicFrame';
 
-const {font, fontSize, radius} = graphicTheme;
+const {font, fontSize, motion} = graphicTheme;
 
 const RoutineBlock: React.FC<{
   time: string;
@@ -20,60 +24,61 @@ const RoutineBlock: React.FC<{
       style={{
         ...reveal,
         display: 'grid',
-        gridTemplateColumns: '160px 1fr',
-        alignItems: 'center',
+        gridTemplateColumns: '150px 1fr',
+        alignItems: 'baseline',
         gap: 26,
         width: '100%',
-        padding: '22px 28px',
-        borderRadius: radius.panel,
-        background: colors.paper,
-        boxShadow: `0 8px 24px ${colors.shadow}`,
       }}
     >
-      <div
+      {/* Right-aligned accent time — the column lines up so 10 / 10 / 10 reads
+          as a split at a glance, but stays secondary to the action. */}
+      <span
         style={{
-          borderRadius: radius.pill,
-          background: colors.warmOrange,
-          color: colors.paper,
+          textAlign: 'right',
           fontFamily: font.family,
-          fontSize: 38,
-          fontWeight: 800,
-          textAlign: 'center',
-          padding: '16px 12px',
-          lineHeight: 1,
+          fontSize: 40,
+          fontWeight: 700,
+          color: colors.accent,
+          lineHeight: 1.05,
+          fontVariantNumeric: 'tabular-nums',
         }}
       >
         {time}
-      </div>
-      <div
+      </span>
+      <span
         style={{
+          paddingLeft: 26,
+          borderLeft: `3px solid ${colors.accentSoft}`,
           fontFamily: font.family,
           fontSize: fontSize.item,
-          fontWeight: 800,
-          color: colors.text,
-          lineHeight: 1.1,
+          fontWeight: 600,
+          color: colors.textPrimary,
+          lineHeight: 1.16,
+          display: '-webkit-box',
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: 'vertical',
+          overflow: 'hidden',
         }}
       >
         {text}
-      </div>
+      </span>
     </div>
   );
 };
 
-const TotalLabel: React.FC<{children: React.ReactNode; colors: GraphicColorRoles}> = ({children, colors}) => {
-  const reveal = useReveal(0.2);
+const TotalEyebrow: React.FC<{children: React.ReactNode; colors: GraphicColorRoles}> = ({children, colors}) => {
+  const reveal = useReveal(motion.itemStartSec - 0.08);
   return (
     <div
       style={{
         ...reveal,
         alignSelf: 'center',
-        padding: '12px 30px',
-        borderRadius: radius.pill,
-        background: colors.positiveSoft,
-        color: colors.oliveDark,
         fontFamily: font.family,
-        fontSize: 40,
-        fontWeight: 800,
+        fontSize: 30,
+        fontWeight: 700,
+        letterSpacing: 2,
+        textTransform: 'uppercase',
+        color: colors.textMuted,
         lineHeight: 1,
       }}
     >
@@ -99,23 +104,21 @@ export const RoutineSplitGraphic: React.FC<{
       <div
         style={{
           width: '100%',
-          maxWidth: 880,
+          maxWidth: 860,
+          margin: '0 auto',
           display: 'flex',
           flexDirection: 'column',
-          gap: 22,
-          alignItems: 'stretch',
+          gap: 40,
         }}
       >
-        {payload.totalLabel && (
-          <TotalLabel colors={colors}>{payload.totalLabel}</TotalLabel>
-        )}
+        {payload.totalLabel && <TotalEyebrow colors={colors}>{payload.totalLabel}</TotalEyebrow>}
         {blocks.map((block, i) => (
           <RoutineBlock
             key={`${block.time}-${i}`}
             time={block.time}
             text={block.text}
             colors={colors}
-            delaySec={0.45 + i * 0.35}
+            delaySec={motion.itemStartSec + i * motion.itemStaggerSec}
           />
         ))}
       </div>

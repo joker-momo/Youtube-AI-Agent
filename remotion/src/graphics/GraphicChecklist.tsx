@@ -1,22 +1,26 @@
 /**
- * Checklist graphic (spec v7 §13.1). 2-5 items, one revealed at a time, calm
- * warm checkmarks. Large text, no full-screen card feel.
+ * Checklist graphic — calm typographic list (taste refresh C3).
+ *
+ * No per-row cards or drop shadows: each item is a thin ghost check + large
+ * text sitting directly on the warm background, revealed in a quick gentle
+ * cascade. One dominant idea, readable within ~1s, no dashboard feel.
  */
 import React from 'react';
 import {getGraphicColors, graphicTheme, type GraphicColorRoles} from './graphic-theme';
 import {GraphicChecklistPayload} from './graphic-payloads';
 import {GraphicFrame, useReveal} from './GraphicFrame';
 
-const {font, fontSize} = graphicTheme;
+const {font, fontSize, motion} = graphicTheme;
 
-const Check: React.FC<{colors: GraphicColorRoles}> = ({colors}) => (
-  <svg width={56} height={56} viewBox="0 0 56 56" style={{flexShrink: 0}}>
-    <circle cx={28} cy={28} r={26} fill={colors.olive} />
+/** Thin outlined check — a quiet mark, not a filled badge. */
+const GhostCheck: React.FC<{colors: GraphicColorRoles}> = ({colors}) => (
+  <svg width={52} height={52} viewBox="0 0 52 52" style={{flexShrink: 0}}>
+    <circle cx={26} cy={26} r={23} fill="none" stroke={colors.positive} strokeWidth={2.5} opacity={0.55} />
     <path
-      d="M16 29 L24 37 L40 19"
+      d="M16 27 L23 34 L37 18"
       fill="none"
-      stroke={colors.paper}
-      strokeWidth={5}
+      stroke={colors.positive}
+      strokeWidth={4}
       strokeLinecap="round"
       strokeLinejoin="round"
     />
@@ -30,27 +34,20 @@ const ChecklistItem: React.FC<{
 }> = ({children, colors, delaySec}) => {
   const reveal = useReveal(delaySec);
   return (
-    <div
-      style={{
-        ...reveal,
-        display: 'flex',
-        alignItems: 'center',
-        gap: 28,
-        width: '100%',
-        padding: '18px 28px',
-        borderRadius: graphicTheme.radius.panel,
-        background: colors.paper,
-        boxShadow: `0 8px 24px ${colors.shadow}`,
-      }}
-    >
-      <Check colors={colors} />
+    <div style={{...reveal, display: 'flex', alignItems: 'center', gap: 28, width: '100%'}}>
+      <GhostCheck colors={colors} />
       <span
         style={{
           fontFamily: font.family,
           fontSize: fontSize.item,
-          fontWeight: 700,
-          color: colors.text,
-          lineHeight: 1.1,
+          fontWeight: 600,
+          color: colors.textPrimary,
+          lineHeight: 1.16,
+          // Keep each item to ~2 readable lines, no dense wrapping.
+          display: '-webkit-box',
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: 'vertical',
+          overflow: 'hidden',
         }}
       >
         {children}
@@ -73,9 +70,18 @@ export const GraphicChecklist: React.FC<{
       variant={payload.variant}
       surfaceStyle={payload.surface_style}
     >
-      <div style={{display: 'flex', flexDirection: 'column', gap: 26, width: '100%'}}>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 44,
+          width: '100%',
+          maxWidth: 840,
+          margin: '0 auto',
+        }}
+      >
         {items.map((item, i) => (
-          <ChecklistItem key={i} colors={colors} delaySec={0.4 + i * 0.45}>
+          <ChecklistItem key={i} colors={colors} delaySec={motion.itemStartSec + i * motion.itemStaggerSec}>
             {item}
           </ChecklistItem>
         ))}

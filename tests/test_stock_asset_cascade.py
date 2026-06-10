@@ -404,3 +404,78 @@ def test_missing_orientation_metadata_defaults_to_portrait_for_shorts(tmp_path):
     img = Image.open(tmp_frame_path)
     assert img.size == (1080, 1920), f"Short fallback size {img.size} is not 1080x1920"
 
+
+
+def test_graphic_scene_skips_media_acquisition_by_default(tmp_path):
+    """graphic_* scenes render on a paper card; no stock/AI background is fetched
+    unless background_mode == 'video_blur'. Guards wasted ChatGPT image gen."""
+    from video_agent.stages.assets import prepare_assets
+
+    gen_calls = []
+
+    def _img_gen(prompt, out_path):
+        gen_calls.append(out_path)
+
+    scene_doc = {
+        "total_duration_sec": 3,
+        "scenes": [{
+            "id": "s01", "layout": "graphic_routine_split",
+            "on_screen_text": "MICRO PAUSAS", "visual_prompt": "p",
+            "visual_importance": "critical", "asset_refs": {},
+        }],
+    }
+    palette = {"palette": {"background": "#F6F1E8", "primary": "#2F6B57", "secondary": "#D98C5F", "accent": "#F5C24B", "text": "#26332F"}}
+
+    class _EmptyStock:
+        def search(self, provider, query, filters): return {}
+        def normalize(self, provider, response): return []
+
+    manifest = prepare_assets(
+        job_dir=tmp_path / "jobs" / "job-graph-skip",
+        style_dna=palette, scene_doc=scene_doc,
+        visual_config={"strategy": "stock_photo_api", "providers": ["pexels"],
+                       "query_cache_path": str(tmp_path / "c.db"),
+                       "asset_library_path": str(tmp_path / "lib")},
+        stock_client=_EmptyStock(), image_gen_fn=_img_gen,
+    )
+
+    assert gen_calls == []  # no AI image generated for the paper graphic
+    assert scene_doc["scenes"][0]["asset_refs"]["background"] == ""
+    assert manifest["scenes"][0]["background_source"] == "Graphic (card)"
+
+
+def test_graphic_scene_with_video_blur_still_acquires(tmp_path):
+    from video_agent.stages.assets import prepare_assets
+
+    gen_calls = []
+
+    def _img_gen(prompt, out_path):
+        gen_calls.append(out_path)
+        from PIL import Image
+        Image.new("RGB", (1080, 1920), (20, 30, 40)).save(out_path)
+
+    scene_doc = {
+        "total_duration_sec": 3,
+        "scenes": [{
+            "id": "s01", "layout": "graphic_routine_split",
+            "on_screen_text": "MICRO PAUSAS", "visual_prompt": "p",
+            "visual_importance": "critical", "asset_refs": {},
+            "layout_payload": {"background_mode": "video_blur"},
+        }],
+    }
+    palette = {"palette": {"background": "#F6F1E8", "primary": "#2F6B57", "secondary": "#D98C5F", "accent": "#F5C24B", "text": "#26332F"}}
+
+    class _EmptyStock:
+        def search(self, provider, query, filters): return {}
+        def normalize(self, provider, response): return []
+
+    prepare_assets(
+        job_dir=tmp_path / "jobs" / "job-graph-blur",
+        style_dna=palette, scene_doc=scene_doc,
+        visual_config={"strategy": "stock_photo_api", "providers": ["pexels"],
+                       "query_cache_path": str(tmp_path / "c.db"),
+                       "asset_library_path": str(tmp_path / "lib")},
+        stock_client=_EmptyStock(), image_gen_fn=_img_gen,
+    )
+    # video_blur explicitly wants media -> AI fallback runs (critical scene).
+    assert len(gen_calls) >= 1

@@ -606,7 +606,15 @@ def prepare_assets(
         local_image = primary_asset or _find_local_scene_image(scene["id"], source_dir)
         stock_asset = None
         scene_dur = float(scene.get("duration_sec") or 30)
-        if not local_image and stock_service:
+        # Graphic scenes (layout graphic_*) render on a clean/paper/radial card and
+        # only show a media background when background_mode == "video_blur" (see
+        # remotion GraphicBackground). Acquiring stock/AI footage for the common
+        # paper-mode case wastes a ChatGPT image gen per graphic scene and is never
+        # shown, so skip acquisition unless the scene explicitly asks for blur.
+        _layout = str(scene.get("layout") or "")
+        _bg_mode = (scene.get("layout_payload") or {}).get("background_mode") or scene.get("background_mode")
+        graphic_skips_media = _layout.startswith("graphic_") and _bg_mode != "video_blur"
+        if not local_image and stock_service and not graphic_skips_media:
             stock_asset = stock_service.get_scene_asset(scene, channel_id, job_dir.name)
         # Force all scene backgrounds to video so Remotion always renders OffthreadVideo.
         asset_suffix = ".mp4"
@@ -686,10 +694,14 @@ def prepare_assets(
         public_ref = f"jobs/{job_dir.name}/assets/{image_path.name}"
         scene["asset_refs"]["background"] = public_ref
         
-        if stock_asset and stock_asset.get("provider") == "graphic_fallback":
-            if (scene.get("layout") or "").startswith("graphic_"):
-                scene["asset_refs"]["background"] = ""
-                scene["background_mode"] = "paper"
+        if (stock_asset and stock_asset.get("provider") == "graphic_fallback"
+                and (scene.get("layout") or "").startswith("graphic_")):
+            scene["asset_refs"]["background"] = ""
+            scene["background_mode"] = "paper"
+        elif graphic_skips_media:
+            # Clean graphic card with no media background (acquisition skipped).
+            scene["asset_refs"]["background"] = ""
+            scene.setdefault("background_mode", "paper")
         scene_asset = {
             "scene_id": scene["id"],
             "background": str(image_path.resolve()),
@@ -700,6 +712,11 @@ def prepare_assets(
         scene_asset.update(extra_manifest)
         scene_asset["background_source"] = _background_source_label(scene_asset)
         scene_asset["media_kind"] = media_kind
+        if graphic_skips_media:
+            # Honest report label: this scene renders as a clean graphic card with
+            # no media background (no stock/AI was fetched on purpose).
+            scene_asset["background_source"] = "Graphic (card)"
+            scene_asset["media_kind"] = "image"
         scene_assets.append(scene_asset)
         if on_scene_resolved is not None:
             try:

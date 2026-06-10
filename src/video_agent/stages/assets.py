@@ -175,6 +175,25 @@ def _write_placeholder_image(
         image.save(path, quality=92)
 
 
+def _write_preview_still(src_image: Path, dst_jpg: Path, *, max_h: int = 360) -> bool:
+    """Save a small JPEG preview of a still-image source for the UI report.
+
+    Returns True on success. Best-effort: any failure just means the UI falls
+    back to the .mp4 frame, so this must never raise into asset prep.
+    """
+    try:
+        with Image.open(src_image) as im:
+            im = im.convert("RGB")
+            if im.height > max_h:
+                w = int(im.width * (max_h / im.height))
+                im = im.resize((max(1, w), max_h))
+            dst_jpg.parent.mkdir(parents=True, exist_ok=True)
+            im.save(dst_jpg, format="JPEG", quality=80)
+        return True
+    except Exception:
+        return False
+
+
 def _write_video_from_image(image_path: Path, output_path: Path, duration_sec: float, is_portrait: bool = False) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     vf_filter = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920" if is_portrait else "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080"
@@ -345,6 +364,7 @@ def _write_background_report(
         entries.append({
             "scene_id": sid,
             "background_source": a.get("background_source") or _background_source_label(a),
+            "media_kind": a.get("media_kind") or "video",
             "provider": a.get("provider"),
             "asset_tier": a.get("asset_tier"),
             "query": sel.get("query"),
@@ -591,12 +611,19 @@ def prepare_assets(
         # Force all scene backgrounds to video so Remotion always renders OffthreadVideo.
         asset_suffix = ".mp4"
         image_path = assets_dir / f"{scene['id']}{asset_suffix}"
+        # media_kind records whether the SOURCE was real video footage or a still
+        # image (photo / AI image / placeholder), so the UI can preview it as a
+        # <video> or <img> even though every asset is encoded to .mp4 for render.
+        media_kind = "video"
+        preview_still = assets_dir / f"{scene['id']}_preview.jpg"
         if local_image:
             if local_image.suffix.lower() == ".mp4":
                 if local_image.resolve() != image_path.resolve():
                     shutil.copy2(local_image, image_path)
             else:
                 _write_video_from_image(local_image, image_path, scene_dur, is_portrait=is_portrait)
+                if _write_preview_still(local_image, preview_still):
+                    media_kind = "image"
             source = (
                 "asset_refs_primary" if primary_asset is not None else "local_directory"
             )
@@ -615,6 +642,8 @@ def prepare_assets(
                 shutil.copy2(library_path, image_path)
             else:
                 _write_video_from_image(library_path, image_path, scene_dur, is_portrait=is_portrait)
+                if _write_preview_still(library_path, preview_still):
+                    media_kind = "image"
             source = "asset_library"
             source_path = str(library_path.resolve())
             extra_manifest = {
@@ -670,6 +699,7 @@ def prepare_assets(
         }
         scene_asset.update(extra_manifest)
         scene_asset["background_source"] = _background_source_label(scene_asset)
+        scene_asset["media_kind"] = media_kind
         scene_assets.append(scene_asset)
         if on_scene_resolved is not None:
             try:

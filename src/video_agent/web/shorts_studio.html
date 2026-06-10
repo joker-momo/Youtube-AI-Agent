@@ -2108,16 +2108,26 @@ async function spViewBackgroundSources(jobId, shortId, btn) {
       const motion = s.motion ? ` · <span style="color:var(--muted)">${escapeHtml(s.motion)}</span>` : '';
       const q = s.query ? `<div style="font-size:11px;color:var(--muted-2,#94a3b8);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(s.query)}">${escapeHtml((s.query || '').slice(0, 90))}</div>` : '';
       const lnk = s.source_url ? `<div style="font-size:11px;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(s.source_url)}"><a href="${escapeHtml(s.source_url)}" target="_blank" style="color:var(--blue);text-decoration:none">🔗 ${escapeHtml(s.source_url)}</a></div>` : '';
-      // Inline 9:16 preview of the resolved background. Scene assets are always
-      // encoded to .mp4 in shorts/<id>/assets/<scene>.mp4; #t=0.1 shows frame 1.
-      const assetPath = 'shorts/' + shortId + '/assets/' + (s.scene_id || '') + '.mp4';
-      const assetUrl = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(assetPath) + '#t=0.1';
-      const thumb = s.scene_id
-        ? `<video src="${assetUrl}" muted preload="metadata" playsinline
-                 onmouseover="this.play()" onmouseout="this.pause();this.currentTime=0.1"
-                 onerror="this.style.display='none'"
-                 style="width:34px;height:60px;flex:none;object-fit:cover;border-radius:5px;background:#0f172a;cursor:pointer"></video>`
-        : '';
+      // Inline 9:16 preview of the resolved background. Video sources render a
+      // hover-playable <video>; still-image sources (photo / ChatGPT image) get
+      // the saved <scene>_preview.jpg as an <img>. Both live in the short's
+      // assets dir, served via the artifact route.
+      const artBase = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=';
+      const thumbStyle = 'width:34px;height:60px;flex:none;object-fit:cover;border-radius:5px;background:#0f172a';
+      let thumb = '';
+      if (s.scene_id) {
+        if (s.media_kind === 'image') {
+          const imgPath = 'shorts/' + shortId + '/assets/' + s.scene_id + '_preview.jpg';
+          thumb = `<img src="${artBase + encodeURIComponent(imgPath)}" loading="lazy" onerror="this.style.display='none'" style="${thumbStyle}">`;
+        } else {
+          const vidPath = 'shorts/' + shortId + '/assets/' + s.scene_id + '.mp4';
+          const vidUrl = artBase + encodeURIComponent(vidPath) + '#t=0.1';
+          thumb = `<video src="${vidUrl}" muted preload="metadata" playsinline
+                     onmouseover="this.play()" onmouseout="this.pause();this.currentTime=0.1"
+                     onerror="this.style.display='none'"
+                     style="${thumbStyle};cursor:pointer"></video>`;
+        }
+      }
       return `
         <div style="border:1px solid var(--line);border-radius:8px;padding:7px 9px;background:#fff;display:flex;gap:9px;align-items:flex-start">
           ${thumb}

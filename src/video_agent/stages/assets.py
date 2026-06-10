@@ -24,6 +24,23 @@ from video_agent.utils.json_io import write_json
 
 SUPPORTED_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp")
 
+def _project_name_from_out_path(out_path: str | Path) -> str:
+    """Readable ChatGPT project name like ``<job_id>_<scene_id>`` derived from the
+    image's out_path (``jobs/<job_id>/assets/ai_temp_<scene>_<hash>.png``) so the
+    project is identifiable in the ChatGPT sidebar instead of a generic 'fallback'."""
+    try:
+        p = Path(out_path)
+        job_id = p.parent.parent.name if p.parent.parent.name not in ("", "assets") else p.parent.name
+        stem = p.stem
+        scene = stem
+        if stem.startswith("ai_temp_"):
+            scene = stem[len("ai_temp_"):].rsplit("_", 1)[0]  # drop the trailing hash
+        name = f"{job_id}_{scene}".strip("_")
+        return name or "fallback"
+    except Exception:
+        return "fallback"
+
+
 def _default_sync_image_gen(prompt: str, out_path: str | Path) -> None:
     import asyncio
     import os
@@ -35,7 +52,7 @@ def _default_sync_image_gen(prompt: str, out_path: str | Path) -> None:
     asyncio.run(
         client.generate_image(
             prompt=prompt,
-            project_name="fallback",
+            project_name=_project_name_from_out_path(out_path),
             out_path=str(out_path),
             aspect_ratio="9:16",
         )
@@ -552,6 +569,19 @@ def prepare_assets(
     num_scenes = len(scene_doc["scenes"])
     for index, scene in enumerate(scene_doc["scenes"] if render_backgrounds else []):
         _write_audio_progress(job_dir, round((index / num_scenes) * 50.0, 1), f"visuals (scene {index+1}/{num_scenes})")
+        # Emit BEFORE acquiring so the UI shows the scene currently being fetched
+        # (acquisition — esp. ChatGPT image gen — can take many seconds).
+        if on_scene_resolved is not None:
+            try:
+                on_scene_resolved({
+                    "index": index,
+                    "total": num_scenes,
+                    "scene_id": scene["id"],
+                    "phase": "start",
+                    "background_source": None,
+                })
+            except Exception:  # pragma: no cover - reporting must never break asset prep
+                pass
         primary_asset = _find_asset_refs_primary(scene, job_dir)
         local_image = primary_asset or _find_local_scene_image(scene["id"], source_dir)
         stock_asset = None
@@ -647,6 +677,7 @@ def prepare_assets(
                     "index": index,
                     "total": num_scenes,
                     "scene_id": scene["id"],
+                    "phase": "resolved",
                     "background_source": scene_asset["background_source"],
                 })
             except Exception:  # pragma: no cover - reporting must never break asset prep

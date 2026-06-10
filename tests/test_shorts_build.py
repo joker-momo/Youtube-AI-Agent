@@ -788,7 +788,7 @@ def _stub_io(calls):
         for i, sc in enumerate(scenes):
             sc.setdefault("asset_refs", {})["background"] = f"jobs/x/assets/{sc['id']}.mp4"
             if on_scene_resolved:
-                on_scene_resolved({"index": i, "total": len(scenes), "scene_id": sc["id"], "background_source": "Pexels video"})
+                on_scene_resolved({"index": i, "total": len(scenes), "scene_id": sc["id"], "phase": "resolved", "background_source": "Pexels video"})
     def tts_fn(short_dir, short_scenes, channel_config):
         calls.append("tts"); (short_dir / "audio").mkdir(parents=True, exist_ok=True)
         (short_dir / "audio" / "short_narration.wav").write_bytes(b"w"); return short_dir / "audio" / "short_narration.wav"

@@ -2099,17 +2099,22 @@ def _build_short_impl(
             bg_sources: list[dict[str, Any]] = []
 
             def _on_scene_bg(info: dict[str, Any]) -> None:
-                bg_sources.append({
-                    "scene_id": info.get("scene_id"),
-                    "background_source": info.get("background_source"),
-                })
+                phase = info.get("phase")
+                # Record the per-scene source only once acquisition resolved.
+                if phase == "resolved":
+                    bg_sources.append({
+                        "scene_id": info.get("scene_id"),
+                        "background_source": info.get("background_source"),
+                    })
                 update_stage(
                     "background",
                     "in_progress",
                     current_scene=(int(info.get("index", 0)) + 1),
                     total_scenes=info.get("total"),
                     last_scene_id=info.get("scene_id"),
-                    last_source=info.get("background_source"),
+                    # While fetching show "…", then the resolved source label.
+                    last_source=(info.get("background_source") if phase == "resolved" else "fetching…"),
+                    scene_phase=phase,
                 )
 
             background_fn(sd, short_scenes, channel_config, on_scene_resolved=_on_scene_bg)

@@ -44,6 +44,65 @@ def extract_asset_frame(asset_path: str | Path, out_path: str | Path, *, at_sec:
     return dst if dst.exists() else None
 
 
+def _evidence_terms(evidence: dict[str, Any], *keys: str) -> list[str]:
+    out: list[str] = []
+    for k in keys:
+        for term in (evidence.get(k) or []):
+            t = str(term).strip().lower()
+            if t:
+                out.append(t)
+    return out
+
+
+def _term_hits(term: str, haystack: str) -> bool:
+    """True when any informative word (len>3) of ``term`` appears in haystack."""
+    words = [w for w in re.split(r"[^\wáéíóúüñ]+", term.lower()) if len(w) > 3]
+    if not words:
+        words = [term.lower()]
+    return any(w in haystack for w in words)
+
+
+def metadata_evidence_qa(scene: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
+    """Deterministic post-asset QA against an asset's metadata (tags/alt/query).
+
+    Enforces the scene's ``required_visual_evidence`` without pixel-level vision:
+    rejects a candidate whose metadata hits any forbidden_pose/context/mood term,
+    or — for a scene that declares required_actions/objects — whose metadata shows
+    none of them. Returns the strict PASS/FAIL Vision-QA schema so it is a drop-in
+    default for the injectable ``vision_qa_fn`` (which can later do real vision).
+    """
+    evidence = scene.get("required_visual_evidence") or {}
+    haystack_parts = list(candidate.get("tags") or [])
+    for extra in ("alt", "description", "title"):
+        if candidate.get(extra):
+            haystack_parts.append(str(candidate[extra]))
+    haystack_parts.append(str(scene.get("visual_prompt") or ""))
+    haystack = " ".join(str(p) for p in haystack_parts).lower()
+
+    forbidden = _evidence_terms(evidence, "forbidden_pose", "forbidden_context", "forbidden_mood")
+    forbidden_violations = [term for term in forbidden if _term_hits(term, haystack)]
+
+    required = _evidence_terms(evidence, "required_actions", "required_objects")
+    missing_evidence: list[str] = []
+    if required and not any(_term_hits(term, haystack) for term in required):
+        missing_evidence = list(required)
+
+    if forbidden_violations or missing_evidence:
+        reason_parts = []
+        if forbidden_violations:
+            reason_parts.append("forbidden: " + ", ".join(forbidden_violations))
+        if missing_evidence:
+            reason_parts.append("missing required evidence")
+        return {
+            "verdict": "FAIL",
+            "missing_evidence": missing_evidence,
+            "forbidden_violations": forbidden_violations,
+            "confidence": 0.6,
+            "reason": "; ".join(reason_parts),
+        }
+    return {"verdict": "PASS", "missing_evidence": [], "forbidden_violations": [], "confidence": 0.5, "reason": "metadata ok"}
+
+
 def _assert_safe_http_url(url: str) -> None:
     """Reject non-http(s) schemes and link-local / loopback / RFC1918 hosts.
 
@@ -883,13 +942,17 @@ class StockAssetService:
             except Exception:
                 continue
 
-            # --- Post-Asset Vision QA ---
-            # If vision QA is provided, the scene is critical, and we have a local_path, run QA
-            if self.vision_qa_fn is not None and asset.get("local_path"):
-                visual_importance = scene.get("visual_importance", "normal")
-                if visual_importance == "critical":
+            # --- Post-Asset QA for critical scenes ---
+            # Injected vision_qa_fn (real pixel-level vision) takes precedence;
+            # otherwise the built-in deterministic metadata gate enforces the
+            # scene's required_visual_evidence against the asset's tags/alt so
+            # frail/medical/off-pose stock never lands on a critical scene.
+            if scene.get("visual_importance", "normal") == "critical":
+                if self.vision_qa_fn is not None and asset.get("local_path"):
                     qa_result = self.vision_qa_fn(scene, asset["local_path"])
-                    if qa_result.get("verdict") == "FAIL":
+                else:
+                    qa_result = metadata_evidence_qa(scene, candidate)
+                if qa_result and qa_result.get("verdict") == "FAIL":
                         # Record failure reasons to asset_selection payload for transparency
                         asset_selection = asset.get("asset_selection") or {}
                         asset_selection["qa_failed"] = True

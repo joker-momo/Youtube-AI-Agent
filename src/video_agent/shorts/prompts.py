@@ -547,6 +547,18 @@ def short_scene_prompt_v6(
         "}"
     )
 
+    is_food_topic = topic in (TopicFamily.NUTRITION, TopicFamily.GENERAL)
+    if not is_food_topic:
+        topic_directive = (
+            f"TOPIC = {topic.value}. This Short is NOT about bread, food, or food labels.\n"
+            "Any bread / pan / food-label / supermarket / ingredient example in the rules below is\n"
+            "illustrative for NUTRITION Shorts ONLY — IGNORE it here. Do not output bread visuals,\n"
+            "graphic_label_callout, food CTAs (e.g. 'MÍRALO ANTES DE COMPRAR PAN'), or supermarket\n"
+            f"hooks. Apply the {topic.value} rules below instead.\n\n"
+        )
+    else:
+        topic_directive = ""
+
     return (
         "Turn this approved Short script into vertical 9:16 scenes for generation.\n\n"
         f"SCRIPT:\n{script_json}\n\n"
@@ -557,6 +569,7 @@ def short_scene_prompt_v6(
         "Create scene-by-scene visual instructions for a vertical YouTube Short.\n"
         "Do not rewrite the core message.\n"
         "Do not add new health claims.\n\n"
+        f"{topic_directive}"
         "VISUAL QUALITY FIELDS (required per scene):\n"
         "- visual_importance: 'critical' for hook/payoff/key-item scenes, 'bridge' for connective scenes, else 'normal'.\n"
         "- asset_strategy: 'stock_ok' (default), 'ai_image_preferred' for hard-to-find specific visuals, 'graphic_fallback' for data/lists.\n"
@@ -757,15 +770,19 @@ def short_scene_prompt_v6(
         "- Do not keep the same on_screen_text for 5+ seconds.\n\n"
         "CTA RULES:\n"
         "- CTA duration: 1.8–2.6 sec.\n"
-        "- Prefer action-oriented Spanish CTAs: GUARDA ESTA LISTA, GUÁRDALO PARA LA COMPRA, MÍRALO ANTES DE COMPRAR PAN, ÚSALO EN EL SÚPER.\n"
+        + ("- Prefer action-oriented Spanish CTAs: GUARDA ESTA LISTA, GUÁRDALO PARA LA COMPRA, MÍRALO ANTES DE COMPRAR PAN, ÚSALO EN EL SÚPER.\n"
+           if is_food_topic else
+           "- Prefer action-oriented Spanish CTAs that fit the topic (GUARDA ESTA LISTA, EMPIEZA HOY, PRUÉBALO MAÑANA). Do NOT use bread/supermarket CTAs.\n") +
         "- Avoid passive/status CTAs: CHECKLIST GUARDADA, LISTA COMPLETA, FIN, CONSEJO FINAL.\n"
         "- CTA should not be a long graphic scene unless it is the whole point of the video.\n\n"
         "VISUAL RULES:\n"
         "- visual_prompt must be vertical-friendly for 9:16.\n"
         "- Prefer simple realistic scenes: close-up face, hands, kitchen, supermarket aisle, bed, yoga mat, chair, walking, daily routine.\n"
-        "- For food-label topics, the first visual must clearly show the topic object or choice context.\n"
-        "- For bread-label topics, the hook visual_prompt should clearly include bread, a bread package, ingredient label, supermarket bread shelf, hand comparing bread packages, or shopping basket with pan integral.\n"
-        "- Avoid food-label hooks that are abstract close-ups, generic kitchen shots, generic person eating, unrecognizable food texture, or footage that does not immediately say bread/label/supermarket.\n"
+        "- The first visual must clearly show the topic object or core action/context of THIS Short.\n"
+        + ("- For bread-label topics, the hook visual_prompt should clearly include bread, a bread package, ingredient label, supermarket bread shelf, hand comparing bread packages, or shopping basket with pan integral.\n"
+           "- Avoid food-label hooks that are abstract close-ups, generic kitchen shots, generic person eating, unrecognizable food texture, or footage that does not immediately say bread/label/supermarket.\n"
+           if is_food_topic else
+           "- For movement/exercise topics, the hook must show a capable 45+ adult standing or moving (gentle stretch, chair-supported exercise, walking) with trainers/chair visible. Never frail, bedbound, or medical mobility aids (rollator/walker/wheelchair).\n") +
         "- Show adults aged 45+ naturally and respectfully.\n"
         "- Do not make people look frail, sick, helpless, ashamed, or mocked.\n"
         "- No scary medical imagery.\n"

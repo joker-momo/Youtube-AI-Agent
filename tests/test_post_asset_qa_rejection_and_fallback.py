@@ -82,3 +82,62 @@ def test_post_asset_qa_rejection_and_fallback():
     assert len(svc.last_errors) == 1
     assert svc.last_errors[0]["error_type"] == "VisionQAFailure"
     assert "No person" in svc.last_errors[0]["message"]
+
+
+# --- Deterministic metadata QA (no injected vision fn) ---------------------
+# Reproduces the three real MOVEMENT bad matches from the rendered Short and
+# asserts the built-in metadata gate rejects each via required_visual_evidence.
+
+from video_agent.assets.service import metadata_evidence_qa
+
+_MOVEMENT_EVIDENCE = {
+    "required_actions": ["standing", "gentle movement or stretching"],
+    "required_objects": ["chair", "trainers"],
+    "subject_pose": ["upright", "active"],
+    "visibility": ["full body or legs visible"],
+    "forbidden_pose": ["lying down", "seated silhouette only", "bedbound"],
+    "forbidden_context": ["rollator", "walker", "wheelchair", "hospital", "medical mobility aid"],
+    "forbidden_mood": ["frail", "sad", "helpless"],
+}
+
+
+def _movement_scene(visual_prompt="older adult exercising at home"):
+    return {
+        "id": "s",
+        "layout": "short_tip",
+        "visual_importance": "critical",
+        "visual_prompt": visual_prompt,
+        "required_visual_evidence": dict(_MOVEMENT_EVIDENCE),
+    }
+
+
+def test_metadata_qa_rejects_s02_rollator_walker():
+    scene = _movement_scene()
+    candidate = {"provider": "pexels", "provider_asset_id": "2", "tags": ["senior", "rollator", "walker", "elderly"]}
+    res = metadata_evidence_qa(scene, candidate)
+    assert res["verdict"] == "FAIL"
+    assert any("rollator" in v or "walker" in v for v in res["forbidden_violations"])
+
+
+def test_metadata_qa_rejects_s04_yoga_mat_lying():
+    scene = _movement_scene()
+    candidate = {"provider": "pexels", "provider_asset_id": "4", "tags": ["yoga", "mat", "lying down", "floor"]}
+    res = metadata_evidence_qa(scene, candidate)
+    assert res["verdict"] == "FAIL"
+    # Either the lying-down forbidden pose OR missing standing/chair triggers it.
+    assert res["forbidden_violations"] or res["missing_evidence"]
+
+
+def test_metadata_qa_rejects_s06_blazer_hallway_missing_required():
+    scene = _movement_scene()
+    candidate = {"provider": "pexels", "provider_asset_id": "6", "tags": ["blazer", "hallway", "corridor", "business"]}
+    res = metadata_evidence_qa(scene, candidate)
+    assert res["verdict"] == "FAIL"
+    assert res["missing_evidence"]  # no trainers/chair/standing visible
+
+
+def test_metadata_qa_passes_good_movement_asset():
+    scene = _movement_scene()
+    candidate = {"provider": "pexels", "provider_asset_id": "9", "tags": ["senior", "standing", "chair", "stretching", "trainers"]}
+    res = metadata_evidence_qa(scene, candidate)
+    assert res["verdict"] == "PASS"

@@ -6,6 +6,25 @@ from pathlib import Path
 from typing import Any, Callable
 
 from video_agent.contracts import resolve_topic_family
+
+# The 7 structured-evidence lists the scene schema / post-asset QA expect.
+_EVIDENCE_KEYS = (
+    "required_actions", "required_objects", "subject_pose", "visibility",
+    "forbidden_pose", "forbidden_context", "forbidden_mood",
+)
+
+# Safe defaults for MOVEMENT scenes when the LLM omits required_visual_evidence.
+# Encodes the editorial line: active, capable, standing/chair-supported 45+ —
+# never frail, bedbound, or medical mobility-aid imagery.
+_MOVEMENT_EVIDENCE_DEFAULT = {
+    "required_actions": ["standing", "gentle movement or stretching"],
+    "required_objects": ["chair", "trainers"],
+    "subject_pose": ["upright", "active"],
+    "visibility": ["full body or legs visible"],
+    "forbidden_pose": ["lying down", "seated silhouette only", "bedbound"],
+    "forbidden_context": ["rollator", "walker", "wheelchair", "hospital", "medical mobility aid"],
+    "forbidden_mood": ["frail", "sad", "helpless"],
+}
 from video_agent.shorts import paths, prompts
 from video_agent.shorts.idea_preservation import normalize_covers_items
 from video_agent.shorts.llm import LLMCallLog, log_llm_call
@@ -131,6 +150,8 @@ def normalize_short_scenes(scenes_doc: dict, short_script: dict) -> dict:
     - fill safe defaults for the visual-quality fields (visual_importance,
       asset_strategy, required_visual_evidence) when the LLM omits them.
     """
+    topic = resolve_topic_family(short_script or {}) if short_script else None
+    is_movement = topic is not None and topic.name == "MOVEMENT"
     out = dict(scenes_doc or {})
     scenes = list(out.get("scenes") or [])
     n = len(scenes)
@@ -183,6 +204,22 @@ def normalize_short_scenes(scenes_doc: dict, short_script: dict) -> dict:
             sc["visual_importance"] = "critical"
         elif "bridge" in sc["layout"] and sc["visual_importance"] == "normal":
             sc["visual_importance"] = "bridge"
+        # MOVEMENT Shorts: every real content scene is a critical action scene.
+        # Generic frail/medical mobility footage is the failure mode for this
+        # 45+ audience, so mark them critical (forces AI fallback when strict
+        # stock fails) and seed required/forbidden evidence the post-asset QA
+        # gate enforces, unless the LLM already supplied richer evidence.
+        is_graphic = str(sc["layout"]).startswith("graphic_")
+        if is_movement and not is_graphic and sc["visual_importance"] != "bridge":
+            sc["visual_importance"] = "critical"
+            if not sc.get("required_visual_evidence"):
+                sc["required_visual_evidence"] = dict(_MOVEMENT_EVIDENCE_DEFAULT)
+        # Guarantee the structured-evidence shape is always present so downstream
+        # QA never KeyErrors on a partial dict from the LLM.
+        rve = sc.get("required_visual_evidence") or {}
+        for _k in _EVIDENCE_KEYS:
+            rve.setdefault(_k, [])
+        sc["required_visual_evidence"] = rve
         # Scenes that cover idea items must carry a source_scene_ids list (the
         # strict mapping validator rejects a missing field; [] is its explicit
         # "no support found" value the repair loop then fills).

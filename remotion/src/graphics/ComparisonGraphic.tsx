@@ -1,14 +1,18 @@
 /**
- * Two-choice comparison graphic. Framed as helpful choice-making, not fear.
+ * Two-choice comparison — calm editorial two columns (taste refresh C6).
+ *
+ * No card boxes or pills: two open columns separated by one subtle vertical
+ * divider, each led by an accent heading with dominant body text. Framed as a
+ * helpful choice, never fear. One clear opposition, readable in ~1s.
  */
 import React from 'react';
 import {getGraphicColors, graphicTheme, type GraphicColorRoles} from './graphic-theme';
 import {GraphicComparisonPayload} from './graphic-payloads';
 import {GraphicFrame, useReveal} from './GraphicFrame';
 
-const {font, fontSize, radius} = graphicTheme;
+const {font, fontSize, motion} = graphicTheme;
 
-const ChoicePanel: React.FC<{
+const ChoiceColumn: React.FC<{
   heading: string;
   text: string;
   badge?: string;
@@ -18,41 +22,43 @@ const ChoicePanel: React.FC<{
 }> = ({heading, text, badge, tone, colors, delaySec}) => {
   const reveal = useReveal(delaySec);
   const accent = tone === 'positive' ? colors.positive : colors.caution;
-  const badgeBackground = tone === 'positive' ? colors.positiveSoft : colors.cautionSoft;
   return (
     <div
       style={{
         ...reveal,
         flex: 1,
         minWidth: 0,
-        padding: '30px 28px',
-        borderRadius: radius.panel,
-        background: colors.paper,
-        boxShadow: `0 10px 28px ${colors.shadow}`,
-        borderTop: `12px solid ${accent}`,
         display: 'flex',
         flexDirection: 'column',
-        gap: 18,
+        gap: 16,
+        padding: '0 8px',
       }}
     >
+      {/* Accent heading anchors the choice (MEJOR / CUIDADO). */}
       <div
         style={{
           fontFamily: font.family,
-          fontSize: 40,
+          fontSize: 34,
           fontWeight: 800,
+          letterSpacing: 1.5,
           color: accent,
           lineHeight: 1.05,
         }}
       >
         {heading}
       </div>
+      {/* Body is the dominant readable element. */}
       <div
         style={{
           fontFamily: font.family,
           fontSize: fontSize.item,
-          fontWeight: 800,
-          color: colors.text,
-          lineHeight: 1.1,
+          fontWeight: 600,
+          color: colors.textPrimary,
+          lineHeight: 1.16,
+          display: '-webkit-box',
+          WebkitLineClamp: 3,
+          WebkitBoxOrient: 'vertical',
+          overflow: 'hidden',
         }}
       >
         {text}
@@ -60,15 +66,11 @@ const ChoicePanel: React.FC<{
       {badge && (
         <div
           style={{
-            alignSelf: 'flex-start',
-            padding: '10px 18px',
-            borderRadius: radius.pill,
-            background: badgeBackground,
-            color: colors.mutedText,
             fontFamily: font.family,
-            fontSize: 30,
-            fontWeight: 700,
-            lineHeight: 1,
+            fontSize: 28,
+            fontWeight: 600,
+            color: colors.textMuted,
+            lineHeight: 1.2,
           }}
         >
           {badge}
@@ -91,9 +93,11 @@ export const ComparisonGraphic: React.FC<{
       variant={payload.variant}
       surfaceStyle={payload.surface_style}
     >
-      <div style={{display: 'flex', gap: 24, width: '100%', maxWidth: 920}}>
-        <ChoicePanel {...payload.left} tone="positive" colors={colors} delaySec={0.35} />
-        <ChoicePanel {...payload.right} tone="caution" colors={colors} delaySec={0.65} />
+      <div style={{display: 'flex', alignItems: 'stretch', width: '100%', maxWidth: 940, margin: '0 auto'}}>
+        <ChoiceColumn {...payload.left} tone="positive" colors={colors} delaySec={motion.itemStartSec} />
+        {/* One subtle vertical divider — thin and low opacity, not a heavy rule. */}
+        <div style={{width: 1, alignSelf: 'stretch', background: colors.lineStrong, opacity: 0.6, margin: '6px 26px'}} />
+        <ChoiceColumn {...payload.right} tone="caution" colors={colors} delaySec={motion.itemStartSec + motion.itemStaggerSec} />
       </div>
     </GraphicFrame>
   );

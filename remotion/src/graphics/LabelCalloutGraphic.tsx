@@ -1,13 +1,16 @@
 /**
- * Label-reading graphic for supermarket/nutrition moments.
- * Uses a generic label card with highlighted callout rows, never a real brand.
+ * Label-reading graphic — clean editorial nutrition label (taste refresh C7).
+ *
+ * Keeps a strong solid product bar so it still reads as "inspecting a label",
+ * but the callouts become typographic rows (label left, prominent value right,
+ * muted note) separated by thin dividers — no per-row cards, pills or shadows.
  */
 import React from 'react';
 import {getGraphicColors, graphicTheme, type GraphicColorRoles} from './graphic-theme';
 import {GraphicLabelCalloutPayload} from './graphic-payloads';
 import {GraphicFrame, useReveal} from './GraphicFrame';
 
-const {font, fontSize, radius} = graphicTheme;
+const {font, fontSize, radius, motion} = graphicTheme;
 
 const CalloutRow: React.FC<{
   label: string;
@@ -15,7 +18,8 @@ const CalloutRow: React.FC<{
   note?: string;
   colors: GraphicColorRoles;
   delaySec: number;
-}> = ({label, value, note, colors, delaySec}) => {
+  withDivider: boolean;
+}> = ({label, value, note, colors, delaySec, withDivider}) => {
   const reveal = useReveal(delaySec);
   return (
     <div
@@ -23,14 +27,10 @@ const CalloutRow: React.FC<{
         ...reveal,
         display: 'grid',
         gridTemplateColumns: '1fr auto',
-        gap: 18,
-        alignItems: 'center',
-        padding: '18px 24px',
-        borderRadius: radius.panel,
-        background: colors.paper,
-        boxShadow: `0 8px 24px ${colors.shadow}`,
-        border: `2px solid ${colors.line}`,
-        width: '100%',
+        gap: 24,
+        alignItems: 'baseline',
+        padding: '22px 8px',
+        borderTop: withDivider ? `1px solid ${colors.lineStrong}` : 'none',
       }}
     >
       <div style={{minWidth: 0}}>
@@ -38,9 +38,9 @@ const CalloutRow: React.FC<{
           style={{
             fontFamily: font.family,
             fontSize: fontSize.small,
-            fontWeight: 800,
-            color: colors.oliveDark,
-            lineHeight: 1.05,
+            fontWeight: 700,
+            color: colors.titleStrong,
+            lineHeight: 1.08,
           }}
         >
           {label}
@@ -50,24 +50,26 @@ const CalloutRow: React.FC<{
             style={{
               marginTop: 6,
               fontFamily: font.family,
-              fontSize: 28,
+              fontSize: 26,
               fontWeight: 600,
-              color: colors.mutedText,
-              lineHeight: 1.15,
+              color: colors.textMuted,
+              lineHeight: 1.18,
             }}
           >
             {note}
           </div>
         )}
       </div>
+      {/* Value is the standout after the title. */}
       <div
         style={{
           fontFamily: font.family,
-          fontSize: 42,
+          fontSize: 52,
           fontWeight: 800,
-          color: colors.text,
+          color: colors.textPrimary,
           lineHeight: 1,
           whiteSpace: 'nowrap',
+          fontVariantNumeric: 'tabular-nums',
         }}
       >
         {value}
@@ -76,8 +78,8 @@ const CalloutRow: React.FC<{
   );
 };
 
-const ProductLabel: React.FC<{children: React.ReactNode; colors: GraphicColorRoles}> = ({children, colors}) => {
-  const reveal = useReveal(0.2);
+const ProductBar: React.FC<{children: React.ReactNode; colors: GraphicColorRoles}> = ({children, colors}) => {
+  const reveal = useReveal(motion.itemStartSec - 0.12);
   return (
     <div
       style={{
@@ -85,11 +87,12 @@ const ProductLabel: React.FC<{children: React.ReactNode; colors: GraphicColorRol
         alignSelf: 'stretch',
         padding: '16px 24px',
         borderRadius: radius.panel,
-        background: colors.olive,
-        color: colors.paper,
+        background: colors.positive,
+        color: colors.textInverse,
         fontFamily: font.family,
         fontSize: 38,
         fontWeight: 800,
+        letterSpacing: 0.5,
         textAlign: 'center',
         lineHeight: 1.05,
       }}
@@ -116,26 +119,27 @@ export const LabelCalloutGraphic: React.FC<{
       <div
         style={{
           width: '100%',
-          maxWidth: 880,
+          maxWidth: 860,
+          margin: '0 auto',
           display: 'flex',
           flexDirection: 'column',
-          alignItems: 'center',
-          gap: 18,
+          gap: 20,
         }}
       >
-        {payload.productLabel && (
-          <ProductLabel colors={colors}>{payload.productLabel}</ProductLabel>
-        )}
-        {callouts.map((callout, i) => (
-          <CalloutRow
-            key={`${callout.label}-${i}`}
-            label={callout.label}
-            value={callout.value}
-            note={callout.note}
-            colors={colors}
-            delaySec={0.45 + i * 0.35}
-          />
-        ))}
+        {payload.productLabel && <ProductBar colors={colors}>{payload.productLabel}</ProductBar>}
+        <div style={{display: 'flex', flexDirection: 'column'}}>
+          {callouts.map((callout, i) => (
+            <CalloutRow
+              key={`${callout.label}-${i}`}
+              label={callout.label}
+              value={callout.value}
+              note={callout.note}
+              colors={colors}
+              delaySec={motion.itemStartSec + i * motion.itemStaggerSec}
+              withDivider={i > 0}
+            />
+          ))}
+        </div>
       </div>
     </GraphicFrame>
   );

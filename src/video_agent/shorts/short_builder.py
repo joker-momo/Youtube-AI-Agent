@@ -185,6 +185,105 @@ def _stage_performance_memory_final(ctx: BuildContext) -> None:
     ctx.update_stage("performance_memory", "completed", memory_status="rendered")
 
 
+def _stage_spoken_humanization(ctx: BuildContext) -> None:
+    """Stage: spoken_humanization.
+
+    Reads short_script + retention_plan from ctx.extras; writes
+    spoken_humanization back to ctx.extras. Raises on failure (caller propagates).
+    """
+    short_id = ctx.short_plan["short_id"]
+    short_script = ctx.extras["short_script"]
+    retention_plan = ctx.extras.get("retention_plan", {})
+    ctx.update_stage("spoken_humanization", "in_progress")
+    try:
+        ctx.check_stop()
+        spoken_humanization = humanization.build_spoken_humanization(
+            ctx.long_job_dir,
+            short_id,
+            short_script,
+            retention_plan,
+            ctx.channel_config,
+            ctx.llm_fn,
+        )
+        ctx.update_stage(
+            "spoken_humanization",
+            "completed",
+            generation_mode=spoken_humanization.get("generation_mode"),
+            rewrite_discarded=spoken_humanization.get("rewrite_discarded", False),
+        )
+        ctx.extras["spoken_humanization"] = spoken_humanization
+    except Exception as exc:
+        ctx.update_stage("spoken_humanization", "failed", error=str(exc))
+        ctx.status["status"] = "failed"
+        write_short_status(ctx.long_job_dir, short_id, ctx.status)
+        raise exc
+
+
+def _stage_background(ctx: BuildContext) -> None:
+    """Stage: background assets — resolve each scene's background source.
+
+    Reads short_scenes + scene_pipeline_state from ctx.extras. Raises on failure.
+    """
+    short_id = ctx.short_plan["short_id"]
+    sd = ctx.short_dir
+    short_scenes = ctx.extras["short_scenes"]
+    state = ctx.extras["scene_pipeline_state"]
+    ctx.update_stage("background", "in_progress")
+    try:
+        ctx.check_stop()
+        assert_latest_scenes_ready(state)
+        bg_sources: list[dict[str, Any]] = []
+
+        def _on_scene_bg(info: dict[str, Any]) -> None:
+            phase = info.get("phase")
+            # Record the per-scene source only once acquisition resolved.
+            if phase == "resolved":
+                bg_sources.append({
+                    "scene_id": info.get("scene_id"),
+                    "background_source": info.get("background_source"),
+                })
+            ctx.update_stage(
+                "background",
+                "in_progress",
+                current_scene=(int(info.get("index", 0)) + 1),
+                total_scenes=info.get("total"),
+                last_scene_id=info.get("scene_id"),
+                # While fetching show "…", then the resolved source label.
+                last_source=(info.get("background_source") if phase == "resolved" else "fetching…"),
+                scene_phase=phase,
+            )
+
+        ctx.background_fn(sd, short_scenes, ctx.channel_config, on_scene_resolved=_on_scene_bg)
+        ctx.update_stage("background", "completed", per_scene=bg_sources)
+    except Exception as exc:
+        ctx.update_stage("background", "failed", error=str(exc))
+        ctx.status["status"] = "failed"
+        write_short_status(ctx.long_job_dir, short_id, ctx.status)
+        raise exc
+
+
+def _stage_seo(ctx: BuildContext) -> None:
+    """Stage: SEO. Runs only after audio_fit passes. Raises on failure."""
+    short_id = ctx.short_plan["short_id"]
+    short_script = ctx.extras["short_script"]
+    retention_plan = ctx.extras.get("retention_plan", {})
+    ctx.update_stage("seo", "in_progress")
+    try:
+        ctx.check_stop()
+        short_seo_builder.build_short_seo(
+            ctx.long_job_dir, short_id, ctx.plan_for_prompt, short_script,
+            ctx.channel_config, ctx.llm_fn, ctx.long_video_url,
+            retention_plan=retention_plan,
+            history_recorder=ctx.recorder,
+        )
+        ctx.update_stage("seo", "completed")
+    except Exception as exc:
+        ctx.update_stage("seo", "failed")
+        ctx.status["status"] = "failed"
+        write_short_status(ctx.long_job_dir, short_id, ctx.status)
+        raise exc
+
+
 def build_short(
     long_job_dir: Path,
     short_plan: dict,
@@ -678,28 +777,10 @@ def _build_short_impl(
             continue
 
 
-        update_stage("spoken_humanization", "in_progress")
-        try:
-            check_stop()
-            spoken_humanization = humanization.build_spoken_humanization(
-                long_job_dir,
-                short_id,
-                short_script,
-                retention_plan,
-                channel_config,
-                llm_fn,
-            )
-            update_stage(
-                "spoken_humanization",
-                "completed",
-                generation_mode=spoken_humanization.get("generation_mode"),
-                rewrite_discarded=spoken_humanization.get("rewrite_discarded", False),
-            )
-        except Exception as exc:
-            update_stage("spoken_humanization", "failed", error=str(exc))
-            status["status"] = "failed"
-            write_short_status(long_job_dir, short_id, status)
-            raise exc
+        _ctx.extras["short_script"] = short_script
+        _ctx.extras["retention_plan"] = retention_plan
+        _stage_spoken_humanization(_ctx)
+        spoken_humanization = _ctx.extras["spoken_humanization"]
 
         # Script passed! Reset and run the Scenes loop
         state = ScenePipelineState()

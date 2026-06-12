@@ -170,7 +170,7 @@ def _stage_render(ctx: BuildContext) -> None:
         raise exc
 
 
-def _stage_performance_memory_final(ctx: BuildContext) -> None:
+def _stage_performance_memory(ctx: BuildContext) -> None:
     """Stage: performance_memory (final, after render).
 
     Updates the performance memory record to 'rendered' status.
@@ -286,6 +286,172 @@ def _stage_background(ctx: BuildContext) -> None:
         ctx.status["status"] = "failed"
         write_short_status(ctx.long_job_dir, short_id, ctx.status)
         raise exc
+
+
+def _stage_visual_rhythm(
+    ctx: BuildContext,
+    short_scenes: dict[str, Any],
+    scenes_attempts: int,
+    state: ScenePipelineState,
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    """Stage: visual_rhythm_plan.
+
+    Returns the possibly updated scenes document, scene list, and rhythm plan.
+    """
+    short_id = ctx.short_plan["short_id"]
+    long_job_dir = ctx.long_job_dir
+    short_script = ctx.extras["short_script"]
+    retention_plan = ctx.extras.get("retention_plan", {})
+
+    ctx.update_stage("visual_rhythm_plan", "in_progress")
+    try:
+        ctx.check_stop()
+        visual_rhythm_plan = visual_rhythm.build_visual_rhythm_plan(
+            long_job_dir,
+            short_id,
+            short_scenes,
+            retention_plan,
+            ctx.channel_config,
+        )
+        rhythm_candidate = visual_rhythm.apply_visual_rhythm_to_scenes(short_scenes, visual_rhythm_plan)
+        rhythm_issues = validate_scenes.validate_scene_structure(
+            rhythm_candidate.get("scenes") or [],
+            scenes_doc=rhythm_candidate,
+            script=short_script,
+            attempt=scenes_attempts,
+        )
+        if validate_scenes.has_blocking_or_repairable(rhythm_issues):
+            ctx.update_stage("visual_rhythm_plan", "completed", qa_verdict="WARN", discarded=True)
+        else:
+            short_scenes = rhythm_candidate
+            state.current_scenes_version += 1
+            ctx.update_stage(
+                "visual_rhythm_plan",
+                "completed",
+                qa_verdict="PASS",
+                generation_mode=visual_rhythm_plan.get("generation_mode"),
+            )
+        return short_scenes, short_scenes.get("scenes") or [], visual_rhythm_plan
+    except Exception as exc:
+        ctx.update_stage("visual_rhythm_plan", "failed", error=str(exc))
+        ctx.status["status"] = "failed"
+        write_short_status(long_job_dir, short_id, ctx.status)
+        raise exc
+
+
+def _stage_qa_scenes(
+    ctx: BuildContext,
+    short_scenes: dict[str, Any],
+    scenes_attempts: int,
+) -> tuple[dict[str, Any], list[Any]]:
+    """Stage: qa_scenes.
+
+    Runs scene QA, normalizes issues, writes the QA artifact, and updates the
+    qa_scenes stage status. Retry-budget decisions remain in _stage_scenes.
+    """
+    short_id = ctx.short_plan["short_id"]
+    long_job_dir = ctx.long_job_dir
+    _jd = ctx.json_dir
+    status = ctx.status
+    short_plan = ctx.short_plan
+    channel_config = ctx.channel_config
+    update_stage = ctx.update_stage
+    check_stop = ctx.check_stop
+    _recorder = ctx.recorder
+    gemini_fn = ctx.gemini_fn
+    short_script = ctx.extras["short_script"]
+
+    # --- Stage 4: QA Scenes ---
+    update_stage("qa_scenes", "in_progress")
+    try:
+        check_stop()
+        scenes_qa_result = qa.run_short_scenes_qa(
+            long_job_dir, short_id, channel_config,
+            gemini_fn=gemini_fn, attempt=scenes_attempts,
+        )
+        check_and_apply_auto_pass(scenes_qa_result)
+
+        # Normalize scenes QA issues
+        normalized_scene_issues = []
+        for item in scenes_qa_result.get("issues") or []:
+            norm = qa.normalize_qa_issue(
+                item, idea=short_plan, script=short_script, scenes=short_scenes,
+                source="gemini_scene_qa" if scenes_qa_result.get("provider") == "gemini" else "scene_validation"
+            )
+            normalized_scene_issues.append(norm)
+        for item in scenes_qa_result.get("required_changes") or []:
+            norm = qa.normalize_qa_issue(
+                item, idea=short_plan, script=short_script, scenes=short_scenes,
+                source="gemini_scene_qa" if scenes_qa_result.get("provider") == "gemini" else "scene_validation"
+            )
+            if not any(x.detail == norm.detail for x in normalized_scene_issues):
+                normalized_scene_issues.append(norm)
+
+        scenes_qa_result["normalized_issues"] = [n.to_dict() for n in normalized_scene_issues]
+
+        scene_blockers = [n for n in normalized_scene_issues if n.issue_class in {qa.IssueClass.HARD_BLOCKER, qa.IssueClass.REPAIRABLE_BLOCKER}]
+        scene_warnings = [n for n in normalized_scene_issues if n.issue_class == qa.IssueClass.SOFT_WARNING]
+        scene_suppressed = [n for n in normalized_scene_issues if n.issue_class == qa.IssueClass.STALE_OR_SUPPRESSED]
+
+        if not scene_blockers:
+            scenes_qa_result["verdict"] = "WARN" if scene_warnings else "PASS"
+        else:
+            scenes_qa_result["verdict"] = "FAIL"
+
+        verdict = scenes_qa_result.get("verdict", "FAIL")
+        atomic_write_json(_jd / paths.SHORT_SCENES_QA_FILE, scenes_qa_result)
+        update_stage("qa_scenes", "completed" if verdict in ("PASS", "WARN") else "failed", qa_verdict=verdict)
+
+        # Record classification and wrong context suppression for scene QA
+        raw_gemini_verdict = scenes_qa_result.get("verdict")
+        if raw_gemini_verdict == "FAIL" or verdict == "FAIL":
+            classification_reason = "qa_hard_fail"
+            if not scene_blockers:
+                classification_reason = "qa_soft_warn"
+                has_wrong_context = any(n.reason == "wrong_context_five_errors_rule" for n in normalized_scene_issues)
+                has_noncanonical = any(n.reason == "noncanonical_count_inference" for n in normalized_scene_issues)
+                if has_noncanonical:
+                    classification_reason = "noncanonical_count_inference"
+                elif has_wrong_context:
+                    classification_reason = "wrong_context_suppressed"
+
+            _recorder.record_event(
+                "deterministic",
+                "qa_classification",
+                {
+                    "reason": classification_reason,
+                },
+                ok=True
+            )
+        for norm in normalized_scene_issues:
+            if norm.reason == "wrong_context_five_errors_rule":
+                _recorder.record_event(
+                    "deterministic",
+                    "wrong_context_suppressed",
+                    {
+                        "reason": "wrong_context_suppressed",
+                        "detail": norm.detail,
+                    },
+                    ok=False
+                )
+            elif norm.reason == "noncanonical_count_inference":
+                _recorder.record_event(
+                    "deterministic",
+                    "noncanonical_count_inference",
+                    {
+                        "reason": "noncanonical_count_inference",
+                        "detail": norm.detail,
+                    },
+                    ok=False
+                )
+    except Exception as exc:
+        update_stage("qa_scenes", "failed")
+        status["status"] = "failed"
+        write_short_status(long_job_dir, short_id, status)
+        raise exc
+
+
+    return scenes_qa_result, normalized_scene_issues
 
 
 def _stage_scenes(ctx: BuildContext) -> StageResult:
@@ -594,40 +760,12 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
             state.latest_scene_validation_ok = False
             state.latest_scene_validation_version = None
 
-        update_stage("visual_rhythm_plan", "in_progress")
-        try:
-            check_stop()
-            visual_rhythm_plan = visual_rhythm.build_visual_rhythm_plan(
-                long_job_dir,
-                short_id,
-                short_scenes,
-                retention_plan,
-                channel_config,
-            )
-            rhythm_candidate = visual_rhythm.apply_visual_rhythm_to_scenes(short_scenes, visual_rhythm_plan)
-            rhythm_issues = validate_scenes.validate_scene_structure(
-                rhythm_candidate.get("scenes") or [],
-                scenes_doc=rhythm_candidate,
-                script=short_script,
-                attempt=scenes_attempts,
-            )
-            if validate_scenes.has_blocking_or_repairable(rhythm_issues):
-                update_stage("visual_rhythm_plan", "completed", qa_verdict="WARN", discarded=True)
-            else:
-                short_scenes = rhythm_candidate
-                scenes = short_scenes.get("scenes") or []
-                state.current_scenes_version += 1
-                update_stage(
-                    "visual_rhythm_plan",
-                    "completed",
-                    qa_verdict="PASS",
-                    generation_mode=visual_rhythm_plan.get("generation_mode"),
-                )
-        except Exception as exc:
-            update_stage("visual_rhythm_plan", "failed", error=str(exc))
-            status["status"] = "failed"
-            write_short_status(long_job_dir, short_id, status)
-            raise exc
+        short_scenes, scenes, visual_rhythm_plan = _stage_visual_rhythm(
+            ctx,
+            short_scenes,
+            scenes_attempts,
+            state,
+        )
 
         structure_issues = validate_scenes.validate_scene_structure(
             scenes,
@@ -1012,94 +1150,11 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
             )
             continue
 
-        # --- Stage 4: QA Scenes ---
-        update_stage("qa_scenes", "in_progress")
-        try:
-            check_stop()
-            scenes_qa_result = qa.run_short_scenes_qa(
-                long_job_dir, short_id, channel_config,
-                gemini_fn=gemini_fn, attempt=scenes_attempts,
-            )
-            check_and_apply_auto_pass(scenes_qa_result)
-            
-            # Normalize scenes QA issues
-            normalized_scene_issues = []
-            for item in scenes_qa_result.get("issues") or []:
-                norm = qa.normalize_qa_issue(
-                    item, idea=short_plan, script=short_script, scenes=short_scenes,
-                    source="gemini_scene_qa" if scenes_qa_result.get("provider") == "gemini" else "scene_validation"
-                )
-                normalized_scene_issues.append(norm)
-            for item in scenes_qa_result.get("required_changes") or []:
-                norm = qa.normalize_qa_issue(
-                    item, idea=short_plan, script=short_script, scenes=short_scenes,
-                    source="gemini_scene_qa" if scenes_qa_result.get("provider") == "gemini" else "scene_validation"
-                )
-                if not any(x.detail == norm.detail for x in normalized_scene_issues):
-                    normalized_scene_issues.append(norm)
-                    
-            scenes_qa_result["normalized_issues"] = [n.to_dict() for n in normalized_scene_issues]
-            
-            scene_blockers = [n for n in normalized_scene_issues if n.issue_class in {qa.IssueClass.HARD_BLOCKER, qa.IssueClass.REPAIRABLE_BLOCKER}]
-            scene_warnings = [n for n in normalized_scene_issues if n.issue_class == qa.IssueClass.SOFT_WARNING]
-            scene_suppressed = [n for n in normalized_scene_issues if n.issue_class == qa.IssueClass.STALE_OR_SUPPRESSED]
-            
-            if not scene_blockers:
-                scenes_qa_result["verdict"] = "WARN" if scene_warnings else "PASS"
-            else:
-                scenes_qa_result["verdict"] = "FAIL"
-            
-            verdict = scenes_qa_result.get("verdict", "FAIL")
-            atomic_write_json(_jd / paths.SHORT_SCENES_QA_FILE, scenes_qa_result)
-            update_stage("qa_scenes", "completed" if verdict in ("PASS", "WARN") else "failed", qa_verdict=verdict)
-            
-            # Record classification and wrong context suppression for scene QA
-            raw_gemini_verdict = scenes_qa_result.get("verdict")
-            if raw_gemini_verdict == "FAIL" or verdict == "FAIL":
-                classification_reason = "qa_hard_fail"
-                if not scene_blockers:
-                    classification_reason = "qa_soft_warn"
-                    has_wrong_context = any(n.reason == "wrong_context_five_errors_rule" for n in normalized_scene_issues)
-                    has_noncanonical = any(n.reason == "noncanonical_count_inference" for n in normalized_scene_issues)
-                    if has_noncanonical:
-                        classification_reason = "noncanonical_count_inference"
-                    elif has_wrong_context:
-                        classification_reason = "wrong_context_suppressed"
-                
-                _recorder.record_event(
-                    "deterministic",
-                    "qa_classification",
-                    {
-                        "reason": classification_reason,
-                    },
-                    ok=True
-                )
-            for norm in normalized_scene_issues:
-                if norm.reason == "wrong_context_five_errors_rule":
-                    _recorder.record_event(
-                        "deterministic",
-                        "wrong_context_suppressed",
-                        {
-                            "reason": "wrong_context_suppressed",
-                            "detail": norm.detail,
-                        },
-                        ok=False
-                    )
-                elif norm.reason == "noncanonical_count_inference":
-                    _recorder.record_event(
-                        "deterministic",
-                        "noncanonical_count_inference",
-                        {
-                            "reason": "noncanonical_count_inference",
-                            "detail": norm.detail,
-                        },
-                        ok=False
-                    )
-        except Exception as exc:
-            update_stage("qa_scenes", "failed")
-            status["status"] = "failed"
-            write_short_status(long_job_dir, short_id, status)
-            raise exc
+        scenes_qa_result, normalized_scene_issues = _stage_qa_scenes(
+            ctx,
+            short_scenes,
+            scenes_attempts,
+        )
 
         qa_pass = scenes_qa_result.get("verdict") in ("PASS", "WARN")
         scenes_qa_result["qa_pass"] = qa_pass
@@ -1374,11 +1429,11 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
 
 
 def _stage_script(ctx: BuildContext) -> StageResult:
-    """Stage: script generation + qa_script (incl. retry-collapse handling).
+    """Stage: script generation.
 
     Reads from ctx.extras: script_attempts, script_feedback, prev_script_hash,
-    retention_plan, script_retry_memory, script_memory_file. Writes short_script,
-    script_qa_result, normalized_script_issues, prev_script_hash, script_feedback.
+    retention_plan. Writes short_script, then delegates to _stage_qa_script for
+    QA and retry-collapse handling.
 
     Signals: DONE (retry-collapse renderable -> outer break), RESTART_SCRIPT
     (qa FAIL -> outer continue with primed feedback), or a terminal status
@@ -1426,6 +1481,37 @@ def _stage_script(ctx: BuildContext) -> StageResult:
         raise exc
 
     ctx.extras["short_script"] = short_script
+
+    return _stage_qa_script(ctx)
+
+
+def _stage_qa_script(ctx: BuildContext) -> StageResult:
+    """Stage: qa_script.
+
+    Reads short_script and script retry carry-over from ctx.extras. Handles
+    normal script QA plus retry-collapse decisions, preserving the existing
+    StageResult control-flow contract used by _build_short_impl.
+    """
+    short_id = ctx.short_plan["short_id"]
+    long_job_dir = ctx.long_job_dir
+    _jd = ctx.json_dir
+    status = ctx.status
+    short_plan = ctx.short_plan
+    channel_config = ctx.channel_config
+    update_stage = ctx.update_stage
+    check_stop = ctx.check_stop
+    _recorder = ctx.recorder
+    gemini_fn = ctx.gemini_fn
+    music_track = ctx.music_track
+    max_regen = ctx.max_regen
+    long_video_url = ctx.long_video_url
+
+    short_script = ctx.extras["short_script"]
+    script_attempts = ctx.extras["script_attempts"]
+    script_feedback = ctx.extras["script_feedback"]
+    prev_script_hash = ctx.extras["prev_script_hash"]
+    script_retry_memory = ctx.extras["script_retry_memory"]
+    script_memory_file = ctx.extras["script_memory_file"]
 
     cur_script_hash = _normalized_script_hash(short_script)
     if prev_script_hash is not None and cur_script_hash == prev_script_hash:
@@ -2487,8 +2573,7 @@ def _build_short_impl(
         "retention_plan": retention_plan,
         "anti_ai_regeneration_attempts": anti_ai_regeneration_attempts,
     })
-    _stage_performance_memory_final(_ctx)
+    _stage_performance_memory(_ctx)
 
     return status
-
 

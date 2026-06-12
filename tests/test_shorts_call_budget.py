@@ -112,7 +112,7 @@ def test_call_budget_summary_written(tmp_path):
     
     from video_agent.shorts import short_builder, paths
     import json
-    from tests.test_shorts_build import _long_job, _GOOD_SCRIPT, _GOOD_SCENES, _cfg, _stub_io
+    from tests.shorts_build.conftest import _long_job, _GOOD_SCRIPT, _GOOD_SCENES, _cfg, _stub_io
     
     job = _long_job(tmp_path)
     calls = []

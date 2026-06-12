@@ -44,7 +44,9 @@ def run_whisper_timestamps_stage(job_dir: Path) -> Path:
             f"Cannot run whisper_timestamps stage from current_stage={state.current_stage!r}"
         )
     if os.environ.get(_AUDIO_SUBPROCESS_ENV) != "1":
-        return _run_audio_subprocess("whisper-timestamps", job_dir)
+        from video_agent.orchestrator import stages as stages_pkg
+
+        return stages_pkg._run_audio_subprocess("whisper-timestamps", job_dir)
     return _run_whisper_timestamps_stage_inline(job_dir)
 
 

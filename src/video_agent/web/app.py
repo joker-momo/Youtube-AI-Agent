@@ -8,6 +8,7 @@ from video_agent.web.routes import (
     artifacts,
     channels,
     config,
+    dashboard,
     jobs,
     run,
     shorts,
@@ -19,7 +20,6 @@ from video_agent.web.routes import (
 from video_agent.web.routes._legacy import (
     _env_example_path,
     _env_path,
-    dashboard as _dashboard,
     flatten_keyword_result_for_ui,
     get_browser_client,
     get_channel_path,
@@ -35,17 +35,13 @@ def health() -> dict:
     return {"ok": True, "service": "app"}
 
 
-@app.get("/", response_class=HTMLResponse)
-def dashboard() -> str:
-    return _dashboard()
-
-
 # shorts first: its explicit GET /jobs/{id}/shorts must beat the legacy
 # catch-all GET /jobs/{job_id}/{path:path} artifact route.
 for router_module in (
     shorts,
     shorts_studio,
     config,
+    dashboard,
     jobs,
     timeline,
     stages,
@@ -66,4 +62,5 @@ __all__ = [
     "get_channel_path",
     "get_inputs_root",
     "get_jobs_root",
+    "dashboard",
 ]

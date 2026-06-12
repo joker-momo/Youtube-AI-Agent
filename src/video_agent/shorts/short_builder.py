@@ -67,6 +67,7 @@ from video_agent.shorts.builder.snapshots import (
 )
 from video_agent.shorts.builder.status import _update_short_stage
 from video_agent.shorts.builder.render_props import _write_render_props
+from video_agent.shorts.builder.context import BuildContext
 
 # Average product score (0-10) at/above which a soft-only scene-QA FAIL is
 # auto-passed as WARN instead of regenerated (spec §6).
@@ -75,6 +76,113 @@ SCORE_AUTOPASS_AVERAGE = 8.5
 MAX_QA_RETRIES_PER_STAGE = 1
 MAX_SCENE_REGEN_ATTEMPTS = 2
 MAX_SCRIPT_REGEN_ATTEMPTS = 1
+
+
+# ---------------------------------------------------------------------------
+# Per-stage functions extracted from _build_short_impl
+# ---------------------------------------------------------------------------
+
+def _stage_retention_plan(ctx: BuildContext) -> dict[str, Any] | None:
+    """Stage: retention_plan.
+
+    Returns None to continue; returns a terminal failure dict to abort.
+    On unexpected exception, re-raises (caller must propagate).
+    """
+    short_id = ctx.short_plan["short_id"]
+    ctx.update_stage("retention_plan", "in_progress")
+    try:
+        ctx.check_stop()
+        retention_plan = retention_plan_builder.build_retention_plan(
+            ctx.long_job_dir,
+            ctx.plan_for_prompt,
+            ctx.channel_config,
+            ctx.llm_fn,
+            source_artifacts=ctx.source_artifacts,
+        )
+        ctx.update_stage(
+            "retention_plan",
+            "completed",
+            generation_mode=retention_plan.get("generation_mode"),
+            input_hash=retention_plan.get("input_hash"),
+        )
+        ctx.extras["retention_plan"] = retention_plan
+        return None
+    except Exception as exc:
+        ctx.update_stage("retention_plan", "failed", error=str(exc))
+        ctx.status["status"] = "failed"
+        write_short_status(ctx.long_job_dir, short_id, ctx.status)
+        raise exc
+
+
+def _stage_render(ctx: BuildContext) -> None:
+    """Stage: render (video + cover).
+
+    On success, writes video_path / cover_path to ctx.extras.
+    On failure, updates status and re-raises.
+    """
+    short_id = ctx.short_plan["short_id"]
+    sd = ctx.short_dir
+    ctx.update_stage("render", "in_progress")
+    try:
+        ctx.check_stop()
+        stop_file = ctx.long_job_dir / ".stop_requested"
+        try:
+            video_path = ctx.render_fn(sd, ctx.channel_config, stop_request_path=stop_file)
+        except TypeError:
+            # Injected render_fn without the kwarg (back-compat).
+            video_path = ctx.render_fn(sd, ctx.channel_config)
+        ctx.check_stop()
+        cover_path = ctx.cover_fn(sd, ctx.channel_config)
+        ctx.update_stage("render", "completed")
+        ctx.extras["video_path"] = video_path
+        ctx.extras["cover_path"] = cover_path
+    except Exception as exc:
+        ctx.update_stage("render", "failed", error=str(exc))
+        ctx.status["status"] = "failed"
+        ctx.status["error"] = str(exc)
+        write_short_status(ctx.long_job_dir, short_id, ctx.status)
+        raise exc
+
+
+def _stage_performance_memory_final(ctx: BuildContext) -> None:
+    """Stage: performance_memory (final, after render).
+
+    Updates the performance memory record to 'rendered' status.
+    """
+    short_id = ctx.short_plan["short_id"]
+    anti_ai_regeneration_attempts = ctx.extras.get("anti_ai_regeneration_attempts", 0)
+    short_script = ctx.extras.get("short_script", {})
+    short_scenes = ctx.extras.get("short_scenes", {})
+    retention_plan = ctx.extras.get("retention_plan", {})
+    ctx.status.update({
+        "status": "rendered",
+        "rendered": True,
+        "uploaded": False,
+        "youtube_url": "",
+        "requires_user_review": False,
+        "requires_render_confirmation": False,
+        "video_path": f"shorts/{short_id}/{paths.SHORT_OUTPUTS_SUBDIR}/{paths.SHORT_VIDEO_FILE}",
+        "cover_path": f"shorts/{short_id}/{paths.SHORT_OUTPUTS_SUBDIR}/{paths.SHORT_COVER_FILE}",
+        "anti_ai_regeneration_attempts": anti_ai_regeneration_attempts,
+    })
+    write_short_status(ctx.long_job_dir, short_id, ctx.status)
+    ctx.update_stage("performance_memory", "in_progress")
+    performance_memory.write_performance_memory(
+        ctx.long_job_dir,
+        short_id,
+        ctx.plan_for_prompt,
+        short_script,
+        short_scenes,
+        retention_plan,
+        thumbnail_meta={
+            "status": "completed",
+            "mode": "disabled_for_shorts_render",
+            "image_generation_called": False,
+            "thumbnail_path": None,
+        },
+        status="rendered",
+    )
+    ctx.update_stage("performance_memory", "completed", memory_status="rendered")
 
 
 def build_short(
@@ -301,27 +409,40 @@ def _build_short_impl(
             "- Do not use unsafe/medical fear framing."
         ]
 
-    update_stage("retention_plan", "in_progress")
-    try:
-        check_stop()
-        retention_plan = retention_plan_builder.build_retention_plan(
-            long_job_dir,
-            plan_for_prompt,
-            channel_config,
-            llm_fn,
-            source_artifacts=source_artifacts,
-        )
-        update_stage(
-            "retention_plan",
-            "completed",
-            generation_mode=retention_plan.get("generation_mode"),
-            input_hash=retention_plan.get("input_hash"),
-        )
-    except Exception as exc:
-        update_stage("retention_plan", "failed", error=str(exc))
-        status["status"] = "failed"
-        write_short_status(long_job_dir, short_id, status)
-        raise exc
+    # Build the shared context object for per-stage functions.
+    _ctx = BuildContext(
+        long_job_dir=long_job_dir,
+        short_dir=sd,
+        json_dir=_jd,
+        outputs_dir=_od,
+        short_plan=short_plan,
+        plan_for_prompt=plan_for_prompt,
+        channel_config=channel_config,
+        llm_fn=llm_fn,
+        gemini_fn=gemini_fn,
+        background_fn=background_fn,
+        tts_fn=tts_fn,
+        mix_fn=mix_fn,
+        render_fn=render_fn,
+        cover_fn=cover_fn,
+        status=status,
+        recorder=_recorder,
+        update_stage=update_stage,
+        check_stop=check_stop,
+        max_regen=max_regen,
+        max_structural_attempts=max_structural_attempts,
+        max_product_attempts=max_product_attempts,
+        max_chatgpt_provider_retries=max_chatgpt_provider_retries,
+        music_track=music_track,
+        cover_words=cover_words,
+        long_video_url=long_video_url,
+        require_render_confirmation=require_render_confirmation,
+        source_artifacts=source_artifacts,
+    )
+
+    # --- Stage: retention_plan ---
+    _stage_retention_plan(_ctx)
+    retention_plan = _ctx.extras["retention_plan"]
 
     prev_script_hash = None
     # We use a while loop for script generation, allowing loop back on audio_fit failure
@@ -2038,60 +2159,17 @@ def _build_short_impl(
         write_short_status(long_job_dir, short_id, status)
         return status
 
-    # --- Stage 6: Render ---
-    update_stage("render", "in_progress")
-    try:
-        check_stop()
-        # Pass the stop-request file so the Remotion render subprocess can be
-        # SIGTERMed mid-render when the operator presses Stop. ``check_stop``
-        # only fires between stages; without this the long render keeps running.
-        stop_file = long_job_dir / ".stop_requested"
-        try:
-            video_path = render_fn(sd, channel_config, stop_request_path=stop_file)
-        except TypeError:
-            # Injected render_fn without the kwarg (back-compat).
-            video_path = render_fn(sd, channel_config)
-        check_stop()
-        cover_path = cover_fn(sd, channel_config)
-        update_stage("render", "completed")
-    except Exception as exc:
-        update_stage("render", "failed", error=str(exc))
-        status["status"] = "failed"
-        status["error"] = str(exc)
-        write_short_status(long_job_dir, short_id, status)
-        raise exc
+    # --- Stage: render ---
+    _stage_render(_ctx)
 
-    status.update({
-        "status": "rendered",
-        "rendered": True,
-        "uploaded": False,
-        "youtube_url": "",
-        "requires_user_review": False,
-        "requires_render_confirmation": False,
-        "video_path": f"shorts/{short_id}/{paths.SHORT_OUTPUTS_SUBDIR}/{paths.SHORT_VIDEO_FILE}",
-        "cover_path": f"shorts/{short_id}/{paths.SHORT_OUTPUTS_SUBDIR}/{paths.SHORT_COVER_FILE}",
+    # --- Stage: performance_memory (final, after render) ---
+    _ctx.extras.update({
+        "short_script": short_script,
+        "short_scenes": short_scenes,
+        "retention_plan": retention_plan,
         "anti_ai_regeneration_attempts": anti_ai_regeneration_attempts,
     })
-    write_short_status(long_job_dir, short_id, status)
-    update_stage("performance_memory", "in_progress")
-    performance_memory.write_performance_memory(
-        long_job_dir,
-        short_id,
-        plan_for_prompt,
-        short_script,
-        short_scenes,
-        retention_plan,
-        thumbnail_meta={
-            "status": "completed",
-            "mode": "disabled_for_shorts_render",
-            "image_generation_called": False,
-            "thumbnail_path": None,
-        },
-        status="rendered",
-    )
-    update_stage("performance_memory", "completed", memory_status="rendered")
-
-
+    _stage_performance_memory_final(_ctx)
 
     return status
 

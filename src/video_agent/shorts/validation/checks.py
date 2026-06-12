@@ -77,13 +77,15 @@ def validate_full_short_script_candidate(
         if not first_text:
             first_text = str(beats[0].get("visual") or "").lower()
 
+        plan_hook = str(short_plan.get("hook_text") or "").lower().strip()
         has_hook = (
             "?" in first_text or
             "si " in first_text or
             "no " in first_text or
             "te pasa" in first_text or
             "después de los 45" in first_text or
-            "45" in first_text
+            "45" in first_text or
+            (bool(plan_hook) and plan_hook in first_text)
         )
         if not has_hook:
             errors.append("missing_strong_hook_first_two_seconds")

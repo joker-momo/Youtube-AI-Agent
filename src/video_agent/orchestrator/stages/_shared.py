@@ -21,12 +21,37 @@ __all__ = [
     "IDEA_FILE",
     "_IDEA_FILE_LEGACY",
     "_AUDIO_SUBPROCESS_ENV",
+    "SCRIPT_PROMPT_PATH",
+    "SCRIPT_RAW_PATH",
+    "SCENES_PROMPT_PATH",
+    "SCENES_RAW_PATH",
+    "SCENES_PLAN_PATH",
+    "SCENES_BATCHES_DIR",
+    "SCENES_QA_BATCHES_DIR",
+    "SEO_PROMPT_PATH",
+    "SEO_RAW_PATH",
+    "SCRIPT_QA_RAW_PATH",
+    "SCENES_QA_RAW_PATH",
+    "SEO_QA_RAW_PATH",
 ]
 
 logger = logging.getLogger("video_agent.orchestrator.stages")
 
 IDEA_FILE = "json/idea.json"
 _IDEA_FILE_LEGACY = "idea.json"
+
+SCRIPT_PROMPT_PATH = Path("operator/chatgpt/script_prompt.md")
+SCRIPT_RAW_PATH = Path("operator/chatgpt/script.raw.txt")
+SCENES_PROMPT_PATH = Path("operator/chatgpt/scenes_prompt.md")
+SCENES_RAW_PATH = Path("operator/chatgpt/scenes.raw.txt")
+SCENES_PLAN_PATH = Path("operator/chatgpt/scenes_plan.json")
+SCENES_BATCHES_DIR = Path("operator/chatgpt/scenes_batches")
+SCENES_QA_BATCHES_DIR = Path("operator/gemini/scenes_qa_batches")
+SEO_PROMPT_PATH = Path("operator/chatgpt/seo_prompt.md")
+SEO_RAW_PATH = Path("operator/chatgpt/seo.raw.txt")
+SCRIPT_QA_RAW_PATH = Path("operator/gemini/script_qa.raw.txt")
+SCENES_QA_RAW_PATH = Path("operator/gemini/scenes_qa.raw.txt")
+SEO_QA_RAW_PATH = Path("operator/gemini/seo_qa.raw.txt")
 
 _AUDIO_SUBPROCESS_ENV = AUDIO_SUBPROCESS_ENV
 

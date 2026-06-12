@@ -53,6 +53,22 @@ def build_short_script(
         if "stale_hook_text_repaired" not in short_plan.get("planner_warnings", []):
             short_plan.setdefault("planner_warnings", []).append("stale_hook_text_repaired")
 
+    # If audio_fit fails twice (attempt >= 3) and must_preserve_count is False (unlocked count)
+    from video_agent.shorts.idea_preservation import derive_idea_contract
+    contract = derive_idea_contract(short_plan)
+    if not contract.get("must_preserve_count") and attempt >= 3:
+        adaptation_inst = (
+            "\n\nNOTE: Audio fit has failed twice. Since the checklist count is not locked (must_preserve_count=false), "
+            "you are highly encouraged to only speak 3 key points (as spoken anchors) and move the remaining points "
+            "to on-screen text, layout_payload, or source_mapped_flow. "
+            "Alternatively, you may extend target_duration_sec to 45 (content-led duration is allowed), "
+            "or mark split_recommended: true if needed."
+        )
+        if feedback:
+            feedback += adaptation_inst
+        else:
+            feedback = adaptation_inst
+
     prompt = prompts.short_script_prompt(
         channel_config,
         short_plan,

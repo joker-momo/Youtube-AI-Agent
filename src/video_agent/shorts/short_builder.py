@@ -580,7 +580,7 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
                     script=short_script,
                     attempt=scenes_attempts,
                 )
-                
+
                 # Also check for active hard blockers in retry memory
                 active_memory_blockers = [
                     issue for issue in scene_retry_memory.active_issues.values()
@@ -592,7 +592,7 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
                     if issue.issue_class == "soft_warning"
                     or issue.type == "slideshow_risk"
                 ]
-                
+
                 collapse_blockers = [
                     i for i in collapse_issues
                     if i.severity in ("blocking_error", "repairable_error")
@@ -603,7 +603,7 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
                     if i.severity == "warning"
                     or i.type == "slideshow_risk"
                 ]
-                
+
                 remaining_blockers = active_memory_blockers + [
                     {
                         "type": b.type,
@@ -624,15 +624,15 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
                     }
                     for w in collapse_warnings
                 ]
-                
+
                 renderable = len(remaining_blockers) == 0
                 decision = "continued_with_warn" if renderable else "failed_hard_blocker"
-                
+
                 max_limit = min(2, max_regen + 1)
                 max_allowed_attempts = max_limit
                 if attempt_1_failed_layout_schema and max_regen >= 2:
                     max_allowed_attempts = 3
-                    
+
                 decision_summary = {
                     "stage": "qa_scenes",
                     "attempts_used": scenes_attempts,
@@ -646,7 +646,7 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
                     "continued_to_render": renderable,
                 }
                 atomic_write_json(_jd / paths.SHORT_QA_DECISION_SUMMARY_FILE, decision_summary)
-                
+
                 _recorder.record_event(
                     "deterministic",
                     "retry_collapse",
@@ -661,7 +661,7 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
                     },
                     ok=renderable,
                 )
-                
+
                 if renderable:
                     best_scene_candidate = dict(short_scenes)
                     best_scene_candidate_qa = {"verdict": "WARN", "collapsed": True}
@@ -767,6 +767,22 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
             state,
         )
 
+        if validate_scenes.repair_five_error_bread_payoff_layout(scenes, short_script):
+            short_scenes["scenes"] = scenes
+            short_scenes["total_duration_sec"] = round(
+                sum(float(scene.get("duration_sec") or 0.0) for scene in scenes),
+                1,
+            )
+            state.current_scenes_version += 1
+            state.latest_scene_validation_ok = False
+            state.latest_scene_validation_version = None
+            _recorder.record_event(
+                "deterministic",
+                "payoff_layout_repair",
+                {"attempt": scenes_attempts, "layout": "graphic_checklist"},
+                ok=True,
+            )
+
         structure_issues = validate_scenes.validate_scene_structure(
             scenes,
             scenes_doc=short_scenes,
@@ -822,7 +838,7 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
                 )
 
         atomic_write_json(_jd / paths.SHORT_SCENES_FILE, short_scenes)
-        
+
         # Intercept visual_only_unreadable for deterministic repair and downgrade logic
         visual_issues = [i for i in structure_issues if i.type == "visual_only_unreadable"]
         did_visual_repair = False
@@ -832,7 +848,7 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
             if m:
                 item_id = m.group(1)
                 tracker = visual_repair_tracker.get(item_id, {"repairs": 0, "regens": 0})
-                
+
                 if tracker["repairs"] < 1:
                     # Attempt deterministic repair
                     _idea_items = short_script.get("idea_items") or short_script.get("points") or short_script.get("checklist") or []
@@ -841,16 +857,16 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
                         if isinstance(it, dict) and str(it.get("item_id") or it.get("id") or "") == item_id:
                             item_str = it
                             break
-                    
+
                     if validate_scenes.repair_visual_only_unreadable(scenes, item_str):
                         did_visual_repair = True
                         tracker["repairs"] += 1
                         visual_repair_tracker[item_id] = tracker
-                        
+
                         _recorder.record_event(
-                            "deterministic", 
-                            "qa_classification", 
-                            {"reason": "deterministic_repair", "item_id": item_id}, 
+                            "deterministic",
+                            "qa_classification",
+                            {"reason": "deterministic_repair", "item_id": item_id},
                             ok=True
                         )
                 else:
@@ -862,12 +878,12 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
                         vi.severity = "warning"
                         vi.detail = f"(Downgraded) {vi.detail}"
                         _recorder.record_event(
-                            "deterministic", 
-                            "qa_classification", 
-                            {"reason": "visual_repair_downgraded", "item_id": item_id}, 
+                            "deterministic",
+                            "qa_classification",
+                            {"reason": "visual_repair_downgraded", "item_id": item_id},
                             ok=True
                         )
-        
+
         if did_visual_repair:
             atomic_write_json(_jd / paths.SHORT_SCENES_FILE, short_scenes)
             skip_generation = True
@@ -915,7 +931,7 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
         if structure_blocked:
             if scenes_attempts == 1:
                 attempt_1_failed_layout_schema = True
-            
+
             # Check for scene regeneration cap
             stop_scene_retries = False
             max_limit = min(2, max_regen + 1)
@@ -947,7 +963,7 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
                 ] + active_memory_warnings
                 decision = "continued_with_warn" if not remaining_blockers else "failed_hard_blocker"
                 renderable = not remaining_blockers
-                
+
                 max_allowed_attempts = max_limit
                 if attempt_1_failed_layout_schema and max_regen >= 2:
                     max_allowed_attempts = 3
@@ -962,7 +978,7 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
                     "continued_to_render": decision == "continued_with_warn",
                 }
                 atomic_write_json(_jd / paths.SHORT_QA_DECISION_SUMMARY_FILE, decision_summary)
-                
+
                 if not remaining_blockers:
                     # Downgrade slideshow_risk and warnings to WARN and continue
                     structure_blocked = False
@@ -978,7 +994,7 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
                     }
                     atomic_write_json(_jd / paths.SHORT_SCENES_QA_FILE, scenes_qa_result)
                     update_stage("qa_scenes", "completed", qa_verdict="WARN")
-                    
+
                     _recorder.record_event(
                         "deterministic",
                         "qa_classification",
@@ -1004,7 +1020,7 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
                     })
                     write_short_status(long_job_dir, short_id, status)
                     save_retry_memory(scene_retry_memory, scene_memory_file)
-                    
+
                     _recorder.record_event(
                         "deterministic",
                         "qa_classification",
@@ -1070,7 +1086,7 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
                 issue_id = make_stable_issue_id("scene_validation", issue.scene_id, issue.type, issue.detail)
                 active_validation_ids.add(issue_id)
                 required_change = "\n".join(issue.instructions) if getattr(issue, "instructions", None) else (issue.repair_hint or issue.detail)
-                
+
                 issue_class_val = "soft_warning" if issue.severity == "warning" else ("repairable_blocker" if issue.severity == "repairable_error" else "hard_blocker")
                 reason_val = issue.type
                 if issue.type == "total_duration_normalized":
@@ -1099,13 +1115,13 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
                     reason=reason_val
                 )
                 add_or_update_issue(scene_retry_memory, retry_issue)
-            
+
             # Resolve issues no longer present
             for issue_id in list(scene_retry_memory.active_issues.keys()):
                 issue = scene_retry_memory.active_issues[issue_id]
                 if issue.stage == "scene_validation" and issue_id not in active_validation_ids:
                     resolve_issue_by_id(scene_retry_memory, issue_id)
-            
+
             # Suppress visual_only_unreadable false positives
             for issue_id in list(scene_retry_memory.active_issues.keys()):
                 issue = scene_retry_memory.active_issues[issue_id]
@@ -1171,18 +1187,18 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
             best_scene_candidate = dict(short_scenes)
             best_scene_candidate_qa = dict(scenes_qa_result)
             scenes_passed = True
-            
+
             state.latest_scene_qa_ok = True
             state.latest_scene_qa_version = state.current_scenes_version
-            
+
             max_limit = min(2, max_regen + 1)
             max_allowed_attempts = max_limit
             if attempt_1_failed_layout_schema and max_regen >= 2:
                 max_allowed_attempts = 3
-            
+
             scene_warnings = [n for n in normalized_scene_issues if n.issue_class == qa.IssueClass.SOFT_WARNING]
             decision = "continued_with_warn" if scenes_qa_result.get("verdict") == "WARN" else "passed"
-            
+
             decision_summary = {
                 "stage": "qa_scenes",
                 "attempts_used": scenes_attempts,
@@ -1194,7 +1210,7 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
                 "continued_to_render": True,
             }
             atomic_write_json(_jd / paths.SHORT_QA_DECISION_SUMMARY_FILE, decision_summary)
-            
+
             save_retry_memory(scene_retry_memory, scene_memory_file)
             break
 
@@ -1213,7 +1229,7 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
                 suppressed_qa_ids.add(issue_id)
             else:
                 active_qa_ids.add(issue_id)
-            
+
             retry_issue = RetryIssue(
                 id=issue_id,
                 stage="scene_qa",
@@ -1248,7 +1264,7 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
         renderable = not structure_blocked and not any(
             n.issue_class == qa.IssueClass.HARD_BLOCKER for n in normalized_scene_issues
         )
-        
+
         max_limit = min(2, max_regen + 1)
         if scenes_attempts >= max_limit:
             if scenes_attempts == 2 and attempt_1_failed_layout_schema and not renderable and max_regen >= 2:
@@ -1267,7 +1283,7 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
                 if n.issue_class == qa.IssueClass.SOFT_WARNING
                 or n.issue_type == "slideshow_risk"
             ]
-            
+
             decision = ""
             if not remaining_blockers:
                 # Downgrade to WARN and continue
@@ -1276,7 +1292,7 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
                 scenes_passed = True
                 best_scene_candidate = dict(short_scenes)
                 best_scene_candidate_qa = dict(scenes_qa_result)
-                
+
                 state.latest_scene_qa_ok = True
                 state.latest_scene_qa_version = state.current_scenes_version
                 decision = "continued_with_warn"
@@ -1285,7 +1301,7 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
                 scenes_passed = False
                 decision = "failed_hard_blocker"
                 update_stage("qa_scenes", "failed", qa_verdict="FAIL")
-                
+
             summary_report = {
                 "stage": "qa_scenes",
                 "scenes_attempts": scenes_attempts,
@@ -1298,7 +1314,7 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
                 "best_candidate_available": best_scene_candidate is not None,
             }
             atomic_write_json(_jd / paths.SHORT_FAILURE_REPORT_FILE, summary_report)
-            
+
             # Write qa_decision_summary.json
             max_allowed_attempts = max_limit
             if attempt_1_failed_layout_schema and not renderable and max_regen >= 2:
@@ -1314,13 +1330,13 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
                 "continued_to_render": decision == "continued_with_warn",
             }
             atomic_write_json(_jd / paths.SHORT_QA_DECISION_SUMMARY_FILE, decision_summary)
-            
+
             print(f"Scene QA stopped after {scenes_attempts} attempts.\n"
                   f"Remaining blockers: {[b.detail for b in remaining_blockers]}\n"
                   f"Remaining warnings: {[w.detail for w in remaining_warnings]}\n"
                   f"Renderable: {renderable}\n"
                   f"Decision: {decision}")
-                  
+
             if decision == "failed_hard_blocker":
                 status.update({
                     "status": "needs_review",
@@ -1467,12 +1483,62 @@ def _stage_script(ctx: BuildContext) -> StageResult:
     update_stage("script", "in_progress")
     try:
         check_stop()
-        short_script = short_script_builder.build_short_script(
+        candidate = short_script_builder.build_short_script(
             long_job_dir, plan_for_prompt, channel_config, llm_fn,
             source_artifacts=source_artifacts,
             retention_plan=retention_plan,
             feedback=script_feedback, attempt=script_attempts,
+            write_to_disk=False,
         )
+
+        # Check for script completeness and structure
+        from video_agent.shorts.validation.checks import validate_full_short_script_candidate
+        jd_test = paths.short_json_dir(long_job_dir, short_id)
+        source_map_file = jd_test / paths.SHORT_SOURCE_MAP_FILE
+
+        sm = None
+        if source_map_file.exists():
+            import json
+            try:
+                sm = json.loads(source_map_file.read_text())
+            except Exception:
+                pass
+
+        # If candidate has target_duration_sec == 45 and count is unlocked, allow updating short_plan
+        from video_agent.shorts.idea_preservation import derive_idea_contract
+        contract = derive_idea_contract(short_plan)
+        if not contract.get("must_preserve_count") and candidate.get("target_duration_sec") == 45:
+            short_plan["target_duration_sec"] = 45
+            plan_for_prompt["target_duration_sec"] = 45
+
+        errors = validate_full_short_script_candidate(candidate, short_plan, sm)
+
+        if errors:
+            if "audio_fit_over_soft_budget" in errors:
+                ctx.extras["script_feedback"] = (
+                    script_feedback +
+                    "\n\nCRITICAL SYSTEM REJECTION: Audio fit failed. "
+                    "Reduce narration to <= 65 words. "
+                    "Keep 5 items. "
+                    "Move details to visuals. "
+                    "Do not change CTA."
+                )
+            else:
+                ctx.extras["script_feedback"] = (
+                    script_feedback +
+                    "\n\nCRITICAL SYSTEM REJECTION: You returned a partial script or failed strict structural requirements! "
+                    "You MUST return the FULL script from start to finish. "
+                    "Errors detected: " + ", ".join(errors)
+                )
+            _recorder.record_event("deterministic", "script_validation", {"verdict": "REJECTED_PARTIAL", "errors": errors})
+            # Do NOT update stage or save the broken candidate
+            return StageResult(StageSignal.RESTART_SCRIPT)
+
+        short_script = candidate
+        jd = paths.short_json_dir(long_job_dir, short_id)
+        jd.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(jd / paths.SHORT_SCRIPT_FILE, short_script)
+
         update_stage("script", "completed")
     except Exception as exc:
         update_stage("script", "failed")
@@ -2292,6 +2358,8 @@ def _build_short_impl(
     total_regeneration_attempts = 0
 
     plan_for_prompt = {**short_plan, "source_long_job_id": long_job_dir.name}
+    script_qa_result: dict[str, Any] = {"verdict": "FAIL", "issues": ["not_generated"]}
+    normalized_script_issues: list[dict[str, Any]] = []
     scenes_qa_result: dict[str, Any] = {"verdict": "FAIL", "issues": ["not_generated"]}
     short_scenes: dict[str, Any] = {}
     scenes_feedback = ""
@@ -2366,17 +2434,24 @@ def _build_short_impl(
         _ctx.extras["script_retry_memory"] = script_retry_memory
         _ctx.extras["script_memory_file"] = script_memory_file
         _script_result = _stage_script(_ctx)
-        short_script = _ctx.extras["short_script"]
-        script_qa_result = _ctx.extras.get("script_qa_result", script_qa_result)
-        normalized_script_issues = _ctx.extras.get("normalized_script_issues", normalized_script_issues)
-        prev_script_hash = _ctx.extras["prev_script_hash"]
+        
         if _script_result.returns is not None:
             return _script_result.returns
         if _script_result.signal is StageSignal.DONE:
+            short_script = _ctx.extras["short_script"]
+            script_qa_result = _ctx.extras.get("script_qa_result", script_qa_result)
+            normalized_script_issues = _ctx.extras.get("normalized_script_issues", normalized_script_issues)
+            prev_script_hash = _ctx.extras.get("prev_script_hash")
             break
         if _script_result.signal is StageSignal.RESTART_SCRIPT:
             script_feedback = _ctx.extras["script_feedback"]
+            prev_script_hash = _ctx.extras.get("prev_script_hash")
             continue
+
+        short_script = _ctx.extras["short_script"]
+        script_qa_result = _ctx.extras.get("script_qa_result", script_qa_result)
+        normalized_script_issues = _ctx.extras.get("normalized_script_issues", normalized_script_issues)
+        prev_script_hash = _ctx.extras.get("prev_script_hash")
 
         _ctx.extras["short_script"] = short_script
         _ctx.extras["retention_plan"] = retention_plan
@@ -2576,4 +2651,3 @@ def _build_short_impl(
     _stage_performance_memory(_ctx)
 
     return status
-

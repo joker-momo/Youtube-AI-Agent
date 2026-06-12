@@ -2082,20 +2082,9 @@ def _build_short_impl(
             raise exc
 
         # Stage 5: SEO (Only runs after audio_fit passes!)
-        update_stage("seo", "in_progress")
-        try:
-            check_stop()
-            short_seo_builder.build_short_seo(
-                long_job_dir, short_id, plan_for_prompt, short_script, channel_config, llm_fn, long_video_url,
-                retention_plan=retention_plan,
-                history_recorder=_recorder,
-            )
-            update_stage("seo", "completed")
-        except Exception as exc:
-            update_stage("seo", "failed")
-            status["status"] = "failed"
-            write_short_status(long_job_dir, short_id, status)
-            raise exc
+        _ctx.extras["short_script"] = short_script
+        _ctx.extras["retention_plan"] = retention_plan
+        _stage_seo(_ctx)
 
         hook = str(short_script.get("hook") or "")
         cover_text = _cover_text(hook, cover_words)

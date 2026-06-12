@@ -1934,38 +1934,9 @@ def _build_short_impl(
         # Stage: Background assets — resolve each scene's background (Pexels
         # video/photo, ChatGPT image, or placeholder) BEFORE audio, reporting the
         # source scene-by-scene so the UI shows exactly where each came from.
-        update_stage("background", "in_progress")
-        try:
-            check_stop()
-            assert_latest_scenes_ready(state)
-            bg_sources: list[dict[str, Any]] = []
-
-            def _on_scene_bg(info: dict[str, Any]) -> None:
-                phase = info.get("phase")
-                # Record the per-scene source only once acquisition resolved.
-                if phase == "resolved":
-                    bg_sources.append({
-                        "scene_id": info.get("scene_id"),
-                        "background_source": info.get("background_source"),
-                    })
-                update_stage(
-                    "background",
-                    "in_progress",
-                    current_scene=(int(info.get("index", 0)) + 1),
-                    total_scenes=info.get("total"),
-                    last_scene_id=info.get("scene_id"),
-                    # While fetching show "…", then the resolved source label.
-                    last_source=(info.get("background_source") if phase == "resolved" else "fetching…"),
-                    scene_phase=phase,
-                )
-
-            background_fn(sd, short_scenes, channel_config, on_scene_resolved=_on_scene_bg)
-            update_stage("background", "completed", per_scene=bg_sources)
-        except Exception as exc:
-            update_stage("background", "failed", error=str(exc))
-            status["status"] = "failed"
-            write_short_status(long_job_dir, short_id, status)
-            raise exc
+        _ctx.extras["short_scenes"] = short_scenes
+        _ctx.extras["scene_pipeline_state"] = state
+        _stage_background(_ctx)
 
         # Stage 6: Audio TTS & exact audio_fit check
         update_stage("audio", "in_progress")

@@ -1,0 +1,693 @@
+"""Prompt template builders for operator ChatGPT/Gemini workflows."""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+from video_agent.operator_json import _json_block, _json_file_directive
+from video_agent.utils.json_io import read_json
+
+
+def _resolve_existing_qa_path(job_dir: Path, artifact: str) -> Path:
+    return job_dir / "operator" / "gemini" / f"{artifact}_qa.json"
+
+
+def _locale_guidance(channel_config: dict[str, Any]) -> dict[str, Any]:
+    """Resolve locale/language/lexical preferences from channel config.
+
+    Resolution order for language: seo.language → audience.language → es-ES (default).
+    target_locale defaults to ``Spain`` when language is es-ES, else ``Latin America``.
+    """
+    audience = (channel_config or {}).get("audience") or {}
+    seo_cfg = (channel_config or {}).get("seo") or {}
+    locale_style = (channel_config or {}).get("locale_style") or {}
+    language = str(seo_cfg.get("language") or audience.get("language") or "es-ES")
+    default_locale = "Spain" if language == "es-ES" else "Latin America"
+    target_locale = str(locale_style.get("target_locale") or default_locale)
+    lexical = locale_style.get("lexical_preferences") or {}
+    prefer = list(lexical.get("prefer") or [])
+    avoid = list(lexical.get("avoid") or [])
+    return {
+        "language": language,
+        "target_locale": target_locale,
+        "prefer": prefer,
+        "avoid": avoid,
+    }
+
+
+def _locale_block_lines(channel_config: dict[str, Any], *, header: str = "LOCALE AND LANGUAGE RULES (MANDATORY):") -> list[str]:
+    """Return prompt lines describing locale-specific writing rules from channel config."""
+    locale = _locale_guidance(channel_config)
+    lines = [
+        header,
+        f"• Write in Spanish for {locale['target_locale']}, language code {locale['language']}.",
+        f"• Use a natural {locale['target_locale']}-first tone for adults 45+.",
+    ]
+    if locale["prefer"]:
+        lines.append("• Prefer these terms when natural: " + ", ".join(locale["prefer"]) + ".")
+    if locale["avoid"]:
+        lines.append("• Avoid these terms: " + ", ".join(locale["avoid"]) + ".")
+    lines.append("• Never use forbidden age-positioning terms from channel_config.positioning.forbidden_phrases.")
+    lines.append("• Avoid calling the audience senior, elderly, ancianos, tercera edad, abuelos, or adultos mayores.")
+    return lines
+
+
+def _chatgpt_script_prompt(channel_config: dict[str, Any], idea: dict[str, Any]) -> str:
+    cf = channel_config.get("content_format", {})
+    target_sec = cf.get("target_duration_sec", 840)
+    pace_wpm = channel_config.get("tts", {}).get("pace_wpm", 145)
+    # Inflation factor: LLM historically under-produces by ~30-45%. To land the
+    # rendered video inside the 12-15 min content_format window, we ask the
+    # script for a ~20-minute target so the actual output falls back to spec.
+    script_budget_multiplier = float(
+        channel_config.get("tts", {}).get("script_word_budget_multiplier", 1.43)
+    )
+    prompt_target_sec = int(round(target_sec * script_budget_multiplier))
+    target_min = round(prompt_target_sec / 60)
+    total_words = round(prompt_target_sec / 60 * pace_wpm)
+    min_words = int(round(total_words * 0.92))
+    max_words = int(round(total_words * 1.10))
+    return "\n".join(
+        [
+            "You are exporting a SCRIPT artifact as a JSON file for a YouTube channel pipeline.",
+            "",
+            _json_file_directive("script.json"),
+            "",
+            "Required JSON schema:",
+            "- channel_id, job_id, hook, sections, narration, cta, qa",
+            "- sections: array of 6-10 objects, each with: title, key_points (list), narration_text",
+            f"- narration: natural Spanish for a {target_min}-minute video (~{total_words} words total)",
+            f"- ⚠️ WORD-COUNT FLOOR (MANDATORY): the combined narration across ALL sections MUST contain BETWEEN {min_words} AND {max_words} spoken Spanish words. Count every word. If you fall under {min_words}, expand the weakest sections with more concrete steps, examples, mini-stories, or sensory detail — do NOT pad with filler, slogans, or repeated phrases.",
+            f"- Each of the 6-10 sections should contribute roughly {round(total_words / 8)} ± 60 words of narration_text.",
+            f"- hook: opening sentence ≤28 words. Pattern: [relatable symptom] + [implicit promise].",
+            "  Example: 'Si después de los 45 te cuesta conciliar el sueño o despiertas a las 3 de la mañana, esto es exactamente para ti.'",
+            "- cta: closing call-to-action sentence",
+            "- qa.verdict: set to PASS when you believe the script is ready",
+            "",
+            "⚠️ OPENING RETENTION RULES (FIRST 30 SECONDS — HIGHEST PRIORITY):",
+            "• The render skips logo intro/outro entirely. The first frame the viewer sees is your narration hook, so the first ~12 words MUST hook them.",
+            "• Do NOT start with the channel name, a greeting, 'En este video', 'Hoy', 'Bienvenidos', 'Hola', or any meta-introduction. Start IN the problem.",
+            "• Open with one of these 4 retention patterns, picked to fit the idea:",
+            "  1. Specific pain symptom: 'Si después de los 45 te despiertas a las 3 de la mañana mirando el techo, no es solo casualidad.'",
+            "  2. Contradiction / pattern interrupt: 'Cenar pronto NO siempre te ayuda a dormir. Y la mayoría de personas de más de 45 no lo sabe.'",
+            "  3. Concrete number + promise: 'En los próximos 7 minutos vas a ver 3 ajustes de la tarde que cambian la noche entera.'",
+            "  4. Vivid micro-scene: 'Son las 22:30. La luz baja, el cuerpo cansado, pero la cabeza sigue corriendo. Esto es lo que está pasando y cómo cortarlo.'",
+            "• The hook sentence ≤ 28 words. NO subordinate filler. Punch first, explain after.",
+            "• Section 1 (first ~30 s of narration, roughly the first 70 words) MUST deliver the first concrete payoff. Do not save value for later sections.",
+            "• Tease — do not summarise. Hint at the surprise, the contradiction, or the 3-step plan; do NOT list every section upfront.",
+            "• Avoid promising 'al final del video' anything inside Section 1. Promise something the viewer gets in the NEXT 2 minutes.",
+            "",
+            "HOOK AND VALUE RULES (MANDATORY):",
+            "• Do NOT open with generic teaching phrases such as 'En este video aprenderás', 'Hoy vamos a hablar de', or 'Te voy a enseñar'.",
+            "• Open with a specific pain after 45: a concrete symptom, frustration, or hidden daily mistake the viewer recognizes immediately.",
+            "• Make the hook feel like: pain + possible misunderstanding + gentle promise. Example: 'Si después de los 45 comes \"saludable\" pero sigues sin energía, quizá el problema no es tu fuerza de voluntad, sino cómo estás armando tu plato.'",
+            "• Sections must give actions the viewer can apply today, not vague wellness slogans.",
+            "• For nutrition topics, prefer concrete plate guidance: 1/2 plato verduras, 1/4 proteína, 1/4 carbohidrato, una grasa saludable, cena más ligera, evita picar por ansiedad.",
+            "• Do not leave advice as generic slogans like 'come más verduras', 'bebe más agua', 'duerme mejor', or 'haz ejercicio' unless each one includes a specific how-to, amount, timing, or trigger.",
+            "• Use this core narrative format for the viewer experience: pain after 45 -> common misunderstanding -> simple explanation -> 3-5 practical steps -> relief close.",
+            "• This is a story framework, not a topic restriction. You can apply it across sleep, nutrition, movement, menopause, stress, energy, weight, digestion, and daily habits.",
+            "• Choose ONE distinct angle for this video, based on the idea. Example angles: cena ligera, despertar cansada, hambre aunque ya comiste, rodillas, ansiedad, metabolismo cambió, rutina más simple.",
+            "• Across different videos, do not reuse the same pain, misunderstanding, and steps. Keep the channel consistent in experience but varied in angle.",
+            "",
+            "STYLE ANTI-REPETITION RULES (MANDATORY):",
+            "• Do NOT reuse a repetitive tail sentence pattern across sections.",
+            "• Do NOT repeat phrases like 'hazlo simple y con calma' or close variants more than once.",
+            "• Each section narration_text must end differently (different verb + image + rhythm).",
+            "• Keep tone warm and natural, but avoid formulaic copy-paste cadence.",
+            "",
+            "SPOKEN NARRATION RULES (MANDATORY):",
+            "• Write for spoken Spanish, not essay-style Spanish.",
+            "• The narration should sound like a calm coach speaking to one person.",
+            "• Use short and medium sentences.",
+            "• Prefer direct phrases such as: 'si te pasa esto', 'empieza por aquí', 'prueba esto', 'no hace falta', 'vamos paso a paso'.",
+            "• Put important emotional sentences on their own line.",
+            "• Use paragraph breaks (blank line, i.e. \\n\\n) inside narration_text to guide natural TTS pauses.",
+            "• Avoid long paragraphs with many commas.",
+            "• Avoid overly abstract or literary phrases.",
+            "• Avoid robotic repeated endings across sections.",
+            "• Keep a warm Spain-first tone for people over 45.",
+            "• Do not sound childish, slangy, or overly casual.",
+            "",
+            "TTS PROSODY RULES:",
+            "• Write narration for calm Spanish TTS.",
+            "• Use paragraph breaks before emotional or important sentences.",
+            "• Every major section should include one memorable sentence of 8–14 words on its own line.",
+            "• Avoid long chains joined by commas.",
+            "• Do not overuse exclamation marks.",
+            "• Do not use SSML tags (the TTS pipeline does not parse SSML).",
+            "• Use punctuation naturally to guide pauses.",
+            "",
+            "EMPHASIS SENTENCE RULE:",
+            "• Each section should include at most one short emphasis sentence (≤14 words), on its own line.",
+            "• The emphasis sentence must be direct and useful, not melodramatic.",
+            "• Examples: 'No tienes que demostrar nada.' / 'Empieza antes de agotarte.' / 'Tu cuerpo necesita confianza, no castigo.'",
+            "• Avoid fake emotion such as '¡Transforma tu vida para siempre!' or '¡Nunca más sufrirás!'.",
+            "",
+            "DISCLAIMER RULE:",
+            "• Do NOT create a long disclaimer scene near the beginning.",
+            "• If a disclaimer is needed in narration, use one concise sentence only.",
+            "• Preferred form: 'Este contenido es informativo; si tienes dolor, mareos o una condición médica, consulta con un profesional.'",
+            "• Put the complete medical disclaimer in the SEO description, not in the first minute of the video.",
+            "",
+            "WRITTEN-vs-SPOKEN EXAMPLES (style guide):",
+            "• AVOID: 'Para muchas personas de más de 45 años, el camino más sensato empieza con poco, bien elegido y repetido con cabeza.'",
+            "• PREFER: 'Si tienes más de 45, no hace falta empezar fuerte.\\n\\nEmpieza con poco, elige bien, y repítelo sin prisa.'",
+            "• AVOID: 'No necesitas ganar una batalla contra tu cuerpo. Necesitas construir confianza con él.'",
+            "• PREFER: 'No necesitas ganar una batalla contra tu cuerpo.\\n\\nNecesitas construir confianza con él.'",
+            "",
+            *_locale_block_lines(channel_config),
+            "",
+            "Channel config:",
+            _json_block(channel_config),
+            "",
+            "Video idea:",
+            _json_block(idea),
+            "",
+            "⚠️ REMINDER: Output ONLY the raw JSON object. No markdown. No commentary. Start with { and end with }.",
+        ]
+    )
+
+
+def get_scenes_qa_feedback(job_dir: Path) -> str | None:
+    """Helper to extract QA issues and required changes if the verdict is NEEDS_REWORK."""
+    try:
+        p = _resolve_existing_qa_path(job_dir, "scenes")
+        if p.exists():
+            qa_data = read_json(p)
+            verdict = str(qa_data.get("verdict", "")).upper()
+            if verdict == "NEEDS_REWORK":
+                issues = qa_data.get("issues") or []
+                changes = qa_data.get("required_changes") or []
+                
+                feedback_lines = []
+                if issues:
+                    feedback_lines.append("Issues found in previous version:")
+                    for issue in issues:
+                        feedback_lines.append(f"- {issue}")
+                if changes:
+                    feedback_lines.append("Required changes for this revision:")
+                    for change in changes:
+                        feedback_lines.append(f"- {change}")
+                
+                if feedback_lines:
+                    return "\n".join(feedback_lines)
+    except Exception:
+        pass
+    return None
+
+
+_SCENE_RHYTHM_RULES = [
+    "SCENE NARRATION RHYTHM RULES (MANDATORY):",
+    "• Scene narration must sound natural when read aloud by Spanish TTS.",
+    "• Prefer 1–3 short paragraphs per scene, separated by a blank line (\\n\\n).",
+    "• Put the key emotional sentence on its own line so TTS pauses around it.",
+    "• Each scene should have ONE clear emphasis point (≤14 words, direct, useful).",
+    "• Avoid one long paragraph with many commas.",
+    "• Avoid formal essay-style connectors when a direct spoken phrase is better.",
+    "• Keep narration clear enough for people over 45 listening on mobile.",
+    "• Scene narration should usually be 35–60 spoken words; warn above 75; never exceed 90.",
+    "• Avoid melodrama: no '¡Transforma tu vida para siempre!', no '¡Nunca más sufrirás!'.",
+    "• Final CTA scene must be short: do not stuff multiple actions and channel promo into one paragraph.",
+    "DISCLAIMER RULE:",
+    "• Do NOT place a long disclaimer in early scenes.",
+    "• If narration requires a disclaimer, use ONE concise sentence such as: 'Este contenido es informativo; si tienes dolor, mareos o una condición médica, consulta con un profesional.'",
+]
+
+
+def _chatgpt_scenes_prompt(
+    channel_config: dict[str, Any],
+    script: dict[str, Any],
+    qa_feedback: str | None = None,
+) -> str:
+    cf = channel_config.get("content_format", {})
+    target_sec = cf.get("target_duration_sec", 840)
+    scenes_min = cf.get("scenes_count_min", 40)
+    scenes_max = cf.get("scenes_count_max", 55)
+    scene_dur_target = round(target_sec / ((scenes_min + scenes_max) / 2))
+    
+    prompt_parts = [
+        "You are exporting a SCENES artifact as a JSON file for a YouTube channel pipeline.",
+        "",
+        "⚠️ OUTPUT RULES — READ CAREFULLY:",
+        "• Your ENTIRE response must be ONE raw JSON object — nothing else.",
+        "• Do NOT write any text before or after the JSON.",
+        "• Do NOT use markdown code fences (no ```json, no ```).",
+        "• Do NOT add explanations, comments, or apologies.",
+        "• Imagine you are writing directly to a .json file on disk.",
+        f"• This JSON will be large ({scenes_min}-{scenes_max} scenes). That is fine — write the complete JSON until the final }}.",
+        "",
+        "Required JSON schema:",
+        "- channel_id, job_id, scenes (array), total_duration_sec, qa",
+        "- each scene object: id, duration_sec, narration, on_screen_text, caption, visual_prompt, motion, asset_refs, layout, layout_payload, layout_reason",
+        f"- create {scenes_min}-{scenes_max} scenes; each scene duration_sec should be {scene_dur_target-3}–{scene_dur_target+3} seconds",
+        f"- total_duration_sec must be approximately {target_sec} (sum of all scene durations)",
+        "- scene ids: sequential scene-01, scene-02, ...",
+        "- HOOK RULE: scene-01 narration must match the script hook word-for-word.",
+        "  scene-01 on_screen_text: bold 3-6 word question or statement (e.g. '¿Por qué no puedes dormir?').",
+        "- ⚠️ OPENING RETENTION: the render skips logo intro/outro. scene-01 is the very first frame the viewer sees. Keep scene-01 duration_sec between 8 and 12 — short enough to feel snappy but long enough to land the hook.",
+        "- scenes 01-03 (first ~30 s) must deliver the first concrete payoff promised by the script hook. Do NOT use them for channel name, greetings, or 'today we will talk about'. Open IN the pain or contradiction.",
+        "- scenes 01-03 visual_prompt must show the pain/situation directly (e.g. 'Mature woman lying awake in dim bedroom looking at ceiling, soft moonlight, close-up'), not a generic logo card or wide establishing shot.",
+        "- asset_refs: must be an object {}, never an array",
+        "- on_screen_text MUST be 2-4 words (keyword hook), and MUST NOT duplicate caption text.",
+        "- caption should be natural spoken sentence(s); never copy on_screen_text verbatim.",
+        "- visual_prompt: ⚠️ MANDATORY ENGLISH ONLY. NEVER Spanish. visual_prompt is fed directly to Pexels stock search, which is English-keyword based. Spanish prompts produce off-topic stock footage (e.g. 'Bellagio fountains' for a 'rutina nocturna' scene). Required style: specific (person + setting + action + lighting + camera framing). Example: 'Mature woman in her 50s arranging pillows on a calm bedroom bed at dusk, warm tungsten light, close-up shot'. ALL OTHER FIELDS may be Spanish, but visual_prompt MUST be English.",
+        "- visual_prompt must match sleep-wellness context for adults 45+: bedroom night routine, evening herbal tea, low-impact stretching, doctor consultation, calm morning sunlight.",
+        "- avoid off-topic visuals (cars, highways, random city traffic, tech gadgets unless explicitly in narration).",
+        "- motion: 'slow_zoom' / 'pan_right' / 'pan_left'; never repeat same motion 3x in a row",
+        "- layout: one of [\"hook\", \"subtitle\", \"checklist\", \"warning\", \"quote\", \"cta\"].",
+        "- layout_payload: object with exactly these fields: {\"title\": string, \"body\": string, \"bullets\": array of strings, \"cta\": string}.",
+        "- layout_reason: short English reason explaining why the layout fits the narration.",
+        "- scene-01 should use layout=\"hook\" with a 2-8 word Spanish title when safe.",
+        "- final scene should use layout=\"cta\" only if it contains a clear final action.",
+        "- Use layout=\"subtitle\" for normal explanation scenes.",
+        "- Use layout=\"checklist\" only when the narration contains 2-4 concrete steps/items; bullets must come from narration/caption/on_screen_text.",
+        "- Use layout=\"warning\" only when the narration describes a mistake, risk, or something to avoid.",
+        "- Use layout=\"quote\" only for a short emotional or memorable sentence supported by the narration.",
+        "- Every non-subtitle layout must include enough layout_payload for rendering.",
+        "- Python will downgrade unsafe layouts; do not invent overlay facts that are not supported by the scene text.",
+        "- qa.verdict: must be PENDING_GEMINI_QA — never mark your own scenes as PASS",
+        "",
+        *_locale_block_lines(channel_config, header="LOCALE RULES:"),
+        "• All Spanish scene fields (narration, caption, on_screen_text, layout_payload) must use the configured language.",
+        "• on_screen_text must sound natural in the configured locale and remain 2-4 words.",
+        "• visual_prompt must remain English (stock search/generation works better in English).",
+        "",
+        *_SCENE_RHYTHM_RULES,
+        "",
+    ]
+
+    if qa_feedback:
+        prompt_parts.extend([
+            "⚠️ CRITICAL REWORK FEEDBACK FROM PREVIOUS QA REVIEW:",
+            "The previous version of scenes was rejected by the QA reviewer with verdict NEEDS_REWORK.",
+            "You MUST revise and improve the scenes to address the following issues:",
+            qa_feedback,
+            "",
+        ])
+        
+    prompt_parts.extend([
+        "Channel config:",
+        _json_block(channel_config),
+        "",
+        "Approved script:",
+        _json_block(script),
+        "",
+        "⚠️ CRITICAL OUTPUT RULES:",
+        "• Your response is ONLY a raw JSON object. No markdown, no commentary, no ```json fences.",
+        "• Start your response with the character { and end with the character }.",
+        f"• Expected response size: approximately {int(scenes_min) * 300}-{int(scenes_max) * 350} characters.",
+        "• You MUST complete the entire JSON in this single response. Do NOT truncate.",
+        "• If you run low on space, reduce narration text length per scene rather than dropping scenes.",
+        "• Double-check: every { has a matching } before you finish.",
+    ])
+    
+    return "\n".join(prompt_parts)
+
+
+def _chatgpt_scenes_plan_prompt(channel_config: dict[str, Any], script: dict[str, Any]) -> str:
+    cf = channel_config.get("content_format", {})
+    scenes_min = int(cf.get("scenes_count_min", 40))
+    scenes_max = int(cf.get("scenes_count_max", 55))
+    target_scene_count = round((scenes_min + scenes_max) / 2)
+    target_sec = int(cf.get("target_duration_sec", 840))
+    channel_id = (
+        channel_config.get("channel", {}).get("id")
+        or script.get("channel_id")
+        or "vida-plena-45"
+    )
+    job_id = script.get("job_id", "")
+    return "\n".join(
+        [
+            "You are planning sharded SCENES generation for a YouTube channel pipeline.",
+            _json_file_directive("scenes_plan.json"),
+            "",
+            "Required envelope shape:",
+            "{",
+            '  "artifact_type": "scenes_plan",',
+            '  "schema_version": "2026-05-json-shards-v1",',
+            f'  "job_id": "{job_id}",',
+            f'  "channel_id": "{channel_id}",',
+            '  "status": "complete",',
+            '  "batch_index": null,',
+            '  "batch_total": null,',
+            '  "data": {',
+            f'    "target_scene_count": {target_scene_count},',
+            f'    "target_total_duration_sec": {target_sec},',
+            '    "batch_size": 6,',
+            '    "batches": [',
+            '      {',
+            '        "batch_index": 1,',
+            '        "scene_start": "scene-01",',
+            '        "scene_end": "scene-06",',
+            '        "purpose": "Opening hook",',
+            '        "script_sections": ["Section Title"]',
+            '      }',
+            '    ]',
+            "  },",
+            '  "warnings": []',
+            "}",
+            "",
+            "Plan rules:",
+            "- batch_size must be between 6 and 8 scenes.",
+            "- scene ranges must cover the full target_scene_count.",
+            "- scene IDs must be sequential: scene-01, scene-02, ...",
+            "- final batch must include the final scene.",
+            "",
+            *_locale_block_lines(channel_config, header="Locale rules:"),
+            "- Spanish text fields must use the configured language for the configured locale.",
+            "- Prefer Spain-native terms from channel_config.locale_style.lexical_preferences.prefer.",
+            "- Avoid terms from channel_config.locale_style.lexical_preferences.avoid.",
+            "",
+            "Channel config:",
+            _json_block(channel_config),
+            "",
+            "Approved script:",
+            _json_block(script),
+        ]
+    )
+
+
+def _chatgpt_scenes_batch_prompt(
+    channel_config: dict[str, Any],
+    script: dict[str, Any],
+    plan: dict[str, Any],
+    batch: dict[str, Any],
+    previous_batch_summary: str | None = None,
+) -> str:
+    channel_id = (
+        channel_config.get("channel", {}).get("id")
+        or script.get("channel_id")
+        or "vida-plena-45"
+    )
+    job_id = script.get("job_id", "")
+    batch_index = int(batch.get("batch_index") or 1)
+    batch_total = len((plan.get("data") or {}).get("batches") or []) or int(batch.get("batch_total") or 1)
+    scene_start = batch.get("scene_start", "scene-01")
+    scene_end = batch.get("scene_end", scene_start)
+    parts = [
+        "You are exporting one small SCENES batch for a YouTube channel pipeline.",
+        _json_file_directive(f"scenes_batch_{batch_index:02d}.json"),
+        "",
+        "Required envelope:",
+        "{",
+        '  "artifact_type": "scenes_batch",',
+        '  "schema_version": "2026-05-json-shards-v1",',
+        f'  "job_id": "{job_id}",',
+        f'  "channel_id": "{channel_id}",',
+        '  "status": "complete",',
+        f'  "batch_index": {batch_index},',
+        f'  "batch_total": {batch_total},',
+        '  "data": {',
+        f'    "scene_start": "{scene_start}",',
+        f'    "scene_end": "{scene_end}",',
+        '    "scenes": []',
+        "  },",
+        '  "warnings": []',
+        "}",
+        "",
+        "Batch rules:",
+        f"- Generate only scenes {scene_start} through {scene_end}.",
+        "- Scene IDs must exactly match the requested range.",
+        "- Every scene must include: id, duration_sec, narration, on_screen_text, caption, visual_prompt, motion, asset_refs, layout, layout_payload, layout_reason.",
+        "- asset_refs must be {}.",
+        "- ⚠️ visual_prompt MANDATORY ENGLISH ONLY. NEVER Spanish. Fed directly to Pexels (English keyword search). Spanish visual_prompt = rejected, you will be asked to regenerate. Example: 'Mature adult woman drinking herbal tea on a sofa at night, warm tungsten lighting, medium shot'.",
+        "- narration must follow the approved script context.",
+        "- layout must be one of: hook, subtitle, checklist, warning, quote, cta.",
+        "- layout_payload must be an object with {title, body, bullets, cta}; use empty strings/[] for unused fields.",
+        "- layout_reason must be a short English reason explaining why the layout fits the narration.",
+        "- scene-01 should use layout=\"hook\" with a 2-8 word Spanish title when safe.",
+        "- final scene should use layout=\"cta\" only if it contains a clear final action.",
+        "- Use layout=\"subtitle\" for normal explanation scenes.",
+        "- Use layout=\"checklist\" only when the narration contains 2-4 concrete steps/items; bullets must come from narration/caption/on_screen_text.",
+        "- Use layout=\"warning\" only when the narration describes a mistake, risk, or something to avoid.",
+        "- Use layout=\"quote\" only for a short emotional or memorable sentence supported by the narration.",
+        "- Every non-subtitle layout must include enough layout_payload for rendering.",
+        "- Do not invent overlay facts that are not supported by narration/caption/on_screen_text.",
+        "- Do not return more than one JSON object.",
+        "",
+        *_locale_block_lines(channel_config, header="Locale rules:"),
+        "- Spanish text fields must use the configured language for the configured locale.",
+        "- Prefer terms from channel_config.locale_style.lexical_preferences.prefer.",
+        "- Avoid terms from channel_config.locale_style.lexical_preferences.avoid.",
+        "- visual_prompt must stay English regardless of locale.",
+        "",
+        *_SCENE_RHYTHM_RULES,
+        "",
+    ]
+    if previous_batch_summary:
+        parts.extend(["Previous batch summary:", previous_batch_summary, ""])
+    parts.extend(
+        [
+            "Channel config:",
+            _json_block(channel_config),
+            "",
+            "Approved script:",
+            _json_block(script),
+            "",
+            "Scenes plan:",
+            _json_block(plan),
+            "",
+            "Requested batch:",
+            _json_block(batch),
+        ]
+    )
+    return "\n".join(parts)
+
+
+def _gemini_scenes_qa_batch_prompt(
+    channel_config: dict[str, Any],
+    scenes_batch: dict[str, Any],
+    batch_index: int,
+    batch_total: int,
+) -> str:
+    channel_id = channel_config.get("channel", {}).get("id", "vida-plena-45")
+    job_id = scenes_batch.get("job_id", "")
+    return "\n".join(
+        [
+            "You are QA reviewer for one SCENES batch of a Spanish-language YouTube health channel.",
+            _json_file_directive(f"scenes_qa_batch_{batch_index:02d}.json"),
+            "",
+            "Required envelope:",
+            "{",
+            '  "artifact_type": "scenes_qa_batch",',
+            '  "schema_version": "2026-05-json-shards-v1",',
+            f'  "job_id": "{job_id}",',
+            f'  "channel_id": "{channel_id}",',
+            '  "status": "complete",',
+            f'  "batch_index": {batch_index},',
+            f'  "batch_total": {batch_total},',
+            '  "data": {',
+            '    "verdict": "PASS",',
+            '    "youtube_policy": {"compliant": true, "risk_level": "none", "violations": []},',
+            '    "scene_checks": [],',
+            '    "issues": [],',
+            '    "required_changes": [],',
+            '    "scores": {"schema_fit": 5, "channel_fit": 5, "safety": 5, "clarity": 5, "youtube_policy": 5}',
+            "  },",
+            '  "warnings": []',
+            "}",
+            "",
+            "QA rules:",
+            "- Review only this batch.",
+            "- Include scene_checks for every scene in the batch.",
+            "- If any scene has policy, safety, or schema issue, verdict must be NEEDS_REWORK.",
+            "- youtube_policy.compliant must be false if there is any concern.",
+            "",
+            "Channel config:",
+            _json_block(channel_config),
+            "",
+            "Scenes batch:",
+            _json_block(scenes_batch),
+        ]
+    )
+
+
+def _chatgpt_seo_prompt(channel_config: dict[str, Any], script: dict[str, Any], scenes: dict[str, Any]) -> str:
+    locale = _locale_guidance(channel_config)
+    seo_language = locale["language"]
+    is_spain = seo_language == "es-ES"
+    tags_line = (
+        "- tags: 5-8 concise Spain-first Spanish wellness search terms"
+        if is_spain
+        else "- tags: 5-8 concise Spanish wellness search terms matching the configured audience locale"
+    )
+    return "\n".join(
+        [
+            "You are exporting an SEO artifact as a JSON file for a YouTube channel pipeline.",
+            "",
+            _json_file_directive("seo.json"),
+            "",
+            "Required JSON schema:",
+            "- job_id, title, description, tags, language, ai_disclosure, thumbnail_path, thumbnail_text, suggested_pinned_comments",
+            "- title_variants: array of EXACTLY 3 objects, each: {title, thumbnail_text}",
+            "  • title: clear Spanish, searchable, 6-10 words, may include numbers or questions",
+            "  • thumbnail_text: 3-5 words ALL-CAPS Spanish emotional hook (e.g. 'ADIÓS AL INSOMNIO')",
+            "    - RULE 'COMPLEMENTARY, NOT REPETITIVE': The thumbnail_text must be used to trigger curiosity or hit a strong emotion. Do NOT use the thumbnail to summarize the video; let the Title handle the summarization. The thumbnail text should complement the title, not duplicate or paraphrase it.",
+            "    - RULE 'SAME PAIN ANGLE': title and thumbnail_text must point to the same specific pain angle. If thumbnail_text points to one pain, the title must support that same pain clearly instead of switching to a generic wellness promise.",
+            "    - Example alignment: thumbnail_text='TU PLATO TE HABLA' pairs with a title like 'Cómo saber si tu plato te está quitando energía después de los 45'. Do not pair it with a generic title like 'Cómo comer mejor después de los 45'.",
+            "  • Make 3 variants MEANINGFULLY DIFFERENT — vary angle, emotion, or specificity",
+            "  • Do NOT repeat the same hook with minor word swaps",
+            "- title: copy from the best title_variants entry",
+            "- thumbnail_text: copy from the best title_variants entry",
+            "- description: YouTube video description in Spanish. It MUST follow this Golden Structure (structured into 6 distinct sections/paragraphs separated by blank lines):",
+            "  1. Section 1 (Hook & SEO): 2-3 short sentences. Start with the primary keyword within the first 25 characters (e.g. 'Si después de los 45...').",
+            "  2. Section 2 (Detailed Summary): 2-3 short paragraphs detailing what the video covers and what the viewer will learn, incorporating secondary/LSI keywords naturally.",
+            "  3. Section 3 (Timestamps): A list of timestamps for key parts/scenes in 'MM:SS - Section title' format (derive these from the approved scenes narration and durations).",
+            "    - Timestamps MUST be one timestamp per line, never combined on a single line.",
+            "    - Each timestamp line MUST use 'MM:SS - Section title' exactly (two-digit minutes, two-digit seconds, dash with spaces).",
+            "    - IMPORTANT: Do not include any primary or external links in this section.",
+            "  4. Section 4 (CTA & Subscription Link): A call-to-action asking viewers to subscribe, accompanied by the subscription link 'https://www.youtube.com/channel/UCKUswqsAaLsEkcsgzTuKAmw?sub_confirmation=1'. Do NOT mention social links unless they are explicitly provided in channel_config.upload.social_links or channel_config.channel.social_links. Never write placeholder text such as 'Redes adicionales: no proporcionadas', 'no proporcionadas', 'not provided', or 'sin enlaces'.",
+            "  5. Section 5 (Channel Info, Disclaimer & AI Disclosure): A short blurb about the channel's mission (Vida Plena 45+), the medical disclaimer (e.g., 'Aviso: El contenido es de carácter informativo y no sustituye la opinión médica.'), and the AI disclosure statement (disclosing that the video uses AI voice/visual assist).",
+            "  6. Section 6 (Hashtags): 3-5 relevant hashtags at the very bottom (e.g., #vidasana #bienestar45).",
+            "- suggested_pinned_comments: a single suggested pinned comment in Spanish (containing warm/engaging emojis) that combines two strategies: start with an engaging question to boost audience interaction (e.g. asking for opinions or experiences), and follow with a clear call-to-action to subscribe to the channel with the exact link: https://www.youtube.com/channel/UCKUswqsAaLsEkcsgzTuKAmw?sub_confirmation=1",
+            f"- language: must be {seo_language}",
+            tags_line,
+            "- ai_disclosure: must be true",
+            "- thumbnail_path: leave as empty string ''",
+            "",
+            "SEO LOCALE RULES:",
+            f"• Optimize title, description, tags, and pinned comment for {locale['target_locale']}-first Spanish ({seo_language}).",
+            "• Prefer 'móvil' over 'celular', 'ordenador' over 'computadora', 'por la tarde' over LatAm phrasing when natural." if is_spain else "• Use vocabulary natural to the configured audience locale.",
+            "• Use 'personas de más de 45 años' or 'adultos 45+'; avoid 'adultos mayores', 'tercera edad', 'ancianos'.",
+            "• Do not use LatAm label text like 'Spanish/LatAm' in output.",
+            "• For thumbnail_text, use 2-5 words, all caps, Spain-natural Spanish, strong but not exaggerated." if is_spain else "• For thumbnail_text, use 2-5 words, all caps, natural Spanish for the configured locale, strong but not exaggerated.",
+            "• Title and thumbnail_text must share the same pain angle.",
+            "• Avoid medical certainty claims. Use 'puede ayudarte', 'hábitos sencillos', 'rutina realista'.",
+            "",
+            "MISSING-RESOURCE RULES (MANDATORY):",
+            "Never mention missing resources. If social links, website, Instagram, Facebook, or other links are not explicitly provided in channel_config, omit them entirely. Do not write placeholders like 'no proporcionadas', 'not provided', 'sin enlaces', or 'redes adicionales'.",
+            "",
+            "Channel config:",
+            _json_block(channel_config),
+            "",
+            "Approved script:",
+            _json_block(script),
+            "",
+            "Approved scenes (summary + key visuals):",
+            json.dumps(
+                {
+                    "total_duration_sec": scenes.get("total_duration_sec"),
+                    "scene_count": len(scenes.get("scenes", [])),
+                    "visual_prompts_sample": [
+                        str(scene.get("visual_prompt") or "")
+                        for scene in (scenes.get("scenes") or [])[:5]
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            "",
+            "⚠️ REMINDER: Output ONLY the raw JSON object. No markdown. No commentary. Start with { and end with }.",
+        ]
+    )
+
+
+def _gemini_qa_prompt(
+    artifact_name: str,
+    artifact: dict[str, Any] | None,
+    channel_config: dict[str, Any] | None = None,
+) -> str:
+    artifact_text = _json_block(artifact) if artifact is not None else "<paste ChatGPT JSON artifact here>"
+    locale = _locale_guidance(channel_config or {})
+    locale_qa_lines = [
+        "",
+        "════════════════════════════════════════",
+        "LOCALE QA (mandatory when channel_config is available)",
+        "════════════════════════════════════════",
+        "• Check that the artifact uses the configured language from channel_config.seo.language or channel_config.audience.language.",
+        f"• For this channel, expected language is {locale['language']} unless config says otherwise.",
+        "• If the artifact has a language field and it is not EXACTLY the expected language, verdict MUST be NEEDS_REWORK.",
+        f"• Expected target locale: {locale['target_locale']}.",
+    ]
+    if locale["avoid"]:
+        locale_qa_lines.append(
+            "• Flag locale lexical mismatches if these terms appear repeatedly when a configured-locale equivalent is expected: "
+            + ", ".join(locale["avoid"])
+            + "."
+        )
+    locale_qa_lines.append(
+        "• Flag forbidden age-positioning terms from channel_config.positioning.forbidden_phrases (senior, ancianos, tercera edad, abuelos, adultos mayores, abuelitos)."
+    )
+    locale_qa_lines.append(
+        "• Flag placeholder missing-resource text such as 'no proporcionadas', 'redes adicionales', 'not provided', or 'sin enlaces' in any SEO field."
+    )
+    return "\n".join(
+        [
+            f"You are QA reviewer for the {artifact_name.upper()} artifact of a Spanish-language YouTube health channel.",
+            "",
+            "⚠️ OUTPUT RULES:",
+            "• Return exactly ONE raw JSON object. No markdown. No commentary.",
+            "• Start with { and end with }.",
+            *locale_qa_lines,
+            "",
+            "═══════════════════════════════════════════",
+            "MANDATORY CHECK 1 — YouTube Policy & Terms",
+            "═══════════════════════════════════════════",
+            "YouTube's policies are ZERO-TOLERANCE here. Even the SLIGHTEST suspicion = NEEDS_REWORK.",
+            "Check every piece of content against ALL of the following:",
+            "",
+            "• MEDICAL MISINFORMATION: Any unproven health claims, cures, treatments, or medical advice",
+            "  that contradicts established scientific consensus. Example: 'X cures diabetes'.",
+            "• DANGEROUS HEALTH CONTENT: Content that encourages harmful behaviour, extreme diets,",
+            "  unsafe supplements, or anything that could cause physical harm.",
+            "• MISLEADING / CLICKBAIT: Title, thumbnail_text, or hook promises something the content",
+            "  does not fully deliver. Exaggerated outcomes ('lose 20kg in a week').",
+            "• SPAM OR DECEPTIVE PRACTICES: Repetitive content, fake engagement, misleading metadata.",
+            "• HATE SPEECH OR DISCRIMINATION: Any content targeting groups by age, gender, race, etc.",
+            "• PRIVACY VIOLATIONS: References to real people without consent, doxxing.",
+            "• COPYRIGHT: Song lyrics, verbatim quotes from copyrighted works in narration.",
+            "• CHILD SAFETY: Content inappropriate for minors that could reach them.",
+            "• REGULATED PRODUCTS: Supplement promotion, pharmaceutical recommendations.",
+            "• SENSATIONALISM ABOUT DEATH / DISEASE: Content designed to cause fear or panic.",
+            "",
+            "RULE: If ANY of the above applies — even weakly or by implication — set:",
+            "  youtube_policy.compliant = false",
+            "  youtube_policy.risk_level = 'medium' or 'high'",
+            "  verdict = NEEDS_REWORK",
+            "  required_changes must explain exactly what to fix.",
+            "",
+            "Only set youtube_policy.compliant = true AND risk_level = 'none' when you are",
+            "100% certain NO policy concern exists.",
+            "",
+            "════════════════════════════════════════",
+            "MANDATORY CHECK 2 — Schema & Content Quality",
+            "════════════════════════════════════════",
+            "• Schema fit: all required fields present, correct types, no nulls where strings expected",
+            f"• Channel fit: content matches {locale['language']} Spanish health channel ({locale['target_locale']}-first) for adults 45+",
+            "• Safety: no specific medical diagnoses, no supplement promotion, no miracle cures",
+            "• Clarity: language is natural, readable, appropriate pace",
+            f"• Duration accuracy (for scenes): total_duration_sec must match sum of scene durations",
+            "",
+            "════════════════════════════════════════",
+            "REQUIRED JSON OUTPUT SCHEMA",
+            "════════════════════════════════════════",
+            "{",
+            '  "verdict": "PASS" | "NEEDS_REWORK",',
+            '  "youtube_policy": {',
+            '    "compliant": true | false,',
+            '    "risk_level": "none" | "low" | "medium" | "high",',
+            '    "violations": ["exact quote or description of policy concern"]',
+            '  },',
+            '  "scores": {',
+            '    "schema_fit": 1-5,',
+            '    "channel_fit": 1-5,',
+            '    "safety": 1-5,',
+            '    "clarity": 1-5,',
+            '    "youtube_policy": 1-5',
+            '  },',
+            '  "issues": ["list of problems found"],',
+            '  "required_changes": ["specific actionable fix for each issue"]',
+            "}",
+            "",
+            "VERDICT RULE: verdict = PASS only when:",
+            "  • youtube_policy.compliant = true AND risk_level = 'none'",
+            "  • All scores ≥ 4",
+            "  • issues list is empty",
+            "  • required_changes list is empty",
+            "",
+            f"Artifact to review ({artifact_name.upper()}):",
+            artifact_text,
+            "",
+            "⚠️ REMINDER: Output ONLY the raw JSON. No markdown. No text before or after.",
+        ]
+    )

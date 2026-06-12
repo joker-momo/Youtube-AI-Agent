@@ -1492,7 +1492,7 @@ def _stage_script(ctx: BuildContext) -> StageResult:
         )
 
         # Check for script completeness and structure
-        from video_agent.shorts.validation.checks import validate_full_short_script_candidate
+        from video_agent.shorts.validation.checks import validate_full_short_script_candidate, classify_script_validation
         jd_test = paths.short_json_dir(long_job_dir, short_id)
         source_map_file = jd_test / paths.SHORT_SOURCE_MAP_FILE
 
@@ -1530,7 +1530,8 @@ def _stage_script(ctx: BuildContext) -> StageResult:
                     "You MUST return the FULL script from start to finish. "
                     "Errors detected: " + ", ".join(errors)
                 )
-            _recorder.record_event("deterministic", "script_validation", {"verdict": "REJECTED_PARTIAL", "errors": errors})
+            verdict = classify_script_validation(errors)
+            _recorder.record_event("deterministic", "script_validation", {"verdict": verdict, "errors": errors})
             # Do NOT update stage or save the broken candidate
             return StageResult(StageSignal.RESTART_SCRIPT)
 

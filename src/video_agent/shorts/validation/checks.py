@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from video_agent.shorts.validation.issues import *  # noqa: F401,F403
+import re
+from collections import Counter
 
 def validate_script_word_budget(script: dict[str, Any], *, wps: float = DEFAULT_SPANISH_WPS) -> SceneValidationIssue | None:
     narration = str((script or {}).get("narration") or "")
@@ -41,6 +43,98 @@ def validate_script_word_budget(script: dict[str, Any], *, wps: float = DEFAULT_
     return None
 
 
+def validate_full_short_script_candidate(
+    script: dict[str, Any],
+    short_plan: dict[str, Any],
+    source_map: dict[str, Any] | None = None,
+) -> list[str]:
+    """Validates that a generated script is complete and not a partial rewrite fragment."""
+    errors = []
+
+    beats = list(script.get("beats") or [])
+    if len(beats) < 5:
+        errors.append("partial_script_too_few_blocks")
+
+    target_duration_sec = short_plan.get("target_duration_sec") or 35
+    if target_duration_sec == 35:
+        total_words = sum(len(re.findall(r'\w+', str(b.get("narration") or ""))) for b in beats if isinstance(b, dict))
+        if total_words > 85:
+            errors.append("audio_fit_over_soft_budget")
+
+    if beats and isinstance(beats[0], dict):
+        t_sec = beats[0].get("time_sec")
+        first_time = str(t_sec).strip() if t_sec is not None else ""
+        # Ensure the first beat starts at 0 or 1
+        match = re.match(r"^(\d+)", first_time)
+        if match:
+            start_sec = int(match.group(1))
+            if start_sec > 1:
+                errors.append("script_does_not_start_at_zero")
+        elif not first_time.startswith("0") and not first_time.startswith("1"):
+            errors.append("script_does_not_start_at_zero")
+
+        first_text = str(beats[0].get("narration") or "").lower()
+        if not first_text:
+            first_text = str(beats[0].get("visual") or "").lower()
+
+        has_hook = (
+            "?" in first_text or
+            "si " in first_text or
+            "no " in first_text or
+            "te pasa" in first_text or
+            "después de los 45" in first_text or
+            "45" in first_text
+        )
+        if not has_hook:
+            errors.append("missing_strong_hook_first_two_seconds")
+
+    has_cta_beat = False
+    for b in beats:
+        if isinstance(b, dict) and str(b.get("purpose") or "").lower() == "cta":
+            has_cta_beat = True
+            break
+
+    def normalize_str(text: str) -> str:
+        return re.sub(r'\W+', ' ', text.lower()).strip()
+
+    expected_cta = "Vídeo completo en el canal."
+    if source_map and source_map.get("funnel", {}).get("cta"):
+        expected_cta = source_map["funnel"]["cta"]
+    elif short_plan.get("funnel", {}).get("cta"):
+        expected_cta = short_plan["funnel"]["cta"]
+
+    cta_text = str(script.get("cta") or "").strip()
+    if not has_cta_beat and not cta_text:
+        errors.append("missing_cta")
+    elif cta_text:
+        word_count = len(re.findall(r'\w+', cta_text))
+        if word_count > 8:
+            errors.append("cta_too_long_exceeds_8_words")
+        if normalize_str(expected_cta) not in normalize_str(cta_text):
+            errors.append("missing_expected_funnel_cta")
+
+    flow = list(script.get("source_mapped_flow") or [])
+    if flow:
+        def normalize(text: str) -> str:
+            return re.sub(r'\W+', ' ', text.lower()).strip()
+
+        summaries = [normalize(str(item.get("spoken_summary") or "")) for item in flow if str(item.get("spoken_summary") or "").strip()]
+        counts = Counter(summaries)
+
+        for text, count in counts.items():
+            if count >= 3 and len(text.split()) >= 4:
+                errors.append("same_rewrite_repeated_across_source_scenes")
+                break
+
+    return errors
+
+
+def classify_script_validation(errors: list[str]) -> str:
+    if "audio_fit_over_soft_budget" in errors:
+        return "REJECTED_AUDIO_FIT"
+    return "REJECTED_PARTIAL"
+
+
 def estimate_spoken_checklist_points(script: dict[str, Any]) -> int:
     text = str((script or {}).get("narration") or "")
     lower = text.lower()
@@ -66,12 +160,12 @@ def validate_script_checklist_point_cap(script: dict[str, Any]) -> SceneValidati
         return None
     points = estimate_spoken_checklist_points(script)
     contract = (script or {}).get("idea_contract") or {}
-    
+
     # Extract contract fields directly or fallback to original_idea's contract
     must_preserve = bool(contract.get("must_preserve_count"))
     count_mode = str(contract.get("count_mode") or "")
     original_count = contract.get("original_count")
-    
+
     if not must_preserve:
         orig_contract = (script or {}).get("original_idea", {}).get("idea_contract") or {}
         if orig_contract.get("must_preserve_count"):
@@ -79,7 +173,7 @@ def validate_script_checklist_point_cap(script: dict[str, Any]) -> SceneValidati
             must_preserve = True
             count_mode = str(orig_contract.get("count_mode") or "")
             original_count = orig_contract.get("original_count")
-            
+
     if must_preserve and count_mode == "exact" and original_count is not None:
         try:
             allowed_spoken_points = int(original_count)
@@ -1428,5 +1522,14 @@ def _validate_routine_split(payload: dict, sid: Any, warnings: list[str]) -> Non
             raise ValueError(f"graphic_routine_split scene {sid} has a non-object block.")
         _require_short_string(block.get("time"), _ROUTINE_TIME_MAX, "block.time", sid)
         _require_short_string(block.get("text"), _ROUTINE_TEXT_MAX, "block.text", sid)
+
+
+def classify_script_validation(errors: list[str]) -> str:
+    if not errors:
+        return "PASSED"
+    if len(errors) == 1 and errors[0] == "audio_fit_over_soft_budget":
+        return "REJECTED_AUDIO_FIT"
+    return "REJECTED_PARTIAL"
+
 
 

@@ -172,6 +172,9 @@ returns the last assistant response."""
 # submodules. These must be set at facade level AFTER all imports so that
 # auto_qa_with_rework (in qa.py) can access them via late facade import.
 # ---------------------------------------------------------------------------
+# NOTE: adding a new artifact type? Update BOTH dicts here AND they are synced
+# into the qa submodule below via _qa_mod.*.update(...) — qa.auto_qa_with_rework
+# and qa.auto_rework_artifact read them through the facade at call time.
 _QA_STAGE_FN = {
     "script": auto_script_qa_stage,
     "scenes": auto_scenes_qa_stage,

@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import Callable
 
-from video_agent.contracts import EVENT_LOG, repo_root
+from video_agent.contracts import EVENT_LOG
 from video_agent.orchestrator.job_state import load_job, save_job
 from video_agent.orchestrator.orchestrator import _now
 from video_agent.runtime.providers import AUDIO_SUBPROCESS_ENV

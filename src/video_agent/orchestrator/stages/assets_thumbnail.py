@@ -12,7 +12,7 @@ from video_agent.contracts import (
     ARTIFACT_THUMBNAIL,
 )
 from video_agent.orchestrator.job_state import load_job
-from video_agent.utils.json_io import read_json, read_yaml, write_json as _write_json
+from video_agent.utils.json_io import read_yaml, write_json as _write_json
 from video_agent.utils.logging import EventLogger
 from video_agent.storage.public_jobs import prepare_public_job_dir
 

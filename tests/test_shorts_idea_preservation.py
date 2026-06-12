@@ -939,6 +939,9 @@ def test_prompt_schema_uses_actual_contract_values():
     prompt = prompts.short_script_prompt({}, short_plan)
     assert '"original_count": null' in prompt
     assert '"final_count": null' in prompt
+    # The schema example should not hardcode original_count: 5 / final_count: 5
+    assert '"original_count": 5' not in prompt
+    assert '"final_count": 5' not in prompt
 
 
 def test_unlocked_key_points_do_not_force_original_count_5():

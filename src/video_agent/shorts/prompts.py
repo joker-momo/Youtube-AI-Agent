@@ -86,7 +86,7 @@ def _source_block(source_artifacts: dict) -> str:
 
 
 def _idea_block(short_plan: dict) -> str:
-    if not short_plan.get("idea_id"):
+    if not any(short_plan.get(key) for key in ("idea_id", "title", "hook_text", "viewer_pain", "narration_seed", "key_points")):
         return ""
     key_points = short_plan.get("key_points") or []
     points_text = "\n".join(
@@ -97,6 +97,7 @@ def _idea_block(short_plan: dict) -> str:
         "SHORT IDEA:\n"
         f"Title: {short_plan.get('title', '')}\n"
         f"Hook text: {short_plan.get('hook_text', '')}\n"
+        "Use the selected hook_text as the script hook. Do not sensationalize or rewrite it into clickbait.\n"
         f"Viewer pain: {short_plan.get('viewer_pain', '')}\n"
         f"Practical payoff: {short_plan.get('practical_payoff', '')}\n"
         f"Format: {short_plan.get('format', '')}\n"
@@ -125,6 +126,18 @@ def short_script_prompt(
         indent=2,
     )
 
+    expected_cta = "Vídeo completo en el canal."
+    if source_artifacts and source_artifacts.get("funnel", {}).get("cta"):
+        expected_cta = source_artifacts["funnel"]["cta"]
+    elif short_plan.get("funnel", {}).get("cta"):
+        expected_cta = short_plan["funnel"]["cta"]
+
+    orig_count_val = idea_contract.get("original_count")
+    final_count_val = idea_contract.get("final_count")
+    orig_count_str = "null" if orig_count_val is None else str(orig_count_val)
+    final_count_str = "null" if final_count_val is None else str(final_count_val)
+    preserved_str = "true" if idea_contract.get("must_preserve_count") else "false"
+
     schema = (
         "{\n"
         '  "short_id": "string",\n'
@@ -148,9 +161,9 @@ def short_script_prompt(
         '  "identity_line": "string",\n'
         '  "comment_trigger": "string",\n'
         '  "idea_contract": {\n'
-        '    "preserved": true,\n'
-        '    "original_count": 5,\n'
-        '    "final_count": 5,\n'
+        f'    "preserved": {preserved_str},\n'
+        f'    "original_count": {orig_count_str},\n'
+        f'    "final_count": {final_count_str},\n'
         '    "adaptation_used": false,\n'
         '    "adaptation_reason": ""\n'
         "  },\n"
@@ -200,7 +213,8 @@ def short_script_prompt(
         "No markdown fences.\n"
         "No commentary.\n"
         "No trailing commas.\n"
-        "All strings must be valid JSON strings.\n\n"
+        "All strings must be valid JSON strings.\n"
+        "CRITICAL FOR REWRITES: You MUST return the ENTIRE script from start to finish. Do NOT return just a partial fragment. Do NOT duplicate the exact same narration text across multiple different source_mapped_flow items.\n\n"
         "LANGUAGE RULES:\n"
         "Use es-ES.\n"
         "Speak to adults 45+ without using words like \"ancianos\", \"abuelos\", \"seniors\", \"personas mayores\", or age-shaming language.\n\n"
@@ -213,7 +227,7 @@ def short_script_prompt(
         "Do not say \"en este short\", \"en este vídeo\", \"hoy\", \"bienvenidos\", or \"hola\".\n"
         "Keep one main idea only.\n"
         "Deliver the payoff before the CTA.\n"
-        "CTA must be 8 words or fewer.\n"
+        f"CTA must be 8 words or fewer. You MUST include this exact phrase in the CTA: \"{expected_cta}\"\n"
         "No generic recap.\n\n"
         "STYLE RULES:\n"
         "Warm, direct, calm.\n"
@@ -1160,7 +1174,7 @@ def gemini_scenes_qa_prompt(channel_config: dict, short_script: dict, short_scen
         "3. On-screen text labels:\n"
         "   - Generic \"ERROR 1/2/3...\" text is forbidden. Fail it. Must use specific uppercase labels: \"DE PIE\", \"SUMAR SIN DECIDIR\", \"BARRA A LA VISTA\", \"CANSANCIO\", \"CENA IMPROVISADA\".\n"
         "4. Payoff Scene (s07):\n"
-        "   - May use a footage-led 'short_checklist' or a compact 'graphic_checklist' with title \"MEJOR ASÍ\" and checklist items: \"Porción visible\", \"Plato pequeño\", \"Comida completa\". Do not use plate ratio.\n"
+        "   - Must use compact 'graphic_checklist' with title \"MEJOR ASÍ\" and checklist items: \"Porción visible\", \"Plato pequeño\", \"Comida completa\". Do not use short_quote, graphic_routine_split, short_checklist, or plate ratio.\n"
         "5. Visual Specificity:\n"
         "   - Every scene must clearly show bread or bread-related behavior. Reject generic cooking/eating footage without bread visible.\n"
         "6. Caption Zone & Safe Zone:\n"

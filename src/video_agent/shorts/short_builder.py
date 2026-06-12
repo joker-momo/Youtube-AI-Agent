@@ -79,6 +79,32 @@ MAX_SCRIPT_REGEN_ATTEMPTS = 1
 
 
 # ---------------------------------------------------------------------------
+# Signal-based dispatch for stages extracted from _build_short_impl. A stage
+# returns a StageResult; the outer loop inspects `.returns` (a terminal status
+# payload the caller must `return`) and `.signal` (control flow when `.returns`
+# is None): PROCEED falls through, RESTART_SCRIPT is the outer-loop `continue`,
+# DONE is the outer-loop `break`.
+# ---------------------------------------------------------------------------
+from enum import Enum
+from dataclasses import dataclass
+
+
+class StageSignal(Enum):
+    PROCEED = "proceed"
+    RESTART_SCRIPT = "restart"
+    DONE = "done"
+
+
+@dataclass
+class StageResult:
+    signal: StageSignal = StageSignal.PROCEED
+    returns: dict[str, Any] | None = None
+
+
+_PROCEED = StageResult(StageSignal.PROCEED)
+
+
+# ---------------------------------------------------------------------------
 # Per-stage functions extracted from _build_short_impl
 # ---------------------------------------------------------------------------
 
@@ -260,6 +286,168 @@ def _stage_background(ctx: BuildContext) -> None:
         ctx.status["status"] = "failed"
         write_short_status(ctx.long_job_dir, short_id, ctx.status)
         raise exc
+
+
+def _stage_anti_ai_review(ctx: BuildContext) -> StageResult:
+    """Stage: graphic validation -> performance_memory(scenes_ready) -> anti_ai_review.
+
+    Reads from ctx.extras: short_script, short_scenes, retention_plan,
+    script_retry_memory, script_memory_file, script_attempts,
+    anti_ai_regeneration_attempts.
+
+    On anti-AI FAIL with budget left, primes script_feedback in ctx.extras and
+    returns RESTART_SCRIPT (outer-loop continue). On exhausted budget returns a
+    terminal status payload. Otherwise PROCEED. Raises on unexpected errors.
+    """
+    short_id = ctx.short_plan["short_id"]
+    long_job_dir = ctx.long_job_dir
+    status = ctx.status
+    short_plan = ctx.short_plan
+    plan_for_prompt = ctx.plan_for_prompt
+    channel_config = ctx.channel_config
+    update_stage = ctx.update_stage
+    gemini_fn = ctx.gemini_fn
+    max_regen = ctx.max_regen
+
+    short_script = ctx.extras["short_script"]
+    short_scenes = ctx.extras["short_scenes"]
+    retention_plan = ctx.extras.get("retention_plan", {})
+    script_retry_memory = ctx.extras["script_retry_memory"]
+    script_memory_file = ctx.extras["script_memory_file"]
+    script_attempts = ctx.extras["script_attempts"]
+    anti_ai_regeneration_attempts = ctx.extras["anti_ai_regeneration_attempts"]
+
+    # Scenes passed! Run graphic validator
+    try:
+        graphic_warnings = validate_scenes.validate_short_graphic_scenes(
+            short_scenes.get("scenes") or []
+        )
+        if graphic_warnings:
+            status["graphic_warnings"] = graphic_warnings
+    except ValueError as exc:
+        update_stage("render", "failed", error=str(exc))
+        status["status"] = "failed"
+        write_short_status(long_job_dir, short_id, status)
+        raise
+
+    update_stage("performance_memory", "in_progress")
+    try:
+        performance_memory.write_performance_memory(
+            long_job_dir,
+            short_id,
+            plan_for_prompt,
+            short_script,
+            short_scenes,
+            retention_plan,
+            status="scenes_ready",
+        )
+        update_stage("performance_memory", "completed", memory_status="scenes_ready")
+    except Exception as exc:
+        update_stage("performance_memory", "failed", error=str(exc))
+        status["status"] = "failed"
+        write_short_status(long_job_dir, short_id, status)
+        raise exc
+
+    update_stage("anti_ai_review", "in_progress")
+    try:
+        anti_ai_review = anti_ai.run_anti_ai_review(
+            long_job_dir,
+            short_id,
+            short_script,
+            short_scenes,
+            retention_plan,
+            channel_config,
+            gemini_fn=gemini_fn,
+        )
+        anti_verdict = anti_ai_review.get("verdict", "FAIL")
+        update_stage(
+            "anti_ai_review",
+            "completed" if anti_verdict in {"PASS", "WARN"} else "failed",
+            qa_verdict=anti_verdict,
+        )
+    except Exception as exc:
+        update_stage("anti_ai_review", "failed", error=str(exc))
+        status["status"] = "failed"
+        write_short_status(long_job_dir, short_id, status)
+        raise exc
+
+    ctx.extras["anti_ai_review"] = anti_ai_review
+
+    if anti_ai_review.get("verdict") == "FAIL":
+        anti_ai_regeneration_attempts += 1
+        ctx.extras["anti_ai_regeneration_attempts"] = anti_ai_regeneration_attempts
+        status["anti_ai_regeneration_attempts"] = anti_ai_regeneration_attempts
+        issue_text = "; ".join(
+            str(item)
+            for item in (
+                anti_ai_review.get("recommended_changes")
+                or anti_ai_review.get("robotic_patterns")
+                or anti_ai_review.get("generic_phrases")
+                or ["anti_ai_review_failed"]
+            )
+        )
+        issue_id = make_stable_issue_id("anti_ai_review", "global", "anti_ai_issue", issue_text)
+        add_or_update_issue(script_retry_memory, RetryIssue(
+            id=issue_id,
+            stage="anti_ai_review",
+            attempt=script_attempts,
+            scene_id="global",
+            type="anti_ai_issue",
+            severity="major",
+            detail=issue_text,
+            required_change=issue_text,
+            status="active",
+            first_seen_attempt=script_attempts,
+            last_seen_attempt=script_attempts,
+        ))
+        save_retry_memory(script_retry_memory, script_memory_file)
+        if anti_ai_regeneration_attempts <= 1 and script_attempts < max_regen + 1:
+            from video_agent.shorts.idea_preservation import derive_idea_items
+            exact_mapping_items = short_plan.get("idea_items") or derive_idea_items(short_plan)
+            exact_mapping_context = "\n".join(f"{i+1}. {item.get('label') or item.get('topic') or item}" for i, item in enumerate(exact_mapping_items)) if exact_mapping_items else ""
+            script_feedback = generate_cumulative_feedback(
+                script_retry_memory, script_attempts + 1, exact_mapping_context=exact_mapping_context
+            )
+            ctx.extras["script_feedback"] = script_feedback
+            for stage_name in (
+                "script",
+                "qa_script",
+                "spoken_humanization",
+                "scenes",
+                "visual_rhythm_plan",
+                "qa_scenes",
+                "anti_ai_review",
+            ):
+                update_stage(stage_name, "pending")
+            return StageResult(StageSignal.RESTART_SCRIPT)
+
+        performance_memory.write_performance_memory(
+            long_job_dir,
+            short_id,
+            plan_for_prompt,
+            short_script,
+            short_scenes,
+            retention_plan,
+            status="failed",
+            failure_stage="anti_ai_review",
+            failure_reason=issue_text,
+        )
+        update_stage("performance_memory", "completed", memory_status="failed")
+        status.update({
+            "status": "failed",
+            "rendered": False,
+            "uploaded": False,
+            "youtube_url": "",
+            "requires_user_review": True,
+            "qa_verdict": "FAIL",
+            "failure_stage": "anti_ai_review",
+            "failure_reason": issue_text,
+            "anti_ai_regeneration_attempts": anti_ai_regeneration_attempts,
+        })
+        write_short_status(long_job_dir, short_id, status)
+        return StageResult(StageSignal.PROCEED, returns=status)
+
+    return _PROCEED
 
 
 def _stage_seo(ctx: BuildContext) -> None:
@@ -1805,131 +1993,22 @@ def _build_short_impl(
         if not scenes_passed:
             break
 
-        # Scenes passed! Run graphic validator
-        try:
-            graphic_warnings = validate_scenes.validate_short_graphic_scenes(
-                short_scenes.get("scenes") or []
-            )
-            if graphic_warnings:
-                status["graphic_warnings"] = graphic_warnings
-        except ValueError as exc:
-            update_stage("render", "failed", error=str(exc))
-            status["status"] = "failed"
-            write_short_status(long_job_dir, short_id, status)
-            raise
-
-        update_stage("performance_memory", "in_progress")
-        try:
-            performance_memory.write_performance_memory(
-                long_job_dir,
-                short_id,
-                plan_for_prompt,
-                short_script,
-                short_scenes,
-                retention_plan,
-                status="scenes_ready",
-            )
-            update_stage("performance_memory", "completed", memory_status="scenes_ready")
-        except Exception as exc:
-            update_stage("performance_memory", "failed", error=str(exc))
-            status["status"] = "failed"
-            write_short_status(long_job_dir, short_id, status)
-            raise exc
-
-        update_stage("anti_ai_review", "in_progress")
-        try:
-            anti_ai_review = anti_ai.run_anti_ai_review(
-                long_job_dir,
-                short_id,
-                short_script,
-                short_scenes,
-                retention_plan,
-                channel_config,
-                gemini_fn=gemini_fn,
-            )
-            anti_verdict = anti_ai_review.get("verdict", "FAIL")
-            update_stage(
-                "anti_ai_review",
-                "completed" if anti_verdict in {"PASS", "WARN"} else "failed",
-                qa_verdict=anti_verdict,
-            )
-        except Exception as exc:
-            update_stage("anti_ai_review", "failed", error=str(exc))
-            status["status"] = "failed"
-            write_short_status(long_job_dir, short_id, status)
-            raise exc
-
-        if anti_ai_review.get("verdict") == "FAIL":
-            anti_ai_regeneration_attempts += 1
-            status["anti_ai_regeneration_attempts"] = anti_ai_regeneration_attempts
-            issue_text = "; ".join(
-                str(item)
-                for item in (
-                    anti_ai_review.get("recommended_changes")
-                    or anti_ai_review.get("robotic_patterns")
-                    or anti_ai_review.get("generic_phrases")
-                    or ["anti_ai_review_failed"]
-                )
-            )
-            issue_id = make_stable_issue_id("anti_ai_review", "global", "anti_ai_issue", issue_text)
-            add_or_update_issue(script_retry_memory, RetryIssue(
-                id=issue_id,
-                stage="anti_ai_review",
-                attempt=script_attempts,
-                scene_id="global",
-                type="anti_ai_issue",
-                severity="major",
-                detail=issue_text,
-                required_change=issue_text,
-                status="active",
-                first_seen_attempt=script_attempts,
-                last_seen_attempt=script_attempts,
-            ))
-            save_retry_memory(script_retry_memory, script_memory_file)
-            if anti_ai_regeneration_attempts <= 1 and script_attempts < max_regen + 1:
-                from video_agent.shorts.idea_preservation import derive_idea_items
-                exact_mapping_items = short_plan.get("idea_items") or derive_idea_items(short_plan)
-                exact_mapping_context = "\n".join(f"{i+1}. {item.get('label') or item.get('topic') or item}" for i, item in enumerate(exact_mapping_items)) if exact_mapping_items else ""
-                script_feedback = generate_cumulative_feedback(
-                    script_retry_memory, script_attempts + 1, exact_mapping_context=exact_mapping_context
-                )
-                for stage_name in (
-                    "script",
-                    "qa_script",
-                    "spoken_humanization",
-                    "scenes",
-                    "visual_rhythm_plan",
-                    "qa_scenes",
-                    "anti_ai_review",
-                ):
-                    update_stage(stage_name, "pending")
-                continue
-
-            performance_memory.write_performance_memory(
-                long_job_dir,
-                short_id,
-                plan_for_prompt,
-                short_script,
-                short_scenes,
-                retention_plan,
-                status="failed",
-                failure_stage="anti_ai_review",
-                failure_reason=issue_text,
-            )
-            update_stage("performance_memory", "completed", memory_status="failed")
-            status.update({
-                "status": "failed",
-                "rendered": False,
-                "uploaded": False,
-                "youtube_url": "",
-                "requires_user_review": True,
-                "qa_verdict": "FAIL",
-                "failure_stage": "anti_ai_review",
-                "failure_reason": issue_text,
-                "anti_ai_regeneration_attempts": anti_ai_regeneration_attempts,
-            })
-            write_short_status(long_job_dir, short_id, status)
-            return status
+        # Scenes passed! Graphic validation -> performance_memory -> anti_ai_review.
+        _ctx.extras["short_script"] = short_script
+        _ctx.extras["short_scenes"] = short_scenes
+        _ctx.extras["retention_plan"] = retention_plan
+        _ctx.extras["script_retry_memory"] = script_retry_memory
+        _ctx.extras["script_memory_file"] = script_memory_file
+        _ctx.extras["script_attempts"] = script_attempts
+        _ctx.extras["anti_ai_regeneration_attempts"] = anti_ai_regeneration_attempts
+        _anti_ai_result = _stage_anti_ai_review(_ctx)
+        anti_ai_review = _ctx.extras.get("anti_ai_review", {})
+        anti_ai_regeneration_attempts = _ctx.extras["anti_ai_regeneration_attempts"]
+        if _anti_ai_result.returns is not None:
+            return _anti_ai_result.returns
+        if _anti_ai_result.signal is StageSignal.RESTART_SCRIPT:
+            script_feedback = _ctx.extras["script_feedback"]
+            continue
 
         # Stage: Background assets — resolve each scene's background (Pexels
         # video/photo, ChatGPT image, or placeholder) BEFORE audio, reporting the

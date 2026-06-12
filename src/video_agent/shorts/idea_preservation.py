@@ -221,12 +221,17 @@ def derive_idea_items(short_plan: dict[str, Any] | None, contract: dict[str, Any
 
 def ensure_script_idea_fields(script: dict[str, Any], short_plan: dict[str, Any] | None) -> dict[str, Any]:
     out = dict(script or {})
-    if short_plan and not out.get("original_idea"):
-        out["original_idea"] = {
-            key: short_plan.get(key)
-            for key in ("title", "hook_text", "format", "viewer_pain", "practical_payoff", "key_points", "narration_seed", "source_scene_ids", "scene_ids")
-            if key in short_plan
-        }
+    if short_plan:
+        if not out.get("original_idea"):
+            out["original_idea"] = {}
+        # Ensure hook_text is always updated/overwritten to avoid stale metadata from LLM output
+        if "hook_text" in short_plan:
+            out["original_idea"]["hook_text"] = short_plan.get("hook_text")
+        for key in ("title", "format", "viewer_pain", "practical_payoff", "key_points", "narration_seed", "source_scene_ids", "scene_ids", "idea_id"):
+            if key in short_plan and (key not in out["original_idea"] or out["original_idea"].get(key) is None):
+                out["original_idea"][key] = short_plan.get(key)
+        if "idea_id" in short_plan and not out.get("idea_id"):
+            out["idea_id"] = short_plan["idea_id"]
     derived = derive_idea_contract(short_plan)
     contract = dict(out.get("idea_contract") or {})
     for k, v in derived.items():

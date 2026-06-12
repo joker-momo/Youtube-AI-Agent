@@ -998,3 +998,23 @@ def test_audio_fit_rejection_is_not_partial():
     assert classify_script_validation(errors) == "REJECTED_AUDIO_FIT"
 
 
+def test_ensure_script_idea_fields_overwrites_stale_hook():
+    from video_agent.shorts.idea_preservation import ensure_script_idea_fields
+    script = {
+        "original_idea": {
+            "hook_text": "Old Stale Hook",
+            "title": "Old Title"
+        }
+    }
+    short_plan = {
+        "hook_text": "New Correct Hook",
+        "title": "New Title",
+        "idea_id": "idea_123"
+    }
+    res = ensure_script_idea_fields(script, short_plan)
+    assert res["original_idea"]["hook_text"] == "New Correct Hook"
+    assert res["original_idea"]["idea_id"] == "idea_123"
+    assert res["idea_id"] == "idea_123"
+
+
+

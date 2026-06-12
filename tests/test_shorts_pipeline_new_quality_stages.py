@@ -38,6 +38,7 @@ def _plan(short_id: str = "short-01") -> dict:
         "music_track": "shorts_sleep_stress",
         "source_scene_ids": ["scene-01"],
         "narration_seed": "Mira la etiqueta del pan antes de comprar.",
+        "funnel": {"cta": "Guárdalo para comprar."},
     }
 
 
@@ -45,7 +46,7 @@ def _script(short_id: str = "short-01", *, generic: bool = False) -> dict:
     narration = (
         "Es importante recordar consejos saludables para mantener hábitos saludables de forma equilibrada."
         if generic
-        else "No todo pan oscuro es integral. Gira la bolsa y mira el primer ingrediente. Luego busca fibra por 100 gramos. Sin culpa: después de los 45, decidir rápido ayuda."
+        else "No todo pan oscuro es integral. Gira la bolsa and mira el primer ingrediente. Luego busca fibra por 100 gramos. Sin culpa: después de los 45, decidir rápido ayuda."
     )
     return {
         "short_id": short_id,
@@ -54,7 +55,7 @@ def _script(short_id: str = "short-01", *, generic: bool = False) -> dict:
         "target_duration_sec": 28,
         "hook": "Recuerda estos consejos saludables." if generic else "No todo pan oscuro es integral.",
         "narration": narration,
-        "beats": ["hook", "proof", "payoff"],
+        "beats": ["hook", "proof", "payoff", "cta", "outro"],
         "cta": "Guárdalo para comprar.",
         "micro_tension_lines": ["No basta con el color.", "Pero la etiqueta sí te da la pista."],
         "comment_trigger": "¿También mirabas solo el color?",

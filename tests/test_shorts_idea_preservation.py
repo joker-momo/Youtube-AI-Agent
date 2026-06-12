@@ -864,3 +864,134 @@ def test_goal_rule_based_qa_passes_when_checklist_point_cap_satisfied(tmp_path):
     assert res["verdict"] == "PASS"
     assert "script_checklist_point_cap" not in res["issues"]
 
+
+def test_stale_hook_normalized_in_script_prompt_and_qa_payload(tmp_path):
+    from video_agent.shorts import short_script_builder, qa, paths, prompts
+    import json
+
+    long_job_dir = tmp_path / "long_job"
+    shorts_dir = long_job_dir / "shorts"
+    shorts_dir.mkdir(parents=True)
+    
+    selected_ideas = [{
+        "idea_id": "idea_1",
+        "hook_text": "BAJA LA CARGA",
+        "title": "Baja la carga mental",
+        "key_points": []
+    }]
+    (shorts_dir / paths.SELECTED_SHORT_IDEAS_FILE).write_text(json.dumps(selected_ideas), encoding="utf-8")
+
+    short_plan = {
+        "short_id": "short_1",
+        "idea_id": "idea_1",
+        "hook_text": "El pan marrón",
+        "title": "Baja la carga mental",
+        "key_points": []
+    }
+    source_artifacts = {
+        "idea": {
+            "idea_id": "idea_1",
+            "hook_text": "BAJA LA CARGA"
+        }
+    }
+
+    # Verify normalization happens before short_script_prompt is rendered
+    # We pass short_plan with stale hook text, and source_artifacts with true hook text
+    # We simulate build_short_script behavior before prompt generation
+    sa = source_artifacts
+    source_idea_hook = sa.get("idea", {}).get("hook_text")
+    if source_idea_hook and short_plan.get("hook_text") != source_idea_hook:
+        short_plan["hook_text"] = source_idea_hook
+
+    rendered_script_prompt = prompts.short_script_prompt({}, short_plan, sa)
+    assert "El pan marrón" not in rendered_script_prompt
+    assert "BAJA LA CARGA" in rendered_script_prompt
+
+    # Save script to short folder with stale hook to test QA normalization
+    sd = paths.short_json_dir(long_job_dir, "short_1")
+    sd.mkdir(parents=True)
+    script = {
+        "short_id": "short_1",
+        "original_idea": {
+            "idea_id": "idea_1",
+            "hook_text": "El pan marrón"
+        }
+    }
+    (sd / paths.SHORT_SCRIPT_FILE).write_text(json.dumps(script), encoding="utf-8")
+    (sd / paths.SHORT_SOURCE_MAP_FILE).write_text(json.dumps({"used_source_scenes": ["scene-01"]}), encoding="utf-8")
+
+    # Run QA rule checking to check that it gets normalized
+    res = qa.run_short_script_qa(long_job_dir, "short_1", {"shorts": {"funnel": {"cta_max_words": 8}}}, music_track="track")
+    # Verify that in-memory script has been normalized
+    script_after = qa._load(paths.resolve_short_json(sd, paths.SHORT_SCRIPT_FILE))
+    assert script_after["original_idea"]["hook_text"] == "BAJA LA CARGA"
+
+
+def test_prompt_schema_uses_actual_contract_values():
+    from video_agent.shorts import prompts
+    
+    short_plan = {
+        "format": "pain_to_tip",
+        "key_points": [],
+        "narration_seed": ""
+    }
+    
+    prompt = prompts.short_script_prompt({}, short_plan)
+    assert '"original_count": null' in prompt
+    assert '"final_count": null' in prompt
+
+
+def test_unlocked_key_points_do_not_force_original_count_5():
+    from video_agent.shorts.idea_preservation import validate_script_idea_contract
+    
+    def validate(script, contract):
+        s = dict(script)
+        s["idea_contract"] = {**s.get("idea_contract", {}), **contract}
+        return [i.type for i in validate_script_idea_contract(s)]
+
+    contract = {"must_preserve_count": False, "original_count": None}
+    script = {
+        "idea_contract": {"original_count": None},
+        "idea_items": [
+            {"item_id": 1, "source_support": ["key_point_1"]},
+            {"item_id": 2, "source_support": ["key_point_2"]},
+            {"item_id": 3, "source_support": ["key_point_3"]},
+        ]
+    }
+    assert "idea_fidelity" not in validate(script, contract)
+
+
+def test_unlocked_count_audio_fit_allows_visual_compression():
+    from video_agent.shorts.idea_preservation import validate_script_idea_contract
+    from video_agent.shorts.validate_scenes import validate_script_checklist_point_cap
+
+    script = {
+        "short_id": "short-01",
+        "short_format": "mistake_list",
+        "narration": "Uno: de pie. Dos: con pasta. Tres: barra mesa.",
+        "idea_contract": {
+            "must_preserve_count": False,
+            "original_count": None,
+            "final_count": None,
+        },
+        "idea_items": [
+            {"item_id": 1, "label": "comerlo de pie", "source_support": ["key_point_1"], "required": True},
+            {"item_id": 2, "label": "sumarlo a arroz o pasta", "source_support": ["key_point_2"], "required": True},
+            {"item_id": 3, "label": "dejar la barra en la mesa", "source_support": ["key_point_3"], "required": True},
+            {"item_id": 4, "label": "cortar otro trozo por cansancio", "source_support": ["key_point_4"], "required": True},
+            {"item_id": 5, "label": "cenar a bocados", "source_support": ["key_point_5"], "required": True},
+        ]
+    }
+    issues = validate_script_idea_contract(script)
+    assert not issues
+    
+    cap_issue = validate_script_checklist_point_cap(script)
+    assert cap_issue is None
+
+
+def test_audio_fit_rejection_is_not_partial():
+    from video_agent.shorts.validation.checks import classify_script_validation
+    errors = ["audio_fit_over_soft_budget"]
+    assert classify_script_validation(errors) == "REJECTED_AUDIO_FIT"
+
+

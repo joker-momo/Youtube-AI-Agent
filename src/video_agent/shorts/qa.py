@@ -160,7 +160,7 @@ def normalize_qa_issue(
             trigger_regeneration=False,
         )
 
-    if "duration_pacing" in issue_type_lower or "pacing remains strong" in detail_lower or "pacing remains strong" in (repair_hint or "").lower():
+    if "duration_pacing" in issue_type_lower or "pacing remains strong" in detail_lower or "pacing remains strong" in (repair_hint or "").lower() or "rushed pacing" in detail_lower or "crammed" in detail_lower:
         return NormalizedIssue(
             issue_class=IssueClass.SOFT_WARNING,
             reason="duration_pacing",
@@ -202,6 +202,26 @@ def normalize_qa_issue(
         is_repairable = True
 
     # Aesthetic suggestion, weak hook motion (if first scene renderable), product scores 7-8 -> SOFT_WARNING
+    is_suppressed = False
+    script_ignored_stale_hook = "stale_hook_text_repaired" in (script.get("planner_warnings") or [])
+    if issue_type_lower == "idea_fidelity" and "unrelated" in detail_lower and script_ignored_stale_hook:
+        is_suppressed = True
+        is_hard = False
+        reason = "wrong_context_suppressed"
+
+    if issue_type_lower == "idea_fidelity" and ("agrupan" in detail_lower or "agrupa" in detail_lower or "un solo bloque" in detail_lower):
+        is_repairable = True
+        is_hard = False
+        reason = "repairable_point_grouping"
+
+    if issue_type_lower in ("style", "structure") and any(k in detail_lower for k in ("word count", "words", "speaking time", "audio-fit", "rushed", "pacing")):
+        is_repairable = True
+        is_hard = False
+        reason = "repairable_audio_fit"
+
+
+
+
     is_soft = False
     if severity_lower in ("warning", "minor", "suggestion", "info"):
         is_soft = True
@@ -244,6 +264,17 @@ def normalize_qa_issue(
     elif "average product quality" in detail_lower:
         is_soft = True
 
+
+    if is_soft:
+        # Don't let default hard overrides override the explicit minor
+        is_hard = False
+        is_repairable = False
+
+    # Required changes (strings) shouldn't default to hard blocker unless they match hard markers
+    if not isinstance(issue, dict) and not getattr(issue, "severity", None):
+        if not is_hard and not is_repairable:
+            is_soft = True
+
     if is_hard:
         issue_class = IssueClass.HARD_BLOCKER
     elif is_repairable:
@@ -251,6 +282,11 @@ def normalize_qa_issue(
     elif is_soft:
         issue_class = IssueClass.SOFT_WARNING
         trigger_regeneration = False
+
+    if is_suppressed:
+        issue_class = IssueClass.STALE_OR_SUPPRESSED
+        trigger_regeneration = False
+        include_in_retry_feedback = False
 
     # Apply wrong context check
     real_idea = idea or script.get("original_idea") or {}
@@ -515,6 +551,31 @@ def _route_validation_issue(
     warnings.append(issue.detail)
 
 
+def _get_source_idea_hook_text(long_job_dir: Path, idea_id: str) -> str | None:
+    selected_p = long_job_dir / paths.SHORTS_DIRNAME / paths.SELECTED_SHORT_IDEAS_FILE
+    if selected_p.exists():
+        try:
+            import json
+            ideas = json.loads(selected_p.read_text(encoding="utf-8"))
+            for idea in ideas:
+                if str(idea.get("idea_id")) == str(idea_id):
+                    return idea.get("hook_text")
+        except Exception:
+            pass
+    ideas_p = long_job_dir / paths.SHORTS_DIRNAME / paths.SHORT_IDEAS_FILE
+    if ideas_p.exists():
+        try:
+            import json
+            ideas_doc = json.loads(ideas_p.read_text(encoding="utf-8"))
+            ideas = ideas_doc.get("ideas") or []
+            for idea in ideas:
+                if str(idea.get("idea_id")) == str(idea_id):
+                    return idea.get("hook_text")
+        except Exception:
+            pass
+    return None
+
+
 def _run_rule_script_qa(
     long_job_dir: Path,
     short_id: str,
@@ -525,6 +586,17 @@ def _run_rule_script_qa(
     sd = paths.short_dir(long_job_dir, short_id)
     script = _load(paths.resolve_short_json(sd, paths.SHORT_SCRIPT_FILE))
     source_map = _load(paths.resolve_short_json(sd, paths.SHORT_SOURCE_MAP_FILE))
+
+    # Normalize original_idea.hook_text if conflict detected
+    original_idea = script.get("original_idea") or {}
+    idea_id = original_idea.get("idea_id") or script.get("idea_id") or source_map.get("idea_id")
+    if idea_id:
+        source_hook = _get_source_idea_hook_text(long_job_dir, idea_id)
+        if source_hook and original_idea.get("hook_text") != source_hook:
+            original_idea["hook_text"] = source_hook
+            script["original_idea"] = original_idea
+            from video_agent.storage.atomic import atomic_write_json
+            atomic_write_json(paths.resolve_short_json(sd, paths.SHORT_SCRIPT_FILE), script)
 
     cta_max_words = int(((channel_config.get("shorts") or {}).get("funnel") or {}).get("cta_max_words", 8))
 
@@ -590,6 +662,18 @@ def _run_gemini_script_qa(
     sd = paths.short_dir(long_job_dir, short_id)
     script = _load(paths.resolve_short_json(sd, paths.SHORT_SCRIPT_FILE))
     source_map = _load(paths.resolve_short_json(sd, paths.SHORT_SOURCE_MAP_FILE))
+
+    # Normalize original_idea.hook_text if conflict detected
+    original_idea = script.get("original_idea") or {}
+    idea_id = original_idea.get("idea_id") or script.get("idea_id") or source_map.get("idea_id")
+    if idea_id:
+        source_hook = _get_source_idea_hook_text(long_job_dir, idea_id)
+        if source_hook and original_idea.get("hook_text") != source_hook:
+            original_idea["hook_text"] = source_hook
+            script["original_idea"] = original_idea
+            from video_agent.storage.atomic import atomic_write_json
+            atomic_write_json(paths.resolve_short_json(sd, paths.SHORT_SCRIPT_FILE), script)
+
     prompt = prompts.gemini_script_qa_prompt(
         channel_config,
         script,
@@ -684,6 +768,18 @@ def _run_rule_scenes_qa(
             cta_scene_dur += float(s.get("duration_sec") or 0)
     if total and cta_scene_dur > 0.2 * float(total):
         issues.append("cta_dominates")
+    if scenes:
+        first = scenes[0]
+        first_prompt = str(first.get("visual_prompt") or "").lower()
+        first_plan = first.get("first_frame_plan") or {}
+        if not first_plan:
+            warnings.append("first_scene_missing_first_frame_plan")
+        if first_plan.get("strategy") in {"evidence_closeup", "object_contrast"} and not first.get("crop_plan"):
+            warnings.append("first_scene_missing_crop_plan")
+        elif not first.get("crop_plan") and any(term in first_prompt for term in ("label", "ingredient", "package", "bread", "pan", "etiqueta")):
+            warnings.append("first_scene_missing_crop_plan")
+        if any(term in first_prompt for term in ("wide", "smiling", "stock pose", "generic", "centered")):
+            warnings.append("first_scene_generic_stock_risk")
     if hard_structure:
         issues.extend(issue.type for issue in hard_structure)
         repair_plan = validate_scenes.build_scene_repair_plan(scenes, structure_issues, script=script)

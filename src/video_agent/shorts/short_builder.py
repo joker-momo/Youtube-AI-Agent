@@ -450,6 +450,183 @@ def _stage_anti_ai_review(ctx: BuildContext) -> StageResult:
     return _PROCEED
 
 
+def _stage_audio(ctx: BuildContext) -> StageResult:
+    """Stage: audio TTS + audio_fit check.
+
+    Reads from ctx.extras: short_scenes, scene_pipeline_state, short_script, and
+    the counters total_regeneration_attempts / scenes_attempts /
+    structural_attempts / product_attempts (for the failure payload). Writes
+    narration_wav + duration_sec back to ctx.extras. Returns a terminal status
+    payload when audio_fit fails; otherwise PROCEED. Raises on unexpected errors.
+    """
+    short_id = ctx.short_plan["short_id"]
+    long_job_dir = ctx.long_job_dir
+    sd = ctx.short_dir
+    _jd = ctx.json_dir
+    status = ctx.status
+    channel_config = ctx.channel_config
+    update_stage = ctx.update_stage
+    check_stop = ctx.check_stop
+    _recorder = ctx.recorder
+    tts_fn = ctx.tts_fn
+
+    short_scenes = ctx.extras["short_scenes"]
+    short_script = ctx.extras["short_script"]
+    state = ctx.extras["scene_pipeline_state"]
+    total_regeneration_attempts = ctx.extras["total_regeneration_attempts"]
+    scenes_attempts = ctx.extras["scenes_attempts"]
+    structural_attempts = ctx.extras["structural_attempts"]
+    product_attempts = ctx.extras["product_attempts"]
+
+    update_stage("audio", "in_progress")
+    try:
+        check_stop()
+        assert_latest_scenes_ready(state)
+        # Shorts TTS runs with dynamic_sync=False (see shorts.audio): each
+        # scene's audio is padded to its planned duration_sec, so the single
+        # narration track stays aligned with the per-scene visual sequences.
+        # Keep the planned scene durations the renderer already uses — do NOT
+        # overwrite them with raw speech lengths, which desyncs audio/video.
+        narration_wav = tts_fn(sd, short_scenes, channel_config)
+        duration_sec = float(_scene_duration_sum(short_scenes) or short_scenes.get("total_duration_sec") or 0.0)
+        short_scenes["total_duration_sec"] = round(duration_sec, 1)
+        narration_audio_sec = validate_scenes.probe_audio_duration_sec(narration_wav)
+        tail_added_total = 0.0
+        tail_distribution: list[dict[str, Any]] = []
+        if narration_audio_sec is not None:
+            tail_repair = validate_scenes.extend_scene_durations_for_audio_tail(
+                short_scenes,
+                narration_audio_sec
+            )
+            tail_added_total = float(tail_repair.get("added_sec") or 0.0)
+            tail_distribution = list(tail_repair.get("tail_repair_distribution") or [])
+            if tail_repair.get("changed"):
+                duration_sec = float(_scene_duration_sum(short_scenes) or short_scenes.get("total_duration_sec") or duration_sec)
+                short_scenes["total_duration_sec"] = round(duration_sec, 1)
+
+                state.current_scenes_version += 1
+                state.latest_scene_validation_ok = False
+                state.latest_scene_validation_version = None
+
+                re_issues = validate_scenes.validate_scene_structure(
+                    short_scenes.get("scenes") or [],
+                    scenes_doc=short_scenes,
+                    script=short_script,
+                )
+                if not validate_scenes.has_blocking_or_repairable(re_issues):
+                    state.latest_scene_validation_ok = True
+                    state.latest_scene_validation_version = state.current_scenes_version
+                    if state.latest_scene_qa_ok:
+                        state.latest_scene_qa_version = state.current_scenes_version
+                duration_sec = float(_scene_duration_sum(short_scenes) or short_scenes.get("total_duration_sec") or duration_sec)
+                short_scenes["total_duration_sec"] = round(duration_sec, 1)
+
+                atomic_write_json(_jd / paths.SHORT_SCENES_FILE, short_scenes)
+                _recorder.record_event(
+                    "deterministic",
+                    "audio_tail_repair",
+                    {
+                        "verdict": "PASS",
+                        "render_duration_sec": duration_sec,
+                        "narration_audio_sec": round(narration_audio_sec, 3),
+                        **tail_repair,
+                    },
+                    ok=True,
+                )
+
+        if narration_audio_sec is not None:
+            sync_summary = validate_scenes.audio_sync_summary(
+                render_duration_sec=duration_sec,
+                narration_audio_sec=narration_audio_sec,
+                tail_added_sec=tail_added_total,
+                tail_repair_distribution=tail_distribution,
+            )
+            atomic_write_json(_jd / paths.SHORT_AUDIO_SYNC_SUMMARY_FILE, sync_summary)
+            _recorder.record_event(
+                "deterministic",
+                "audio_sync_summary",
+                sync_summary,
+                ok=sync_summary["verdict"] != "FAIL",
+            )
+
+        audio_fit_passed = True
+        audio_issue = None
+        if narration_audio_sec is not None:
+            audio_issue = validate_scenes.validate_audio_fit(duration_sec, narration_audio_sec)
+            if audio_issue:
+                audio_fit_passed = False
+
+        if audio_fit_passed:
+            state.latest_audio_tail_ok = True
+            state.latest_audio_tail_version = state.current_scenes_version
+        else:
+            state.latest_audio_tail_ok = False
+            state.latest_audio_tail_version = None
+
+        if not audio_fit_passed:
+            repair_plan = validate_scenes.build_scene_repair_plan(
+                short_scenes.get("scenes") or [],
+                [audio_issue],
+                script=short_script,
+            )
+            _recorder.record_event(
+                "deterministic",
+                "audio_fit",
+                {
+                    "verdict": "FAIL",
+                    "issue": audio_issue.to_dict(),
+                    "render_duration_sec": duration_sec,
+                    "narration_audio_sec": round(narration_audio_sec, 3),
+                    "repair_plan": repair_plan,
+                },
+                ok=False,
+            )
+            update_stage("audio", "failed", error=audio_issue.detail)
+            atomic_write_json(_jd / paths.SHORT_FAILURE_REPORT_FILE, {
+                "stage": "audio",
+                "issues": [audio_issue.to_dict()],
+                "render_duration_sec": duration_sec,
+                "narration_audio_sec": round(narration_audio_sec, 3),
+                "repair_plan": repair_plan,
+            })
+            status.update({
+                "status": "needs_review",
+                "rendered": False,
+                "uploaded": False,
+                "youtube_url": "",
+                "requires_user_review": True,
+                "qa_verdict": "FAIL",
+                "duration_sec": round(duration_sec, 1),
+                "audio_fit_issue": audio_issue.to_dict(),
+                "regeneration_attempts": total_regeneration_attempts,
+                "qa_scenes_attempts": scenes_attempts,
+                "qa_scenes_structural_attempts": structural_attempts,
+                "qa_scenes_product_attempts": product_attempts,
+            })
+            write_short_status(long_job_dir, short_id, status)
+            ctx.extras["narration_wav"] = narration_wav
+            ctx.extras["duration_sec"] = duration_sec
+            return StageResult(StageSignal.PROCEED, returns=status)
+        else:
+            audio_fit_passed = True
+            update_stage(
+                "audio",
+                "completed",
+                qa_verdict="PASS",
+                render_duration_sec=round(duration_sec, 1),
+                narration_audio_sec=round(narration_audio_sec, 3) if narration_audio_sec is not None else None,
+            )
+    except Exception as exc:
+        update_stage("audio", "failed")
+        status["status"] = "failed"
+        write_short_status(long_job_dir, short_id, status)
+        raise exc
+
+    ctx.extras["narration_wav"] = narration_wav
+    ctx.extras["duration_sec"] = duration_sec
+    return _PROCEED
+
+
 def _stage_seo(ctx: BuildContext) -> None:
     """Stage: SEO. Runs only after audio_fit passes. Raises on failure."""
     short_id = ctx.short_plan["short_id"]
@@ -2018,147 +2195,18 @@ def _build_short_impl(
         _stage_background(_ctx)
 
         # Stage 6: Audio TTS & exact audio_fit check
-        update_stage("audio", "in_progress")
-        try:
-            check_stop()
-            assert_latest_scenes_ready(state)
-            # Shorts TTS runs with dynamic_sync=False (see shorts.audio): each
-            # scene's audio is padded to its planned duration_sec, so the single
-            # narration track stays aligned with the per-scene visual sequences.
-            # Keep the planned scene durations the renderer already uses — do NOT
-            # overwrite them with raw speech lengths, which desyncs audio/video.
-            narration_wav = tts_fn(sd, short_scenes, channel_config)
-            duration_sec = float(_scene_duration_sum(short_scenes) or short_scenes.get("total_duration_sec") or 0.0)
-            short_scenes["total_duration_sec"] = round(duration_sec, 1)
-            narration_audio_sec = validate_scenes.probe_audio_duration_sec(narration_wav)
-            tail_added_total = 0.0
-            tail_distribution: list[dict[str, Any]] = []
-            if narration_audio_sec is not None:
-                tail_repair = validate_scenes.extend_scene_durations_for_audio_tail(
-                    short_scenes,
-                    narration_audio_sec
-                )
-                tail_added_total = float(tail_repair.get("added_sec") or 0.0)
-                tail_distribution = list(tail_repair.get("tail_repair_distribution") or [])
-                if tail_repair.get("changed"):
-                    duration_sec = float(_scene_duration_sum(short_scenes) or short_scenes.get("total_duration_sec") or duration_sec)
-                    short_scenes["total_duration_sec"] = round(duration_sec, 1)
-                    
-                    state.current_scenes_version += 1
-                    state.latest_scene_validation_ok = False
-                    state.latest_scene_validation_version = None
-                    
-                    re_issues = validate_scenes.validate_scene_structure(
-                        short_scenes.get("scenes") or [],
-                        scenes_doc=short_scenes,
-                        script=short_script,
-                    )
-                    if not validate_scenes.has_blocking_or_repairable(re_issues):
-                        state.latest_scene_validation_ok = True
-                        state.latest_scene_validation_version = state.current_scenes_version
-                        if state.latest_scene_qa_ok:
-                            state.latest_scene_qa_version = state.current_scenes_version
-                    duration_sec = float(_scene_duration_sum(short_scenes) or short_scenes.get("total_duration_sec") or duration_sec)
-                    short_scenes["total_duration_sec"] = round(duration_sec, 1)
-                    
-                    atomic_write_json(_jd / paths.SHORT_SCENES_FILE, short_scenes)
-                    _recorder.record_event(
-                        "deterministic",
-                        "audio_tail_repair",
-                        {
-                            "verdict": "PASS",
-                            "render_duration_sec": duration_sec,
-                            "narration_audio_sec": round(narration_audio_sec, 3),
-                            **tail_repair,
-                        },
-                        ok=True,
-                    )
-            
-            if narration_audio_sec is not None:
-                sync_summary = validate_scenes.audio_sync_summary(
-                    render_duration_sec=duration_sec,
-                    narration_audio_sec=narration_audio_sec,
-                    tail_added_sec=tail_added_total,
-                    tail_repair_distribution=tail_distribution,
-                )
-                atomic_write_json(_jd / paths.SHORT_AUDIO_SYNC_SUMMARY_FILE, sync_summary)
-                _recorder.record_event(
-                    "deterministic",
-                    "audio_sync_summary",
-                    sync_summary,
-                    ok=sync_summary["verdict"] != "FAIL",
-                )
-
-            audio_fit_passed = True
-            audio_issue = None
-            if narration_audio_sec is not None:
-                audio_issue = validate_scenes.validate_audio_fit(duration_sec, narration_audio_sec)
-                if audio_issue:
-                    audio_fit_passed = False
-
-            if audio_fit_passed:
-                state.latest_audio_tail_ok = True
-                state.latest_audio_tail_version = state.current_scenes_version
-            else:
-                state.latest_audio_tail_ok = False
-                state.latest_audio_tail_version = None
- 
-            if not audio_fit_passed:
-                repair_plan = validate_scenes.build_scene_repair_plan(
-                    short_scenes.get("scenes") or [],
-                    [audio_issue],
-                    script=short_script,
-                )
-                _recorder.record_event(
-                    "deterministic",
-                    "audio_fit",
-                    {
-                        "verdict": "FAIL",
-                        "issue": audio_issue.to_dict(),
-                        "render_duration_sec": duration_sec,
-                        "narration_audio_sec": round(narration_audio_sec, 3),
-                        "repair_plan": repair_plan,
-                    },
-                    ok=False,
-                )
-                update_stage("audio", "failed", error=audio_issue.detail)
-                atomic_write_json(_jd / paths.SHORT_FAILURE_REPORT_FILE, {
-                    "stage": "audio",
-                    "issues": [audio_issue.to_dict()],
-                    "render_duration_sec": duration_sec,
-                    "narration_audio_sec": round(narration_audio_sec, 3),
-                    "repair_plan": repair_plan,
-                })
-                status.update({
-                    "status": "needs_review",
-                    "rendered": False,
-                    "uploaded": False,
-                    "youtube_url": "",
-                    "requires_user_review": True,
-                    "qa_verdict": "FAIL",
-                    "duration_sec": round(duration_sec, 1),
-                    "audio_fit_issue": audio_issue.to_dict(),
-                    "regeneration_attempts": total_regeneration_attempts,
-                    "qa_scenes_attempts": scenes_attempts,
-                    "qa_scenes_structural_attempts": structural_attempts,
-                    "qa_scenes_product_attempts": product_attempts,
-                })
-                write_short_status(long_job_dir, short_id, status)
-                return status
-            else:
-                audio_fit_passed = True
-                update_stage(
-                    "audio",
-                    "completed",
-                    qa_verdict="PASS",
-                    render_duration_sec=round(duration_sec, 1),
-                    narration_audio_sec=round(narration_audio_sec, 3) if narration_audio_sec is not None else None,
-                )
-        except Exception as exc:
-            update_stage("audio", "failed")
-            status["status"] = "failed"
-            write_short_status(long_job_dir, short_id, status)
-            raise exc
+        _ctx.extras["short_scenes"] = short_scenes
+        _ctx.extras["short_script"] = short_script
+        _ctx.extras["scene_pipeline_state"] = state
+        _ctx.extras["total_regeneration_attempts"] = total_regeneration_attempts
+        _ctx.extras["scenes_attempts"] = scenes_attempts
+        _ctx.extras["structural_attempts"] = structural_attempts
+        _ctx.extras["product_attempts"] = product_attempts
+        _audio_result = _stage_audio(_ctx)
+        narration_wav = _ctx.extras["narration_wav"]
+        duration_sec = _ctx.extras["duration_sec"]
+        if _audio_result.returns is not None:
+            return _audio_result.returns
 
         # Stage 5: SEO (Only runs after audio_fit passes!)
         _ctx.extras["short_script"] = short_script

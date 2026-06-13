@@ -77,7 +77,40 @@ def build_image_gen_prompt(prompt: str, aspect_ratio: str = "16:9") -> str:
 
 
 PROJECTS_HEADER_SELECTOR = "button:has-text('Projects')"
+# ChatGPT moved "Projects" from an expandable sidebar group (a <button> with
+# aria-expanded) to a plain nav link (<a href=.../projects>). Cover both so the
+# project flow works across the old and current layouts.
+PROJECTS_NAV_SELECTORS = (
+    "a[href$='/projects']",
+    "a[href*='/project']",
+    "nav a:has-text('Projects')",
+    "aside a:has-text('Projects')",
+    "a:has-text('Projects')",
+    "button:has-text('Projects')",
+)
+# The "New project" entry point. In the new UI it can be a sidebar link, a "+"
+# button next to the Projects heading, or a button on the /projects page.
+NEW_PROJECT_BUTTON_SELECTORS = (
+    "button:has-text('New project')",
+    "a:has-text('New project')",
+    "[role='menuitem']:has-text('New project')",
+    "button[aria-label*='New project' i]",
+    "a[aria-label*='New project' i]",
+    "button:has-text('Create project')",
+    "button:has-text('New Project')",
+)
 NEW_PROJECT_BUTTON_SELECTOR = "button:has-text('New project')"
+# Fallback path when the Projects sidebar group is gone (ChatGPT moved
+# "Projects" to a plain nav link with no inline "New project" button): start a
+# normal, non-temporary chat and generate the image there instead.
+NEW_CHAT_SELECTORS = (
+    "a[data-testid='create-new-chat-button']",
+    "button[data-testid='create-new-chat-button']",
+    "a[aria-label*='New chat' i]",
+    "button[aria-label*='New chat' i]",
+    "a:has-text('New chat')",
+    "button:has-text('New chat')",
+)
 PROJECT_NAME_INPUT_SELECTOR = "input[name='projectName']"
 CREATE_PROJECT_BUTTON_SELECTOR = "button:has-text('Create project')"
 COMPOSER_SELECTORS = (
@@ -160,6 +193,11 @@ class ChatGPTImageDriver:
     def __init__(self, page: "Page") -> None:
         self.page = page
         self._opened = False
+        # True once a real ChatGPT Project has been created for this image
+        # session. When the Projects UI is unavailable (post-2026 sidebar
+        # redesign) we fall back to a plain new chat and this stays False so
+        # cleanup skips the (now non-existent) project deletion.
+        self._used_project = False
 
     async def open(self) -> None:
         if self._opened:
@@ -220,18 +258,42 @@ class ChatGPTImageDriver:
         self._opened = True
 
     async def _ensure_projects_expanded(self) -> None:
-        """Expand the "Projects" sidebar group so "New project" is visible."""
+        """Reveal the "Projects" section so a "New project" entry is reachable.
+
+        Handles both layouts:
+        * old — "Projects" is an expandable <button> group (toggle aria-expanded);
+        * new — "Projects" is a nav link that navigates to the projects page.
+        """
+        # New UI: if a "New project" entry is already visible, nothing to do.
+        for sel in NEW_PROJECT_BUTTON_SELECTORS:
+            try:
+                if await self.page.locator(sel).first.is_visible(timeout=400):
+                    return
+            except Exception:
+                continue
+
+        # Old UI: toggle the collapsible group if present.
         header = self.page.locator(PROJECTS_HEADER_SELECTOR).first
         try:
-            expanded = await header.get_attribute("aria-expanded")
+            if await header.is_visible(timeout=600):
+                expanded = await header.get_attribute("aria-expanded")
+                if expanded == "false":
+                    await human_click(header, hover_pause_min_ms=80, hover_pause_max_ms=180)
+                    await human_pause(self.page, min_ms=200, max_ms=400)
+                    return
         except Exception:
-            expanded = None
-        if expanded != "true":
+            pass
+
+        # New UI: click the Projects nav link to open the projects view.
+        for sel in PROJECTS_NAV_SELECTORS:
             try:
-                await human_click(header, hover_pause_min_ms=80, hover_pause_max_ms=180)
-                await human_pause(self.page, min_ms=200, max_ms=400)
+                loc = self.page.locator(sel).first
+                if await loc.is_visible(timeout=600):
+                    await human_click(loc, hover_pause_min_ms=80, hover_pause_max_ms=180)
+                    await human_pause(self.page, min_ms=600, max_ms=1100)
+                    return
             except Exception:
-                pass  # best effort — may already be expanded
+                continue
 
     async def _create_project(self, name: str) -> None:
         try:
@@ -245,11 +307,18 @@ class ChatGPTImageDriver:
 
             if not dialog_already_open:
                 await self._ensure_projects_expanded()
-                new_btn = self.page.locator(NEW_PROJECT_BUTTON_SELECTOR).first
-                try:
-                    await new_btn.wait_for(state="visible", timeout=15_000)
-                except Exception:
-                    # Double-check if dialog appeared while expanding sidebar
+                # Locate the "New project" entry across old/new layouts.
+                new_btn = None
+                for sel in NEW_PROJECT_BUTTON_SELECTORS:
+                    loc = self.page.locator(sel).first
+                    try:
+                        await loc.wait_for(state="visible", timeout=4_000)
+                        new_btn = loc
+                        break
+                    except Exception:
+                        continue
+                if new_btn is None:
+                    # Dialog may have opened directly while navigating the sidebar.
                     try:
                         if await name_input.is_visible():
                             dialog_already_open = True
@@ -261,7 +330,7 @@ class ChatGPTImageDriver:
                             "ChatGPT 'New project' button not found.",
                             screenshot_path=shot,
                         )
-                if not dialog_already_open:
+                if not dialog_already_open and new_btn is not None:
                     await human_click(new_btn)
                     await human_pause(self.page, min_ms=600, max_ms=1200)
 
@@ -318,6 +387,50 @@ class ChatGPTImageDriver:
                 f"Create project failed: {exc}",
                 screenshot_path=shot,
             ) from exc
+
+    async def _start_new_chat(self) -> None:
+        """Open a fresh, normal (non-temporary) chat for image generation.
+
+        Used as a fallback when ChatGPT's Projects UI is unavailable. A plain
+        new chat exposes the same "Create image" tool + composer, so image gen
+        works without a Project wrapper.
+        """
+        try:
+            await self.page.goto(
+                CHATGPT_HOME, wait_until="domcontentloaded", timeout=30_000
+            )
+            await human_pause(self.page, min_ms=800, max_ms=1600)
+        except Exception:
+            # Best effort — fall back to clicking an in-page "New chat" control.
+            pass
+        # Best-effort click of an explicit "New chat" affordance to guarantee a
+        # clean composer even if we were already on a stale conversation.
+        await self._click_first_visible(NEW_CHAT_SELECTORS, timeout_ms=2_000)
+        await human_pause(self.page, min_ms=300, max_ms=700)
+
+    async def _ensure_image_session(self, project_name: str) -> bool:
+        """Prepare a chat for image generation.
+
+        Prefers a ChatGPT Project (keeps generations grouped + easy to delete).
+        When the Projects UI is unavailable (sidebar redesign removed the inline
+        "New project" button), transparently falls back to a normal new chat.
+
+        Returns ``True`` if a real Project was created (and must be deleted on
+        teardown), ``False`` if the new-chat fallback was used.
+        """
+        try:
+            await self._create_project(project_name)
+            self._used_project = True
+            return True
+        except BrowserDriverError as exc:
+            print(
+                f"[chatgpt-image] Projects flow unavailable ({exc}); "
+                f"falling back to a normal new chat.",
+                flush=True,
+            )
+            await self._start_new_chat()
+            self._used_project = False
+            return False
 
     async def _focus_composer(self) -> "Locator":
         composer = None
@@ -566,7 +679,7 @@ class ChatGPTImageDriver:
             raise BrowserDriverError("Empty image prompt")
 
         try:
-            await self._create_project(project_name)
+            await self._ensure_image_session(project_name)
             if aspect_ratio != "16:9":
                 await self._select_create_image_mode_and_aspect_ratio(aspect_ratio=aspect_ratio)
             else:
@@ -574,7 +687,7 @@ class ChatGPTImageDriver:
             composer = await self._focus_composer()
             full_prompt = build_image_gen_prompt(prompt, aspect_ratio=aspect_ratio)
             await self._fill_composer_robust(composer, full_prompt)
-            await human_pause(self.page, min_ms=500, max_ms=1200)
+            await human_pause(self.page, min_ms=1500, max_ms=3500)
             await self._click_send()
 
             # We do NOT wait for the stop button to disappear. ChatGPT often writes
@@ -590,7 +703,7 @@ class ChatGPTImageDriver:
                 "bytes": out_path.stat().st_size,
             }
         finally:
-            await self.delete_project(project_name)
+            await self._teardown_image_session(project_name)
 
     async def generate_images(
         self,
@@ -610,7 +723,7 @@ class ChatGPTImageDriver:
             raise BrowserDriverError("Prompts and out_paths length mismatch")
 
         try:
-            await self._create_project(project_name)
+            await self._ensure_image_session(project_name)
 
             results = []
             exclude_urls = []
@@ -625,7 +738,7 @@ class ChatGPTImageDriver:
                 composer = await self._focus_composer()
                 full_prompt = build_image_gen_prompt(prompt, aspect_ratio=aspect_ratio)
                 await self._fill_composer_robust(composer, full_prompt)
-                await human_pause(self.page, min_ms=500, max_ms=1200)
+                await human_pause(self.page, min_ms=1500, max_ms=3500)
                 await self._click_send()
 
                 # We do NOT wait for the stop button to disappear. ChatGPT often writes
@@ -646,10 +759,119 @@ class ChatGPTImageDriver:
 
             return results
         finally:
-            await self.delete_project(project_name)
+            await self._teardown_image_session(project_name)
+
+    async def delete_current_chat(self) -> None:
+        """Delete the active (just-used) normal chat to prevent clutter.
+
+        Verified against the 2026 ChatGPT sidebar: the per-conversation options
+        button and its menu items are hover-gated, so Playwright's actionable
+        ``.click()`` times out on them. We dispatch DOM ``.click()`` via
+        ``page.evaluate`` instead — it fires the handler regardless of hover
+        state. Selectors (confirmed live):
+          * options button — ``button[aria-label^='Open conversation options']``
+          * delete item   — ``[data-testid='delete-chat-menu-item']``
+          * confirm button — ``[data-testid='delete-conversation-confirm-button']``
+        Best-effort: never raises.
+        """
+        try:
+            match = re.search(r"/c/([a-zA-Z0-9-]+)", self.page.url)
+            if not match:
+                print("Not on a conversation URL. Skipping chat deletion.")
+                return
+            chat_id = match.group(1)
+            print(f"Attempting to delete fallback chat conversation: {chat_id}")
+
+            # 1. Open the conversation's options menu (hover-gated -> DOM click).
+            opened = await self.page.evaluate(
+                """(chatId) => {
+                    const a = document.querySelector(`a[href*='${chatId}']`);
+                    const row = a ? (a.closest('li') || a.parentElement) : null;
+                    let btn = row ? row.querySelector(
+                        "button[aria-label^='Open conversation options'], button[data-testid$='-options']"
+                    ) : null;
+                    if (!btn) {
+                        btn = document.querySelector("button[aria-label^='Open conversation options']");
+                    }
+                    if (!btn) return 'no-options-button';
+                    btn.click();
+                    return 'opened';
+                }""",
+                chat_id,
+            )
+            if opened != "opened":
+                print(f"Could not open options for chat {chat_id}: {opened}")
+                return
+            await human_pause(self.page, min_ms=300, max_ms=650)
+
+            # 2. Click the Delete menu item.
+            clicked = await self.page.evaluate(
+                """() => {
+                    let d = document.querySelector("[data-testid='delete-chat-menu-item']");
+                    if (!d) {
+                        d = [...document.querySelectorAll("[role='menuitem']")].find(
+                            m => /^(delete|eliminar|xo)/i.test((m.innerText || '').trim()));
+                    }
+                    if (!d) return 'no-delete-item';
+                    d.click();
+                    return 'clicked';
+                }"""
+            )
+            if clicked != "clicked":
+                print(f"Delete menu item not found: {clicked}")
+                try:
+                    await self.page.keyboard.press("Escape")
+                except Exception:
+                    pass
+                return
+            await human_pause(self.page, min_ms=300, max_ms=650)
+
+            # 3. Confirm deletion in the dialog.
+            confirmed = await self.page.evaluate(
+                """() => {
+                    let b = document.querySelector("[data-testid='delete-conversation-confirm-button']");
+                    if (!b) {
+                        b = [...document.querySelectorAll(
+                            "div[role='dialog'] button, div[role='alertdialog'] button")].find(
+                            x => /^(delete|eliminar|xo)/i.test((x.innerText || '').trim()));
+                    }
+                    if (!b) return 'no-confirm';
+                    b.click();
+                    return 'confirmed';
+                }"""
+            )
+            await human_pause(self.page, min_ms=500, max_ms=900)
+            if confirmed == "confirmed":
+                print(f"Successfully deleted chat conversation: {chat_id}")
+            else:
+                print(f"Delete confirmation not found for chat {chat_id}: {confirmed}")
+        except Exception as exc:
+            print(f"Error while deleting chat conversation: {exc}")
+
+    async def _teardown_image_session(self, project_name: str) -> None:
+        """Clean up after an image session (best-effort, never raises).
+
+        Deletes the ChatGPT Project when one was created, or the normal chat
+        when the new-chat fallback was used — so neither path leaves clutter
+        that bloats request headers and eventually triggers HTTP 431.
+        """
+        try:
+            if self._used_project:
+                await self.delete_project(project_name)
+            else:
+                await self.delete_current_chat()
+        except Exception as exc:  # pragma: no cover - cleanup must never break gen
+            print(f"[chatgpt-image] session teardown best-effort failed: {exc}", flush=True)
 
     async def delete_project(self, project_name: str) -> None:
         """Deletes the project with the specified name from ChatGPT to prevent clutter."""
+        # Pause before deleting to look more human and prevent rate limit warnings from OpenAI
+        await human_pause(self.page, min_ms=4000, max_ms=8000)
+
+        if not self._used_project:
+            # New-chat fallback path — no Project was created, delete the chat conversation instead.
+            await self.delete_current_chat()
+            return
         try:
             # Ensure the sidebar and projects section are visible/expanded
             await self._ensure_projects_expanded()

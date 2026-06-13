@@ -138,6 +138,7 @@ def idea_to_short_plan(
         "visual_angle": idea.get("visual_angle", ""),
         "risk_level": idea.get("risk_level", "lifestyle"),
         "scores": dict(idea.get("scores") or {}),
+        "target_duration_sec": idea.get("target_duration_sec", 35),
     }
 
 

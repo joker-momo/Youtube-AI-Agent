@@ -1,0 +1,20 @@
+[
+  {
+    "topic": "pan integral falso",
+    "format": "myth_or_contradiction",
+    "expected_visual": "bread package / ingredient label / supermarket",
+    "topic_family": "nutrition"
+  },
+  {
+    "topic": "carga mental 45+",
+    "format": "pain_to_tip",
+    "expected_visual": "home routine / note / tired adult",
+    "topic_family": "mental_load"
+  },
+  {
+    "topic": "yogur con azucar oculto",
+    "format": "label_check",
+    "expected_visual": "yogurt package / nutrition label / spoon",
+    "topic_family": "nutrition"
+  }
+]

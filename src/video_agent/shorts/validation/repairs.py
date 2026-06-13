@@ -2,6 +2,62 @@ from __future__ import annotations
 
 from video_agent.shorts.validation.checks import *  # noqa: F401,F403
 
+
+def _is_five_error_bread_script(script: dict[str, Any] | None) -> bool:
+    if not script:
+        return False
+    contract = script.get("idea_contract") or {}
+    count = contract.get("original_count") == 5 or contract.get("final_count") == 5
+    narration = str(script.get("narration") or "").lower()
+    return bool(count and any(term in narration for term in ("pan", "bread", "hogaza")))
+
+
+def repair_five_error_bread_payoff_layout(scenes: list[dict[str, Any]], script: dict[str, Any] | None) -> bool:
+    """Normalize the fixed 5-error bread payoff card before spending a regen."""
+    if not _is_five_error_bread_script(script) or len(scenes) < 2:
+        return False
+
+    payoff = scenes[-2]
+    changed = payoff.get("layout") != "graphic_checklist"
+
+    if payoff.get("on_screen_text") != "MEJOR ASÍ":
+        payoff["on_screen_text"] = "MEJOR ASÍ"
+        changed = True
+
+    canonical_payload = {
+        "title": "MEJOR ASÍ",
+        "items": ["Porción visible", "Plato pequeño", "Comida completa"],
+    }
+    if payoff.get("layout_payload") != canonical_payload:
+        payoff["layout_payload"] = canonical_payload
+        changed = True
+
+    try:
+        duration = float(payoff.get("duration_sec") or 0.0)
+    except (TypeError, ValueError):
+        duration = 0.0
+    repaired_duration = min(5.0, max(4.2, duration or 4.6))
+    if duration != repaired_duration:
+        payoff["duration_sec"] = repaired_duration
+        changed = True
+
+    if payoff.get("layout") != "graphic_checklist":
+        payoff["layout"] = "graphic_checklist"
+        payoff["visual_type"] = "graphic"
+        changed = True
+    elif payoff.get("visual_type") != "graphic":
+        payoff["visual_type"] = "graphic"
+        changed = True
+
+    if not payoff.get("caption"):
+        payoff["caption"] = "Porción visible"
+        changed = True
+    if not payoff.get("visual_prompt"):
+        payoff["visual_prompt"] = "Graphic checklist card for a better bread portion routine"
+        changed = True
+    return changed
+
+
 def repair_scene_duration_if_possible(scene: dict[str, Any]) -> str:
     layout = scene.get("layout") or ""
     narration = scene.get("narration") or ""
@@ -430,4 +486,3 @@ def repair_visual_only_unreadable(scenes: list[dict], required_item: Any) -> boo
             target_scene["covers_items"] = sorted(list(covers), key=lambda x: (isinstance(x, str), x))
             
     return True
-

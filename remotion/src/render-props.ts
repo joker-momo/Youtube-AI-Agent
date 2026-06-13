@@ -40,6 +40,23 @@ export type LayoutPayload = {
   cover_text?: string;
 };
 
+export type FirstFramePlan = {
+  strategy?: string;
+  overlay_text?: string;
+  roi_target?: string;
+  must_show?: string[];
+  must_avoid?: string[];
+};
+
+export type CropPlan = {
+  mode?: string;
+  target?: string;
+  scale?: number;
+  anchor?: string;
+  safe_area?: string;
+  reason?: string;
+};
+
 export type Scene = {
   id: string;
   duration_sec: number;
@@ -57,6 +74,8 @@ export type Scene = {
   layout_payload?: LayoutPayload | GraphicAnyPayload;
   layout_reason?: string;
   planner_warnings?: string[];
+  first_frame_plan?: FirstFramePlan;
+  crop_plan?: CropPlan;
 };
 
 export type RenderProps = {

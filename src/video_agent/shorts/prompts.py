@@ -114,6 +114,7 @@ def short_script_prompt(
     retention_plan: dict | None = None,
 ) -> str:
     fmt = short_plan.get("format", "pain_to_tip")
+    target_duration_sec = short_plan.get("target_duration_sec") or 35
     seed = short_plan.get("narration_seed", "")
     idea_block = _idea_block(short_plan).strip() or "(none)"
     source_block_text = _source_block(source_artifacts or {}).strip() or "(none)"
@@ -143,7 +144,7 @@ def short_script_prompt(
         '  "short_id": "string",\n'
         '  "source_long_job_id": "string or null",\n'
         f'  "short_format": "{fmt}",\n'
-        '  "target_duration_sec": 35,\n'
+        f'  "target_duration_sec": {target_duration_sec},\n'
         '  "hook": "string",\n'
         '  "narration": "string",\n'
         '  "beats": [\n'
@@ -242,11 +243,10 @@ def short_script_prompt(
         "Do not include long disclaimers.\n"
         "Do not use fear-based medical language.\n\n"
         "DURATION RULES:\n"
-        "Target duration is a soft planning target; audio-fit and pacing are more important than exactly 35 seconds.\n"
+        f"The target duration for this Short is {target_duration_sec} seconds. Pacing must be calm and warm.\n"
+        f"For this {target_duration_sec}s Short, the spoken narration must be between {int(target_duration_sec * 1.7)} and {int(target_duration_sec * 2.0)} Spanish words (approximately {int(target_duration_sec * 1.8)} words is ideal). "
+        f"Ensure that the visual beats time_sec blocks span from 0s to exactly {target_duration_sec}s.\n"
         "Use the calibrated Vida Plena voice budget: estimated Spanish WPS is 2.25.\n"
-        "For a 35s Short, aim for about 60–70 spoken Spanish words.\n"
-        "For a 30s Short, aim for about 50–60 spoken Spanish words.\n"
-        "For a 60s hard-max Short, do not exceed about 115–125 spoken Spanish words unless explicitly requested.\n"
         "CHECKLIST POINT COUNT POLICY:\n"
         "If idea_contract.must_preserve_count=true, preserve the promised count; exact count uses original_count, range count uses idea_count_max as the upper bound.\n"
         "Do not reduce 5 errores to 3 or 4 only to satisfy a generic checklist rule.\n"

@@ -70,6 +70,7 @@ export const ShortVideo: React.FC<RenderProps> = (props) => {
                 src={bg}
                 overlay={pickOverlayKey(scene)}
                 motion={scene.motion}
+                cropPlan={scene.crop_plan}
                 durationInFrames={durFrames}
               />
               <Layout

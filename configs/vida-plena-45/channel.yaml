@@ -155,6 +155,16 @@ visuals:
   orientation: "landscape"
   per_page: 10
   scene_count_target: 5
+  # Editorial asset candidate selection (Shorts quality upgrade). Caps the number
+  # of candidates scored per provider search / library cache, plus a cumulative
+  # per-scene metadata-scoring cap across attempted cascade tiers. Kept out of the
+  # LLM call_budget because Pexels/library candidate counts grow without LLM calls.
+  asset_selection:
+    enable_quality_scoring: true
+    max_asset_candidates_per_provider: 12
+    max_library_cache_candidates: 10
+    max_candidate_metadata_score_total: 24
+    quality_weight: 0.45
 music:
   source: "asset_library"
   preferred_track: "No.6 In My Dreams - Esther Abrami.mp3"

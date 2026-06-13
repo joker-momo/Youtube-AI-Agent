@@ -117,6 +117,39 @@ def score_candidate(candidate: dict, channel_config: dict) -> dict[str, Any]:
     }
 
 
+def score_hook_candidate(candidate: dict, short_plan: dict | None = None) -> dict[str, Any]:
+    clarity = float(candidate.get("clarity_2s") or 0)
+    curiosity = float(candidate.get("curiosity_gap") or 0)
+    tension = float(candidate.get("emotional_tension") or 0)
+    trust = float(candidate.get("trust_fit_45plus") or 0)
+    fidelity = float(candidate.get("source_fidelity") or 0)
+    clickbait = float(candidate.get("clickbait_risk") or 0)
+
+    reject_reason = ""
+    if clickbait >= 8:
+        reject_reason = "clickbait_risk"
+    elif fidelity < 7:
+        reject_reason = "low_source_fidelity"
+    elif clarity < 6:
+        reject_reason = "low_clarity_2s"
+
+    # Spec A5 weighted formula (clarity .25, curiosity/tension/trust .20, fidelity .15).
+    score = (
+        clarity * 0.25
+        + curiosity * 0.20
+        + tension * 0.20
+        + trust * 0.20
+        + fidelity * 0.15
+        - clickbait * 0.25
+    )
+    return {
+        **candidate,
+        "score": round(max(0.0, min(10.0, score)), 1),
+        "reject": bool(reject_reason),
+        "reject_reason": reject_reason,
+    }
+
+
 def classify(score: float) -> str:
     if score >= 75:
         return "strong"

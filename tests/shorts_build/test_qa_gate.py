@@ -126,6 +126,37 @@ def test_soft_warning_does_not_trigger_excess_retry(tmp_path: Path):
     assert qa_calls["n"] == 1, "WARN scene QA must not trigger a regeneration loop"
 
 
+def test_script_warn_and_scene_pass_still_renders(tmp_path: Path):
+    from video_agent.shorts import short_builder
+
+    job = _long_job(tmp_path)
+    calls: list[str] = []
+
+    def gemini_fn(prompt: str, **kwargs):
+        if "Scenes QA reviewer" in prompt:
+            return json.dumps({
+                "verdict": "PASS",
+                "issues": [],
+                "required_changes": [],
+                "warnings": [],
+                "product_scores": _scene_qa_scores(),
+            })
+        return json.dumps({
+            "verdict": "WARN",
+            "issues": [{"type": "style", "severity": "minor", "detail": "Minor polish only."}],
+            "required_changes": [],
+            "warnings": ["Minor polish only."],
+        })
+
+    plan = {"short_id": "short-script-warn-renders", "format": "pain_to_tip", "scene_ids": ["scene-09"],
+            "source_start_sec": 183.0, "source_end_sec": 199.0, "music_track": "shorts_sleep_stress",
+            "narration_seed": "Marca una hora de cierre."}
+    res = short_builder.build_short(job, plan, _cfg(), llm_fn=_llm_fn_factory(), gemini_fn=gemini_fn, **_stub_io(calls))
+
+    assert res["status"] == "rendered"
+    assert "render" in calls
+
+
 def test_short_scene_retry_cap_on_soft_issues(tmp_path: Path):
     """Fix C4/C6#3: repeated soft QA warnings must not exceed 2 scene attempts."""
     from video_agent.shorts import short_builder

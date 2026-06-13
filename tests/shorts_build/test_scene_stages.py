@@ -23,6 +23,119 @@ def test_phase15_graphic_layouts_preserved_by_scene_normalizer():
     assert all(s["visual_type"] == "graphic" for s in out["scenes"])
 
 
+def test_scene_normalizer_backfills_source_scene_ids_from_idea_items():
+    from video_agent.shorts.short_scene_builder import normalize_short_scenes
+
+    doc = {
+        "scenes": [
+            {
+                "scene_id": "s1",
+                "layout": "short_tip",
+                "narration": "Suelta la mandíbula.",
+                "covers_items": [1],
+            }
+        ]
+    }
+    script = {
+        "narration": "Suelta la mandíbula.",
+        "idea_items": [
+            {
+                "item_id": 1,
+                "source_support": ["scene-16"],
+            }
+        ],
+    }
+
+    out = normalize_short_scenes(doc, script)
+
+    assert out["scenes"][0]["source_scene_ids"] == ["scene-16"]
+
+
+def test_scene_normalizer_caps_short_cta_duration():
+    from video_agent.shorts.short_scene_builder import normalize_short_scenes
+
+    doc = {
+        "scenes": [
+            {
+                "scene_id": "s1",
+                "layout": "short_cta",
+                "duration_sec": 4.8,
+                "narration": "Pruébalo esta noche.",
+            }
+        ]
+    }
+
+    out = normalize_short_scenes(doc, {"narration": "Pruébalo esta noche."})
+
+    assert out["scenes"][0]["duration_sec"] == 2.8
+    assert out["total_duration_sec"] == 2.8
+
+
+def test_scene_normalizer_replaces_stale_food_payload_for_non_food_topic():
+    from video_agent.shorts.short_scene_builder import normalize_short_scenes
+
+    doc = {
+        "scenes": [
+            {
+                "scene_id": "s07",
+                "layout": "graphic_checklist",
+                "duration_sec": 5.0,
+                "on_screen_text": "MEJOR ASÍ",
+                "caption": "Menos perfección. Más constancia. Ritual repetible",
+                "narration": "Diez minutos, si se repiten.",
+                "layout_payload": {
+                    "title": "MEJOR ASÍ",
+                    "items": ["Porción visible", "Plato pequeño", "Comida completa"],
+                },
+            }
+        ]
+    }
+    script = {
+        "title": "Pequeños límites que le dicen al cuerpo que ya no hay que correr",
+        "hook": "BAJA LA CARGA",
+        "narration": "Diez minutos repetibles bastan.",
+    }
+
+    out = normalize_short_scenes(doc, script)
+
+    assert out["scenes"][0]["layout_payload"]["items"] == [
+        "Menos perfección",
+        "Más constancia",
+        "Ritual repetible",
+    ]
+    assert "stale_food_payload_repaired" in out["scenes"][0]["planner_warnings"]
+
+
+def test_scene_normalizer_keeps_food_payload_for_food_topic():
+    from video_agent.shorts.short_scene_builder import normalize_short_scenes
+
+    doc = {
+        "scenes": [
+            {
+                "scene_id": "s07",
+                "layout": "graphic_checklist",
+                "narration": "Mejor: porción visible, plato pequeño, comida completa.",
+                "layout_payload": {
+                    "title": "MEJOR ASÍ",
+                    "items": ["Porción visible", "Plato pequeño", "Comida completa"],
+                },
+            }
+        ]
+    }
+    script = {
+        "title": "Cómo comer pan sin pasarte después de los 45",
+        "narration": "Mejor: porción visible, plato pequeño, comida completa.",
+    }
+
+    out = normalize_short_scenes(doc, script)
+
+    assert out["scenes"][0]["layout_payload"]["items"] == [
+        "Porción visible",
+        "Plato pequeño",
+        "Comida completa",
+    ]
+
+
 def test_phase15_graphic_validator_accepts_new_layouts_and_stubs_blank_fields():
     from video_agent.shorts.validate_scenes import validate_short_graphic_scenes
 
@@ -716,6 +829,55 @@ def test_five_error_accepted_duration_ranges_do_not_fail_scenes_qa(tmp_path: Pat
     assert not any("duration" in str(issue).lower() for issue in out["issues"])
 
 
+def test_five_error_bread_payoff_layout_repairs_to_graphic_checklist():
+    from video_agent.shorts import validate_scenes as v
+
+    script = {
+        "short_format": "mistake_list",
+        "hook": "No es el pan.",
+        "narration": (
+            "No es el pan. Uno: comerlo de pie. Dos: sumarlo sin decidir. "
+            "Tres: dejar la barra a la vista. Cuatro: cortar por cansancio. "
+            "Cinco: cenar improvisando con pan. Mejor: porción visible, plato pequeño, comida completa. Guárdalo."
+        ),
+        "idea_contract": {"original_count": 5, "final_count": 5},
+    }
+    scenes = [
+        {"id": "s01", "layout": "short_hook", "duration_sec": 2.8, "narration": "No es el pan."},
+        {"id": "s02", "layout": "short_pain", "duration_sec": 3.6, "narration": "Uno: comerlo de pie."},
+        {"id": "s03", "layout": "short_pain", "duration_sec": 3.6, "narration": "Dos: sumarlo sin decidir."},
+        {"id": "s04", "layout": "short_pain", "duration_sec": 3.6, "narration": "Tres: dejar la barra a la vista."},
+        {"id": "s05", "layout": "short_pain", "duration_sec": 3.6, "narration": "Cuatro: cortar por cansancio."},
+        {"id": "s06", "layout": "short_pain", "duration_sec": 3.6, "narration": "Cinco: cenar improvisando con pan."},
+        {
+            "id": "s07",
+            "layout": "graphic_routine_split",
+            "duration_sec": 4.6,
+            "on_screen_text": "MEJOR ASÍ",
+            "narration": "Mejor: porción visible, plato pequeño, comida completa.",
+            "layout_payload": {
+                "title": "RUTINA",
+                "blocks": [{"time": "1", "text": "Porción visible"}],
+            },
+        },
+        {"id": "s08", "layout": "short_cta", "duration_sec": 2.6, "narration": "Guárdalo."},
+    ]
+    doc = {"total_duration_sec": 28.0, "scenes": scenes}
+    issues = v.validate_scene_structure(scenes, scenes_doc=doc, script=script)
+    assert any(i.type == "payoff_layout" for i in issues)
+
+    assert v.repair_five_error_bread_payoff_layout(scenes, script)
+
+    assert scenes[-2]["layout"] == "graphic_checklist"
+    assert scenes[-2]["on_screen_text"] == "MEJOR ASÍ"
+    assert scenes[-2]["layout_payload"] == {
+        "title": "MEJOR ASÍ",
+        "items": ["Porción visible", "Plato pequeño", "Comida completa"],
+    }
+    repaired_issues = v.validate_scene_structure(scenes, scenes_doc=doc, script=script)
+    assert not any(i.type == "payoff_layout" for i in repaired_issues)
+
+
 
 
 def test_three_graphics_fails_deterministic_validation_and_repair_converts_checklist():
@@ -959,5 +1121,3 @@ def _scene_qa_scores() -> dict:
         "audience_fit_45_plus": 10, "hook_strength": 10, "visual_specificity": 10,
         "clarity": 10, "retention_pacing": 9, "natural_spanish": 10, "saveability": 10,
     }
-
-

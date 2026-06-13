@@ -14,6 +14,7 @@
 import React from 'react';
 import {AbsoluteFill, Img, OffthreadVideo, staticFile, useCurrentFrame, interpolate, Easing} from 'remotion';
 import {SHORT_OVERLAYS, OverlayKey} from './ShortLayoutConstants';
+import type {CropPlan} from '../render-props';
 
 export type ShortBackgroundProps = {
   src?: string;
@@ -23,6 +24,7 @@ export type ShortBackgroundProps = {
   overlay?: OverlayKey;
   /** Spec §3 — per-scene camera motion intent (LLM-planned, QA-enforced). */
   motion?: string;
+  cropPlan?: CropPlan;
   /** Scene length in frames; normalizes the motion progress 0→1. */
   durationInFrames?: number;
 };
@@ -87,11 +89,31 @@ function shortMotion(motion: string | undefined, p: number): {scale: number; x: 
   }
 }
 
+function cropTransform(cropPlan: CropPlan | undefined): {scale: number; x: number; y: number} {
+  if (!cropPlan) return {scale: 1, x: 0, y: 0};
+  const scale = Math.max(1, cropPlan.scale ?? 1);
+  switch ((cropPlan.anchor || '').toLowerCase()) {
+    case 'center-left':
+    case 'left':
+      return {scale, x: 4, y: 0};
+    case 'center-right':
+    case 'right':
+      return {scale, x: -4, y: 0};
+    case 'top':
+      return {scale, x: 0, y: 3};
+    case 'bottom':
+      return {scale, x: 0, y: -3};
+    default:
+      return {scale, x: 0, y: 0};
+  }
+}
+
 export const ShortBackground: React.FC<ShortBackgroundProps> = ({
   src,
   kind,
   overlay = 'default',
   motion,
+  cropPlan,
   durationInFrames,
 }) => {
   const resolved = resolveSrc(src);
@@ -106,7 +128,9 @@ export const ShortBackground: React.FC<ShortBackgroundProps> = ({
     easing: Easing.inOut(Easing.ease),
   });
   const m = shortMotion(motion, progress);
-  const mediaTransform = `translateX(${m.x}%) scale(${m.scale})`;
+  const c = cropTransform(cropPlan);
+  const motionTransform = `translateX(${m.x}%) scale(${m.scale})`;
+  const mediaTransform = cropPlan ? `translate(${c.x + m.x}%, ${c.y}%) scale(${c.scale * m.scale})` : motionTransform;
 
   return (
     <AbsoluteFill style={{backgroundColor: '#0b1020'}}>

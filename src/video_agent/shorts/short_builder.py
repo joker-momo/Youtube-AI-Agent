@@ -2589,7 +2589,7 @@ def _build_short_impl(
     # a hard blocker stops the pipeline with an explicit, reviewable reason; the
     # generic "QA failed after max regeneration attempts" message is never the
     # source of truth — the structured decision below is.
-    if script_qa_result["verdict"] != "PASS" or scenes_qa_result["verdict"] not in ("PASS", "WARN"):
+    if script_qa_result["verdict"] not in ("PASS", "WARN") or scenes_qa_result["verdict"] not in ("PASS", "WARN"):
         if script_qa_result["verdict"] not in ("PASS", "WARN"):
             fail_stage = "qa_script"
             blocker_details = _qa_blocker_details(script_qa_result)

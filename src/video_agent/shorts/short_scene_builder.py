@@ -26,6 +26,7 @@ _MOVEMENT_EVIDENCE_DEFAULT = {
     "forbidden_mood": ["frail", "sad", "helpless"],
 }
 from video_agent.shorts import paths, prompts
+from video_agent.shorts.first_frame_planner import apply_first_frame_plan
 from video_agent.shorts.idea_preservation import normalize_covers_items
 from video_agent.shorts.llm import LLMCallLog, log_llm_call
 from video_agent.storage.atomic import atomic_write_json
@@ -140,6 +141,87 @@ def _chunk(seq: list, n: int) -> list[list]:
     return [seq[i * k // n : (i + 1) * k // n] for i in range(n)]
 
 
+def _source_support_by_item(short_script: dict) -> dict[int, list[str]]:
+    by_item: dict[int, list[str]] = {}
+    for item in list((short_script or {}).get("idea_items") or []):
+        if not isinstance(item, dict):
+            continue
+        try:
+            item_id = int(item.get("item_id"))
+        except (TypeError, ValueError):
+            continue
+        refs = [
+            str(ref).strip()
+            for ref in list(item.get("source_support") or [])
+            if str(ref).strip()
+        ]
+        if refs:
+            by_item[item_id] = refs
+    return by_item
+
+
+_STALE_FOOD_PAYLOAD_ITEMS = {
+    "porción visible",
+    "porcion visible",
+    "plato pequeño",
+    "plato pequeno",
+    "comida completa",
+}
+
+
+def _script_is_food_topic(short_script: dict) -> bool:
+    text = " ".join(
+        str((short_script or {}).get(key) or "")
+        for key in ("title", "hook", "narration", "short_format", "topic_family")
+    ).lower()
+    return any(
+        term in text
+        for term in (
+            "pan",
+            "plato",
+            "comida",
+            "cena",
+            "nutric",
+            "aliment",
+            "proteína",
+            "proteina",
+            "fibra",
+            "etiqueta",
+        )
+    )
+
+
+def _split_payload_phrases(text: str) -> list[str]:
+    phrases = [
+        p.strip(" .,:;!?¡¿")
+        for p in re.split(r"[.;\n]+", str(text or ""))
+        if p.strip(" .,:;!?¡¿")
+    ]
+    return [p[:42] for p in phrases if len(p.split()) <= 5][:3]
+
+
+def _repair_stale_food_payload(sc: dict[str, Any], short_script: dict) -> None:
+    payload = sc.get("layout_payload")
+    if not isinstance(payload, dict) or _script_is_food_topic(short_script):
+        return
+    items = [str(item).strip() for item in list(payload.get("items") or []) if str(item).strip()]
+    if not items:
+        return
+    normalized_items = {item.lower() for item in items}
+    if not normalized_items or not normalized_items.issubset(_STALE_FOOD_PAYLOAD_ITEMS):
+        return
+    replacement = _split_payload_phrases(str(sc.get("caption") or ""))
+    if len(replacement) < 2:
+        replacement = _split_payload_phrases(str(sc.get("narration") or ""))
+    if len(replacement) < 2:
+        replacement = [str(sc.get("on_screen_text") or "Cierre simple").strip()[:42]]
+    payload["items"] = replacement
+    sc["layout_payload"] = payload
+    warnings = list(sc.get("planner_warnings") or [])
+    warnings.append("stale_food_payload_repaired")
+    sc["planner_warnings"] = warnings
+
+
 def normalize_short_scenes(scenes_doc: dict, short_script: dict) -> dict:
     """Make Short scenes compatible with the long-form render/TTS pipeline.
 
@@ -157,6 +239,7 @@ def normalize_short_scenes(scenes_doc: dict, short_script: dict) -> dict:
     n = len(scenes)
     sentences = _split_sentences((short_script or {}).get("narration"))
     groups = _chunk(sentences, n) if sentences else [[] for _ in range(n)]
+    source_support_by_item = _source_support_by_item(short_script or {})
 
     norm_scenes = []
     for i, raw in enumerate(scenes):
@@ -183,6 +266,7 @@ def normalize_short_scenes(scenes_doc: dict, short_script: dict) -> dict:
             "graphic" if str(sc.get("layout") or "").startswith("graphic_") else "generated_placeholder",
         )
         sc.setdefault("layout_payload", {})
+        _repair_stale_food_payload(sc, short_script or {})
         covers_items, covers_warnings = normalize_covers_items(sc.get("covers_items"))
         sc["covers_items"] = covers_items
         if covers_warnings:
@@ -196,6 +280,12 @@ def normalize_short_scenes(scenes_doc: dict, short_script: dict) -> dict:
         sc.setdefault("planner_warnings", [])
         sc.setdefault("audio_offset_sec", 0.0)
         sc.setdefault("duration_sec", 3.0)
+        if sc["layout"] == "short_cta":
+            try:
+                if float(sc.get("duration_sec") or 0.0) > 2.8:
+                    sc["duration_sec"] = 2.8
+            except (TypeError, ValueError):
+                sc["duration_sec"] = 2.4
         sc.setdefault("transition_from_previous", "")
         sc.setdefault("visual_importance", "normal")
         sc.setdefault("asset_strategy", "stock_ok")
@@ -224,7 +314,15 @@ def normalize_short_scenes(scenes_doc: dict, short_script: dict) -> dict:
         # strict mapping validator rejects a missing field; [] is its explicit
         # "no support found" value the repair loop then fills).
         if sc.get("covers_items"):
-            sc.setdefault("source_scene_ids", [])
+            source_ids = [
+                str(ref).strip()
+                for ref in list(sc.get("source_scene_ids") or [])
+                if str(ref).strip()
+            ]
+            if not source_ids:
+                for item_id in sc["covers_items"]:
+                    source_ids.extend(source_support_by_item.get(item_id, []))
+            sc["source_scene_ids"] = list(dict.fromkeys(source_ids))
         sc.setdefault("retention_function", "")
         norm_scenes.append(sc)
 
@@ -310,6 +408,7 @@ def build_short_scenes(
             snippet=snippet,
         )
     scenes = normalize_short_scenes(_parse(raw), short_script)
+    scenes = apply_first_frame_plan(scenes, short_plan, channel_config)
     jd = paths.short_json_dir(long_job_dir, short_plan["short_id"])
     jd.mkdir(parents=True, exist_ok=True)
     atomic_write_json(jd / paths.SHORT_SCENES_FILE, scenes)

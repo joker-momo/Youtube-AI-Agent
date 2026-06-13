@@ -173,6 +173,23 @@ def normalize_qa_issue(
             trigger_regeneration=False,
         )
 
+    if (
+        issue_type_lower == "duration"
+        and "target_duration" in detail_lower
+        and any(term in detail_lower for term in ("underperforms", "total sequence duration", "target duration"))
+    ):
+        return NormalizedIssue(
+            issue_class=IssueClass.SOFT_WARNING,
+            reason="duration_compression_after_deterministic_pass",
+            source=inferred_source,
+            scene_id=scene_id,
+            issue_type=issue_type,
+            detail=detail,
+            repair_hint=repair_hint,
+            include_in_retry_feedback=True,
+            trigger_regeneration=False,
+        )
+
     severity_lower = ""
     if isinstance(issue, dict):
         severity_lower = str(issue.get("severity") or "").lower()
@@ -219,10 +236,25 @@ def normalize_qa_issue(
         is_hard = False
         reason = "repairable_audio_fit"
 
-
-
-
     is_soft = False
+    if issue_type_lower == "source_fidelity" and any(
+        k in detail_lower
+        for k in (
+            "target duration",
+            "target_duration",
+            "heavily truncated",
+            "truncates",
+            "truncated",
+            "compresses",
+            "restore the full text",
+            "exact narration",
+        )
+    ):
+        is_hard = False
+        is_repairable = False
+        is_soft = True
+        reason = "scene_compression_preference"
+
     if severity_lower in ("warning", "minor", "suggestion", "info"):
         is_soft = True
     elif issue_type_lower in ["weak_hook_motion", "hook_motion", "aesthetic", "visual_rhythm", "rhythm", "product_quality_average_low", "product_quality_score_low", "hook_polish", "polish", "visual", "visual_polish", "pacing_polish"]:
@@ -236,17 +268,7 @@ def normalize_qa_issue(
                 is_soft = False
                 is_hard = True
             else:
-                # Parse score values from dict-like detail string
-                score_vals = re.findall(r'(\d+(?:\.\d+)?)', detail_lower)
-                for s_str in score_vals:
-                    try:
-                        s_val = float(s_str)
-                        if s_val <= 6.0:
-                            is_soft = False
-                            is_hard = True
-                            break
-                    except ValueError:
-                        pass
+                is_hard = False
     elif any(k in detail_lower for k in ["weak_hook_motion", "hook motion", "aesthetic", "visual rhythm", "polish", "pacing", "pacing preference", "could consolidate", "near limit", "verify", "ensure"]):
         is_soft = True
     elif "product quality scores are below" in detail_lower:

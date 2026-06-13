@@ -395,6 +395,102 @@ def _candidate_score(query: str, candidate: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_ASSET_SELECTION_DEFAULTS: dict[str, Any] = {
+    "enable_quality_scoring": True,
+    "max_asset_candidates_per_provider": 12,
+    "max_library_cache_candidates": 10,
+    "max_candidate_metadata_score_total": 24,
+    "quality_weight": 0.45,
+}
+
+
+def _asset_selection_config(visual_config: dict[str, Any]) -> dict[str, Any]:
+    cfg = dict(_ASSET_SELECTION_DEFAULTS)
+    cfg.update((visual_config.get("asset_selection") or {}))
+    cfg.update(((visual_config.get("shorts_quality") or {}).get("asset_selection") or {}))
+    return cfg
+
+
+def _quality_norm(value: float) -> float:
+    return max(0.0, min(1.0, value))
+
+
+def _normalize_candidate_scores(scores: list[float]) -> list[float]:
+    if not scores:
+        return []
+    lo = min(scores)
+    hi = max(scores)
+    if hi == lo:
+        return [1.0 for _ in scores]
+    return [(score - lo) / (hi - lo) for score in scores]
+
+
+def _candidate_haystack(candidate: dict[str, Any]) -> str:
+    parts = list(candidate.get("tags") or [])
+    for extra in ("alt", "description", "title", "query", "original_query"):
+        if candidate.get(extra):
+            parts.append(str(candidate[extra]))
+    return " ".join(str(p) for p in parts).lower()
+
+
+def _asset_quality_dimensions(scene: dict[str, Any] | None, candidate: dict[str, Any]) -> dict[str, Any]:
+    scene = scene or {}
+    haystack = _candidate_haystack(candidate)
+    first_frame_plan = scene.get("first_frame_plan") or {}
+    evidence = scene.get("required_visual_evidence") or {}
+
+    positive_terms: list[str] = []
+    positive_terms.extend(str(term) for term in first_frame_plan.get("must_show") or [])
+    if first_frame_plan.get("roi_target"):
+        positive_terms.append(str(first_frame_plan["roi_target"]))
+    positive_terms.extend(_evidence_terms(evidence, "required_actions", "required_objects"))
+    positive_hits = [term for term in positive_terms if _term_hits(term, haystack)]
+
+    avoid_terms = [str(term) for term in first_frame_plan.get("must_avoid") or []]
+    avoid_terms.extend(_evidence_terms(evidence, "forbidden_pose", "forbidden_context", "forbidden_mood"))
+    avoid_hits = [term for term in avoid_terms if _term_hits(term, haystack)]
+
+    stock_terms = {
+        "smiling", "family", "portrait", "pose", "posed", "wide", "generic", "stock",
+        "centered", "kitchen",
+    }
+    stock_hits = sorted(term for term in stock_terms if term in haystack)
+    importance_bonus = 12 if scene.get("visual_importance") == "critical" and positive_hits else 0
+    first_frame_bonus = 10 if first_frame_plan and positive_hits else 0
+    evidence_bonus = min(40, len(set(positive_hits)) * 12)
+    avoid_penalty = min(35, len(set(avoid_hits)) * 12)
+    stock_penalty = min(25, len(stock_hits) * 5)
+    raw = 50 + importance_bonus + first_frame_bonus + evidence_bonus - avoid_penalty - stock_penalty
+    return {
+        "quality_raw": raw,
+        "evidence_hits": positive_hits,
+        "avoid_hits": avoid_hits,
+        "stock_feeling_penalty": stock_penalty,
+        "first_frame_bonus": first_frame_bonus,
+        "visual_importance_bonus": importance_bonus,
+    }
+
+
+def _editorial_query(query: str, scene: dict[str, Any]) -> str:
+    terms: list[str] = [query]
+    first_frame_plan = scene.get("first_frame_plan") or {}
+    if first_frame_plan.get("roi_target"):
+        terms.append(str(first_frame_plan["roi_target"]))
+    terms.extend(str(term) for term in first_frame_plan.get("must_show") or [])
+    evidence = scene.get("required_visual_evidence") or {}
+    terms.extend(_evidence_terms(evidence, "required_actions", "required_objects"))
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for term in terms:
+        clean = str(term).strip()
+        key = clean.lower()
+        if clean and key not in seen:
+            out.append(clean)
+            seen.add(key)
+    return " ".join(out)
+
+
 class StockAssetService:
     def __init__(
         self,
@@ -444,6 +540,7 @@ class StockAssetService:
         self.used_provider_ids: set[tuple[str, str]] = set()
         self.used_asset_ids: set[tuple[str, str]] = set()  # (provider, asset_id)
         self.last_errors: list[dict[str, str]] = []
+        self.asset_selection_config = _asset_selection_config(visual_config)
 
     # Library-cache results without real semantic overlap have no place in the
     # final video (e.g. Vietnam Airlines clip returned for a "rutina nocturna"
@@ -454,8 +551,39 @@ class StockAssetService:
     _MIN_LIBRARY_CACHE_SCORE = 40
     _REQUIRE_LIBRARY_CACHE_TAG_MATCH = True
 
+    def _new_candidate_budget(self) -> dict[str, int]:
+        limit = int(self.asset_selection_config.get("max_candidate_metadata_score_total") or 24)
+        return {"limit": max(0, limit), "scored_total": 0}
+
+    @staticmethod
+    def _candidate_budget_remaining(candidate_budget: dict[str, int] | None) -> int:
+        if candidate_budget is None:
+            return 10**9
+        return max(0, int(candidate_budget.get("limit", 0)) - int(candidate_budget.get("scored_total", 0)))
+
+    @staticmethod
+    def _record_candidates_scored(candidate_budget: dict[str, int] | None, count: int) -> None:
+        if candidate_budget is not None:
+            candidate_budget["scored_total"] = int(candidate_budget.get("scored_total", 0)) + max(0, count)
+
+    @staticmethod
+    def _candidate_budget_debug(candidate_budget: dict[str, int] | None) -> dict[str, int]:
+        if candidate_budget is None:
+            return {"limit": 0, "scored_total": 0, "remaining": 0}
+        return {
+            "limit": int(candidate_budget.get("limit", 0)),
+            "scored_total": int(candidate_budget.get("scored_total", 0)),
+            "remaining": max(0, int(candidate_budget.get("limit", 0)) - int(candidate_budget.get("scored_total", 0))),
+        }
+
     def _try_library_cache(
-        self, query: str, media_type: str | None, channel_id: str, job_id: str, scene: dict[str, Any]
+        self,
+        query: str,
+        media_type: str | None,
+        channel_id: str,
+        job_id: str,
+        scene: dict[str, Any],
+        candidate_budget: dict[str, int] | None = None,
     ) -> dict[str, Any] | None:
         """Return a cached library asset matching the query, scored against it.
 
@@ -466,29 +594,43 @@ class StockAssetService:
         wildly off-topic backgrounds (airplane takeoff for a sleep-rest scene).
         """
         used_asset_ids = {aid for _, aid in self.used_asset_ids}
+        library_cap = int(self.asset_selection_config.get("max_library_cache_candidates") or 10)
+        cap = min(library_cap, self._candidate_budget_remaining(candidate_budget))
+        if cap <= 0:
+            return None
         candidates = self.library.search_by_query(
-            query, media_type=media_type, exclude_asset_ids=used_asset_ids, limit=10
+            query, media_type=media_type, exclude_asset_ids=used_asset_ids, limit=library_cap
         )
 
-        scored: list[tuple[int, int, dict[str, Any], dict[str, Any]]] = []
-        for idx, asset in enumerate(candidates):
+        valid_candidates: list[dict[str, Any]] = []
+        for asset in candidates:
             key = (asset["provider"], str(asset["provider_asset_id"]))
             if key in self.used_provider_ids:
                 continue
             if not self.library.is_file_valid(asset):
                 continue
-            scoring = _candidate_score(query, asset)
-            scored.append((scoring["score"], idx, asset, scoring))
+            valid_candidates.append(asset)
+            if len(valid_candidates) >= cap:
+                break
 
-        if not scored:
+        if not valid_candidates:
             return None
 
-        scored.sort(key=lambda row: (-row[0], row[1]))
-        best_score, _, best_asset, best_scoring = scored[0]
+        ranked_cache = self._rank_candidates(
+            query,
+            valid_candidates,
+            provider_order=1,
+            scene=scene,
+            candidate_budget=candidate_budget,
+        )
+        ranked_cache.sort(key=lambda item: (-item["score"], item["provider_order"], item["provider_candidate_rank"]))
+        best = ranked_cache[0]
+        best_score = best["score"]
+        best_asset = best["candidate"]
         if best_score < self._MIN_LIBRARY_CACHE_SCORE:
             return None
-        matched_terms = best_scoring.get("matched_terms") or []
-        reasons = set(best_scoring.get("reasons") or [])
+        matched_terms = best.get("matched_terms") or []
+        reasons = set(best.get("reasons") or [])
         # Require strong overlap (>=2 matched scene terms or the explicit
         # strong_scene_term_match reason). Resolution / aspect-ratio bonuses
         # alone push generic clips above the score threshold even when their
@@ -514,10 +656,17 @@ class StockAssetService:
             "source": "library_cache",
             "candidate_rank": 1,
             "searched_providers": [],
-            "candidate_count": len(scored),
+            "candidate_count": len(ranked_cache),
             "score": best_score,
-            "reasons": ["library_cache_hit", *best_scoring["reasons"]],
-            "matched_terms": best_scoring["matched_terms"],
+            "base_raw_score": best.get("base_raw_score"),
+            "base_norm": best.get("base_norm"),
+            "quality_norm": best.get("quality_norm"),
+            "final_norm": best.get("final_norm"),
+            "quality_dimensions": best.get("quality_dimensions"),
+            "quality_scoring_enabled": bool(self.asset_selection_config.get("enable_quality_scoring", True)),
+            "candidate_budget": self._candidate_budget_debug(candidate_budget),
+            "reasons": ["library_cache_hit", *(best.get("reasons") or [])],
+            "matched_terms": best.get("matched_terms") or [],
             "candidate_tags": list(best_asset.get("tags", [])),
         }
         return best_asset
@@ -579,9 +728,11 @@ class StockAssetService:
         # before sending it to Pexels (an English-keyword search engine).
         translated_query = _translate_spanish_query_to_english(raw_query)
         query = _force_elderly_demographic(translated_query)
+        query = _editorial_query(query, scene)
         scene_dur = int(scene.get("duration_sec") or 30)
         filters = _stock_filters(self.visual_config, scene_duration_sec=scene_dur)
         ttl_hours = int(self.visual_config.get("query_cache_ttl_hours", 24))
+        candidate_budget = self._new_candidate_budget()
 
         # Determine preferred media type from provider list
         prefers_video = any("video" in p for p in self.providers)
@@ -591,7 +742,7 @@ class StockAssetService:
         # BYPASS cache when demographic keywords are present — the library token-overlap
         # search cannot enforce demographic constraints, so we must hit the API fresh.
         if not self._query_requires_fresh_search(query):
-            cached = self._try_library_cache(query, media_type_hint, channel_id, job_id, scene)
+            cached = self._try_library_cache(query, media_type_hint, channel_id, job_id, scene, candidate_budget)
             if cached is not None:
                 return cached
 
@@ -610,6 +761,7 @@ class StockAssetService:
                 job_id=job_id,
                 is_fallback=is_fallback,
                 require_strict=require_strict,
+                candidate_budget=candidate_budget,
             )
 
         strategy = scene.get("asset_strategy", "stock_ok")
@@ -818,10 +970,13 @@ class StockAssetService:
         job_id: str,
         is_fallback: bool = False,
         require_strict: bool = False,
+        candidate_budget: dict[str, int] | None = None,
     ) -> dict[str, Any] | None:
         ranked_candidates: list[dict[str, Any]] = []
         for provider_order, provider in enumerate(providers, start=1):
             try:
+                if self._candidate_budget_remaining(candidate_budget) <= 0:
+                    break
                 exclude_ids = {asset_id for prov, asset_id in self.used_provider_ids if prov == provider}
                 response = self.cache.get(provider, query, filters)
                 if response is not None:
@@ -842,10 +997,15 @@ class StockAssetService:
                         else:
                             raise
                     self.cache.set(provider, query, filters, response, ttl_hours=ttl_hours)
+                provider_cap = int(self.asset_selection_config.get("max_asset_candidates_per_provider") or 12)
+                normalized = self.stock_client.normalize(provider, response)
+                cap = min(provider_cap, self._candidate_budget_remaining(candidate_budget))
                 candidates = self._rank_candidates(
                     query,
-                    self.stock_client.normalize(provider, response),
+                    normalized[:cap],
                     provider_order=provider_order,
+                    scene=scene,
+                    candidate_budget=candidate_budget,
                 )
                 ranked_candidates.extend(candidates)
             except Exception as exc:
@@ -892,7 +1052,7 @@ class StockAssetService:
                 contexts = {"supermarket", "grocery", "store", "aisle", "shelf", "shopping", "basket", "market", "checkout", "kitchen", "table"}
                 
                 turning_terms = {"turn", "rotate", "flip", "back", "turning", "rotating", "flipping"}
-                reading_terms = {"read", "show", "reading", "showing"}
+                reading_terms = {"read", "show", "reading", "showing", "check", "checking", "inspect", "inspecting"}
                 
                 has_obj = any(o in matched for o in objects)
                 has_ctx = any(c in matched for c in contexts)
@@ -996,6 +1156,13 @@ class StockAssetService:
                 "searched_providers": providers,
                 "candidate_count": len(ranked_candidates),
                 "score": ranked_candidate["score"],
+                "base_raw_score": ranked_candidate.get("base_raw_score"),
+                "base_norm": ranked_candidate.get("base_norm"),
+                "quality_norm": ranked_candidate.get("quality_norm"),
+                "final_norm": ranked_candidate.get("final_norm"),
+                "quality_dimensions": ranked_candidate.get("quality_dimensions"),
+                "quality_scoring_enabled": bool(self.asset_selection_config.get("enable_quality_scoring", True)),
+                "candidate_budget": self._candidate_budget_debug(candidate_budget),
                 "reasons": ranked_candidate.get("reasons") or [],
                 "matched_terms": ranked_candidate.get("matched_terms") or [],
                 "fallback": is_fallback,
@@ -1008,17 +1175,47 @@ class StockAssetService:
         return None
 
     def _rank_candidates(
-        self, query: str, candidates: list[dict[str, Any]], provider_order: int
+        self,
+        query: str,
+        candidates: list[dict[str, Any]],
+        provider_order: int,
+        *,
+        scene: dict[str, Any] | None = None,
+        candidate_budget: dict[str, int] | None = None,
     ) -> list[dict[str, Any]]:
         ranked = []
-        for candidate_index, candidate in enumerate(candidates, start=1):
-            scoring = _candidate_score(query, candidate)
+        base_scorings = [_candidate_score(query, candidate) for candidate in candidates]
+        self._record_candidates_scored(candidate_budget, len(base_scorings))
+        base_norms = _normalize_candidate_scores([float(scoring["score"]) for scoring in base_scorings])
+        quality_dimensions = [_asset_quality_dimensions(scene, candidate) for candidate in candidates]
+        quality_norms = [_quality_norm(float(dim["quality_raw"]) / 100.0) for dim in quality_dimensions]
+        quality_weight = float(self.asset_selection_config.get("quality_weight") or 0.45)
+        quality_weight = _quality_norm(quality_weight)
+        enable_quality = bool(self.asset_selection_config.get("enable_quality_scoring", True))
+        for candidate_index, (candidate, scoring, base_norm, quality_norm, quality_dim) in enumerate(
+            zip(candidates, base_scorings, base_norms, quality_norms, quality_dimensions),
+            start=1,
+        ):
+            if enable_quality:
+                final_norm = (base_norm * (1.0 - quality_weight)) + (quality_norm * quality_weight)
+                score = int(round(final_norm * 100))
+            else:
+                final_norm = base_norm
+                score = scoring["score"]
             ranked.append(
                 {
                     "candidate": candidate,
                     "provider_order": provider_order,
                     "provider_candidate_rank": candidate_index,
-                    **scoring,
+                    "base_raw_score": scoring["score"],
+                    "base_norm": base_norm,
+                    "quality_norm": quality_norm,
+                    "final_norm": final_norm,
+                    "quality_dimensions": quality_dim,
+                    "score": score,
+                    "reasons": scoring.get("reasons") or [],
+                    "matched_terms": scoring.get("matched_terms") or [],
+                    "penalized_terms": scoring.get("penalized_terms") or [],
                 }
             )
         return ranked

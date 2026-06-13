@@ -737,6 +737,14 @@ def prepare_assets(
             channel_id=channel_id,
             outputs_dir=job_dir,
         )
+        # Attach deterministic ROI crop plans now that asset_refs.background is
+        # resolved, so render/QA see crop_plan in the persisted scene artifact
+        # (not only in memory). Skips graphic_* and background-less scenes.
+        try:
+            from video_agent.shorts.roi_crop_planner import apply_crop_plan
+            scene_doc["scenes"] = apply_crop_plan(scene_doc)["scenes"]
+        except Exception:  # pragma: no cover - crop planning must never break asset prep
+            pass
         # Persist asset_refs + the per-scene background sourcing report so the
         # Shorts Studio UI can show which source each scene used.
         write_json(job_dir / ARTIFACT_SCENES, scene_doc)

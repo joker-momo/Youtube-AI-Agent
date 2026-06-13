@@ -56,10 +56,12 @@ def validate_full_short_script_candidate(
         errors.append("partial_script_too_few_blocks")
 
     target_duration_sec = short_plan.get("target_duration_sec") or 35
-    if target_duration_sec == 35:
-        total_words = sum(len(re.findall(r'\w+', str(b.get("narration") or ""))) for b in beats if isinstance(b, dict))
-        if total_words > 85:
-            errors.append("audio_fit_over_soft_budget")
+    total_words = sum(len(re.findall(r'\w+', str(b.get("narration") or ""))) for b in beats if isinstance(b, dict))
+    global_words = len(re.findall(r'\w+', str(script.get("narration") or "")))
+    if target_duration_sec == 35 and (total_words > 72 or global_words > 72):
+        errors.append("audio_fit_over_soft_budget")
+    elif target_duration_sec == 45 and (total_words > 95 or global_words > 95):
+        errors.append("audio_fit_over_soft_budget")
 
     if beats and isinstance(beats[0], dict):
         t_sec = beats[0].get("time_sec")

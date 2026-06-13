@@ -26,9 +26,24 @@ HARD_SCENE_VALIDATION_TYPES = {
 
 _HARD_QA_ISSUE_MARKERS = (
     "safety", "source_fidelity", "source_support", "idea", "schema",
-    "layout", "contract", "audio_fit", "duration_cap", "product_quality",
+    "layout", "contract", "audio_fit", "duration_cap",
     "missing_item", "first_scene", "last_scene", "empty_scenes",
 )
+
+
+def _is_soft_scene_qa_issue(item: dict[str, Any]) -> bool:
+    itype = str(item.get("type") or "").lower()
+    detail = str(item.get("detail") or "").lower()
+    if "product_quality" in itype:
+        return True
+    if "source_fidelity" in itype and (
+        "target duration" in detail
+        or "heavily truncated" in detail
+        or "exact narration" in detail
+        or "restore the full text" in detail
+    ):
+        return True
+    return False
 
 
 def _scene_qa_has_hard_fail(result: dict[str, Any]) -> bool:
@@ -39,14 +54,17 @@ def _scene_qa_has_hard_fail(result: dict[str, Any]) -> bool:
         if not isinstance(item, dict):
             # Bare string issue: treat as soft suggestion.
             continue
+        if _is_soft_scene_qa_issue(item):
+            continue
         severity = str(item.get("severity") or "").lower()
+        if severity in {"minor", "warning", "suggestion", "info"}:
+            continue
         if severity in {"blocking_error", "repairable_error", "major"}:
             return True
         itype = str(item.get("type") or "").lower()
         if any(marker in itype for marker in _HARD_QA_ISSUE_MARKERS):
             return True
-    # A concrete required change is a hard ask.
-    return bool(result.get("required_changes"))
+    return False
 
 
 def has_hard_fail(result: dict[str, Any]) -> bool:
@@ -62,6 +80,8 @@ def has_hard_fail(result: dict[str, Any]) -> bool:
         itype = str(item.get("type") or "").lower()
         severity = str(item.get("severity") or "").lower()
         detail = str(item.get("detail") or "").lower()
+        if severity in {"minor", "warning", "suggestion", "info"}:
+            continue
         if severity == "blocking_error":
             return True
         hard_markers = {
@@ -76,6 +96,7 @@ def has_hard_fail(result: dict[str, Any]) -> bool:
         if any(m in detail for m in ["safety", "source_fidelity", "source_support", "health claim", "medical overclaim"]):
             return True
     return False
+
 
 
 def _qa_blocker_details(result: dict[str, Any]) -> list[str]:

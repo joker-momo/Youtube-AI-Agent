@@ -40,7 +40,14 @@ _GOOD_SCRIPT = {
     "short_id": "short-01", "source_long_job_id": "long-job", "short_format": "pain_to_tip",
     "target_duration_sec": 32, "hook": "¿Duermes pero te levantas cansado?",
     "narration": "¿Duermes pero te levantas cansado? Marca una hora de cierre y apaga la pantalla.\nNotarás la diferencia.",
-    "beats": ["pain", "tip"], "cta": "Vídeo completo en el canal.", "qa": {"verdict": "PENDING_SHORTS_QA"},
+    "beats": [
+        {"time_sec": 0, "narration": "¿Duermes pero te levantas cansado?", "purpose": "hook"},
+        {"time_sec": 2, "narration": "Marca una hora de cierre.", "purpose": "tip"},
+        {"time_sec": 5, "narration": "Apaga la pantalla.", "purpose": "tip"},
+        {"time_sec": 8, "narration": "Notarás la diferencia.", "purpose": "tip"},
+        {"time_sec": 11, "narration": "Vídeo completo en el canal.", "purpose": "cta"}
+    ], 
+    "cta": "Vídeo completo en el canal.", "qa": {"verdict": "PENDING_SHORTS_QA"},
 }
 _GOOD_SCENES = {
     "channel_id": "vida-plena-45", "short_id": "short-01", "total_duration_sec": 21.0,

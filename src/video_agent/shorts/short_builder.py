@@ -1229,6 +1229,262 @@ def _scenes_structural_repair(ctx, loop):
     return _LoopAction.CONTINUE
 
 
+def _scenes_run_qa(ctx, loop):
+    """Run Gemini scene QA, record its verdict, and enforce the QA hard gate.
+
+    On PASS/WARN it records the best candidate and stops the loop; otherwise it
+    tracks QA issues in retry memory, caps regeneration, and either downgrades
+    to WARN, fails hard, or continues for another product-quality repair.
+
+    Returns a `_LoopAction` or a `StageResult`. Mutates `loop` in place and
+    stores the normalized QA issues on `loop.normalized_scene_issues`.
+    """
+    short_id = ctx.short_plan["short_id"]
+    long_job_dir = ctx.long_job_dir
+    _jd = ctx.json_dir
+    status = ctx.status
+    update_stage = ctx.update_stage
+    max_regen = ctx.max_regen
+
+    state = loop.state
+    scene_retry_memory = loop.scene_retry_memory
+    scene_memory_file = loop.scene_memory_file
+    scenes_attempts = loop.scenes_attempts
+    short_scenes = loop.short_scenes
+
+    scenes_qa_result, normalized_scene_issues = _stage_qa_scenes(
+        ctx,
+        short_scenes,
+        scenes_attempts,
+    )
+    loop.scenes_qa_result = scenes_qa_result
+    loop.normalized_scene_issues = normalized_scene_issues
+
+    qa_pass = scenes_qa_result.get("verdict") in ("PASS", "WARN")
+    scenes_qa_result["qa_pass"] = qa_pass
+    scenes_qa_result["provider_call_ok"] = bool(
+        scenes_qa_result.get("provider_call_ok")
+        or scenes_qa_result.get("provider") in {"gemini", "rule_based"}
+    )
+
+    if qa_pass:
+        for issue_id in list(scene_retry_memory.active_issues.keys()):
+            issue = scene_retry_memory.active_issues[issue_id]
+            if issue.stage == "scene_qa":
+                resolve_issue_by_id(scene_retry_memory, issue_id)
+        loop.best_scene_candidate = dict(short_scenes)
+        loop.best_scene_candidate_qa = dict(scenes_qa_result)
+        loop.scenes_passed = True
+
+        state.latest_scene_qa_ok = True
+        state.latest_scene_qa_version = state.current_scenes_version
+
+        max_limit = min(2, max_regen + 1)
+        max_allowed_attempts = max_limit
+        if loop.attempt_1_failed_layout_schema and max_regen >= 2:
+            max_allowed_attempts = 3
+
+        scene_warnings = [n for n in normalized_scene_issues if n.issue_class == qa.IssueClass.SOFT_WARNING]
+        decision = "continued_with_warn" if scenes_qa_result.get("verdict") == "WARN" else "passed"
+
+        decision_summary = {
+            "stage": "qa_scenes",
+            "attempts_used": scenes_attempts,
+            "max_attempts": max_allowed_attempts,
+            "decision": decision,
+            "renderable": True,
+            "remaining_blockers": [],
+            "remaining_warnings": [w.to_dict() if hasattr(w, "to_dict") else w for w in scene_warnings],
+            "continued_to_render": True,
+        }
+        atomic_write_json(_jd / paths.SHORT_QA_DECISION_SUMMARY_FILE, decision_summary)
+
+        save_retry_memory(scene_retry_memory, scene_memory_file)
+        return _LoopAction.BREAK
+
+    loop.best_scene_candidate = dict(short_scenes)
+    loop.best_scene_candidate_qa = dict(scenes_qa_result)
+    loop.product_attempts += 1
+    status["qa_scenes_product_attempts"] = loop.product_attempts
+    write_short_status(long_job_dir, short_id, status)
+
+    # Track Gemini QA issues in retry memory
+    active_qa_ids = set()
+    suppressed_qa_ids = set()
+    for norm in normalized_scene_issues:
+        issue_id = make_stable_issue_id("scene_qa", norm.scene_id, norm.issue_type, norm.detail)
+        if norm.issue_class == qa.IssueClass.STALE_OR_SUPPRESSED:
+            suppressed_qa_ids.add(issue_id)
+        else:
+            active_qa_ids.add(issue_id)
+
+        retry_issue = RetryIssue(
+            id=issue_id,
+            stage="scene_qa",
+            attempt=scenes_attempts,
+            scene_id=norm.scene_id,
+            type=norm.issue_type,
+            severity="minor" if norm.issue_class == "soft_warning" else "major",
+            detail=norm.detail,
+            required_change=norm.repair_hint or norm.detail,
+            status="active" if norm.issue_class != "stale_or_suppressed" else "suppressed",
+            first_seen_attempt=scenes_attempts,
+            last_seen_attempt=scenes_attempts,
+            issue_class=norm.issue_class,
+            reason=norm.reason
+        )
+        if retry_issue.status == "suppressed":
+            scene_retry_memory.suppressed_issues[issue_id] = retry_issue
+            suppress_issue_by_id(scene_retry_memory, issue_id)
+        else:
+            add_or_update_issue(scene_retry_memory, retry_issue)
+
+    for issue_id in list(scene_retry_memory.active_issues.keys()):
+        issue = scene_retry_memory.active_issues[issue_id]
+        if issue.stage == "scene_qa" and issue_id not in active_qa_ids and issue_id not in suppressed_qa_ids:
+            resolve_issue_by_id(scene_retry_memory, issue_id)
+
+    # Max attempts check: MAX_SCENE_REGEN_ATTEMPTS = 2
+    # Allow attempt 3 only if:
+    # - attempt 1 failed schema/layout hard blocker;
+    # - and current candidate is not renderable.
+    stop_scene_retries = False
+    renderable = not loop.structure_blocked and not any(
+        n.issue_class == qa.IssueClass.HARD_BLOCKER for n in normalized_scene_issues
+    )
+
+    max_limit = min(2, max_regen + 1)
+    if scenes_attempts >= max_limit:
+        if scenes_attempts == 2 and loop.attempt_1_failed_layout_schema and not renderable and max_regen >= 2:
+            pass
+        else:
+            stop_scene_retries = True
+
+    if stop_scene_retries:
+        remaining_blockers = [
+            n for n in normalized_scene_issues
+            if n.issue_class in {qa.IssueClass.HARD_BLOCKER, qa.IssueClass.REPAIRABLE_BLOCKER}
+            and n.issue_type != "slideshow_risk"
+        ]
+        remaining_warnings = [
+            n for n in normalized_scene_issues
+            if n.issue_class == qa.IssueClass.SOFT_WARNING
+            or n.issue_type == "slideshow_risk"
+        ]
+
+        decision = ""
+        if not remaining_blockers:
+            # Downgrade to WARN and continue
+            scenes_qa_result["verdict"] = "WARN"
+            scenes_qa_result["qa_pass"] = True
+            loop.scenes_passed = True
+            loop.best_scene_candidate = dict(short_scenes)
+            loop.best_scene_candidate_qa = dict(scenes_qa_result)
+
+            state.latest_scene_qa_ok = True
+            state.latest_scene_qa_version = state.current_scenes_version
+            decision = "continued_with_warn"
+            update_stage("qa_scenes", "completed", qa_verdict="WARN")
+        else:
+            loop.scenes_passed = False
+            decision = "failed_hard_blocker"
+            update_stage("qa_scenes", "failed", qa_verdict="FAIL")
+
+        summary_report = {
+            "stage": "qa_scenes",
+            "scenes_attempts": scenes_attempts,
+            "remaining_blockers": [b.to_dict() for b in remaining_blockers],
+            "remaining_warnings": [w.to_dict() for w in remaining_warnings],
+            "renderable": renderable,
+            "decision": decision,
+            "latest_scene_qa_ok": state.latest_scene_qa_ok,
+            "latest_scene_qa_version": state.latest_scene_qa_version,
+            "best_candidate_available": loop.best_scene_candidate is not None,
+        }
+        atomic_write_json(_jd / paths.SHORT_FAILURE_REPORT_FILE, summary_report)
+
+        # Write qa_decision_summary.json
+        max_allowed_attempts = max_limit
+        if loop.attempt_1_failed_layout_schema and not renderable and max_regen >= 2:
+            max_allowed_attempts = 3
+        decision_summary = {
+            "stage": "qa_scenes",
+            "attempts_used": scenes_attempts,
+            "max_attempts": max_allowed_attempts,
+            "decision": decision,
+            "renderable": renderable,
+            "remaining_blockers": [b.to_dict() for b in remaining_blockers],
+            "remaining_warnings": [w.to_dict() for w in remaining_warnings],
+            "continued_to_render": decision == "continued_with_warn",
+        }
+        atomic_write_json(_jd / paths.SHORT_QA_DECISION_SUMMARY_FILE, decision_summary)
+
+        print(f"Scene QA stopped after {scenes_attempts} attempts.\n"
+              f"Remaining blockers: {[b.detail for b in remaining_blockers]}\n"
+              f"Remaining warnings: {[w.detail for w in remaining_warnings]}\n"
+              f"Renderable: {renderable}\n"
+              f"Decision: {decision}")
+
+        if decision == "failed_hard_blocker":
+            status.update({
+                "status": "needs_review",
+                "rendered": False,
+                "uploaded": False,
+                "youtube_url": "",
+                "requires_user_review": True,
+                "qa_verdict": "FAIL",
+                "failure_stage": "qa_scenes",
+                "failure_reason": f"Scene QA failed hard blocker: {[b.detail for b in remaining_blockers]}",
+            })
+            write_short_status(long_job_dir, short_id, status)
+            save_retry_memory(scene_retry_memory, scene_memory_file)
+            return StageResult(StageSignal.PROCEED, returns=status)
+        else:
+            save_retry_memory(scene_retry_memory, scene_memory_file)
+            return _LoopAction.BREAK
+
+    return _LoopAction.FALLTHROUGH
+
+
+def _scenes_product_quality_repair(ctx, loop):
+    """Build the cumulative feedback for the next scene regeneration after a
+    Gemini product-quality miss (optionally requesting a pacing simplify).
+
+    Always returns `_LoopAction.FALLTHROUGH`. Mutates `loop` in place.
+    """
+    short_plan = ctx.short_plan
+    scene_retry_memory = loop.scene_retry_memory
+    scene_memory_file = loop.scene_memory_file
+    scenes_attempts = loop.scenes_attempts
+    short_scenes = loop.short_scenes
+    scenes_qa_result = loop.scenes_qa_result
+
+    # --- Product quality repair strategy ---
+    summary = qa.summarize_product_scores(
+        scenes_qa_result.get("product_scores") or {}
+    )
+    scene_count = len(short_scenes.get("scenes") or [])
+    candidate_summary = ""
+    if summary["needs_pacing_simplify"] and scene_count >= qa.SIMPLIFY_SCENE_COUNT_THRESHOLD:
+        candidate_summary = (
+            "SIMPLIFY FOR PACING:\n"
+            f"- retention_pacing is weak ({summary['retention_pacing']}) with {scene_count} scenes.\n"
+            "- Remove the redundant late summary scene.\n"
+            "- Merge the final tip/quote into the CTA scene.\n"
+            "- Target 7-8 scenes total.\n"
+            "- Do NOT add more graphics."
+        )
+
+    save_retry_memory(scene_retry_memory, scene_memory_file)
+    from video_agent.shorts.idea_preservation import derive_idea_items
+    exact_mapping_items = short_plan.get("idea_items") or derive_idea_items(short_plan)
+    exact_mapping_context = "\n".join(f"{i+1}. {item.get('label') or item.get('topic') or item}" for i, item in enumerate(exact_mapping_items)) if exact_mapping_items else ""
+    loop.scenes_feedback = generate_cumulative_feedback(
+        scene_retry_memory, scenes_attempts + 1, candidate_summary=candidate_summary, exact_mapping_context=exact_mapping_context
+    )
+    return _LoopAction.FALLTHROUGH
+
+
 def _stage_scenes(ctx: BuildContext) -> StageResult:
     """Stage: scenes -> visual_rhythm_plan -> qa_scenes inner regen loop.
 

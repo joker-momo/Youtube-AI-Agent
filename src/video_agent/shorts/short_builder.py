@@ -104,6 +104,61 @@ class StageResult:
 _PROCEED = StageResult(StageSignal.PROCEED)
 
 
+class _LoopAction(Enum):
+    """Control signal returned by `_scenes_*` loop-body helpers.
+
+    CONTINUE -> the caller's `while` loop does `continue`.
+    BREAK    -> the caller's `while` loop does `break`.
+    FALLTHROUGH -> proceed to the next block in the loop body.
+    A returned StageResult instead means: bubble up out of `_stage_scenes`.
+    """
+
+    CONTINUE = "continue"
+    BREAK = "break"
+    FALLTHROUGH = "fallthrough"
+
+
+@dataclass
+class _SceneLoopState:
+    """Mutable state shared across one `_stage_scenes` inner-loop iteration.
+
+    Holds every local that the loop body reads or writes across helper
+    boundaries, so the extracted `_scenes_*` helpers can mutate it in place
+    rather than threading dozens of return values.
+    """
+
+    # Counters mirrored into ctx.extras at the loop boundaries.
+    scenes_attempts: int = 0
+    structural_attempts: int = 0
+    product_attempts: int = 0
+    total_regeneration_attempts: int = 0
+    # Internal loop bookkeeping.
+    scene_fit_failures: int = 0
+    provider_error_attempts: int = 0
+    attempt_1_failed_layout_schema: bool = False
+    prev_scene_hash: str | None = None
+    skip_generation: bool = False
+    scenes_passed: bool = False
+    escalate_to_script: bool = False
+    scene_collapsed: bool = False
+    # Working objects.
+    short_scenes: Any = None
+    scenes_qa_result: Any = None
+    visual_rhythm_plan: Any = None
+    state: Any = None
+    scenes_feedback: str = ""
+    best_scene_candidate: Any = None
+    best_scene_candidate_qa: Any = None
+    scene_retry_memory: Any = None
+    scene_memory_file: Any = None
+    visual_repair_tracker: Any = None
+    # Iteration-local working values reused by later blocks.
+    scenes: Any = None
+    structure_issues: Any = None
+    structure_blocked: bool = False
+    normalized_scene_issues: Any = None
+
+
 # ---------------------------------------------------------------------------
 # Per-stage functions extracted from _build_short_impl
 # ---------------------------------------------------------------------------
@@ -454,6 +509,401 @@ def _stage_qa_scenes(
     return scenes_qa_result, normalized_scene_issues
 
 
+def _scenes_generate_and_normalize(ctx, loop):
+    """Generate scenes, apply deterministic repairs + visual rhythm, validate.
+
+    Covers Stage-3 generation (with provider/generic exception handling),
+    retry-collapse protection, post-generation duration/hook repairs, the
+    visual-rhythm pass, payoff-layout repair, scene-structure validation, the
+    deterministic scene-fit repair, and visual_only_unreadable repair.
+
+    Returns a `_LoopAction` (CONTINUE / BREAK / FALLTHROUGH) or a `StageResult`
+    to bubble up out of `_stage_scenes`. Mutates `loop` in place.
+    """
+    short_id = ctx.short_plan["short_id"]
+    long_job_dir = ctx.long_job_dir
+    _jd = ctx.json_dir
+    status = ctx.status
+    plan_for_prompt = ctx.plan_for_prompt
+    channel_config = ctx.channel_config
+    update_stage = ctx.update_stage
+    check_stop = ctx.check_stop
+    _recorder = ctx.recorder
+    llm_fn = ctx.llm_fn
+    max_regen = ctx.max_regen
+    max_chatgpt_provider_retries = ctx.max_chatgpt_provider_retries
+
+    short_script = ctx.extras["short_script"]
+    retention_plan = ctx.extras.get("retention_plan", {})
+    spoken_humanization = ctx.extras["spoken_humanization"]
+
+    state = loop.state
+    scene_retry_memory = loop.scene_retry_memory
+    scene_memory_file = loop.scene_memory_file
+    scenes_attempts = loop.scenes_attempts
+
+    # --- Stage 3: Scenes ---
+    try:
+        if not loop.skip_generation:
+            update_stage("scenes", "in_progress")
+            check_stop()
+            loop.short_scenes = short_scene_builder.build_short_scenes(
+                long_job_dir, plan_for_prompt, short_script, channel_config, llm_fn,
+                retention_plan=retention_plan,
+                spoken_humanization=spoken_humanization,
+                feedback=loop.scenes_feedback, attempt=scenes_attempts,
+            )
+            update_stage("scenes", "completed")
+        else:
+            loop.skip_generation = False
+            update_stage("scenes", "completed")
+
+        short_scenes = loop.short_scenes
+
+        state.current_scenes_version += 1
+        state.latest_scene_validation_ok = False
+        state.latest_scene_validation_version = None
+        state.latest_scene_qa_ok = False
+        state.latest_scene_qa_version = None
+        state.latest_audio_tail_ok = False
+        state.latest_audio_tail_version = None
+
+        # Spec §8: retry-collapse protection. If a regeneration produced
+        # the same normalized scenes as the previous attempt, the
+        # generator is stuck — stop looping. Accept with WARN when the
+        # output is renderable + safe, otherwise let the loop end and
+        # report a clear failure.
+        cur_scene_hash = _normalized_scene_hash(short_scenes)
+        if loop.prev_scene_hash is not None and cur_scene_hash == loop.prev_scene_hash:
+            # Run deterministic repairs first so they are present in final scenes
+            scenes = short_scenes.get("scenes") or []
+            for scene in scenes:
+                validate_scenes.repair_scene_duration_if_possible(scene)
+            validate_scenes.repair_weak_hook_motion(scenes)
+
+            collapse_issues = validate_scenes.validate_scene_structure(
+                scenes,
+                scenes_doc=short_scenes,
+                script=short_script,
+                attempt=scenes_attempts,
+            )
+
+            # Also check for active hard blockers in retry memory
+            active_memory_blockers = [
+                issue for issue in scene_retry_memory.active_issues.values()
+                if issue.issue_class in {"hard_blocker", "repairable_blocker"}
+                and issue.type != "slideshow_risk"
+            ]
+            active_memory_warnings = [
+                issue for issue in scene_retry_memory.active_issues.values()
+                if issue.issue_class == "soft_warning"
+                or issue.type == "slideshow_risk"
+            ]
+
+            collapse_blockers = [
+                i for i in collapse_issues
+                if i.severity in ("blocking_error", "repairable_error")
+                and i.type != "slideshow_risk"
+            ]
+            collapse_warnings = [
+                i for i in collapse_issues
+                if i.severity == "warning"
+                or i.type == "slideshow_risk"
+            ]
+
+            remaining_blockers = active_memory_blockers + [
+                {
+                    "type": b.type,
+                    "scene_id": b.scene_id,
+                    "detail": b.detail,
+                    "severity": b.severity,
+                    "issue_class": "repairable_blocker" if b.severity == "repairable_error" else "hard_blocker",
+                }
+                for b in collapse_blockers
+            ]
+            remaining_warnings = active_memory_warnings + [
+                {
+                    "type": w.type,
+                    "scene_id": w.scene_id,
+                    "detail": w.detail,
+                    "severity": w.severity,
+                    "issue_class": "soft_warning",
+                }
+                for w in collapse_warnings
+            ]
+
+            renderable = len(remaining_blockers) == 0
+            decision = "continued_with_warn" if renderable else "failed_hard_blocker"
+
+            max_limit = min(2, max_regen + 1)
+            max_allowed_attempts = max_limit
+            if loop.attempt_1_failed_layout_schema and max_regen >= 2:
+                max_allowed_attempts = 3
+
+            decision_summary = {
+                "stage": "qa_scenes",
+                "attempts_used": scenes_attempts,
+                "max_attempts": max_allowed_attempts,
+                "decision": decision,
+                "renderable": renderable,
+                "remaining_blockers": [b.to_dict() if hasattr(b, "to_dict") else b for b in remaining_blockers],
+                "remaining_warnings": [w.to_dict() if hasattr(w, "to_dict") else w for w in remaining_warnings] + [
+                    {"type": "retry_collapse", "detail": "Identical scene output across retries; stopping loop."}
+                ],
+                "continued_to_render": renderable,
+            }
+            atomic_write_json(_jd / paths.SHORT_QA_DECISION_SUMMARY_FILE, decision_summary)
+
+            _recorder.record_event(
+                "deterministic",
+                "retry_collapse",
+                {
+                    "verdict": "WARN" if renderable else "FAIL",
+                    "retry_reason": "scene_validation_fail",
+                    "retry_scope": "scenes_only",
+                    "attempt": scenes_attempts,
+                    "renderable": renderable,
+                    "detail": "Identical scene output across retries; stopping loop.",
+                    "reason": "retry_collapse",
+                },
+                ok=renderable,
+            )
+
+            if renderable:
+                loop.best_scene_candidate = dict(short_scenes)
+                loop.best_scene_candidate_qa = {"verdict": "WARN", "collapsed": True}
+                loop.scenes_qa_result = {"verdict": "WARN", "collapsed": True, "qa_pass": True}
+                loop.scenes_passed = True
+                state.latest_scene_validation_ok = True
+                state.latest_scene_validation_version = state.current_scenes_version
+                state.latest_scene_qa_ok = True
+                state.latest_scene_qa_version = state.current_scenes_version
+                atomic_write_json(_jd / paths.SHORT_SCENES_FILE, short_scenes)
+                update_stage("qa_scenes", "completed", qa_verdict="WARN")
+                loop.scene_collapsed = True
+                save_retry_memory(scene_retry_memory, scene_memory_file)
+                return _LoopAction.BREAK
+            else:
+                loop.scenes_passed = False
+                update_stage("qa_scenes", "failed", qa_verdict="FAIL")
+                status.update({
+                    "status": "needs_review",
+                    "rendered": False,
+                    "uploaded": False,
+                    "youtube_url": "",
+                    "requires_user_review": True,
+                    "qa_verdict": "FAIL",
+                    "failure_stage": "qa_scenes",
+                    "failure_reason": f"Scene QA retry collapse failed hard blocker: {[b.get('detail') if isinstance(b, dict) else getattr(b, 'detail', '') for b in remaining_blockers]}",
+                    "regeneration_attempts": loop.total_regeneration_attempts,
+                })
+                write_short_status(long_job_dir, short_id, status)
+                save_retry_memory(scene_retry_memory, scene_memory_file)
+                return StageResult(StageSignal.PROCEED, returns=status)
+        loop.prev_scene_hash = cur_scene_hash
+    except short_scene_builder.ChatGPTProviderError as exc:
+        # Provider/browser failure — NOT a creative scene-QA failure.
+        # The recovery-wrapped llm_fn already cleared cookies + reopened a
+        # fresh temp chat; here we just keep it off the creative budget and
+        # surface a non-QA failure if the provider keeps erroring.
+        loop.provider_error_attempts += 1
+        snippet = getattr(exc, "snippet", "")
+        update_stage("scenes", "failed", error="chatgpt_provider_error")
+        _recorder.record_event(
+            "chatgpt",
+            "provider_error",
+            {
+                "event": "chatgpt_provider_error",
+                "stage": "scene_generation",
+                "action": "clear_browser_state_and_retry",
+                "attempt": loop.provider_error_attempts,
+                "error_snippet": snippet,
+            },
+            ok=False,
+        )
+        atomic_write_json(_jd / paths.SHORT_FAILURE_REPORT_FILE, {
+            "stage": "scene_generation",
+            "type": "chatgpt_provider_error",
+            "attempt": loop.provider_error_attempts,
+            "detail": "ChatGPT returned provider-error text instead of scene JSON.",
+            "error_snippet": snippet,
+        })
+        if loop.provider_error_attempts > max_chatgpt_provider_retries:
+            for s in status["stages"]:
+                if s["status"] == "pending":
+                    s["status"] = "skipped"
+            status.update({
+                "status": "needs_review",
+                "rendered": False,
+                "uploaded": False,
+                "youtube_url": "",
+                "requires_user_review": True,
+                "qa_verdict": "PROVIDER_ERROR",
+                "failure_kind": "chatgpt_provider_error",
+                "failure_message": (
+                    "ChatGPT provider error persisted after browser/session "
+                    "cleanup and retry. This is not a scene QA failure."
+                ),
+                "regeneration_attempts": loop.total_regeneration_attempts,
+            })
+            write_short_status(long_job_dir, short_id, status)
+            return StageResult(StageSignal.PROCEED, returns=status)
+        # Do NOT consume the scenes/creative budget for a provider error.
+        loop.scenes_attempts -= 1
+        return _LoopAction.CONTINUE
+    except Exception as exc:
+        update_stage("scenes", "failed")
+        status["status"] = "failed"
+        write_short_status(long_job_dir, short_id, status)
+        raise exc
+
+    short_scenes = loop.short_scenes
+    scenes = short_scenes.get("scenes") or []
+    for scene in scenes:
+        validate_scenes.repair_scene_duration_if_possible(scene)
+
+    # Deterministic repair: weak hook motion (spec §10.1)
+    if validate_scenes.repair_weak_hook_motion(scenes):
+        state.current_scenes_version += 1
+        state.latest_scene_validation_ok = False
+        state.latest_scene_validation_version = None
+
+    short_scenes, scenes, loop.visual_rhythm_plan = _stage_visual_rhythm(
+        ctx,
+        short_scenes,
+        scenes_attempts,
+        state,
+    )
+    loop.short_scenes = short_scenes
+
+    if validate_scenes.repair_five_error_bread_payoff_layout(scenes, short_script):
+        short_scenes["scenes"] = scenes
+        short_scenes["total_duration_sec"] = round(
+            sum(float(scene.get("duration_sec") or 0.0) for scene in scenes),
+            1,
+        )
+        state.current_scenes_version += 1
+        state.latest_scene_validation_ok = False
+        state.latest_scene_validation_version = None
+        _recorder.record_event(
+            "deterministic",
+            "payoff_layout_repair",
+            {"attempt": scenes_attempts, "layout": "graphic_checklist"},
+            ok=True,
+        )
+
+    structure_issues = validate_scenes.validate_scene_structure(
+        scenes,
+        scenes_doc=short_scenes,
+        script=short_script,
+        attempt=scenes_attempts,
+    )
+
+    # Auto-repair duration/narration-fit if it's the only class of hard issues remaining
+    hard_errors = [
+        i for i in structure_issues
+        if i.severity in ("blocking_error", "repairable_error")
+        and i.type in HARD_SCENE_VALIDATION_TYPES
+    ]
+    # Run deterministic fit-repair whenever ANY duration/narration-fit
+    # hard error exists — even alongside other hard errors (e.g.
+    # missing_item_coverage). Repairing the fixable fit issues here keeps
+    # them from blocking the run; remaining errors still drive regen.
+    if any(i.type in ("duration_cap", "scene_narration_fit") for i in hard_errors):
+        repaired_any = False
+        # First try simple per-scene duration clamp/extend (handles duration_cap).
+        for issue in hard_errors:
+            if issue.scene_id:
+                scene_to_fix = next((s for s in scenes if str(s.get("id") or s.get("scene_id") or "") == issue.scene_id), None)
+                if scene_to_fix:
+                    res = validate_scenes.repair_scene_duration_if_possible(scene_to_fix)
+                    if res in ("auto_shortened", "auto_extended", "auto_shortened_cta"):
+                        repaired_any = True
+        # Then run deterministic scene-fit repair (extend -> split ->
+        # micro-condense) for any remaining narration overflow, BEFORE
+        # spending an LLM regeneration. No regen_fn: an unfixable scene
+        # falls through to the existing regeneration path below.
+        fit_result = validate_scenes.deterministic_scene_fit_repair(scenes, short_script)
+        if any(mode != "regen_required" for mode in fit_result["modes"]):
+            repaired_any = True
+            short_scenes["scenes"] = fit_result["scenes"]
+            scenes = fit_result["scenes"]
+            short_scenes["total_duration_sec"] = fit_result["total_duration_sec"]
+        for entry in fit_result["logs"]:
+            _recorder.record_event(
+                "deterministic", "scene_narration_fit_repair", entry,
+                ok=entry["repair_mode_attempted"] != "regen_required",
+            )
+        if repaired_any:
+            state.current_scenes_version += 1
+            state.latest_scene_validation_ok = False
+            state.latest_scene_validation_version = None
+            # Re-run validation with repaired durations
+            structure_issues = validate_scenes.validate_scene_structure(
+                scenes,
+                scenes_doc=short_scenes,
+                script=short_script,
+                attempt=scenes_attempts,
+            )
+
+    atomic_write_json(_jd / paths.SHORT_SCENES_FILE, short_scenes)
+
+    # Intercept visual_only_unreadable for deterministic repair and downgrade logic
+    visual_issues = [i for i in structure_issues if i.type == "visual_only_unreadable"]
+    did_visual_repair = False
+    for vi in visual_issues:
+        import re
+        m = re.match(r"Item (\w+) appears", str(vi.detail))
+        if m:
+            item_id = m.group(1)
+            tracker = loop.visual_repair_tracker.get(item_id, {"repairs": 0, "regens": 0})
+
+            if tracker["repairs"] < 1:
+                # Attempt deterministic repair
+                _idea_items = short_script.get("idea_items") or short_script.get("points") or short_script.get("checklist") or []
+                item_str = item_id
+                for it in _idea_items:
+                    if isinstance(it, dict) and str(it.get("item_id") or it.get("id") or "") == item_id:
+                        item_str = it
+                        break
+
+                if validate_scenes.repair_visual_only_unreadable(scenes, item_str):
+                    did_visual_repair = True
+                    tracker["repairs"] += 1
+                    loop.visual_repair_tracker[item_id] = tracker
+
+                    _recorder.record_event(
+                        "deterministic",
+                        "qa_classification",
+                        {"reason": "deterministic_repair", "item_id": item_id},
+                        ok=True
+                    )
+            else:
+                # We already tried deterministic repair. This is a ChatGPT regen attempt.
+                tracker["regens"] += 1
+                loop.visual_repair_tracker[item_id] = tracker
+                if tracker["regens"] > 1:
+                    # Already regenerated once, give up and downgrade
+                    vi.severity = "warning"
+                    vi.detail = f"(Downgraded) {vi.detail}"
+                    _recorder.record_event(
+                        "deterministic",
+                        "qa_classification",
+                        {"reason": "visual_repair_downgraded", "item_id": item_id},
+                        ok=True
+                    )
+
+    if did_visual_repair:
+        atomic_write_json(_jd / paths.SHORT_SCENES_FILE, short_scenes)
+        loop.skip_generation = True
+        return _LoopAction.CONTINUE
+
+    loop.short_scenes = short_scenes
+    loop.scenes = scenes
+    loop.structure_issues = structure_issues
+    return _LoopAction.FALLTHROUGH
+
+
 def _stage_scenes(ctx: BuildContext) -> StageResult:
     """Stage: scenes -> visual_rhythm_plan -> qa_scenes inner regen loop.
 
@@ -531,363 +981,92 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
     _scenes_loop_ceiling = max_structural_attempts + max_product_attempts + 2
     visual_repair_tracker = {}
     skip_generation = False
-    while scenes_attempts < _scenes_loop_ceiling:
-        scenes_attempts += 1
-        total_regeneration_attempts = (script_attempts - 1) + (scenes_attempts - 1)
+    visual_rhythm_plan = None
+
+    # Shared mutable loop state, mutated in place by the `_scenes_*` helpers.
+    loop = _SceneLoopState(
+        scenes_attempts=scenes_attempts,
+        structural_attempts=structural_attempts,
+        product_attempts=product_attempts,
+        total_regeneration_attempts=0,
+        scene_fit_failures=scene_fit_failures,
+        provider_error_attempts=provider_error_attempts,
+        attempt_1_failed_layout_schema=attempt_1_failed_layout_schema,
+        prev_scene_hash=prev_scene_hash,
+        skip_generation=skip_generation,
+        scenes_passed=scenes_passed,
+        escalate_to_script=escalate_to_script,
+        scene_collapsed=scene_collapsed,
+        short_scenes=short_scenes,
+        scenes_qa_result=scenes_qa_result,
+        visual_rhythm_plan=None,
+        state=state,
+        scenes_feedback=scenes_feedback,
+        best_scene_candidate=best_scene_candidate,
+        best_scene_candidate_qa=best_scene_candidate_qa,
+        scene_retry_memory=scene_retry_memory,
+        scene_memory_file=scene_memory_file,
+        visual_repair_tracker=visual_repair_tracker,
+    )
+
+    while loop.scenes_attempts < _scenes_loop_ceiling:
+        # Capture any mutations the not-yet-extracted blocks below made to the
+        # local mirror variables on the previous iteration before advancing.
+        loop.scenes_attempts = scenes_attempts
+        loop.structural_attempts = structural_attempts
+        loop.product_attempts = product_attempts
+        loop.scene_fit_failures = scene_fit_failures
+        loop.provider_error_attempts = provider_error_attempts
+        loop.attempt_1_failed_layout_schema = attempt_1_failed_layout_schema
+        loop.prev_scene_hash = prev_scene_hash
+        loop.skip_generation = skip_generation
+        loop.scenes_passed = scenes_passed
+        loop.escalate_to_script = escalate_to_script
+        loop.scene_collapsed = scene_collapsed
+        loop.short_scenes = short_scenes
+        loop.scenes_qa_result = scenes_qa_result
+        loop.visual_rhythm_plan = visual_rhythm_plan
+        loop.scenes_feedback = scenes_feedback
+        loop.best_scene_candidate = best_scene_candidate
+        loop.best_scene_candidate_qa = best_scene_candidate_qa
+
+        loop.scenes_attempts += 1
+        loop.total_regeneration_attempts = (script_attempts - 1) + (loop.scenes_attempts - 1)
+        # Mirror loop state into the locals used by the not-yet-extracted
+        # blocks below.
+        scenes_attempts = loop.scenes_attempts
+        total_regeneration_attempts = loop.total_regeneration_attempts
         status["qa_scenes_attempts"] = scenes_attempts
         write_short_status(long_job_dir, short_id, status)
 
-        # --- Stage 3: Scenes ---
-        try:
-            if not skip_generation:
-                update_stage("scenes", "in_progress")
-                check_stop()
-                short_scenes = short_scene_builder.build_short_scenes(
-                    long_job_dir, plan_for_prompt, short_script, channel_config, llm_fn,
-                    retention_plan=retention_plan,
-                    spoken_humanization=spoken_humanization,
-                    feedback=scenes_feedback, attempt=scenes_attempts,
-                )
-                update_stage("scenes", "completed")
-            else:
-                skip_generation = False
-                update_stage("scenes", "completed")
-
-            state.current_scenes_version += 1
-            state.latest_scene_validation_ok = False
-            state.latest_scene_validation_version = None
-            state.latest_scene_qa_ok = False
-            state.latest_scene_qa_version = None
-            state.latest_audio_tail_ok = False
-            state.latest_audio_tail_version = None
-
-            # Spec §8: retry-collapse protection. If a regeneration produced
-            # the same normalized scenes as the previous attempt, the
-            # generator is stuck — stop looping. Accept with WARN when the
-            # output is renderable + safe, otherwise let the loop end and
-            # report a clear failure.
-            cur_scene_hash = _normalized_scene_hash(short_scenes)
-            if prev_scene_hash is not None and cur_scene_hash == prev_scene_hash:
-                # Run deterministic repairs first so they are present in final scenes
-                scenes = short_scenes.get("scenes") or []
-                for scene in scenes:
-                    validate_scenes.repair_scene_duration_if_possible(scene)
-                validate_scenes.repair_weak_hook_motion(scenes)
-
-                collapse_issues = validate_scenes.validate_scene_structure(
-                    scenes,
-                    scenes_doc=short_scenes,
-                    script=short_script,
-                    attempt=scenes_attempts,
-                )
-
-                # Also check for active hard blockers in retry memory
-                active_memory_blockers = [
-                    issue for issue in scene_retry_memory.active_issues.values()
-                    if issue.issue_class in {"hard_blocker", "repairable_blocker"}
-                    and issue.type != "slideshow_risk"
-                ]
-                active_memory_warnings = [
-                    issue for issue in scene_retry_memory.active_issues.values()
-                    if issue.issue_class == "soft_warning"
-                    or issue.type == "slideshow_risk"
-                ]
-
-                collapse_blockers = [
-                    i for i in collapse_issues
-                    if i.severity in ("blocking_error", "repairable_error")
-                    and i.type != "slideshow_risk"
-                ]
-                collapse_warnings = [
-                    i for i in collapse_issues
-                    if i.severity == "warning"
-                    or i.type == "slideshow_risk"
-                ]
-
-                remaining_blockers = active_memory_blockers + [
-                    {
-                        "type": b.type,
-                        "scene_id": b.scene_id,
-                        "detail": b.detail,
-                        "severity": b.severity,
-                        "issue_class": "repairable_blocker" if b.severity == "repairable_error" else "hard_blocker",
-                    }
-                    for b in collapse_blockers
-                ]
-                remaining_warnings = active_memory_warnings + [
-                    {
-                        "type": w.type,
-                        "scene_id": w.scene_id,
-                        "detail": w.detail,
-                        "severity": w.severity,
-                        "issue_class": "soft_warning",
-                    }
-                    for w in collapse_warnings
-                ]
-
-                renderable = len(remaining_blockers) == 0
-                decision = "continued_with_warn" if renderable else "failed_hard_blocker"
-
-                max_limit = min(2, max_regen + 1)
-                max_allowed_attempts = max_limit
-                if attempt_1_failed_layout_schema and max_regen >= 2:
-                    max_allowed_attempts = 3
-
-                decision_summary = {
-                    "stage": "qa_scenes",
-                    "attempts_used": scenes_attempts,
-                    "max_attempts": max_allowed_attempts,
-                    "decision": decision,
-                    "renderable": renderable,
-                    "remaining_blockers": [b.to_dict() if hasattr(b, "to_dict") else b for b in remaining_blockers],
-                    "remaining_warnings": [w.to_dict() if hasattr(w, "to_dict") else w for w in remaining_warnings] + [
-                        {"type": "retry_collapse", "detail": "Identical scene output across retries; stopping loop."}
-                    ],
-                    "continued_to_render": renderable,
-                }
-                atomic_write_json(_jd / paths.SHORT_QA_DECISION_SUMMARY_FILE, decision_summary)
-
-                _recorder.record_event(
-                    "deterministic",
-                    "retry_collapse",
-                    {
-                        "verdict": "WARN" if renderable else "FAIL",
-                        "retry_reason": "scene_validation_fail",
-                        "retry_scope": "scenes_only",
-                        "attempt": scenes_attempts,
-                        "renderable": renderable,
-                        "detail": "Identical scene output across retries; stopping loop.",
-                        "reason": "retry_collapse",
-                    },
-                    ok=renderable,
-                )
-
-                if renderable:
-                    best_scene_candidate = dict(short_scenes)
-                    best_scene_candidate_qa = {"verdict": "WARN", "collapsed": True}
-                    scenes_qa_result = {"verdict": "WARN", "collapsed": True, "qa_pass": True}
-                    scenes_passed = True
-                    state.latest_scene_validation_ok = True
-                    state.latest_scene_validation_version = state.current_scenes_version
-                    state.latest_scene_qa_ok = True
-                    state.latest_scene_qa_version = state.current_scenes_version
-                    atomic_write_json(_jd / paths.SHORT_SCENES_FILE, short_scenes)
-                    update_stage("qa_scenes", "completed", qa_verdict="WARN")
-                    scene_collapsed = True
-                    save_retry_memory(scene_retry_memory, scene_memory_file)
-                    break
-                else:
-                    scenes_passed = False
-                    update_stage("qa_scenes", "failed", qa_verdict="FAIL")
-                    status.update({
-                        "status": "needs_review",
-                        "rendered": False,
-                        "uploaded": False,
-                        "youtube_url": "",
-                        "requires_user_review": True,
-                        "qa_verdict": "FAIL",
-                        "failure_stage": "qa_scenes",
-                        "failure_reason": f"Scene QA retry collapse failed hard blocker: {[b.get('detail') if isinstance(b, dict) else getattr(b, 'detail', '') for b in remaining_blockers]}",
-                        "regeneration_attempts": total_regeneration_attempts,
-                    })
-                    write_short_status(long_job_dir, short_id, status)
-                    save_retry_memory(scene_retry_memory, scene_memory_file)
-                    return StageResult(StageSignal.PROCEED, returns=status)
-            prev_scene_hash = cur_scene_hash
-        except short_scene_builder.ChatGPTProviderError as exc:
-            # Provider/browser failure — NOT a creative scene-QA failure.
-            # The recovery-wrapped llm_fn already cleared cookies + reopened a
-            # fresh temp chat; here we just keep it off the creative budget and
-            # surface a non-QA failure if the provider keeps erroring.
-            provider_error_attempts += 1
-            snippet = getattr(exc, "snippet", "")
-            update_stage("scenes", "failed", error="chatgpt_provider_error")
-            _recorder.record_event(
-                "chatgpt",
-                "provider_error",
-                {
-                    "event": "chatgpt_provider_error",
-                    "stage": "scene_generation",
-                    "action": "clear_browser_state_and_retry",
-                    "attempt": provider_error_attempts,
-                    "error_snippet": snippet,
-                },
-                ok=False,
-            )
-            atomic_write_json(_jd / paths.SHORT_FAILURE_REPORT_FILE, {
-                "stage": "scene_generation",
-                "type": "chatgpt_provider_error",
-                "attempt": provider_error_attempts,
-                "detail": "ChatGPT returned provider-error text instead of scene JSON.",
-                "error_snippet": snippet,
-            })
-            if provider_error_attempts > max_chatgpt_provider_retries:
-                for s in status["stages"]:
-                    if s["status"] == "pending":
-                        s["status"] = "skipped"
-                status.update({
-                    "status": "needs_review",
-                    "rendered": False,
-                    "uploaded": False,
-                    "youtube_url": "",
-                    "requires_user_review": True,
-                    "qa_verdict": "PROVIDER_ERROR",
-                    "failure_kind": "chatgpt_provider_error",
-                    "failure_message": (
-                        "ChatGPT provider error persisted after browser/session "
-                        "cleanup and retry. This is not a scene QA failure."
-                    ),
-                    "regeneration_attempts": total_regeneration_attempts,
-                })
-                write_short_status(long_job_dir, short_id, status)
-                return StageResult(StageSignal.PROCEED, returns=status)
-            # Do NOT consume the scenes/creative budget for a provider error.
-            scenes_attempts -= 1
+        _r = _scenes_generate_and_normalize(ctx, loop)
+        # Sync mutated loop state back into the local mirror variables.
+        scenes_attempts = loop.scenes_attempts
+        structural_attempts = loop.structural_attempts
+        product_attempts = loop.product_attempts
+        total_regeneration_attempts = loop.total_regeneration_attempts
+        scene_fit_failures = loop.scene_fit_failures
+        provider_error_attempts = loop.provider_error_attempts
+        attempt_1_failed_layout_schema = loop.attempt_1_failed_layout_schema
+        prev_scene_hash = loop.prev_scene_hash
+        skip_generation = loop.skip_generation
+        scenes_passed = loop.scenes_passed
+        escalate_to_script = loop.escalate_to_script
+        scene_collapsed = loop.scene_collapsed
+        short_scenes = loop.short_scenes
+        scenes_qa_result = loop.scenes_qa_result
+        visual_rhythm_plan = loop.visual_rhythm_plan
+        scenes_feedback = loop.scenes_feedback
+        best_scene_candidate = loop.best_scene_candidate
+        best_scene_candidate_qa = loop.best_scene_candidate_qa
+        scenes = loop.scenes
+        structure_issues = loop.structure_issues
+        if isinstance(_r, StageResult):
+            return _r
+        if _r is _LoopAction.CONTINUE:
             continue
-        except Exception as exc:
-            update_stage("scenes", "failed")
-            status["status"] = "failed"
-            write_short_status(long_job_dir, short_id, status)
-            raise exc
-
-        scenes = short_scenes.get("scenes") or []
-        for scene in scenes:
-            validate_scenes.repair_scene_duration_if_possible(scene)
-
-        # Deterministic repair: weak hook motion (spec §10.1)
-        if validate_scenes.repair_weak_hook_motion(scenes):
-            state.current_scenes_version += 1
-            state.latest_scene_validation_ok = False
-            state.latest_scene_validation_version = None
-
-        short_scenes, scenes, visual_rhythm_plan = _stage_visual_rhythm(
-            ctx,
-            short_scenes,
-            scenes_attempts,
-            state,
-        )
-
-        if validate_scenes.repair_five_error_bread_payoff_layout(scenes, short_script):
-            short_scenes["scenes"] = scenes
-            short_scenes["total_duration_sec"] = round(
-                sum(float(scene.get("duration_sec") or 0.0) for scene in scenes),
-                1,
-            )
-            state.current_scenes_version += 1
-            state.latest_scene_validation_ok = False
-            state.latest_scene_validation_version = None
-            _recorder.record_event(
-                "deterministic",
-                "payoff_layout_repair",
-                {"attempt": scenes_attempts, "layout": "graphic_checklist"},
-                ok=True,
-            )
-
-        structure_issues = validate_scenes.validate_scene_structure(
-            scenes,
-            scenes_doc=short_scenes,
-            script=short_script,
-            attempt=scenes_attempts,
-        )
-
-        # Auto-repair duration/narration-fit if it's the only class of hard issues remaining
-        hard_errors = [
-            i for i in structure_issues
-            if i.severity in ("blocking_error", "repairable_error")
-            and i.type in HARD_SCENE_VALIDATION_TYPES
-        ]
-        # Run deterministic fit-repair whenever ANY duration/narration-fit
-        # hard error exists — even alongside other hard errors (e.g.
-        # missing_item_coverage). Repairing the fixable fit issues here keeps
-        # them from blocking the run; remaining errors still drive regen.
-        if any(i.type in ("duration_cap", "scene_narration_fit") for i in hard_errors):
-            repaired_any = False
-            # First try simple per-scene duration clamp/extend (handles duration_cap).
-            for issue in hard_errors:
-                if issue.scene_id:
-                    scene_to_fix = next((s for s in scenes if str(s.get("id") or s.get("scene_id") or "") == issue.scene_id), None)
-                    if scene_to_fix:
-                        res = validate_scenes.repair_scene_duration_if_possible(scene_to_fix)
-                        if res in ("auto_shortened", "auto_extended", "auto_shortened_cta"):
-                            repaired_any = True
-            # Then run deterministic scene-fit repair (extend -> split ->
-            # micro-condense) for any remaining narration overflow, BEFORE
-            # spending an LLM regeneration. No regen_fn: an unfixable scene
-            # falls through to the existing regeneration path below.
-            fit_result = validate_scenes.deterministic_scene_fit_repair(scenes, short_script)
-            if any(mode != "regen_required" for mode in fit_result["modes"]):
-                repaired_any = True
-                short_scenes["scenes"] = fit_result["scenes"]
-                scenes = fit_result["scenes"]
-                short_scenes["total_duration_sec"] = fit_result["total_duration_sec"]
-            for entry in fit_result["logs"]:
-                _recorder.record_event(
-                    "deterministic", "scene_narration_fit_repair", entry,
-                    ok=entry["repair_mode_attempted"] != "regen_required",
-                )
-            if repaired_any:
-                state.current_scenes_version += 1
-                state.latest_scene_validation_ok = False
-                state.latest_scene_validation_version = None
-                # Re-run validation with repaired durations
-                structure_issues = validate_scenes.validate_scene_structure(
-                    scenes,
-                    scenes_doc=short_scenes,
-                    script=short_script,
-                    attempt=scenes_attempts,
-                )
-
-        atomic_write_json(_jd / paths.SHORT_SCENES_FILE, short_scenes)
-
-        # Intercept visual_only_unreadable for deterministic repair and downgrade logic
-        visual_issues = [i for i in structure_issues if i.type == "visual_only_unreadable"]
-        did_visual_repair = False
-        for vi in visual_issues:
-            import re
-            m = re.match(r"Item (\w+) appears", str(vi.detail))
-            if m:
-                item_id = m.group(1)
-                tracker = visual_repair_tracker.get(item_id, {"repairs": 0, "regens": 0})
-
-                if tracker["repairs"] < 1:
-                    # Attempt deterministic repair
-                    _idea_items = short_script.get("idea_items") or short_script.get("points") or short_script.get("checklist") or []
-                    item_str = item_id
-                    for it in _idea_items:
-                        if isinstance(it, dict) and str(it.get("item_id") or it.get("id") or "") == item_id:
-                            item_str = it
-                            break
-
-                    if validate_scenes.repair_visual_only_unreadable(scenes, item_str):
-                        did_visual_repair = True
-                        tracker["repairs"] += 1
-                        visual_repair_tracker[item_id] = tracker
-
-                        _recorder.record_event(
-                            "deterministic",
-                            "qa_classification",
-                            {"reason": "deterministic_repair", "item_id": item_id},
-                            ok=True
-                        )
-                else:
-                    # We already tried deterministic repair. This is a ChatGPT regen attempt.
-                    tracker["regens"] += 1
-                    visual_repair_tracker[item_id] = tracker
-                    if tracker["regens"] > 1:
-                        # Already regenerated once, give up and downgrade
-                        vi.severity = "warning"
-                        vi.detail = f"(Downgraded) {vi.detail}"
-                        _recorder.record_event(
-                            "deterministic",
-                            "qa_classification",
-                            {"reason": "visual_repair_downgraded", "item_id": item_id},
-                            ok=True
-                        )
-
-        if did_visual_repair:
-            atomic_write_json(_jd / paths.SHORT_SCENES_FILE, short_scenes)
-            skip_generation = True
-            continue
+        if _r is _LoopAction.BREAK:
+            break
 
         # Check for scene_narration_fit failures
         has_fit_failure = any(

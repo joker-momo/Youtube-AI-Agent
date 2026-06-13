@@ -904,6 +904,331 @@ def _scenes_generate_and_normalize(ctx, loop):
     return _LoopAction.FALLTHROUGH
 
 
+def _scenes_run_structure_validation(ctx, loop):
+    """Track narration-fit failures, compute structure_blocked, persist the
+    scene-validation doc, and update validation-ok bookkeeping.
+
+    Always returns `_LoopAction.FALLTHROUGH`. Mutates `loop` in place.
+    """
+    _jd = ctx.json_dir
+    _recorder = ctx.recorder
+    scenes_attempts = loop.scenes_attempts
+    state = loop.state
+    scene_retry_memory = loop.scene_retry_memory
+    structure_issues = loop.structure_issues
+
+    # Check for scene_narration_fit failures
+    has_fit_failure = any(
+        issue.type == "scene_narration_fit" and issue.severity in ("blocking_error", "repairable_error")
+        for issue in structure_issues
+    )
+    if has_fit_failure:
+        loop.scene_fit_failures += 1
+
+    structure_blocked = (
+        validate_scenes.has_blocking_or_repairable(structure_issues)
+        and not should_fallback_to_gemini_scene_qa(structure_issues)
+    )
+
+    structure_doc = {
+        "attempt": scenes_attempts,
+        "verdict": "FAIL" if structure_blocked else "PASS",
+        "issues": validate_scenes.issues_to_dicts(structure_issues),
+    }
+    atomic_write_json(_jd / paths.SHORT_SCENE_STRUCTURE_FILE, structure_doc)
+    _recorder.record_event(
+        "deterministic",
+        "scene_validation",
+        structure_doc,
+        ok=structure_doc["verdict"] == "PASS",
+    )
+
+    if not structure_blocked:
+        state.latest_scene_validation_ok = True
+        state.latest_scene_validation_version = state.current_scenes_version
+        if state.latest_scene_qa_ok:
+            state.latest_scene_qa_version = state.current_scenes_version
+        for issue_id in list(scene_retry_memory.active_issues.keys()):
+            issue = scene_retry_memory.active_issues[issue_id]
+            if issue.stage == "scene_validation":
+                resolve_issue_by_id(scene_retry_memory, issue_id)
+    else:
+        state.latest_scene_validation_ok = False
+        state.latest_scene_validation_version = None
+
+    loop.structure_blocked = structure_blocked
+    return _LoopAction.FALLTHROUGH
+
+
+def _scenes_structural_repair(ctx, loop):
+    """Handle the deterministic structural-repair branch (structure_blocked).
+
+    Caps regeneration, downgrades-to-WARN-or-fails when stopping, builds the
+    repair plan, records retry-memory issues, and either escalates to script
+    compression or feeds back for another scene regeneration.
+
+    Returns a `_LoopAction` or a `StageResult`. Mutates `loop` in place.
+    """
+    short_id = ctx.short_plan["short_id"]
+    long_job_dir = ctx.long_job_dir
+    _jd = ctx.json_dir
+    status = ctx.status
+    short_plan = ctx.short_plan
+    update_stage = ctx.update_stage
+    _recorder = ctx.recorder
+    max_regen = ctx.max_regen
+    max_structural_attempts = ctx.max_structural_attempts
+
+    short_script = ctx.extras["short_script"]
+
+    state = loop.state
+    scene_retry_memory = loop.scene_retry_memory
+    scene_memory_file = loop.scene_memory_file
+    scenes_attempts = loop.scenes_attempts
+    scenes = loop.scenes
+    structure_issues = loop.structure_issues
+
+    if not loop.structure_blocked:
+        return _LoopAction.FALLTHROUGH
+
+    if scenes_attempts == 1:
+        loop.attempt_1_failed_layout_schema = True
+
+    # Check for scene regeneration cap
+    stop_scene_retries = False
+    max_limit = min(2, max_regen + 1)
+    if scenes_attempts >= max_limit:
+        if scenes_attempts == 2 and loop.attempt_1_failed_layout_schema and max_regen >= 2:
+            pass
+        else:
+            stop_scene_retries = True
+
+    if stop_scene_retries:
+        active_memory_blockers = [
+            issue for issue in scene_retry_memory.active_issues.values()
+            if issue.issue_class in {"hard_blocker", "repairable_blocker"}
+            and issue.type != "slideshow_risk"
+        ]
+        active_memory_warnings = [
+            issue for issue in scene_retry_memory.active_issues.values()
+            if issue.issue_class == "soft_warning"
+            or issue.type == "slideshow_risk"
+        ]
+        remaining_blockers = [
+            i for i in structure_issues
+            if i.severity in ("blocking_error", "repairable_error")
+            and i.type != "slideshow_risk"
+        ] + active_memory_blockers
+        remaining_warnings = [
+            i for i in structure_issues
+            if i.severity == "warning" or i.type == "slideshow_risk"
+        ] + active_memory_warnings
+        decision = "continued_with_warn" if not remaining_blockers else "failed_hard_blocker"
+        renderable = not remaining_blockers
+
+        max_allowed_attempts = max_limit
+        if loop.attempt_1_failed_layout_schema and max_regen >= 2:
+            max_allowed_attempts = 3
+        decision_summary = {
+            "stage": "qa_scenes",
+            "attempts_used": scenes_attempts,
+            "max_attempts": max_allowed_attempts,
+            "decision": decision,
+            "renderable": renderable,
+            "remaining_blockers": [b.to_dict() if hasattr(b, "to_dict") else b for b in remaining_blockers],
+            "remaining_warnings": [w.to_dict() if hasattr(w, "to_dict") else w for w in remaining_warnings],
+            "continued_to_render": decision == "continued_with_warn",
+        }
+        atomic_write_json(_jd / paths.SHORT_QA_DECISION_SUMMARY_FILE, decision_summary)
+
+        if not remaining_blockers:
+            # Downgrade slideshow_risk and warnings to WARN and continue
+            loop.structure_blocked = False
+            loop.scenes_passed = True
+            state.latest_scene_validation_ok = True
+            state.latest_scene_validation_version = state.current_scenes_version
+            loop.scenes_qa_result = {
+                "verdict": "WARN",
+                "issues": validate_scenes.issues_to_dicts(structure_issues),
+                "required_changes": [],
+                "warnings": [i.detail for i in structure_issues],
+                "provider": "deterministic",
+            }
+            atomic_write_json(_jd / paths.SHORT_SCENES_QA_FILE, loop.scenes_qa_result)
+            update_stage("qa_scenes", "completed", qa_verdict="WARN")
+
+            _recorder.record_event(
+                "deterministic",
+                "qa_classification",
+                {
+                    "reason": "qa_soft_warn",
+                },
+                ok=True
+            )
+            save_retry_memory(scene_retry_memory, scene_memory_file)
+            return _LoopAction.BREAK
+        else:
+            loop.scenes_passed = False
+            update_stage("qa_scenes", "failed", qa_verdict="FAIL")
+            status.update({
+                "status": "needs_review",
+                "rendered": False,
+                "uploaded": False,
+                "youtube_url": "",
+                "requires_user_review": True,
+                "qa_verdict": "FAIL",
+                "failure_stage": "qa_scenes",
+                "failure_reason": f"Scene validation failed hard blocker: {[b.get('detail') if isinstance(b, dict) else getattr(b, 'detail', '') for b in remaining_blockers]}",
+            })
+            write_short_status(long_job_dir, short_id, status)
+            save_retry_memory(scene_retry_memory, scene_memory_file)
+
+            _recorder.record_event(
+                "deterministic",
+                "qa_classification",
+                {
+                    "reason": "scene_validation_fail",
+                },
+                ok=True
+            )
+            return StageResult(StageSignal.PROCEED, returns=status)
+
+    repair_plan = validate_scenes.build_scene_repair_plan(
+        scenes,
+        structure_issues,
+        script=short_script,
+    )
+    atomic_write_json(_jd / paths.SHORT_SCENE_REPAIR_FILE, {
+        "attempt": scenes_attempts,
+        **repair_plan,
+    })
+    _recorder.record_event(
+        "deterministic",
+        "scene_repair_plan",
+        {"attempt": scenes_attempts, **repair_plan},
+    )
+    loop.scenes_qa_result = {
+        "verdict": "FAIL",
+        "issues": validate_scenes.issues_to_dicts(structure_issues),
+        "required_changes": repair_plan["instructions"],
+        "warnings": [
+            issue.detail for issue in structure_issues
+            if issue.severity == "warning"
+        ],
+        "provider": "deterministic",
+        "repair_plan": repair_plan,
+    }
+    atomic_write_json(_jd / paths.SHORT_SCENES_QA_FILE, loop.scenes_qa_result)
+    update_stage("qa_scenes", "failed", qa_verdict="FAIL")
+
+    # Log qa_classification event
+    classification_reason = "scene_validation_fail"
+    if any(i.type == "slideshow_risk" for i in structure_issues):
+        if scenes_attempts >= 2:
+            classification_reason = "retry_collapse"
+        else:
+            classification_reason = "scene_validation_fail"
+    elif any(i.type == "duration_pacing" for i in structure_issues):
+        classification_reason = "qa_soft_warn"
+    elif any(i.type == "total_duration_normalized" for i in structure_issues):
+        classification_reason = "duration_normalized"
+
+    _recorder.record_event(
+        "deterministic",
+        "qa_classification",
+        {
+            "reason": classification_reason,
+        },
+        ok=True
+    )
+
+    # Track deterministic issues in retry memory
+    active_validation_ids = set()
+    for issue in structure_issues:
+        issue_id = make_stable_issue_id("scene_validation", issue.scene_id, issue.type, issue.detail)
+        active_validation_ids.add(issue_id)
+        required_change = "\n".join(issue.instructions) if getattr(issue, "instructions", None) else (issue.repair_hint or issue.detail)
+
+        issue_class_val = "soft_warning" if issue.severity == "warning" else ("repairable_blocker" if issue.severity == "repairable_error" else "hard_blocker")
+        reason_val = issue.type
+        if issue.type == "total_duration_normalized":
+            reason_val = "duration_normalized"
+            issue_class_val = "soft_warning"
+        elif issue.type == "duration_pacing":
+            reason_val = "duration_pacing"
+            issue_class_val = "soft_warning"
+        elif issue.type == "weak_hook_motion":
+            reason_val = "weak_hook_motion"
+            issue_class_val = "soft_warning"
+
+        retry_issue = RetryIssue(
+            id=issue_id,
+            stage="scene_validation",
+            attempt=scenes_attempts,
+            scene_id=issue.scene_id,
+            type=issue.type,
+            severity=issue.severity,
+            detail=issue.detail,
+            required_change=required_change,
+            status="active",
+            first_seen_attempt=scenes_attempts,
+            last_seen_attempt=scenes_attempts,
+            issue_class=issue_class_val,
+            reason=reason_val
+        )
+        add_or_update_issue(scene_retry_memory, retry_issue)
+
+    # Resolve issues no longer present
+    for issue_id in list(scene_retry_memory.active_issues.keys()):
+        issue = scene_retry_memory.active_issues[issue_id]
+        if issue.stage == "scene_validation" and issue_id not in active_validation_ids:
+            resolve_issue_by_id(scene_retry_memory, issue_id)
+
+    # Suppress visual_only_unreadable false positives
+    for issue_id in list(scene_retry_memory.active_issues.keys()):
+        issue = scene_retry_memory.active_issues[issue_id]
+        if issue.type == "visual_only_unreadable" and issue.scene_id:
+            scene = next((s for s in scenes if str(s.get("id") or s.get("scene_id") or "") == issue.scene_id), None)
+            if scene:
+                covers = scene.get("covers_items") or []
+                narration = str(scene.get("narration") or "").lower()
+                suppress = False
+                for cid in covers:
+                    if str(cid) in narration or "cinco" in narration or "cuatro" in narration or "tres" in narration or "dos" in narration or "uno" in narration:
+                        suppress = True
+                if suppress:
+                    suppress_issue_by_id(scene_retry_memory, issue_id)
+
+    loop.structural_attempts += 1
+    status["qa_scenes_structural_attempts"] = loop.structural_attempts
+    write_short_status(long_job_dir, short_id, status)
+    if loop.scene_fit_failures >= 2:
+        loop.escalate_to_script = True
+        return _LoopAction.BREAK
+    if loop.structural_attempts >= max_structural_attempts:
+        save_retry_memory(scene_retry_memory, scene_memory_file)
+        from video_agent.shorts.idea_preservation import derive_idea_items
+        exact_mapping_items = short_plan.get("idea_items") or derive_idea_items(short_plan)
+        exact_mapping_context = "\n".join(f"{i+1}. {item.get('label') or item.get('topic') or item}" for i, item in enumerate(exact_mapping_items)) if exact_mapping_items else ""
+        loop.scenes_feedback = generate_cumulative_feedback(
+            scene_retry_memory, scenes_attempts + 1,
+            candidate_summary=f"Scenes attempt {scenes_attempts} failed deterministic validation.",
+            exact_mapping_context=exact_mapping_context
+        )
+        return _LoopAction.BREAK
+
+    save_retry_memory(scene_retry_memory, scene_memory_file)
+    from video_agent.shorts.idea_preservation import derive_idea_items
+    exact_mapping_items = short_plan.get("idea_items") or derive_idea_items(short_plan)
+    exact_mapping_context = "\n".join(f"{i+1}. {item.get('label') or item.get('topic') or item}" for i, item in enumerate(exact_mapping_items)) if exact_mapping_items else ""
+    loop.scenes_feedback = generate_cumulative_feedback(
+        scene_retry_memory, scenes_attempts + 1,
+        candidate_summary=f"Scenes attempt {scenes_attempts} failed deterministic validation.",
+        exact_mapping_context=exact_mapping_context
+    )
+    return _LoopAction.CONTINUE
+
+
 def _stage_scenes(ctx: BuildContext) -> StageResult:
     """Stage: scenes -> visual_rhythm_plan -> qa_scenes inner regen loop.
 
@@ -1068,282 +1393,26 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
         if _r is _LoopAction.BREAK:
             break
 
-        # Check for scene_narration_fit failures
-        has_fit_failure = any(
-            issue.type == "scene_narration_fit" and issue.severity in ("blocking_error", "repairable_error")
-            for issue in structure_issues
-        )
-        if has_fit_failure:
-            scene_fit_failures += 1
+        loop.scenes = scenes
+        loop.structure_issues = structure_issues
+        _scenes_run_structure_validation(ctx, loop)
+        scene_fit_failures = loop.scene_fit_failures
+        structure_blocked = loop.structure_blocked
 
-        structure_blocked = (
-            validate_scenes.has_blocking_or_repairable(structure_issues)
-            and not should_fallback_to_gemini_scene_qa(structure_issues)
-        )
-
-        structure_doc = {
-            "attempt": scenes_attempts,
-            "verdict": "FAIL" if structure_blocked else "PASS",
-            "issues": validate_scenes.issues_to_dicts(structure_issues),
-        }
-        atomic_write_json(_jd / paths.SHORT_SCENE_STRUCTURE_FILE, structure_doc)
-        _recorder.record_event(
-            "deterministic",
-            "scene_validation",
-            structure_doc,
-            ok=structure_doc["verdict"] == "PASS",
-        )
-
-        if not structure_blocked:
-            state.latest_scene_validation_ok = True
-            state.latest_scene_validation_version = state.current_scenes_version
-            if state.latest_scene_qa_ok:
-                state.latest_scene_qa_version = state.current_scenes_version
-            for issue_id in list(scene_retry_memory.active_issues.keys()):
-                issue = scene_retry_memory.active_issues[issue_id]
-                if issue.stage == "scene_validation":
-                    resolve_issue_by_id(scene_retry_memory, issue_id)
-        else:
-            state.latest_scene_validation_ok = False
-            state.latest_scene_validation_version = None
-
-        if structure_blocked:
-            if scenes_attempts == 1:
-                attempt_1_failed_layout_schema = True
-
-            # Check for scene regeneration cap
-            stop_scene_retries = False
-            max_limit = min(2, max_regen + 1)
-            if scenes_attempts >= max_limit:
-                if scenes_attempts == 2 and attempt_1_failed_layout_schema and max_regen >= 2:
-                    pass
-                else:
-                    stop_scene_retries = True
-
-            if stop_scene_retries:
-                active_memory_blockers = [
-                    issue for issue in scene_retry_memory.active_issues.values()
-                    if issue.issue_class in {"hard_blocker", "repairable_blocker"}
-                    and issue.type != "slideshow_risk"
-                ]
-                active_memory_warnings = [
-                    issue for issue in scene_retry_memory.active_issues.values()
-                    if issue.issue_class == "soft_warning"
-                    or issue.type == "slideshow_risk"
-                ]
-                remaining_blockers = [
-                    i for i in structure_issues
-                    if i.severity in ("blocking_error", "repairable_error")
-                    and i.type != "slideshow_risk"
-                ] + active_memory_blockers
-                remaining_warnings = [
-                    i for i in structure_issues
-                    if i.severity == "warning" or i.type == "slideshow_risk"
-                ] + active_memory_warnings
-                decision = "continued_with_warn" if not remaining_blockers else "failed_hard_blocker"
-                renderable = not remaining_blockers
-
-                max_allowed_attempts = max_limit
-                if attempt_1_failed_layout_schema and max_regen >= 2:
-                    max_allowed_attempts = 3
-                decision_summary = {
-                    "stage": "qa_scenes",
-                    "attempts_used": scenes_attempts,
-                    "max_attempts": max_allowed_attempts,
-                    "decision": decision,
-                    "renderable": renderable,
-                    "remaining_blockers": [b.to_dict() if hasattr(b, "to_dict") else b for b in remaining_blockers],
-                    "remaining_warnings": [w.to_dict() if hasattr(w, "to_dict") else w for w in remaining_warnings],
-                    "continued_to_render": decision == "continued_with_warn",
-                }
-                atomic_write_json(_jd / paths.SHORT_QA_DECISION_SUMMARY_FILE, decision_summary)
-
-                if not remaining_blockers:
-                    # Downgrade slideshow_risk and warnings to WARN and continue
-                    structure_blocked = False
-                    scenes_passed = True
-                    state.latest_scene_validation_ok = True
-                    state.latest_scene_validation_version = state.current_scenes_version
-                    scenes_qa_result = {
-                        "verdict": "WARN",
-                        "issues": validate_scenes.issues_to_dicts(structure_issues),
-                        "required_changes": [],
-                        "warnings": [i.detail for i in structure_issues],
-                        "provider": "deterministic",
-                    }
-                    atomic_write_json(_jd / paths.SHORT_SCENES_QA_FILE, scenes_qa_result)
-                    update_stage("qa_scenes", "completed", qa_verdict="WARN")
-
-                    _recorder.record_event(
-                        "deterministic",
-                        "qa_classification",
-                        {
-                            "reason": "qa_soft_warn",
-                        },
-                        ok=True
-                    )
-                    save_retry_memory(scene_retry_memory, scene_memory_file)
-                    break
-                else:
-                    scenes_passed = False
-                    update_stage("qa_scenes", "failed", qa_verdict="FAIL")
-                    status.update({
-                        "status": "needs_review",
-                        "rendered": False,
-                        "uploaded": False,
-                        "youtube_url": "",
-                        "requires_user_review": True,
-                        "qa_verdict": "FAIL",
-                        "failure_stage": "qa_scenes",
-                        "failure_reason": f"Scene validation failed hard blocker: {[b.get('detail') if isinstance(b, dict) else getattr(b, 'detail', '') for b in remaining_blockers]}",
-                    })
-                    write_short_status(long_job_dir, short_id, status)
-                    save_retry_memory(scene_retry_memory, scene_memory_file)
-
-                    _recorder.record_event(
-                        "deterministic",
-                        "qa_classification",
-                        {
-                            "reason": "scene_validation_fail",
-                        },
-                        ok=True
-                    )
-                    return StageResult(StageSignal.PROCEED, returns=status)
-
-            repair_plan = validate_scenes.build_scene_repair_plan(
-                scenes,
-                structure_issues,
-                script=short_script,
-            )
-            atomic_write_json(_jd / paths.SHORT_SCENE_REPAIR_FILE, {
-                "attempt": scenes_attempts,
-                **repair_plan,
-            })
-            _recorder.record_event(
-                "deterministic",
-                "scene_repair_plan",
-                {"attempt": scenes_attempts, **repair_plan},
-            )
-            scenes_qa_result = {
-                "verdict": "FAIL",
-                "issues": validate_scenes.issues_to_dicts(structure_issues),
-                "required_changes": repair_plan["instructions"],
-                "warnings": [
-                    issue.detail for issue in structure_issues
-                    if issue.severity == "warning"
-                ],
-                "provider": "deterministic",
-                "repair_plan": repair_plan,
-            }
-            atomic_write_json(_jd / paths.SHORT_SCENES_QA_FILE, scenes_qa_result)
-            update_stage("qa_scenes", "failed", qa_verdict="FAIL")
-
-            # Log qa_classification event
-            classification_reason = "scene_validation_fail"
-            if any(i.type == "slideshow_risk" for i in structure_issues):
-                if scenes_attempts >= 2:
-                    classification_reason = "retry_collapse"
-                else:
-                    classification_reason = "scene_validation_fail"
-            elif any(i.type == "duration_pacing" for i in structure_issues):
-                classification_reason = "qa_soft_warn"
-            elif any(i.type == "total_duration_normalized" for i in structure_issues):
-                classification_reason = "duration_normalized"
-
-            _recorder.record_event(
-                "deterministic",
-                "qa_classification",
-                {
-                    "reason": classification_reason,
-                },
-                ok=True
-            )
-
-            # Track deterministic issues in retry memory
-            active_validation_ids = set()
-            for issue in structure_issues:
-                issue_id = make_stable_issue_id("scene_validation", issue.scene_id, issue.type, issue.detail)
-                active_validation_ids.add(issue_id)
-                required_change = "\n".join(issue.instructions) if getattr(issue, "instructions", None) else (issue.repair_hint or issue.detail)
-
-                issue_class_val = "soft_warning" if issue.severity == "warning" else ("repairable_blocker" if issue.severity == "repairable_error" else "hard_blocker")
-                reason_val = issue.type
-                if issue.type == "total_duration_normalized":
-                    reason_val = "duration_normalized"
-                    issue_class_val = "soft_warning"
-                elif issue.type == "duration_pacing":
-                    reason_val = "duration_pacing"
-                    issue_class_val = "soft_warning"
-                elif issue.type == "weak_hook_motion":
-                    reason_val = "weak_hook_motion"
-                    issue_class_val = "soft_warning"
-
-                retry_issue = RetryIssue(
-                    id=issue_id,
-                    stage="scene_validation",
-                    attempt=scenes_attempts,
-                    scene_id=issue.scene_id,
-                    type=issue.type,
-                    severity=issue.severity,
-                    detail=issue.detail,
-                    required_change=required_change,
-                    status="active",
-                    first_seen_attempt=scenes_attempts,
-                    last_seen_attempt=scenes_attempts,
-                    issue_class=issue_class_val,
-                    reason=reason_val
-                )
-                add_or_update_issue(scene_retry_memory, retry_issue)
-
-            # Resolve issues no longer present
-            for issue_id in list(scene_retry_memory.active_issues.keys()):
-                issue = scene_retry_memory.active_issues[issue_id]
-                if issue.stage == "scene_validation" and issue_id not in active_validation_ids:
-                    resolve_issue_by_id(scene_retry_memory, issue_id)
-
-            # Suppress visual_only_unreadable false positives
-            for issue_id in list(scene_retry_memory.active_issues.keys()):
-                issue = scene_retry_memory.active_issues[issue_id]
-                if issue.type == "visual_only_unreadable" and issue.scene_id:
-                    scene = next((s for s in scenes if str(s.get("id") or s.get("scene_id") or "") == issue.scene_id), None)
-                    if scene:
-                        covers = scene.get("covers_items") or []
-                        narration = str(scene.get("narration") or "").lower()
-                        suppress = False
-                        for cid in covers:
-                            if str(cid) in narration or "cinco" in narration or "cuatro" in narration or "tres" in narration or "dos" in narration or "uno" in narration:
-                                suppress = True
-                        if suppress:
-                            suppress_issue_by_id(scene_retry_memory, issue_id)
-
-            structural_attempts += 1
-            status["qa_scenes_structural_attempts"] = structural_attempts
-            write_short_status(long_job_dir, short_id, status)
-            if scene_fit_failures >= 2:
-                escalate_to_script = True
-                break
-            if structural_attempts >= max_structural_attempts:
-                save_retry_memory(scene_retry_memory, scene_memory_file)
-                from video_agent.shorts.idea_preservation import derive_idea_items
-                exact_mapping_items = short_plan.get("idea_items") or derive_idea_items(short_plan)
-                exact_mapping_context = "\n".join(f"{i+1}. {item.get('label') or item.get('topic') or item}" for i, item in enumerate(exact_mapping_items)) if exact_mapping_items else ""
-                scenes_feedback = generate_cumulative_feedback(
-                    scene_retry_memory, scenes_attempts + 1,
-                    candidate_summary=f"Scenes attempt {scenes_attempts} failed deterministic validation.",
-                    exact_mapping_context=exact_mapping_context
-                )
-                break
-
-            save_retry_memory(scene_retry_memory, scene_memory_file)
-            from video_agent.shorts.idea_preservation import derive_idea_items
-            exact_mapping_items = short_plan.get("idea_items") or derive_idea_items(short_plan)
-            exact_mapping_context = "\n".join(f"{i+1}. {item.get('label') or item.get('topic') or item}" for i, item in enumerate(exact_mapping_items)) if exact_mapping_items else ""
-            scenes_feedback = generate_cumulative_feedback(
-                scene_retry_memory, scenes_attempts + 1,
-                candidate_summary=f"Scenes attempt {scenes_attempts} failed deterministic validation.",
-                exact_mapping_context=exact_mapping_context
-            )
+        _r = _scenes_structural_repair(ctx, loop)
+        structure_blocked = loop.structure_blocked
+        scenes_passed = loop.scenes_passed
+        scenes_qa_result = loop.scenes_qa_result
+        structural_attempts = loop.structural_attempts
+        scenes_feedback = loop.scenes_feedback
+        attempt_1_failed_layout_schema = loop.attempt_1_failed_layout_schema
+        escalate_to_script = loop.escalate_to_script
+        if isinstance(_r, StageResult):
+            return _r
+        if _r is _LoopAction.CONTINUE:
             continue
+        if _r is _LoopAction.BREAK:
+            break
 
         scenes_qa_result, normalized_scene_issues = _stage_qa_scenes(
             ctx,

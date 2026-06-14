@@ -19,9 +19,7 @@ from video_agent.stages.visual_contact_sheet import (
     create_visual_contact_sheet,
 )
 
-ffmpeg_required = pytest.mark.skipif(
-    shutil.which("ffmpeg") is None, reason="ffmpeg not installed"
-)
+ffmpeg_required = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
 
 
 def _make_png(path):
@@ -31,9 +29,18 @@ def _make_png(path):
 def _make_mp4(path):
     subprocess.run(
         [
-            "ffmpeg", "-nostdin", "-loglevel", "error", "-y",
-            "-f", "lavfi", "-i", "color=c=red:s=64x64:d=1",
-            "-frames:v", "1", str(path),
+            "ffmpeg",
+            "-nostdin",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:s=64x64:d=1",
+            "-frames:v",
+            "1",
+            str(path),
         ],
         check=True,
         stdout=subprocess.DEVNULL,

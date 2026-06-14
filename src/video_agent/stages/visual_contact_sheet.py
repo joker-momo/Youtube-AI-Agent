@@ -78,7 +78,9 @@ def create_visual_contact_sheet(job_dir: Path, visual_review: dict) -> Path:
     label_height = 92
     scenes = visual_review.get("scenes") or []
     if not scenes:
-        raise RuntimeError("visual_review has no scenes; refusing to render an empty contact sheet.")
+        raise RuntimeError(
+            "visual_review has no scenes; refusing to render an empty contact sheet."
+        )
     width = padding + len(scenes) * (thumb_size[0] + padding)
     height = padding + thumb_size[1] + label_height + padding
     sheet = Image.new("RGB", (width, height), "#f7f7f2")

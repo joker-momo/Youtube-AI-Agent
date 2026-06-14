@@ -1,20 +1,25 @@
 """Render props writer extracted from short_builder."""
+
 from __future__ import annotations
 
 from pathlib import Path
 
-from video_agent.shorts.builder.snapshots import _scene_duration_sum
 from video_agent.shorts import paths
+from video_agent.shorts.builder.snapshots import _scene_duration_sum
 from video_agent.storage.atomic import atomic_write_json
 
 
-def _write_render_props(short_dir: Path, short_scenes: dict, channel_config: dict, music_track: str | None) -> None:
+def _write_render_props(
+    short_dir: Path, short_scenes: dict, channel_config: dict, music_track: str | None
+) -> None:
     rcfg = (channel_config.get("shorts") or {}).get("render") or {}
     # Inherit performance + encoding tunables from the channel-wide render
     # config so Shorts also get VideoToolbox HW encode, Metal/ANGLE WebGL,
     # and proper concurrency on Mac. ``shorts.render`` overrides win.
-    base_render = (channel_config.get("render") or {})
-    duration_sec = _scene_duration_sum(short_scenes) or float(short_scenes.get("total_duration_sec") or 35)
+    base_render = channel_config.get("render") or {}
+    duration_sec = _scene_duration_sum(short_scenes) or float(
+        short_scenes.get("total_duration_sec") or 35
+    )
     short_scenes["total_duration_sec"] = round(duration_sec, 1)
     render_block = {
         "composition": rcfg.get("composition", "ShortVideoStandard"),

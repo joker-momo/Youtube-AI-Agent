@@ -29,6 +29,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest>=8.2",
+  "ruff>=0.6",
+  "mypy>=1.10",
 ]
 
 [project.scripts]
@@ -37,3 +39,24 @@ video-agent = "video_agent.cli:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.ruff]
+# Single tool for PEP 8 lint + black-style format + import sorting.
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+extend-exclude = ["src/youtube_ai_agent.egg-info"]
+
+[tool.ruff.lint]
+# E/W pycodestyle, F pyflakes, I import order, UP pyupgrade, B bugbear.
+select = ["E", "W", "F", "I", "UP", "B"]
+# E501 (line length): ~1.2k pre-existing violations (long prompt/URL literals).
+# Tracked as debt and fixed incrementally rather than mass-reflowed.
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+mypy_path = "src"
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_unused_ignores = true

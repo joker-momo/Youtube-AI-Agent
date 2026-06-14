@@ -1,10 +1,10 @@
 """Shared orchestration types & tuning constants for the Short builder."""
+
 from __future__ import annotations
 
-from enum import Enum
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
-
 
 # Average product score (0-10) at/above which a soft-only scene-QA FAIL is
 # auto-passed as WARN instead of regenerated (spec §6).

@@ -7,19 +7,18 @@ defaults used by the autopilot.
 from __future__ import annotations
 
 import datetime
-import json
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from video_agent.shorts import (
     anti_ai,
     call_budget,
     humanization,
     llm_history,
-    performance_memory,
     paths,
+    performance_memory,
     qa,
-    retention_plan as retention_plan_builder,
     short_scene_builder,
     short_script_builder,
     short_seo_builder,
@@ -27,87 +26,190 @@ from video_agent.shorts import (
     validate_scenes,
     visual_rhythm,
 )
-from video_agent.shorts.idea_preservation import allowed_spoken_points_from_contract
-from video_agent.shorts.manifest import write_short_status
-from video_agent.storage.atomic import atomic_write_json
-from video_agent.shorts.retry_memory import (
-    ScenePipelineState,
-    assert_latest_scenes_ready,
-    RetryMemory,
-    RetryIssue,
-    add_or_update_issue,
-    resolve_issue_by_id,
-    suppress_issue_by_id,
-    generate_cumulative_feedback,
-    make_stable_issue_id,
-    save_retry_memory,
-    load_retry_memory,
+from video_agent.shorts import (
+    retention_plan as retention_plan_builder,
 )
+from video_agent.shorts.builder.context import BuildContext
 
 # Backwards-compatible facade: tests and callers import/patch these via
 # video_agent.shorts.short_builder.<name>.
 from video_agent.shorts.builder.defaults import (
-    _default_llm_fn, _default_background_fn, _default_tts_fn,
-    _default_mix_fn, _default_render_fn, _default_cover_fn,
+    _default_background_fn,
+    _default_cover_fn,
+    _default_llm_fn,
+    _default_mix_fn,
+    _default_render_fn,
+    _default_tts_fn,
 )
 from video_agent.shorts.builder.qa_gate import (
-    HARD_SCENE_VALIDATION_TYPES,
     _HARD_QA_ISSUE_MARKERS,
-    _scene_qa_has_hard_fail, has_hard_fail, _qa_blocker_details,
-    check_and_apply_auto_pass, should_fallback_to_gemini_scene_qa,
+    HARD_SCENE_VALIDATION_TYPES,
+    _qa_blocker_details,
+    _scene_qa_has_hard_fail,
     build_script_compression_feedback,
+    check_and_apply_auto_pass,
+    has_hard_fail,
+    should_fallback_to_gemini_scene_qa,
 )
+from video_agent.shorts.builder.render_props import _write_render_props
 from video_agent.shorts.builder.retry import (
     MAX_PROVIDER_RETRIES_PER_CALL,
-    record_retry_event, wrap_llm_with_provider_retries,
+    record_retry_event,
+    wrap_llm_with_provider_retries,
 )
 from video_agent.shorts.builder.snapshots import (
-    _parse, _cover_text, _normalized_script_hash, _normalized_scene_hash,
-    _scene_duration_sum, _snapshot_scene_durations, _restore_scene_durations,
+    _cover_text,
+    _normalized_scene_hash,
+    _normalized_script_hash,
+    _parse,
+    _restore_scene_durations,
+    _scene_duration_sum,
+    _snapshot_scene_durations,
+)
+from video_agent.shorts.builder.stages.media import (
+    _stage_audio,
+    _stage_background,
+    _stage_performance_memory,
+    _stage_render,
+    _stage_retention_plan,
+    _stage_seo,
+)
+from video_agent.shorts.builder.stages.scenes import (
+    _LoopAction,
+    _SceneLoopState,
+    _scenes_generate_and_normalize,
+    _scenes_product_quality_repair,
+    _scenes_run_qa,
+    _scenes_run_structure_validation,
+    _scenes_structural_repair,
+    _stage_qa_scenes,
+    _stage_scenes,
+    _stage_visual_rhythm,
+)
+from video_agent.shorts.builder.stages.script import (
+    _stage_anti_ai_review,
+    _stage_qa_script,
+    _stage_script,
+    _stage_spoken_humanization,
 )
 from video_agent.shorts.builder.status import _update_short_stage
-from video_agent.shorts.builder.render_props import _write_render_props
-from video_agent.shorts.builder.context import BuildContext
 
 # Back-compat facade: stages were extracted into builder.stages.* and the
 # orchestration kernel into builder.types. Re-exported here so existing
 # callers/tests that patch or import via video_agent.shorts.short_builder.*
 # keep working unchanged.
 from video_agent.shorts.builder.types import (
-    StageSignal,
-    StageResult,
     _PROCEED,
-    SCORE_AUTOPASS_AVERAGE,
     MAX_QA_RETRIES_PER_STAGE,
     MAX_SCENE_REGEN_ATTEMPTS,
     MAX_SCRIPT_REGEN_ATTEMPTS,
+    SCORE_AUTOPASS_AVERAGE,
+    StageResult,
+    StageSignal,
 )
-from video_agent.shorts.builder.stages.scenes import (
-    _LoopAction,
-    _SceneLoopState,
-    _stage_visual_rhythm,
-    _stage_qa_scenes,
-    _scenes_generate_and_normalize,
-    _scenes_run_structure_validation,
-    _scenes_structural_repair,
-    _scenes_run_qa,
-    _scenes_product_quality_repair,
-    _stage_scenes,
+from video_agent.shorts.idea_preservation import allowed_spoken_points_from_contract
+from video_agent.shorts.manifest import write_short_status
+from video_agent.shorts.retry_memory import (
+    RetryIssue,
+    RetryMemory,
+    ScenePipelineState,
+    add_or_update_issue,
+    assert_latest_scenes_ready,
+    generate_cumulative_feedback,
+    load_retry_memory,
+    make_stable_issue_id,
+    resolve_issue_by_id,
+    save_retry_memory,
+    suppress_issue_by_id,
 )
-from video_agent.shorts.builder.stages.script import (
-    _stage_spoken_humanization,
-    _stage_script,
-    _stage_qa_script,
-    _stage_anti_ai_review,
-)
-from video_agent.shorts.builder.stages.media import (
-    _stage_retention_plan,
-    _stage_render,
-    _stage_performance_memory,
-    _stage_background,
-    _stage_audio,
-    _stage_seo,
-)
+from video_agent.storage.atomic import atomic_write_json
+
+__all__ = [
+    "anti_ai",
+    "call_budget",
+    "humanization",
+    "llm_history",
+    "performance_memory",
+    "paths",
+    "qa",
+    "retention_plan_builder",
+    "short_scene_builder",
+    "short_script_builder",
+    "short_seo_builder",
+    "source_map",
+    "validate_scenes",
+    "visual_rhythm",
+    "allowed_spoken_points_from_contract",
+    "write_short_status",
+    "atomic_write_json",
+    "ScenePipelineState",
+    "assert_latest_scenes_ready",
+    "RetryMemory",
+    "RetryIssue",
+    "add_or_update_issue",
+    "resolve_issue_by_id",
+    "suppress_issue_by_id",
+    "generate_cumulative_feedback",
+    "make_stable_issue_id",
+    "save_retry_memory",
+    "load_retry_memory",
+    "_default_llm_fn",
+    "_default_background_fn",
+    "_default_tts_fn",
+    "_default_mix_fn",
+    "_default_render_fn",
+    "_default_cover_fn",
+    "HARD_SCENE_VALIDATION_TYPES",
+    "_HARD_QA_ISSUE_MARKERS",
+    "_scene_qa_has_hard_fail",
+    "has_hard_fail",
+    "_qa_blocker_details",
+    "check_and_apply_auto_pass",
+    "should_fallback_to_gemini_scene_qa",
+    "build_script_compression_feedback",
+    "MAX_PROVIDER_RETRIES_PER_CALL",
+    "record_retry_event",
+    "wrap_llm_with_provider_retries",
+    "_parse",
+    "_cover_text",
+    "_normalized_script_hash",
+    "_normalized_scene_hash",
+    "_scene_duration_sum",
+    "_snapshot_scene_durations",
+    "_restore_scene_durations",
+    "_update_short_stage",
+    "_write_render_props",
+    "BuildContext",
+    "StageSignal",
+    "StageResult",
+    "_PROCEED",
+    "SCORE_AUTOPASS_AVERAGE",
+    "MAX_QA_RETRIES_PER_STAGE",
+    "MAX_SCENE_REGEN_ATTEMPTS",
+    "MAX_SCRIPT_REGEN_ATTEMPTS",
+    "_LoopAction",
+    "_SceneLoopState",
+    "_stage_visual_rhythm",
+    "_stage_qa_scenes",
+    "_scenes_generate_and_normalize",
+    "_scenes_run_structure_validation",
+    "_scenes_structural_repair",
+    "_scenes_run_qa",
+    "_scenes_product_quality_repair",
+    "_stage_scenes",
+    "_stage_spoken_humanization",
+    "_stage_script",
+    "_stage_qa_script",
+    "_stage_anti_ai_review",
+    "_stage_retention_plan",
+    "_stage_render",
+    "_stage_performance_memory",
+    "_stage_background",
+    "_stage_audio",
+    "_stage_seo",
+    "build_short",
+    "_build_short_impl",
+]
 
 
 def build_short(
@@ -252,7 +354,7 @@ def _build_short_impl(
         {"name": "performance_memory", "label": "Performance Memory", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
     ]
 
-    started_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    started_at = datetime.datetime.now(datetime.UTC).isoformat()
     status = {
         **base,
         "status": "generating",
@@ -300,7 +402,6 @@ def _build_short_impl(
     script_qa_result: dict[str, Any] = {"verdict": "FAIL", "issues": ["not_generated"]}
     short_script: dict[str, Any] = {}
     normalized_script_issues: list[Any] = []
-    normalized_scene_issues: list[Any] = []
     script_feedback = ""
     script_attempts = 0
     scenes_attempts = 0
@@ -313,13 +414,8 @@ def _build_short_impl(
     normalized_script_issues: list[dict[str, Any]] = []
     scenes_qa_result: dict[str, Any] = {"verdict": "FAIL", "issues": ["not_generated"]}
     short_scenes: dict[str, Any] = {}
-    scenes_feedback = ""
-    best_scene_candidate = None
-    best_scene_candidate_qa = None
     retention_plan: dict[str, Any] = {}
     spoken_humanization: dict[str, Any] = {}
-    visual_rhythm_plan: dict[str, Any] = {}
-    anti_ai_review: dict[str, Any] = {}
     anti_ai_regeneration_attempts = 0
 
     narration_wav = None
@@ -385,7 +481,7 @@ def _build_short_impl(
         _ctx.extras["script_retry_memory"] = script_retry_memory
         _ctx.extras["script_memory_file"] = script_memory_file
         _script_result = _stage_script(_ctx)
-        
+
         if _script_result.returns is not None:
             return _script_result.returns
         if _script_result.signal is StageSignal.DONE:
@@ -441,7 +537,6 @@ def _build_short_impl(
         _ctx.extras["script_attempts"] = script_attempts
         _ctx.extras["anti_ai_regeneration_attempts"] = anti_ai_regeneration_attempts
         _anti_ai_result = _stage_anti_ai_review(_ctx)
-        anti_ai_review = _ctx.extras.get("anti_ai_review", {})
         anti_ai_regeneration_attempts = _ctx.extras["anti_ai_regeneration_attempts"]
         if _anti_ai_result.returns is not None:
             return _anti_ai_result.returns

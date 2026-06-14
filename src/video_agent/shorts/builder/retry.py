@@ -1,7 +1,9 @@
 """Retry helpers extracted from short_builder."""
+
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from video_agent.shorts import llm_history
 
@@ -16,7 +18,7 @@ def record_retry_event(
     max_attempts: int,
     hard_fail: bool,
     source_stage: str,
-    details: dict | None = None
+    details: dict | None = None,
 ) -> None:
     payload = {
         "retry_reason": reason,
@@ -36,10 +38,15 @@ def record_retry_event(
     )
 
 
-def wrap_llm_with_provider_retries(original_llm_fn: Callable[..., str], recorder: llm_history.LLMHistoryRecorder, provider: str) -> Callable[..., str]:
+def wrap_llm_with_provider_retries(
+    original_llm_fn: Callable[..., str], recorder: llm_history.LLMHistoryRecorder, provider: str
+) -> Callable[..., str]:
     def wrapped(*args: Any, **kwargs: Any) -> str:
-        from video_agent.shorts.short_scene_builder import is_provider_error_text, ChatGPTProviderError
         from video_agent.shorts.llm_history import _guess_kind
+        from video_agent.shorts.short_scene_builder import (
+            ChatGPTProviderError,
+            is_provider_error_text,
+        )
 
         prompt = ""
         if len(args) == 2:
@@ -54,7 +61,9 @@ def wrap_llm_with_provider_retries(original_llm_fn: Callable[..., str], recorder
             try:
                 res = original_llm_fn(*args, **kwargs)
                 if is_provider_error_text(res):
-                    raise ChatGPTProviderError("Provider error text returned by LLM", snippet=res[:200])
+                    raise ChatGPTProviderError(
+                        "Provider error text returned by LLM", snippet=res[:200]
+                    )
                 return res
             except Exception as exc:
                 last_error = exc
@@ -66,9 +75,10 @@ def wrap_llm_with_provider_retries(original_llm_fn: Callable[..., str], recorder
                     max_attempts=MAX_PROVIDER_RETRIES_PER_CALL,
                     hard_fail=True,
                     source_stage=stage_name,
-                    details={"error": str(exc)}
+                    details={"error": str(exc)},
                 )
                 if attempt == MAX_PROVIDER_RETRIES_PER_CALL:
                     raise exc
         raise last_error or RuntimeError("Provider retries exhausted")
+
     return wrapped

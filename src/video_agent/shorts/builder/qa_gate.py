@@ -1,10 +1,11 @@
 """QA gate helpers extracted from short_builder."""
+
 from __future__ import annotations
 
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from video_agent.shorts import validate_scenes as _validate_scenes
+    pass
 
 
 HARD_SCENE_VALIDATION_TYPES = {
@@ -25,9 +26,19 @@ HARD_SCENE_VALIDATION_TYPES = {
 
 
 _HARD_QA_ISSUE_MARKERS = (
-    "safety", "source_fidelity", "source_support", "idea", "schema",
-    "layout", "contract", "audio_fit", "duration_cap",
-    "missing_item", "first_scene", "last_scene", "empty_scenes",
+    "safety",
+    "source_fidelity",
+    "source_support",
+    "idea",
+    "schema",
+    "layout",
+    "contract",
+    "audio_fit",
+    "duration_cap",
+    "missing_item",
+    "first_scene",
+    "last_scene",
+    "empty_scenes",
 )
 
 
@@ -50,7 +61,7 @@ def _scene_qa_has_hard_fail(result: dict[str, Any]) -> bool:
     """True when a scene-QA result carries a blocking/repairable issue that must
     be regenerated. Soft suggestions (severity warning, no required changes) are
     not hard fails."""
-    for item in (result.get("issues") or []):
+    for item in result.get("issues") or []:
         if not isinstance(item, dict):
             # Bare string issue: treat as soft suggestion.
             continue
@@ -74,7 +85,18 @@ def has_hard_fail(result: dict[str, Any]) -> bool:
     for item in issues:
         if isinstance(item, str):
             item_lower = item.lower()
-            if any(m in item_lower for m in ["safety", "source_fidelity", "source_support", "health_claim", "disclaimer", "medical", "contract"]):
+            if any(
+                m in item_lower
+                for m in [
+                    "safety",
+                    "source_fidelity",
+                    "source_support",
+                    "health_claim",
+                    "disclaimer",
+                    "medical",
+                    "contract",
+                ]
+            ):
                 return True
             continue
         itype = str(item.get("type") or "").lower()
@@ -85,18 +107,38 @@ def has_hard_fail(result: dict[str, Any]) -> bool:
         if severity == "blocking_error":
             return True
         hard_markers = {
-            "safety", "source_fidelity", "source_support", "idea", "schema",
-            "layout", "contract", "first_scene", "empty_scenes", "greeting",
-            "disclaimer", "medical", "overclaim", "narration", "source_map"
+            "safety",
+            "source_fidelity",
+            "source_support",
+            "idea",
+            "schema",
+            "layout",
+            "contract",
+            "first_scene",
+            "empty_scenes",
+            "greeting",
+            "disclaimer",
+            "medical",
+            "overclaim",
+            "narration",
+            "source_map",
         }
         if any(m in itype for m in hard_markers):
             if "product_quality" in itype:
                 continue
             return True
-        if any(m in detail for m in ["safety", "source_fidelity", "source_support", "health claim", "medical overclaim"]):
+        if any(
+            m in detail
+            for m in [
+                "safety",
+                "source_fidelity",
+                "source_support",
+                "health claim",
+                "medical overclaim",
+            ]
+        ):
             return True
     return False
-
 
 
 def _qa_blocker_details(result: dict[str, Any]) -> list[str]:
@@ -109,7 +151,7 @@ def _qa_blocker_details(result: dict[str, Any]) -> list[str]:
     are excluded here.
     """
     details: list[str] = []
-    for item in (result.get("issues") or []):
+    for item in result.get("issues") or []:
         if isinstance(item, str):
             details.append(item)
             continue
@@ -123,7 +165,7 @@ def _qa_blocker_details(result: dict[str, Any]) -> list[str]:
             severity not in {"", "minor", "info"}
         ):
             details.append(str(item.get("detail") or item.get("type") or "issue"))
-    for rc in (result.get("required_changes") or []):
+    for rc in result.get("required_changes") or []:
         rc_str = rc if isinstance(rc, str) else str(rc)
         if rc_str and rc_str not in details:
             details.append(rc_str)
@@ -137,6 +179,7 @@ def check_and_apply_auto_pass(qa_result: dict[str, Any]) -> bool:
     if has_hard_fail(qa_result):
         return False
     from video_agent.shorts.qa import parse_defensive_score
+
     p_scores = qa_result.get("product_scores") or {}
     avg_product = 0.0
     if p_scores:
@@ -170,6 +213,7 @@ def should_fallback_to_gemini_scene_qa(issues: list) -> bool:
 
 def build_script_compression_feedback(short_script: dict[str, Any] | None) -> str:
     from video_agent.shorts.idea_preservation import allowed_spoken_points_from_contract
+
     script = short_script or {}
     contract = script.get("idea_contract") or {}
     allowed_points = allowed_spoken_points_from_contract(contract)
@@ -179,13 +223,15 @@ def build_script_compression_feedback(short_script: dict[str, Any] | None) -> st
         if allowed_points
         else "- Keep 3-4 spoken points if it improves retention and no locked count exists."
     )
-    return "\n".join([
-        "SCRIPT COMPRESSION REQUIRED:",
-        "- Scene-level narration fit failed after 2 attempts.",
-        point_line,
-        "- Make each item shorter and more natural.",
-        "- Move supporting detail to on-screen text, captions, visual action, or layout_payload.",
-        "- Use only source-supported language from the current idea.",
-        "- If it still cannot fit without rushed narration or poor readability, return split_recommended.",
-        "- Do not reduce the promised count unless adaptation_allowed=true.",
-    ])
+    return "\n".join(
+        [
+            "SCRIPT COMPRESSION REQUIRED:",
+            "- Scene-level narration fit failed after 2 attempts.",
+            point_line,
+            "- Make each item shorter and more natural.",
+            "- Move supporting detail to on-screen text, captions, visual action, or layout_payload.",
+            "- Use only source-supported language from the current idea.",
+            "- If it still cannot fit without rushed narration or poor readability, return split_recommended.",
+            "- Do not reduce the promised count unless adaptation_allowed=true.",
+        ]
+    )

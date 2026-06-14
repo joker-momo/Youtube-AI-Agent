@@ -1,78 +1,45 @@
 """Script generation, QA, anti-AI review & humanization stages."""
-from __future__ import annotations
 
-import datetime
-import json
-from pathlib import Path
-from typing import Any, Callable
+from __future__ import annotations
 
 from video_agent.shorts import (
     anti_ai,
-    call_budget,
     humanization,
-    llm_history,
-    performance_memory,
     paths,
+    performance_memory,
     qa,
-    retention_plan as retention_plan_builder,
-    short_scene_builder,
     short_script_builder,
-    short_seo_builder,
     source_map,
     validate_scenes,
-    visual_rhythm,
 )
-from video_agent.shorts.idea_preservation import allowed_spoken_points_from_contract
-from video_agent.shorts.manifest import write_short_status
-from video_agent.storage.atomic import atomic_write_json
-from video_agent.shorts.retry_memory import (
-    ScenePipelineState,
-    assert_latest_scenes_ready,
-    RetryMemory,
-    RetryIssue,
-    add_or_update_issue,
-    resolve_issue_by_id,
-    suppress_issue_by_id,
-    generate_cumulative_feedback,
-    make_stable_issue_id,
-    save_retry_memory,
-    load_retry_memory,
-)
+from video_agent.shorts.builder.context import BuildContext
 
 # Backwards-compatible facade: tests and callers import/patch these via
 # video_agent.shorts.short_builder.<name>.
-from video_agent.shorts.builder.defaults import (
-    _default_llm_fn, _default_background_fn, _default_tts_fn,
-    _default_mix_fn, _default_render_fn, _default_cover_fn,
-)
 from video_agent.shorts.builder.qa_gate import (
-    HARD_SCENE_VALIDATION_TYPES,
-    _HARD_QA_ISSUE_MARKERS,
-    _scene_qa_has_hard_fail, has_hard_fail, _qa_blocker_details,
-    check_and_apply_auto_pass, should_fallback_to_gemini_scene_qa,
-    build_script_compression_feedback,
-)
-from video_agent.shorts.builder.retry import (
-    MAX_PROVIDER_RETRIES_PER_CALL,
-    record_retry_event, wrap_llm_with_provider_retries,
+    _qa_blocker_details,
+    check_and_apply_auto_pass,
+    has_hard_fail,
 )
 from video_agent.shorts.builder.snapshots import (
-    _parse, _cover_text, _normalized_script_hash, _normalized_scene_hash,
-    _scene_duration_sum, _snapshot_scene_durations, _restore_scene_durations,
+    _normalized_script_hash,
 )
-from video_agent.shorts.builder.status import _update_short_stage
-from video_agent.shorts.builder.render_props import _write_render_props
-from video_agent.shorts.builder.context import BuildContext
-
 from video_agent.shorts.builder.types import (
-    StageSignal,
-    StageResult,
     _PROCEED,
-    SCORE_AUTOPASS_AVERAGE,
-    MAX_QA_RETRIES_PER_STAGE,
-    MAX_SCENE_REGEN_ATTEMPTS,
-    MAX_SCRIPT_REGEN_ATTEMPTS,
+    StageResult,
+    StageSignal,
 )
+from video_agent.shorts.manifest import write_short_status
+from video_agent.shorts.retry_memory import (
+    RetryIssue,
+    add_or_update_issue,
+    generate_cumulative_feedback,
+    make_stable_issue_id,
+    resolve_issue_by_id,
+    save_retry_memory,
+    suppress_issue_by_id,
+)
+from video_agent.storage.atomic import atomic_write_json
 
 
 def _stage_spoken_humanization(ctx: BuildContext) -> None:
@@ -131,39 +98,44 @@ def _stage_script(ctx: BuildContext) -> StageResult:
     check_stop = ctx.check_stop
     _recorder = ctx.recorder
     llm_fn = ctx.llm_fn
-    gemini_fn = ctx.gemini_fn
-    music_track = ctx.music_track
-    max_regen = ctx.max_regen
-    long_video_url = ctx.long_video_url
     source_artifacts = ctx.source_artifacts
 
     script_attempts = ctx.extras["script_attempts"]
     script_feedback = ctx.extras["script_feedback"]
-    prev_script_hash = ctx.extras["prev_script_hash"]
+    ctx.extras["prev_script_hash"]
     retention_plan = ctx.extras.get("retention_plan", {})
-    script_retry_memory = ctx.extras["script_retry_memory"]
-    script_memory_file = ctx.extras["script_memory_file"]
+    ctx.extras["script_retry_memory"]
+    ctx.extras["script_memory_file"]
 
     # --- Stage 1: Script ---
     update_stage("script", "in_progress")
     try:
         check_stop()
         candidate = short_script_builder.build_short_script(
-            long_job_dir, plan_for_prompt, channel_config, llm_fn,
+            long_job_dir,
+            plan_for_prompt,
+            channel_config,
+            llm_fn,
             source_artifacts=source_artifacts,
             retention_plan=retention_plan,
-            feedback=script_feedback, attempt=script_attempts,
+            feedback=script_feedback,
+            attempt=script_attempts,
             write_to_disk=False,
         )
 
         # Check for script completeness and structure
-        from video_agent.shorts.validation.checks import validate_full_short_script_candidate, classify_script_validation
+        from video_agent.shorts.validation.checks import (
+            classify_script_validation,
+            validate_full_short_script_candidate,
+        )
+
         jd_test = paths.short_json_dir(long_job_dir, short_id)
         source_map_file = jd_test / paths.SHORT_SOURCE_MAP_FILE
 
         sm = None
         if source_map_file.exists():
             import json
+
             try:
                 sm = json.loads(source_map_file.read_text())
             except Exception:
@@ -171,6 +143,7 @@ def _stage_script(ctx: BuildContext) -> StageResult:
 
         # If candidate has target_duration_sec == 45 and count is unlocked, allow updating short_plan
         from video_agent.shorts.idea_preservation import derive_idea_contract
+
         contract = derive_idea_contract(short_plan)
         if not contract.get("must_preserve_count") and candidate.get("target_duration_sec") == 45:
             short_plan["target_duration_sec"] = 45
@@ -181,8 +154,7 @@ def _stage_script(ctx: BuildContext) -> StageResult:
         if errors:
             if "audio_fit_over_soft_budget" in errors:
                 ctx.extras["script_feedback"] = (
-                    script_feedback +
-                    "\n\nCRITICAL SYSTEM REJECTION: Audio fit failed. "
+                    script_feedback + "\n\nCRITICAL SYSTEM REJECTION: Audio fit failed. "
                     "Reduce narration to <= 65 words. "
                     "Keep 5 items. "
                     "Move details to visuals. "
@@ -190,13 +162,15 @@ def _stage_script(ctx: BuildContext) -> StageResult:
                 )
             else:
                 ctx.extras["script_feedback"] = (
-                    script_feedback +
-                    "\n\nCRITICAL SYSTEM REJECTION: You returned a partial script or failed strict structural requirements! "
+                    script_feedback
+                    + "\n\nCRITICAL SYSTEM REJECTION: You returned a partial script or failed strict structural requirements! "
                     "You MUST return the FULL script from start to finish. "
                     "Errors detected: " + ", ".join(errors)
                 )
             verdict = classify_script_validation(errors)
-            _recorder.record_event("deterministic", "script_validation", {"verdict": verdict, "errors": errors})
+            _recorder.record_event(
+                "deterministic", "script_validation", {"verdict": verdict, "errors": errors}
+            )
             # Do NOT update stage or save the broken candidate
             return StageResult(StageSignal.RESTART_SCRIPT)
 
@@ -248,14 +222,22 @@ def _stage_qa_script(ctx: BuildContext) -> StageResult:
     cur_script_hash = _normalized_script_hash(short_script)
     if prev_script_hash is not None and cur_script_hash == prev_script_hash:
         script_qa_result = qa.run_short_script_qa(
-            long_job_dir, short_id, channel_config,
-            music_track=music_track, gemini_fn=gemini_fn, attempt=script_attempts,
+            long_job_dir,
+            short_id,
+            channel_config,
+            music_track=music_track,
+            gemini_fn=gemini_fn,
+            attempt=script_attempts,
         )
         check_and_apply_auto_pass(script_qa_result)
         atomic_write_json(_jd / paths.SHORT_SCRIPT_QA_FILE, script_qa_result)
         ctx.extras["script_qa_result"] = script_qa_result
         verdict = script_qa_result.get("verdict", "FAIL")
-        update_stage("qa_script", "completed" if verdict in ("PASS", "WARN") else "failed", qa_verdict=verdict)
+        update_stage(
+            "qa_script",
+            "completed" if verdict in ("PASS", "WARN") else "failed",
+            qa_verdict=verdict,
+        )
 
         renderable = not has_hard_fail(script_qa_result)
         _recorder.record_event(
@@ -278,7 +260,9 @@ def _stage_qa_script(ctx: BuildContext) -> StageResult:
             status["hook"] = str(short_script.get("hook") or "")
             write_short_status(long_job_dir, short_id, status)
             try:
-                sm = source_map.build_source_map(long_job_dir, short_plan, short_script, channel_config, long_video_url)
+                sm = source_map.build_source_map(
+                    long_job_dir, short_plan, short_script, channel_config, long_video_url
+                )
                 atomic_write_json(_jd / paths.SHORT_SOURCE_MAP_FILE, sm)
             except Exception:
                 pass
@@ -305,17 +289,19 @@ def _stage_qa_script(ctx: BuildContext) -> StageResult:
             for s in status["stages"]:
                 if s["status"] == "pending":
                     s["status"] = "skipped"
-            status.update({
-                "status": "needs_review",
-                "rendered": False,
-                "uploaded": False,
-                "youtube_url": "",
-                "requires_user_review": True,
-                "qa_verdict": "FAIL",
-                "failure_stage": "qa_script",
-                "failure_reason": failure_reason,
-                "regeneration_attempts": script_attempts,
-            })
+            status.update(
+                {
+                    "status": "needs_review",
+                    "rendered": False,
+                    "uploaded": False,
+                    "youtube_url": "",
+                    "requires_user_review": True,
+                    "qa_verdict": "FAIL",
+                    "failure_stage": "qa_script",
+                    "failure_reason": failure_reason,
+                    "regeneration_attempts": script_attempts,
+                }
+            )
             write_short_status(long_job_dir, short_id, status)
             return StageResult(StageSignal.PROCEED, returns=status)
 
@@ -328,7 +314,9 @@ def _stage_qa_script(ctx: BuildContext) -> StageResult:
 
     # Build Source Map early so Script QA can read it
     try:
-        sm = source_map.build_source_map(long_job_dir, short_plan, short_script, channel_config, long_video_url)
+        sm = source_map.build_source_map(
+            long_job_dir, short_plan, short_script, channel_config, long_video_url
+        )
         atomic_write_json(_jd / paths.SHORT_SOURCE_MAP_FILE, sm)
     except Exception:
         pass
@@ -338,25 +326,39 @@ def _stage_qa_script(ctx: BuildContext) -> StageResult:
     try:
         check_stop()
         script_qa_result = qa.run_short_script_qa(
-            long_job_dir, short_id, channel_config,
-            music_track=music_track, gemini_fn=gemini_fn, attempt=script_attempts,
+            long_job_dir,
+            short_id,
+            channel_config,
+            music_track=music_track,
+            gemini_fn=gemini_fn,
+            attempt=script_attempts,
         )
         check_and_apply_auto_pass(script_qa_result)
 
         # Normalize script QA issues
         normalized_script_issues = []
         for item in script_qa_result.get("issues") or []:
-            norm = qa.normalize_qa_issue(item, idea=short_plan, script=short_script, scenes={}, source="script_qa")
+            norm = qa.normalize_qa_issue(
+                item, idea=short_plan, script=short_script, scenes={}, source="script_qa"
+            )
             normalized_script_issues.append(norm)
         for item in script_qa_result.get("required_changes") or []:
-            norm = qa.normalize_qa_issue(item, idea=short_plan, script=short_script, scenes={}, source="script_qa")
+            norm = qa.normalize_qa_issue(
+                item, idea=short_plan, script=short_script, scenes={}, source="script_qa"
+            )
             if not any(x.detail == norm.detail for x in normalized_script_issues):
                 normalized_script_issues.append(norm)
 
         script_qa_result["normalized_issues"] = [n.to_dict() for n in normalized_script_issues]
 
-        script_blockers = [n for n in normalized_script_issues if n.issue_class in {qa.IssueClass.HARD_BLOCKER, qa.IssueClass.REPAIRABLE_BLOCKER}]
-        script_warnings = [n for n in normalized_script_issues if n.issue_class == qa.IssueClass.SOFT_WARNING]
+        script_blockers = [
+            n
+            for n in normalized_script_issues
+            if n.issue_class in {qa.IssueClass.HARD_BLOCKER, qa.IssueClass.REPAIRABLE_BLOCKER}
+        ]
+        script_warnings = [
+            n for n in normalized_script_issues if n.issue_class == qa.IssueClass.SOFT_WARNING
+        ]
 
         if not script_blockers:
             script_qa_result["verdict"] = "WARN" if script_warnings else "PASS"
@@ -365,7 +367,11 @@ def _stage_qa_script(ctx: BuildContext) -> StageResult:
 
         atomic_write_json(_jd / paths.SHORT_SCRIPT_QA_FILE, script_qa_result)
         verdict = script_qa_result.get("verdict", "FAIL")
-        update_stage("qa_script", "completed" if verdict in ("PASS", "WARN") else "failed", qa_verdict=verdict)
+        update_stage(
+            "qa_script",
+            "completed" if verdict in ("PASS", "WARN") else "failed",
+            qa_verdict=verdict,
+        )
 
         # Record classification and wrong context suppression for script QA
         raw_gemini_verdict = script_qa_result.get("verdict")
@@ -373,8 +379,12 @@ def _stage_qa_script(ctx: BuildContext) -> StageResult:
             classification_reason = "qa_hard_fail"
             if not script_blockers:
                 classification_reason = "qa_soft_warn"
-                has_wrong_context = any(n.reason == "wrong_context_five_errors_rule" for n in normalized_script_issues)
-                has_noncanonical = any(n.reason == "noncanonical_count_inference" for n in normalized_script_issues)
+                has_wrong_context = any(
+                    n.reason == "wrong_context_five_errors_rule" for n in normalized_script_issues
+                )
+                has_noncanonical = any(
+                    n.reason == "noncanonical_count_inference" for n in normalized_script_issues
+                )
                 if has_noncanonical:
                     classification_reason = "noncanonical_count_inference"
                 elif has_wrong_context:
@@ -386,7 +396,7 @@ def _stage_qa_script(ctx: BuildContext) -> StageResult:
                 {
                     "reason": classification_reason,
                 },
-                ok=True
+                ok=True,
             )
         for norm in normalized_script_issues:
             if norm.reason == "wrong_context_five_errors_rule":
@@ -397,7 +407,7 @@ def _stage_qa_script(ctx: BuildContext) -> StageResult:
                         "reason": "wrong_context_suppressed",
                         "detail": norm.detail,
                     },
-                    ok=False
+                    ok=False,
                 )
             elif norm.reason == "noncanonical_count_inference":
                 _recorder.record_event(
@@ -407,7 +417,7 @@ def _stage_qa_script(ctx: BuildContext) -> StageResult:
                         "reason": "noncanonical_count_inference",
                         "detail": norm.detail,
                     },
-                    ok=False
+                    ok=False,
                 )
     except Exception as exc:
         update_stage("qa_script", "failed")
@@ -441,7 +451,7 @@ def _stage_qa_script(ctx: BuildContext) -> StageResult:
                 first_seen_attempt=script_attempts,
                 last_seen_attempt=script_attempts,
                 issue_class=norm.issue_class,
-                reason=norm.reason
+                reason=norm.reason,
             )
             if retry_issue.status == "suppressed":
                 script_retry_memory.suppressed_issues[issue_id] = retry_issue
@@ -455,9 +465,19 @@ def _stage_qa_script(ctx: BuildContext) -> StageResult:
 
         save_retry_memory(script_retry_memory, script_memory_file)
         from video_agent.shorts.idea_preservation import derive_idea_items
+
         exact_mapping_items = short_plan.get("idea_items") or derive_idea_items(short_plan)
-        exact_mapping_context = "\n".join(f"{i+1}. {item.get('label') or item.get('topic') or item}" for i, item in enumerate(exact_mapping_items)) if exact_mapping_items else ""
-        script_feedback = generate_cumulative_feedback(script_retry_memory, script_attempts + 1, exact_mapping_context=exact_mapping_context)
+        exact_mapping_context = (
+            "\n".join(
+                f"{i + 1}. {item.get('label') or item.get('topic') or item}"
+                for i, item in enumerate(exact_mapping_items)
+            )
+            if exact_mapping_items
+            else ""
+        )
+        script_feedback = generate_cumulative_feedback(
+            script_retry_memory, script_attempts + 1, exact_mapping_context=exact_mapping_context
+        )
         ctx.extras["script_feedback"] = script_feedback
         return StageResult(StageSignal.RESTART_SCRIPT)
 
@@ -563,26 +583,39 @@ def _stage_anti_ai_review(ctx: BuildContext) -> StageResult:
             )
         )
         issue_id = make_stable_issue_id("anti_ai_review", "global", "anti_ai_issue", issue_text)
-        add_or_update_issue(script_retry_memory, RetryIssue(
-            id=issue_id,
-            stage="anti_ai_review",
-            attempt=script_attempts,
-            scene_id="global",
-            type="anti_ai_issue",
-            severity="major",
-            detail=issue_text,
-            required_change=issue_text,
-            status="active",
-            first_seen_attempt=script_attempts,
-            last_seen_attempt=script_attempts,
-        ))
+        add_or_update_issue(
+            script_retry_memory,
+            RetryIssue(
+                id=issue_id,
+                stage="anti_ai_review",
+                attempt=script_attempts,
+                scene_id="global",
+                type="anti_ai_issue",
+                severity="major",
+                detail=issue_text,
+                required_change=issue_text,
+                status="active",
+                first_seen_attempt=script_attempts,
+                last_seen_attempt=script_attempts,
+            ),
+        )
         save_retry_memory(script_retry_memory, script_memory_file)
         if anti_ai_regeneration_attempts <= 1 and script_attempts < max_regen + 1:
             from video_agent.shorts.idea_preservation import derive_idea_items
+
             exact_mapping_items = short_plan.get("idea_items") or derive_idea_items(short_plan)
-            exact_mapping_context = "\n".join(f"{i+1}. {item.get('label') or item.get('topic') or item}" for i, item in enumerate(exact_mapping_items)) if exact_mapping_items else ""
+            exact_mapping_context = (
+                "\n".join(
+                    f"{i + 1}. {item.get('label') or item.get('topic') or item}"
+                    for i, item in enumerate(exact_mapping_items)
+                )
+                if exact_mapping_items
+                else ""
+            )
             script_feedback = generate_cumulative_feedback(
-                script_retry_memory, script_attempts + 1, exact_mapping_context=exact_mapping_context
+                script_retry_memory,
+                script_attempts + 1,
+                exact_mapping_context=exact_mapping_context,
             )
             ctx.extras["script_feedback"] = script_feedback
             for stage_name in (
@@ -609,17 +642,19 @@ def _stage_anti_ai_review(ctx: BuildContext) -> StageResult:
             failure_reason=issue_text,
         )
         update_stage("performance_memory", "completed", memory_status="failed")
-        status.update({
-            "status": "failed",
-            "rendered": False,
-            "uploaded": False,
-            "youtube_url": "",
-            "requires_user_review": True,
-            "qa_verdict": "FAIL",
-            "failure_stage": "anti_ai_review",
-            "failure_reason": issue_text,
-            "anti_ai_regeneration_attempts": anti_ai_regeneration_attempts,
-        })
+        status.update(
+            {
+                "status": "failed",
+                "rendered": False,
+                "uploaded": False,
+                "youtube_url": "",
+                "requires_user_review": True,
+                "qa_verdict": "FAIL",
+                "failure_stage": "anti_ai_review",
+                "failure_reason": issue_text,
+                "anti_ai_regeneration_attempts": anti_ai_regeneration_attempts,
+            }
+        )
         write_short_status(long_job_dir, short_id, status)
         return StageResult(StageSignal.PROCEED, returns=status)
 

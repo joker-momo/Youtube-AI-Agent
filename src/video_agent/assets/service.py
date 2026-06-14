@@ -12,6 +12,8 @@ from urllib.request import Request, urlopen
 
 from video_agent.assets.library import AssetLibrary
 from video_agent.assets.providers import DEFAULT_HEADERS, StockPhotoClient
+from video_agent.assets.query_cache import QueryCache
+from video_agent.contracts import repo_root
 
 _IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 
@@ -127,8 +129,7 @@ def _assert_safe_http_url(url: str) -> None:
                 raise ValueError(f"Refusing internal host: {host}")
         except (ValueError, IndexError):
             pass
-from video_agent.assets.query_cache import QueryCache
-from video_agent.contracts import repo_root
+
 
 # Safety net: when ChatGPT leaks Spanish into visual_prompt despite the prompt rule,
 # we still try to send a meaningful English query to Pexels rather than the raw
@@ -1196,7 +1197,14 @@ class StockAssetService:
         quality_weight = _quality_norm(quality_weight)
         enable_quality = bool(self.asset_selection_config.get("enable_quality_scoring", True))
         for candidate_index, (candidate, scoring, base_norm, quality_norm, quality_dim) in enumerate(
-            zip(candidates, base_scorings, base_norms, quality_norms, quality_dimensions),
+            zip(
+                candidates,
+                base_scorings,
+                base_norms,
+                quality_norms,
+                quality_dimensions,
+                strict=True,
+            ),
             start=1,
         ):
             if enable_quality:

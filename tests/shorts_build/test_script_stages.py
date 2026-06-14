@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .conftest import *  # noqa: F401,F403
 
+
 def test_short_script_prompt_has_retention_and_language_rules():
     from video_agent.shorts import prompts
     p = prompts.short_script_prompt(_cfg(), {"short_id": "short-01", "format": "pain_to_tip", "narration_seed": "x"}, {})
@@ -27,7 +28,11 @@ def test_v13_script_prompt_uses_calibrated_word_budget_without_old_rule():
 
     assert "80–105" not in p
     assert "80-105" not in p
-    assert "60–70 spoken spanish words" in p or "60-70 spoken spanish words" in p
+    # The old fixed "60–70 spoken spanish words" literal was replaced by a
+    # calibrated dynamic budget (~1.7–2.0 words/sec for the target duration,
+    # e.g. "between 59 and 70 spanish words ... is ideal" for a 35s Short).
+    assert "spanish words" in p and "words is ideal" in p
+    assert "calibrated" in p
     assert "2.25" in p
     assert "checklist point count policy" in p
     assert "if there is no locked count" in p

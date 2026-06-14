@@ -262,8 +262,18 @@ def normalize_qa_issue(
                 "contract",
             ]
             # 'safety' is a tricky one because the hint itself might say 'preserving safety'
-            if any(bk in detail_lower for bk in _blocking_keywords) or (
-                "safety" in detail_lower and "preserving safety" not in detail_lower
+            # A concrete hard quality floor (any reported dimension below 6.0)
+            # must block, not just keyword matches — otherwise a clarity=5 scene
+            # renders because the FAIL is downgraded to a soft warning. A score of
+            # 6 stays a soft terminal warning. The Required thresholds in the
+            # detail are all >= 8.5, so only an actual failing dimension trips this.
+            _hard_floor_breached = any(
+                float(s) < 6.0 for s in re.findall(r"\d+(?:\.\d+)?", detail_lower)
+            )
+            if (
+                _hard_floor_breached
+                or any(bk in detail_lower for bk in _blocking_keywords)
+                or ("safety" in detail_lower and "preserving safety" not in detail_lower)
             ):
                 is_soft = False
                 is_hard = True

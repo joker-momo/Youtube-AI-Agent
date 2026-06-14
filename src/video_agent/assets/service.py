@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import os
+import re
 import shutil
 import sys
-import os
 import tempfile
-import re
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urlparse
@@ -130,7 +130,6 @@ def _assert_safe_http_url(url: str) -> None:
 from video_agent.assets.query_cache import QueryCache
 from video_agent.contracts import repo_root
 
-
 # Safety net: when ChatGPT leaks Spanish into visual_prompt despite the prompt rule,
 # we still try to send a meaningful English query to Pexels rather than the raw
 # Spanish prose. This is keyword extraction, not real translation — adequate
@@ -181,7 +180,7 @@ _SPANISH_STOPWORDS_FOR_TRANSLATE = {
     "este", "esta", "estos", "estas", "ese", "esa", "esos", "esas",
     "su", "sus", "mi", "mis", "tu", "tus", "se", "le", "lo", "les",
     "no", "sí", "más", "mas", "muy", "ya", "pero", "también",
-    "al", "lo", "es", "son", "estar", "ser", "hay",
+    "al", "es", "son", "estar", "ser", "hay",
 }
 
 
@@ -406,8 +405,8 @@ _ASSET_SELECTION_DEFAULTS: dict[str, Any] = {
 
 def _asset_selection_config(visual_config: dict[str, Any]) -> dict[str, Any]:
     cfg = dict(_ASSET_SELECTION_DEFAULTS)
-    cfg.update((visual_config.get("asset_selection") or {}))
-    cfg.update(((visual_config.get("shorts_quality") or {}).get("asset_selection") or {}))
+    cfg.update(visual_config.get("asset_selection") or {})
+    cfg.update((visual_config.get("shorts_quality") or {}).get("asset_selection") or {})
     return cfg
 
 
@@ -708,17 +707,17 @@ class StockAssetService:
         prompt = (scene.get("visual_prompt") or "").lower()
         candidate = ranked_candidate.get("candidate", {})
         tags = set(str(t).lower() for t in candidate.get("tags", []))
-        
+
         # If the scene explicitly asks for supermarket/store and the asset tags have "sleep" or "bed", it's contradictory.
         if "supermarket" in prompt or "store" in prompt:
             if "sleep" in tags or "bed" in tags or "sleeping" in tags:
                 return True
-                
+
         # If the scene asks for reading/turning label, and asset is purely "slicing bread", it's contradictory.
         if ("turn" in prompt or "read" in prompt) and "label" in prompt:
             if "slice" in tags or "cutting" in tags:
                 return True
-                
+
         return False
 
     def get_scene_asset(self, scene: dict[str, Any], channel_id: str, job_id: str) -> dict[str, Any] | None:
@@ -778,7 +777,7 @@ class StockAssetService:
                 asset["asset_tier"] = "pexels_video"
                 asset["asset_selection"]["asset_match_status"] = "strong_match"
                 return asset
-                
+
             # Tier 2 — stock photo, strict only.
             asset = _search(self.photo_providers, require_strict=True)
             if asset is not None:
@@ -786,10 +785,14 @@ class StockAssetService:
                 asset["asset_selection"]["asset_match_status"] = "strong_match"
                 return asset
 
-        # Tier 3 — AI-generated image fallback
-        # Triggered if strategy is ai_image_preferred OR if it's a critical scene where strict stock failed
+        # Tier 3 — AI-generated image fallback.
+        # Triggered for ANY non-graphic scene once strict stock has failed: an
+        # on-brand AI image always beats an off-topic weak-match stock clip
+        # (e.g. a "man photographing pasta" video standing in for a 55+ breathing
+        # pause). Weak stock (Tier 4b) is kept only as the degraded path for when
+        # AI generation is unavailable or fails. Quality > cost (PRIME DIRECTIVE).
         enable_ai_fallback = str(os.environ.get("ENABLE_AI_IMAGE_FALLBACK", "true")).lower() == "true"
-        ai_triggered = (strategy == "ai_image_preferred") or (is_key and strategy != "graphic_fallback")
+        ai_triggered = strategy != "graphic_fallback"
         if ai_triggered and enable_ai_fallback and self.image_gen_fn is not None:
             # max retries logic is handled inside _ai_generate_scene_asset
             asset = self._ai_generate_scene_asset(scene, query, channel_id, job_id)
@@ -820,7 +823,7 @@ class StockAssetService:
                     "matched_terms": [],
                 },
             }
-            
+
         # Tier 4b — Weak Pexels allowed only for non-key scenes if strategy is stock_ok
         if strategy == "stock_ok" and not is_key:
             asset = _search(self.providers, require_strict=False)
@@ -834,7 +837,7 @@ class StockAssetService:
                     asset["asset_tier"] = "weak_pexels"
                     asset["asset_selection"]["asset_match_status"] = "weak_match"
                     return asset
-                
+
         # Tier 5 — block + review (returns None)
         return None
 
@@ -863,24 +866,24 @@ class StockAssetService:
     ) -> dict[str, Any] | None:
         """Last-resort tier: render an AI image from the scene's visual_prompt."""
         import hashlib
-        
+
         prompt = str(scene.get("visual_prompt") or query or "").strip()
         if not prompt:
             return None
-            
+
         aspect_ratio = "9:16"
         style_version = "v1"
         model_name = "dall-e-3"
         prompt_hash = hashlib.sha256(f"{prompt}_{aspect_ratio}_{style_version}_{model_name}".encode()).hexdigest()[:16]
-        
+
         out_dir = Path(self.library.root) / "ai_generated"
         out_path = out_dir / f"{job_id}_{scene['id']}_{prompt_hash}.png"
-        
+
         # Cache check
         if not (out_path.exists() and out_path.stat().st_size > 1024):
             try:
                 out_dir.mkdir(parents=True, exist_ok=True)
-                
+
                 # Prepend the portrait image gen instruction
                 image_gen_instruction = (
                     "Generate one photorealistic image at exactly 1080x1920 pixels "
@@ -888,12 +891,12 @@ class StockAssetService:
                     "no borders, no padding, no commentary, no watermark."
                 )
                 full_prompt = f"{image_gen_instruction}\n\n{prompt}"
-                
+
                 # Browser-worker refuses to write outside the 'jobs/' directory.
                 # So we must tell it to write to a temp file inside the job dir, then move it.
                 temp_path = Path(f"jobs/{job_id}/assets/ai_temp_{scene['id']}_{prompt_hash}.png").resolve()
                 temp_path.parent.mkdir(parents=True, exist_ok=True)
-                
+
                 # Attempt generation with 1 retry
                 import time as _time
                 for attempt in range(2):
@@ -920,17 +923,17 @@ class StockAssetService:
                     {"provider": "ai_generated", "error_type": exc.__class__.__name__, "message": str(exc), "stage": "ai_gen"}
                 )
                 return None
-                
+
         # Sanity Checks
         if not out_path.exists():
             return None
         if out_path.stat().st_size < 1024:
             # File exists but is too small (blank/corrupt)
             return None
-            
+
         # Optional: check aspect ratio or if it's all black/white if PIL is available
         # (Assuming file size > 1KB is a basic sanity check for non-blank for now)
-            
+
         asset_id = f"ai_{job_id}_{scene['id']}"
         try:
             self.library.record_usage(
@@ -939,7 +942,7 @@ class StockAssetService:
             )
         except Exception:  # pragma: no cover - library is best-effort here
             pass
-            
+
         return {
             "provider": "ai_generated",
             "asset_id": asset_id,
@@ -987,7 +990,7 @@ class StockAssetService:
                     ]
                     if not unused_normalized:
                         response = None
-                
+
                 if response is None:
                     try:
                         response = self.stock_client.search(provider, query, filters, exclude_ids=exclude_ids)
@@ -1036,7 +1039,7 @@ class StockAssetService:
             reasons = set(item.get("reasons") or [])
             matched = set(item.get("matched_terms") or [])
             prompt = query.lower()
-            
+
             # Demographic strict enforcement
             demo_terms = {"senior", "elderly", "mature", "older", "50s", "60s", "aging", "grandfather", "grandmother", "grandparent", "55+"}
             if any(term in prompt for term in demo_terms):
@@ -1044,33 +1047,33 @@ class StockAssetService:
                 if not has_demo:
                     item["failed_required_terms"] = "Missing demographic terms (senior/elderly) for a demographic-specific query"
                     return False
-            
+
             # Check label reading strict context
             key_terms = {"package", "label", "ingredients", "fibra", "harina", "compare", "turn", "rotate", "flip", "back label", "back"}
             if any(term in prompt for term in key_terms):
                 objects = {"bread", "package", "label", "ingredient"}
                 contexts = {"supermarket", "grocery", "store", "aisle", "shelf", "shopping", "basket", "market", "checkout", "kitchen", "table"}
-                
+
                 turning_terms = {"turn", "rotate", "flip", "back", "turning", "rotating", "flipping"}
                 reading_terms = {"read", "show", "reading", "showing", "check", "checking", "inspect", "inspecting"}
-                
+
                 has_obj = any(o in matched for o in objects)
                 has_ctx = any(c in matched for c in contexts)
-                
+
                 has_turning_evidence = any(a in matched for a in turning_terms)
                 has_reading_evidence = any(a in matched for a in reading_terms)
-                
+
                 requires_turning = any(term in prompt for term in turning_terms) or "back label" in prompt
-                
+
                 if requires_turning:
                     has_act = has_turning_evidence
                 else:
                     has_act = has_turning_evidence or has_reading_evidence
-                
+
                 if not (has_obj and has_act and has_ctx):
                     item["failed_required_terms"] = "Missing object/action/context for label reading/turning"
                     return False
-                    
+
             return ("strong_scene_term_match" in reasons or len(matched) >= 2)
 
         unused_ranked_candidates = [

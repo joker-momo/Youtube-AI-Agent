@@ -52,7 +52,9 @@ extend-exclude = ["src/youtube_ai_agent.egg-info"]
 select = ["E", "W", "F", "I", "UP", "B"]
 # E501 (line length): ~1.2k pre-existing violations (long prompt/URL literals).
 # Tracked as debt and fixed incrementally rather than mass-reflowed.
-ignore = ["E501"]
+# F403/F405: the validation package uses `from ...issues import *` as a shared
+# base-namespace pattern by design; star-usage is not actionable noise here.
+ignore = ["E501", "F403", "F405"]
 
 [tool.mypy]
 python_version = "3.11"

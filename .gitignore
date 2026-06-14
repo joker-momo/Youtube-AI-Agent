@@ -47,3 +47,6 @@ remotion/src/*.js
 /docs/plans
 queue.db
 /.serena
+
+# Personal Claude Code overrides
+.claude/settings.local.json

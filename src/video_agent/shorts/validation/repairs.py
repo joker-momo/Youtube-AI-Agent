@@ -12,7 +12,9 @@ def _is_five_error_bread_script(script: dict[str, Any] | None) -> bool:
     return bool(count and any(term in narration for term in ("pan", "bread", "hogaza")))
 
 
-def repair_five_error_bread_payoff_layout(scenes: list[dict[str, Any]], script: dict[str, Any] | None) -> bool:
+def repair_five_error_bread_payoff_layout(
+    scenes: list[dict[str, Any]], script: dict[str, Any] | None
+) -> bool:
     """Normalize the fixed 5-error bread payoff card before spending a regen."""
     if not _is_five_error_bread_script(script) or len(scenes) < 2:
         return False
@@ -119,8 +121,13 @@ SCENE_FIT_TOLERANCE = 0.3
 # Whitelisted, meaning-safe edits for micro-condense. Nothing here removes an
 # idea item, a count, a claim, or safety/CTA wording.
 _MICRO_CONDENSE_FILLER = (
-    "un poco", "también", "simplemente", "en realidad", "de verdad",
-    "muy", "bastante",
+    "un poco",
+    "también",
+    "simplemente",
+    "en realidad",
+    "de verdad",
+    "muy",
+    "bastante",
 )
 _MICRO_CONDENSE_INTROS = ("Y un truco más:", "Recuerda:", "Fíjate:")
 
@@ -141,7 +148,9 @@ def estimate_fits(narration: str, duration: float, tol: float = SCENE_FIT_TOLERA
 
 
 def split_narration_sentences(text: str) -> list[str]:
-    return [m.group(0).strip() for m in _SENTENCE_RE.finditer(str(text or "")) if m.group(0).strip()]
+    return [
+        m.group(0).strip() for m in _SENTENCE_RE.finditer(str(text or "")) if m.group(0).strip()
+    ]
 
 
 def _fit_duration(narration: str, cap: float) -> float:
@@ -220,7 +229,9 @@ def try_mechanical_split(scene: dict[str, Any]) -> list[dict[str, Any]] | None:
     return None
 
 
-def try_micro_condense(scene: dict[str, Any], *, idea_labels: list[str] | None = None) -> dict[str, Any] | None:
+def try_micro_condense(
+    scene: dict[str, Any], *, idea_labels: list[str] | None = None
+) -> dict[str, Any] | None:
     """Conservatively shrink narration using only whitelisted filler/intro
     removal. Returns a repaired scene copy that fits the layout cap, or ``None``
     if it cannot fit without touching protected meaning."""
@@ -255,7 +266,7 @@ def try_micro_condense(scene: dict[str, Any], *, idea_labels: list[str] | None =
 def _idea_labels_from_script(script: dict[str, Any] | None) -> list[str]:
     script = script or {}
     labels: list[str] = []
-    for kp in (script.get("key_points") or []):
+    for kp in script.get("key_points") or []:
         if isinstance(kp, dict):
             point = str(kp.get("point") or kp.get("label") or "")
         else:
@@ -323,7 +334,7 @@ def deterministic_scene_fit_repair(
         if len(scenes) < max_count and graphic_ok:
             parts = try_mechanical_split(scene)
             if parts:
-                scenes[i:i + 1] = parts
+                scenes[i : i + 1] = parts
                 log["repair_mode_attempted"] = "split"
                 modes.append("split")
                 logs.append(log)
@@ -385,16 +396,17 @@ def repair_weak_hook_motion(scenes: list[dict]) -> bool:
 def repair_visual_only_unreadable(scenes: list[dict], required_item: Any) -> bool:
     if not scenes or not required_item:
         return False
-    
+
     item_id = ""
     item_label = ""
-    
+
     if isinstance(required_item, dict):
         item_id = str(required_item.get("item_id") or required_item.get("id") or "")
         item_label = str(required_item.get("label") or required_item.get("point") or "")
     elif isinstance(required_item, str):
         try:
             import json
+
             parsed = json.loads(required_item)
             if isinstance(parsed, dict):
                 item_id = str(parsed.get("id", ""))
@@ -405,16 +417,17 @@ def repair_visual_only_unreadable(scenes: list[dict], required_item: Any) -> boo
             item_label = required_item
     else:
         item_label = str(required_item)
-        
+
     if not item_id and item_label:
         import re
+
         m = re.match(r"^(\d+)", item_label)
         if m:
             item_id = m.group(1)
-            
+
     if not item_label:
         item_label = item_id
-        
+
     if not item_label and not item_id:
         return False
 
@@ -432,7 +445,9 @@ def repair_visual_only_unreadable(scenes: list[dict], required_item: Any) -> boo
                     cid = item_id
                 if cid not in covers and str(cid) not in covers:
                     covers.add(cid)
-                    scene["covers_items"] = sorted(list(covers), key=lambda x: (isinstance(x, str), x))
+                    scene["covers_items"] = sorted(
+                        list(covers), key=lambda x: (isinstance(x, str), x)
+                    )
                     return True
             return False
 
@@ -452,29 +467,37 @@ def repair_visual_only_unreadable(scenes: list[dict], required_item: Any) -> boo
         if item_label.lower() in ost or item_label.lower() in payload_str:
             target_scene = scene
             break
-            
+
     if not target_scene:
         target_scene = scenes[1] if len(scenes) > 1 else scenes[0]
-        
-    # Determine injection text
+
+    # Inject the actual item label so coverage validation can detect this scene
+    # as a readable caption (mode="caption"), which clears the visual_only check.
+    # NEVER hardcode per-item text: a string that does not contain the item's
+    # label words makes this function return True while validation keeps failing
+    # the same item -> false hard blocker on the next attempt.
     inject_text = item_label
-    if item_id == "3":
-        inject_text = "Prepara un pan base antes del hambre."
-    elif item_id == "4":
-        inject_text = "Vuelve a harina, fibra e ingredientes."
-        
+
     # Do not inject the item label into target_scene["narration"]!
     # Narration-fit timing must use only the actual TTS-spoken fields.
     # Injecting the source key_point meaning into the spoken audio estimate
     # creates a false hard blocker (scene_narration_fit exceeds tolerance).
     # We keep coverage validation separate from spoken-duration validation.
-    current_caption = target_scene.get("caption") or ""
-    combined = f"{current_caption} {inject_text}".strip()
-    words = combined.split()
-    if len(words) > 12:
-        combined = " ".join(words[:12]) + "..."
+    current_caption = str(target_scene.get("caption") or "")
+    # Strip stale wrong-topic text left by older buggy runs.
+    current_caption = current_caption.replace("Vuelve a harina, fibra e ingredientes.", "").strip()
+    # Label leads so its words always survive the 12-word readability cap;
+    # otherwise a long existing caption could truncate the label away and the
+    # caption-coverage check would still fail.
+    inject_words = inject_text.split()
+    if len(inject_words) > 12:
+        combined = " ".join(inject_words[:12]) + "..."
+    else:
+        remaining = 12 - len(inject_words)
+        tail = " ".join(current_caption.split()[:remaining]).strip()
+        combined = f"{inject_text} {tail}".strip() if tail else inject_text
     target_scene["caption"] = combined
-        
+
     if item_id:
         covers = set(target_scene.get("covers_items") or [])
         try:
@@ -483,6 +506,8 @@ def repair_visual_only_unreadable(scenes: list[dict], required_item: Any) -> boo
             cid = item_id
         if cid not in covers and str(cid) not in covers:
             covers.add(cid)
-            target_scene["covers_items"] = sorted(list(covers), key=lambda x: (isinstance(x, str), x))
-            
+            target_scene["covers_items"] = sorted(
+                list(covers), key=lambda x: (isinstance(x, str), x)
+            )
+
     return True

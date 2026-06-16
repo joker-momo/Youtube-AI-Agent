@@ -139,18 +139,33 @@ async def human_pause(page: "Page", *, min_ms: int | None = None, max_ms: int | 
     await page.wait_for_timeout(random.randint(lo, hi))
 
 
-async def human_click(locator, *, hover_pause_min_ms: int = 80, hover_pause_max_ms: int = 240, post_pause_min_ms: int = 250, post_pause_max_ms: int = 700, click_timeout_ms: int = 5_000) -> None:
+async def human_click(locator, *, hover_pause_min_ms: int = 80, hover_pause_max_ms: int = 240, post_pause_min_ms: int = 250, post_pause_max_ms: int = 700, click_timeout_ms: int = 5_000, force_on_intercept: bool = False) -> None:
     """Hover, pause, click, pause — the cadence of a human pointer.
 
     Falls back to a plain click if hover is unsupported (e.g. headless
     runtimes that disable real pointer events).
+
+    When ``force_on_intercept`` is set, a click that the actionability check
+    rejects (an overlay — e.g. a sticky sidebar header — intercepts pointer
+    events) is retried with ``force=True`` and finally a DOM-level ``el.click()``.
+    Use it for controls known to sit under sticky/overlapping chrome.
     """
     try:
         await locator.hover(timeout=2_000)
         await asyncio.sleep(random.randint(hover_pause_min_ms, hover_pause_max_ms) / 1000.0)
     except Exception:
         pass
-    await locator.click(timeout=click_timeout_ms)
+    try:
+        await locator.click(timeout=click_timeout_ms)
+    except Exception:
+        if not force_on_intercept:
+            raise
+        # An overlay intercepts pointer events at the hit-point. Bypass the
+        # actionability check, then fall back to firing the click in the DOM.
+        try:
+            await locator.click(timeout=click_timeout_ms, force=True)
+        except Exception:
+            await locator.evaluate("el => el.click()")
     await asyncio.sleep(random.randint(post_pause_min_ms, post_pause_max_ms) / 1000.0)
 
 

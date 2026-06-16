@@ -178,16 +178,15 @@ def _is_login_url(url: str) -> bool:
 
 
 class ChatGPTImageDriver:
-    """Driver for ChatGPT image generation via the Projects workflow.
+    """Driver for ChatGPT image generation.
 
     Flow per call:
-      1. Open ``chatgpt.com/`` (regular chat — image gen is NOT
-         available in temporary chat).
-      2. Expand "Projects" header if collapsed.
-      3. Click "New project", fill projectName, click "Create project".
-      4. Inside the new project, select "Create image" mode and 16:9.
-      5. Send the prompt, wait for an assistant <img> to appear.
-      6. Download the rendered image bytes via Playwright APIRequest.
+      1. Open a temporary (ephemeral) chat — supports image gen, leaves no
+         history, needs no project/teardown. Falls back to a ChatGPT Project
+         (or a plain new chat) only if temporary mode is unavailable.
+      2. Select "Create image" mode and 16:9.
+      3. Send the prompt, wait for an assistant <img> to appear.
+      4. Download the rendered image bytes via Playwright APIRequest.
     """
 
     def __init__(self, page: "Page") -> None:
@@ -331,7 +330,11 @@ class ChatGPTImageDriver:
                             screenshot_path=shot,
                         )
                 if not dialog_already_open and new_btn is not None:
-                    await human_click(new_btn)
+                    # The "New project" entry sits under the sticky sidebar
+                    # header, which intercepts pointer events and makes a normal
+                    # actionability-checked click time out (then we wrongly fell
+                    # back to a plain chat with no Project). Bypass the overlay.
+                    await human_click(new_btn, force_on_intercept=True)
                     await human_pause(self.page, min_ms=600, max_ms=1200)
 
             try:
@@ -408,16 +411,58 @@ class ChatGPTImageDriver:
         await self._click_first_visible(NEW_CHAT_SELECTORS, timeout_ms=2_000)
         await human_pause(self.page, min_ms=300, max_ms=700)
 
+    async def _start_temporary_chat(self) -> bool:
+        """Open a temporary (ephemeral) chat for image generation.
+
+        Temporary chat exposes the same "Create image" tool + composer, leaves
+        nothing in history, needs no Project wrapper and no teardown deletion —
+        the fastest, cleanest path. (The older "image gen is projects-only"
+        assumption no longer holds after the sidebar redesign.)
+
+        Returns ``True`` when temporary mode is confirmed. Raises
+        ``LoginRequiredError`` if the profile is signed out.
+        """
+        from video_agent.browser_worker.drivers.chatgpt import _ensure_temporary_chat
+
+        confirmed = await _ensure_temporary_chat(self.page)
+        if _is_login_url(self.page.url):
+            shot = await save_trace_screenshot(self.page, prefix="chatgpt-image-login")
+            raise LoginRequiredError(
+                "ChatGPT profile is signed out. Open http://localhost:7900 to sign in.",
+                screenshot_path=shot,
+            )
+        await human_pause(self.page, min_ms=300, max_ms=700)
+        return confirmed
+
     async def _ensure_image_session(self, project_name: str) -> bool:
         """Prepare a chat for image generation.
 
-        Prefers a ChatGPT Project (keeps generations grouped + easy to delete).
-        When the Projects UI is unavailable (sidebar redesign removed the inline
-        "New project" button), transparently falls back to a normal new chat.
+        Primary path is a temporary (ephemeral) chat — it supports image gen,
+        leaves no history and needs no project/teardown. Falls back to a ChatGPT
+        Project (grouped + deletable) and finally a plain new chat if temporary
+        mode is unavailable.
 
         Returns ``True`` if a real Project was created (and must be deleted on
-        teardown), ``False`` if the new-chat fallback was used.
+        teardown), ``False`` otherwise.
         """
+        try:
+            if await self._start_temporary_chat():
+                self._used_project = False
+                return False
+            print(
+                "[chatgpt-image] Temporary chat not confirmed; "
+                "trying project/new-chat.",
+                flush=True,
+            )
+        except LoginRequiredError:
+            raise
+        except Exception as exc:
+            print(
+                f"[chatgpt-image] Temporary-chat path unavailable ({exc}); "
+                f"trying project/new-chat.",
+                flush=True,
+            )
+
         try:
             await self._create_project(project_name)
             self._used_project = True

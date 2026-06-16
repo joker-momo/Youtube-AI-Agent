@@ -88,6 +88,17 @@ def build_short_script(
     script.setdefault("source_mapped_flow", [])
     script = ensure_script_idea_fields(script, short_plan)
 
+    # Deterministic CTA fallback: the reject gate forces the model to write a
+    # natural channel CTA on the first attempts, but if it still won't comply,
+    # guarantee the spoken CTA beat names the channel so the funnel never breaks
+    # (a job must not die on a CTA the model keeps omitting).
+    if attempt >= 3:
+        from video_agent.shorts.validation.script_checks import (
+            repair_cta_beat_channel_direction,
+        )
+
+        repair_cta_beat_channel_direction(script, short_plan)
+
     if not script.get("source_mapped_flow") and script.get("idea_items"):
         script["source_mapped_flow"] = [
             {

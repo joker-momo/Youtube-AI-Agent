@@ -493,6 +493,15 @@ def _build_short_impl(
         if _script_result.signal is StageSignal.RESTART_SCRIPT:
             script_feedback = _ctx.extras["script_feedback"]
             prev_script_hash = _ctx.extras.get("prev_script_hash")
+            # Carry the real QA result forward so a final exhausted-attempts
+            # failure reports the actual blocker (e.g. audio-fit) instead of the
+            # placeholder "not_generated". QA only runs after script validation
+            # passes, so this stays the default placeholder on pure validation
+            # rejections — which is correct.
+            script_qa_result = _ctx.extras.get("script_qa_result", script_qa_result)
+            normalized_script_issues = _ctx.extras.get(
+                "normalized_script_issues", normalized_script_issues
+            )
             continue
 
         short_script = _ctx.extras["short_script"]

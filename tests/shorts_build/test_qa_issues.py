@@ -76,6 +76,92 @@ def test_repairable_audio_fit_structure():
     assert normalized.reason == "repairable_audio_fit"
 
 
+def test_audio_fit_within_deterministic_budget_is_soft():
+    # Regression: LLM judge claims an audio-fit problem but the narration is
+    # within the deterministic budget (35s -> 72 words). The deterministic gate
+    # is authoritative, so this must downgrade to a soft warning and NOT trigger
+    # a regeneration loop. Previously this caused a non-converging 5-attempt
+    # failure reported as "not_generated".
+    issue = {
+        "type": "style",
+        "severity": "major",
+        "detail": "The script contains 77 words... audio-fit rushed, needs 42-45s.",
+    }
+    script = {
+        "target_duration_sec": 35,
+        "beats": [{"narration": " ".join(["palabra"] * 65)}],
+    }
+    normalized = qa.normalize_qa_issue(
+        issue, idea={"target_duration_sec": 35}, script=script, scenes={}
+    )
+    assert normalized.issue_class == qa.IssueClass.SOFT_WARNING
+    assert normalized.reason == "audio_fit_within_deterministic_budget"
+    assert normalized.trigger_regeneration is False
+
+
+def test_audio_fit_over_deterministic_budget_still_repairable():
+    # Counterpart guard: when narration genuinely exceeds the budget, the
+    # audio-fit issue stays a repairable blocker that triggers regeneration.
+    issue = {
+        "type": "style",
+        "severity": "major",
+        "detail": "The script word count is too high for the speaking time.",
+    }
+    script = {
+        "target_duration_sec": 35,
+        "beats": [{"narration": " ".join(["palabra"] * 85)}],
+    }
+    normalized = qa.normalize_qa_issue(
+        issue, idea={"target_duration_sec": 35}, script=script, scenes={}
+    )
+    assert normalized.issue_class == qa.IssueClass.REPAIRABLE_BLOCKER
+    assert normalized.reason == "repairable_audio_fit"
+    assert normalized.trigger_regeneration is True
+
+
+def test_graphic_duration_at_hard_max_is_soft():
+    # Regression: a graphic_routine_split scene sitting exactly at the 5.0s hard
+    # max is ALLOWED by the deterministic rule (dur > hard_max). The LLM judge
+    # hard-blocked the boundary value, causing a non-converging scene-QA loop.
+    # Must downgrade to a soft warning when within the deterministic hard max.
+    scenes = {"scenes": [{"id": "s04", "layout": "graphic_routine_split", "duration_sec": 5.0}]}
+    issue = {
+        "type": "duration",
+        "severity": "major",
+        "detail": "La escena s04 utiliza un diseño gráfico (graphic_routine_split) con una duración de 5.0 segundos. Ninguna escena gráfica puede durar más de 5.0 segundos.",
+    }
+    normalized = qa.normalize_qa_issue(issue, idea={}, script={}, scenes=scenes, source="scene_qa")
+    assert normalized.issue_class == qa.IssueClass.SOFT_WARNING
+    assert normalized.trigger_regeneration is False
+
+
+def test_graphic_duration_over_hard_max_still_blocks():
+    # Counterpart guard: a graphic scene genuinely over its hard max stays a
+    # blocker (the deterministic rule would raise), so the judge's complaint holds.
+    scenes = {"scenes": [{"id": "s04", "layout": "graphic_routine_split", "duration_sec": 6.5}]}
+    issue = {
+        "type": "duration",
+        "severity": "major",
+        "detail": "La escena s04 (graphic_routine_split) dura 6.5 segundos, excede el máximo.",
+    }
+    normalized = qa.normalize_qa_issue(issue, idea={}, script={}, scenes=scenes, source="scene_qa")
+    assert normalized.issue_class != qa.IssueClass.SOFT_WARNING
+    assert normalized.trigger_regeneration is True
+
+
+def test_non_graphic_duration_issue_unaffected():
+    # A duration complaint on a non-graphic layout must not be downgraded by the
+    # graphic-duration guard.
+    scenes = {"scenes": [{"id": "s06", "layout": "short_quote", "duration_sec": 5.5}]}
+    issue = {
+        "type": "duration",
+        "severity": "major",
+        "detail": "La escena s06 dura 5.5 segundos, ralentiza el ritmo final.",
+    }
+    normalized = qa.normalize_qa_issue(issue, idea={}, script={}, scenes=scenes, source="scene_qa")
+    assert normalized.issue_class != qa.IssueClass.SOFT_WARNING
+
+
 def test_has_hard_fail_minor():
     from video_agent.shorts.builder.qa_gate import has_hard_fail
     

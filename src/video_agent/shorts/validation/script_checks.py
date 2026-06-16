@@ -126,6 +126,18 @@ def validate_full_short_script_candidate(
         if normalize_str(expected_cta) not in normalize_str(cta_text):
             errors.append("missing_expected_funnel_cta")
 
+    # The spoken CTA is the final CTA beat's narration (it feeds TTS via the
+    # scenes), NOT the cta metadata field. Enforce that the channel direction is
+    # actually spoken — otherwise the Short never drives viewers to the channel,
+    # breaking the funnel. The cta field passing is not sufficient.
+    cta_beat_narr = ""
+    for b in beats:
+        if isinstance(b, dict) and str(b.get("purpose") or "").lower() == "cta":
+            cta_beat_narr = str(b.get("narration") or "")
+            break
+    if cta_beat_narr and normalize_str(expected_cta) not in normalize_str(cta_beat_narr):
+        errors.append("cta_beat_missing_channel_direction")
+
     flow = list(script.get("source_mapped_flow") or [])
     if flow:
 
@@ -145,6 +157,96 @@ def validate_full_short_script_candidate(
                 break
 
     return errors
+
+
+def cta_beat_has_channel_direction(
+    script: dict[str, Any],
+    short_plan: dict[str, Any],
+    source_map: dict[str, Any] | None = None,
+) -> bool:
+    """True when the spoken CTA beat narration carries the channel direction.
+
+    Mirrors the ``cta_beat_missing_channel_direction`` gate so other modules
+    (e.g. QA normalization) can treat the deterministic check as authoritative.
+    """
+    expected_cta = "Vídeo completo en el canal."
+    if source_map and source_map.get("funnel", {}).get("cta"):
+        expected_cta = source_map["funnel"]["cta"]
+    elif short_plan.get("funnel", {}).get("cta"):
+        expected_cta = short_plan["funnel"]["cta"]
+
+    def norm(text: str) -> str:
+        return re.sub(r"\W+", " ", text.lower()).strip()
+
+    for b in script.get("beats") or []:
+        if isinstance(b, dict) and str(b.get("purpose") or "").lower() == "cta":
+            return norm(expected_cta) in norm(str(b.get("narration") or ""))
+    return False
+
+
+def repair_cta_beat_channel_direction(
+    script: dict[str, Any],
+    short_plan: dict[str, Any],
+    source_map: dict[str, Any] | None = None,
+) -> bool:
+    """Deterministic fallback: guarantee the spoken CTA beat names the channel.
+
+    Used when regeneration cannot get the model to include the channel direction
+    in the CTA beat. Prefers the validated ``cta`` field (already <= 8 words and
+    contains the channel reference); otherwise builds a compact CTA from the
+    expected funnel direction. Keeps the cta field and global narration in sync.
+
+    Returns True when a repair was applied.
+    """
+    expected_cta = "Vídeo completo en el canal."
+    if source_map and source_map.get("funnel", {}).get("cta"):
+        expected_cta = source_map["funnel"]["cta"]
+    elif short_plan.get("funnel", {}).get("cta"):
+        expected_cta = short_plan["funnel"]["cta"]
+
+    def norm(text: str) -> str:
+        return re.sub(r"\W+", " ", text.lower()).strip()
+
+    beats = list(script.get("beats") or [])
+    cta_beat = next(
+        (b for b in beats if isinstance(b, dict) and str(b.get("purpose") or "").lower() == "cta"),
+        None,
+    )
+    if cta_beat is None:
+        return False
+
+    old_narr = str(cta_beat.get("narration") or "")
+    if old_narr and norm(expected_cta) in norm(old_narr):
+        return False  # already compliant
+
+    # Prefer the validated cta field (<= 8 words, includes the channel direction).
+    cta_field = str(script.get("cta") or "").strip()
+    if (
+        cta_field
+        and norm(expected_cta) in norm(cta_field)
+        and len(re.findall(r"\w+", cta_field)) <= 8
+    ):
+        new_narr = cta_field
+    else:
+        new_narr = expected_cta if expected_cta.strip().endswith((".", "!", "?")) else expected_cta + "."
+
+    cta_beat["narration"] = new_narr
+    script["cta"] = new_narr
+
+    # Keep the global narration concatenation consistent with the repaired beat.
+    global_narr = str(script.get("narration") or "")
+    if global_narr:
+        if old_narr and old_narr in global_narr:
+            script["narration"] = global_narr.replace(old_narr, new_narr)
+        else:
+            script["narration"] = " ".join(
+                str(b.get("narration") or "").strip()
+                for b in beats
+                if isinstance(b, dict) and str(b.get("narration") or "").strip()
+            )
+
+    script.setdefault("planner_warnings", []).append("cta_beat_channel_direction_repaired")
+    return True
 
 
 def estimate_spoken_checklist_points(script: dict[str, Any]) -> int:

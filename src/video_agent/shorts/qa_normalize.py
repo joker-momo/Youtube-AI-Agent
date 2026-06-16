@@ -8,6 +8,97 @@ from typing import Any
 from video_agent.shorts.qa_common import *  # noqa: F401,F403
 
 
+def _audio_fit_within_deterministic_budget(script: dict, idea: dict | None) -> bool:
+    """True when narration is within the deterministic audio-fit word budget.
+
+    Mirrors the authoritative soft budget in
+    ``validation/script_checks.py::validate_full_short_script_candidate``
+    (35s -> 72 words, 45s -> 95 words). When this passes, the LLM judge's
+    separate audio-fit opinion is a duplicate estimate and must not block.
+    """
+    target = 0
+    for src in (idea or {}, script or {}):
+        try:
+            target = int(src.get("target_duration_sec") or 0)
+        except (TypeError, ValueError):
+            target = 0
+        if target:
+            break
+
+    max_words = 95 if target == 45 else 72
+
+    beats = [b for b in (script.get("beats") or []) if isinstance(b, dict)]
+    total_words = sum(len(re.findall(r"\w+", str(b.get("narration") or ""))) for b in beats)
+    global_words = len(re.findall(r"\w+", str(script.get("narration") or "")))
+
+    # If neither source carries narration text we cannot verify; be conservative
+    # and treat as NOT within budget so the judge's opinion still counts.
+    if total_words == 0 and global_words == 0:
+        return False
+
+    return total_words <= max_words and global_words <= max_words
+
+
+def _cta_deterministically_compliant(script: dict, idea: dict | None) -> bool:
+    """True when the deterministic CTA checks pass: the spoken CTA beat carries
+    the channel direction AND the cta field is within the 8-word limit.
+
+    When this holds, the LLM judge's CTA complaint is a false positive (the
+    deterministic gate already enforced a funnel-correct, in-budget CTA).
+    """
+    cta_field = str(script.get("cta") or "").strip()
+    if not cta_field or len(re.findall(r"\w+", cta_field)) > 8:
+        return False
+    try:
+        from video_agent.shorts.validation.script_checks import (
+            cta_beat_has_channel_direction,
+        )
+    except Exception:
+        return False
+    return cta_beat_has_channel_direction(script, idea or {})
+
+
+def _graphic_scene_duration_within_hard_max(scenes: dict, scene_id: Any, detail: str) -> bool:
+    """True when a duration complaint targets a graphic scene that is actually
+    within the deterministic hard-max for its layout.
+
+    The deterministic graphic-duration rule (validation/graphic_checks.py uses
+    ``dur > hard_max``) ALLOWS a scene sitting exactly at the hard max (e.g. a
+    graphic_routine_split at 5.0s). The LLM judge re-applies the rule subjectively
+    and hard-blocks the boundary value, causing a non-converging scene-QA loop.
+    When the deterministic rule passes, the judge's opinion is advisory only.
+    """
+    sid = str(scene_id or "").strip().lower()
+    if not sid:
+        m = re.search(r"\b(s\d+)\b", (detail or "").lower())
+        sid = m.group(1) if m else ""
+    if not sid:
+        return False
+
+    scene = None
+    for sc in scenes.get("scenes") or []:
+        if isinstance(sc, dict) and str(sc.get("id") or sc.get("scene_id") or "").lower() == sid:
+            scene = sc
+            break
+    if scene is None:
+        return False
+
+    layout = str(scene.get("layout") or "")
+    try:
+        from video_agent.shorts.validation._constants import GRAPHIC_LAYOUT_DURATION_TARGETS
+    except Exception:
+        return False
+    if layout not in GRAPHIC_LAYOUT_DURATION_TARGETS:
+        return False
+
+    hard_max = GRAPHIC_LAYOUT_DURATION_TARGETS[layout][2]
+    try:
+        dur = float(scene.get("duration_sec") or 0)
+    except (TypeError, ValueError):
+        return False
+    return 0 < dur <= hard_max
+
+
 def normalize_qa_issue(
     issue: Any,
     *,
@@ -122,6 +213,7 @@ def normalize_qa_issue(
     reason = issue_type or "unknown_issue"
     trigger_regeneration = True
     include_in_retry_feedback = True
+    audio_fit_within_budget = False
 
     # Safety, source fidelity/support, health claim, contract -> HARD_BLOCKER
     is_hard = False
@@ -208,9 +300,47 @@ def normalize_qa_issue(
         k in detail_lower
         for k in ("word count", "words", "speaking time", "audio-fit", "rushed", "pacing")
     ):
-        is_repairable = True
-        is_hard = False
-        reason = "repairable_audio_fit"
+        # The deterministic audio-fit budget (validation/script_checks.py) is the
+        # source of truth for narration density. The LLM judge re-estimates word
+        # count subjectively and frequently over-counts, blocking a script that is
+        # already within budget — causing a non-converging regen loop (every retry
+        # is fine, the judge keeps failing it). When the actual narration is within
+        # the deterministic budget, downgrade this opinion to a soft warning so it
+        # never triggers regeneration.
+        if _audio_fit_within_deterministic_budget(script, idea):
+            audio_fit_within_budget = True
+            is_repairable = False
+            is_hard = False
+            reason = "audio_fit_within_deterministic_budget"
+        else:
+            is_repairable = True
+            is_hard = False
+            reason = "repairable_audio_fit"
+
+    # CTA: the deterministic gate (cta_beat_missing_channel_direction in
+    # validation/script_checks.py) runs before script QA, so any script reaching
+    # the judge already has the channel direction in its spoken CTA beat. When the
+    # deterministic CTA state is compliant, the judge's CTA complaint is a false
+    # positive — downgrade it so it cannot hard-block a sound, funnel-correct CTA.
+    cta_deterministically_ok = False
+    if "cta" in issue_type_lower or (
+        "cta" in detail_lower
+        and any(
+            k in detail_lower
+            for k in ("channel", "canal", "funnel", "8 word", "8-word", "ocho palabras")
+        )
+    ):
+        if _cta_deterministically_compliant(script, idea):
+            cta_deterministically_ok = True
+
+    # Graphic-scene duration: the deterministic rule allows a graphic scene
+    # exactly at its layout hard-max (uses `dur > hard_max`). The LLM judge
+    # hard-blocks that boundary value, producing a non-converging scene-QA loop.
+    # When the deterministic rule passes, downgrade the opinion to a soft warning.
+    graphic_duration_within_max = False
+    if "duration" in issue_type_lower or "duración" in detail_lower or "duracion" in detail_lower:
+        if _graphic_scene_duration_within_hard_max(scenes or {}, scene_id, detail):
+            graphic_duration_within_max = True
 
     is_soft = False
     if issue_type_lower == "source_fidelity" and any(
@@ -309,6 +439,12 @@ def normalize_qa_issue(
             except ValueError:
                 pass
     elif "average product quality" in detail_lower:
+        is_soft = True
+
+    # Audio-fit within the deterministic budget: the hard gate already passed, so
+    # the LLM's audio-fit opinion is advisory only. Force soft so it never blocks
+    # or triggers an unwinnable regen loop.
+    if audio_fit_within_budget or cta_deterministically_ok or graphic_duration_within_max:
         is_soft = True
 
     if is_soft:

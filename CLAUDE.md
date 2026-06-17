@@ -11,8 +11,103 @@ This is a hard rule. Quality of the final video and fit to the target audience w
 
 ---
 
+# 📊 THỨ TỰ ƯU TIÊN (PRIORITY ORDER) — áp dụng khi cân nhắc mọi quyết định kỹ thuật
+
+Khi hai mục tiêu xung đột, mục tiêu xếp trên LUÔN thắng. Mục tiêu xếp dưới chỉ được theo đuổi khi không hy sinh mục tiêu xếp trên.
+
+1. **Chất lượng video** — cao nhất, bất khả xâm phạm. Hấp dẫn, đúng nhóm đối tượng khán giả của kênh. (Xem PRIME DIRECTIVE phía trên.)
+2. **Tối ưu pipeline & thời gian chạy** — pipeline nhanh, ổn định, ra được sản phẩm. Chỉ tối ưu khi KHÔNG làm tụt chất lượng video.
+3. **Chất lượng code** — phân chia module rõ ràng, chuyên nghiệp theo chuẩn ISO (ISO/IEC 25010: maintainability, readability, testability), dễ debug, dễ bảo trì lâu dài.
+4. **Ưu tiên công nghệ tối ưu trên Mac (Apple Silicon M2)** — khi chọn lib / runtime / model, ưu tiên thứ chạy tối ưu native trên M2 (Metal/MPS, Core ML, Neural Engine, arm64), miễn là không vi phạm 3 ưu tiên trên.
+
+**Quy tắc xung đột:** nếu một thay đổi cải thiện ưu tiên thấp nhưng hại ưu tiên cao hơn → **DỪNG, CẢNH BÁO, chờ xác nhận.** Không tự đánh đổi.
+
+---
+
 # OpenWolf
 
 @.wolf/OPENWOLF.md
 
 This project uses OpenWolf for context management. Read and follow .wolf/OPENWOLF.md every session. Check .wolf/cerebrum.md before generating code. Check .wolf/anatomy.md before reading files.
+
+---
+
+# Cross-Agent Entry Points
+
+All coding agents working in this project must obey the same project contract:
+
+- Codex: read root `AGENTS.md`.
+- Claude: read this root `CLAUDE.md` plus `.claude/rules/*`.
+- Antigravity: read `.agent/AGENTS.md` plus project-local `.agent/skills/*`.
+
+If an agent can read more than one entrypoint, treat root `AGENTS.md` as the canonical project policy and the harness-specific file as an adapter. Do not weaken the prime directive, OpenWolf protocol, skill-routing policy, dirty worktree safety, or verification requirements in any harness-specific adapter.
+
+---
+
+# Agent Workflow Policy
+
+Use Superpowers as the operating system and `agent-skills` as the toolbox.
+
+## Precedence
+
+When instructions conflict:
+
+1. Direct user request and this `CLAUDE.md` win.
+2. OpenWolf memory and project-specific constraints come next.
+3. Superpowers workflow skills define the process.
+4. Selected `agent-skills` domain checklists add focused guidance.
+5. Default model behavior comes last.
+
+Superpowers decides how the task is run. `agent-skills` supplies focused domain
+checklists only when the task clearly matches a domain. Do not load the whole
+agent-skills pack and do not let a generic checklist override this project's
+video-quality priority, dirty-worktree safety, or verification gates.
+
+## Default Workflow
+
+For implementation, refactor, debugging, spec, QA, or git-workflow tasks:
+
+- Start from the relevant Superpowers process skill.
+- Check branch/worktree state before editing when the checkout is dirty.
+- Keep edits small, reversible, and scoped to the request.
+- Verify with targeted tests, type checks, render checks, or artifact inspection
+  appropriate to the touched surface.
+- Before claiming completion, cite concrete verification evidence.
+
+## Agent-Skills Router
+
+When a capability exists in both Superpowers and `agent-skills`, Superpowers wins. Do not invoke the Addy `agent-skills` twin for shadowed areas:
+
+| Shadowed `agent-skills` area | Use instead |
+| --- | --- |
+| `interview-me`, `idea-refine`, `spec-driven-development` | Superpowers `brainstorming` |
+| `planning-and-task-breakdown` | Superpowers `writing-plans` |
+| `test-driven-development` | Superpowers `test-driven-development` |
+| `debugging-and-error-recovery` | Superpowers `systematic-debugging` plus `verification-before-completion` |
+| `code-review-and-quality`, `code-simplification` | Superpowers `requesting-code-review` |
+| `git-workflow-and-versioning` | Superpowers `using-git-worktrees` and `finishing-a-development-branch` |
+| `incremental-implementation`, `source-driven-development`, `doubt-driven-development`, `context-engineering` | Superpowers process plus OpenWolf context |
+
+| Task signal | Agent-skill |
+| --- | --- |
+| UI, dashboard, Remotion visual surface | `frontend-ui-engineering` |
+| Public API, module boundary, schema, contract | `api-and-interface-design` |
+| Browser runtime behavior | `browser-testing-with-devtools` |
+| User input, paths, secrets, auth, network fetch | `security-and-hardening` |
+| Runtime speed, render time, asset search, bundle size | `performance-optimization` |
+| Build/deploy/queue automation | `ci-cd-and-automation` |
+| Removing old systems or migrating contracts | `deprecation-and-migration` |
+| Architecture records or user-facing docs | `documentation-and-adrs` |
+| Logging, metrics, traces, QA summaries | `observability-and-instrumentation` |
+| Launch or production rollout | `shipping-and-launch` |
+
+Routing rules:
+
+- First choose the Superpowers process skill, then add the narrow
+  `agent-skills` checklist if useful.
+- If multiple checklists match, pick the smallest set that covers the risk.
+- If none match, do not force one.
+- If `agent-skills` is unavailable in the current harness, say so and continue
+  with Superpowers plus project rules.
+- For Shorts work, prefer requirement-by-requirement audits and targeted
+  regression evidence over broad smoke tests.

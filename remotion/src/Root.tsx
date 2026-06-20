@@ -19,13 +19,17 @@ const graphicThemePreviewProps = graphicThemePreviewPropsJson as unknown as Rend
 const calculateVideoMetadata = ({props}: {props: RenderProps}) => {
   const fps = props.render?.fps ?? defaultRenderProps.render.fps;
   const duration_sec = props.render?.duration_sec ?? defaultRenderProps.render.duration_sec;
+  const durationInFrames =
+    props.visual_schedule?.total_duration_in_frames ??
+    props.render?.duration_in_frames ??
+    Math.max(1, Math.round(duration_sec * fps));
   const resStr = props.render?.resolution || defaultRenderProps.render.resolution;
   const parts = resStr.split('x');
   const width = parseInt(parts[0] || '1920', 10);
   const height = parseInt(parts[1] || '1080', 10);
   return {
     fps,
-    durationInFrames: Math.max(1, Math.round(duration_sec * fps)),
+    durationInFrames,
     width,
     height,
   };

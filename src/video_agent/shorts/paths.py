@@ -2,6 +2,7 @@
 
 Single source of truth so no module hardcodes ``jobs/<id>/shorts/...`` strings.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -21,7 +22,7 @@ SELECTED_SHORT_IDEAS_FILE = "selected_short_ideas.json"
 IDEA_GENERATION_LOCK_FILE = ".ideas.lock"
 RENDER_SELECTED_LOCK_FILE = ".render-selected.lock"
 
-SHORT_STATUS_FILE = "short_status.json"     # root — job state marker
+SHORT_STATUS_FILE = "short_status.json"  # root — job state marker
 SHORT_IDEA_FILE = "short_idea.json"
 SHORT_SCRIPT_FILE = "short_script.json"
 SHORT_SCENES_FILE = "short_scenes.json"
@@ -48,6 +49,12 @@ SHORT_VISUAL_SPAN_QA_FILE = "visual_span_qa.json"
 SHORT_COMPILED_ASSET_SCHEDULE_FILE = "compiled_asset_schedule.json"
 SHORT_COMPILED_ASSET_SCHEDULE_QA_FILE = "compiled_asset_schedule_qa.json"
 SHORT_RENDER_CONTINUITY_QA_FILE = "render_continuity_qa.json"
+SHORT_VISUAL_ACQUISITION_CONTEXT_FILE = "visual_acquisition_context.json"
+SHORT_VISUAL_SPAN_CANDIDATES_FILE = "visual_span_candidates.json"
+SHORT_VISUAL_SPAN_SELECTION_FILE = "visual_span_asset_selection.json"
+SHORT_VISUAL_SPAN_METADATA_QA_FILE = "visual_span_metadata_qa.json"
+SHORT_VISUAL_SPAN_ASSET_QA_FILE = "visual_span_asset_qa.json"
+SHORT_TRIM_WINDOW_PLAN_FILE = "trim_window_plan.json"
 SHORT_LLM_HISTORY_FILE = "llm_history.jsonl"  # all ChatGPT + Gemini prompts/responses
 SHORT_COVER_FILE = "short_cover.jpg"
 SHORT_THUMBNAIL_FILE = "thumbnail.jpg"
@@ -156,12 +163,13 @@ def studio_render_run_path(long_job_dir: Path) -> Path:
 
 def slugify(text: str) -> str:
     """Normalize and slugify a title or text to a clean URL-friendly string of max 20 chars."""
-    import unicodedata
     import re
+    import unicodedata
+
     if not text:
         return "short"
-    normalized = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('utf-8')
+    normalized = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("utf-8")
     slug = normalized.lower()
-    slug = re.sub(r'[^a-z0-9\s-]', '', slug)
-    slug = re.sub(r'[\s-]+', '-', slug).strip('-')
-    return slug[:20].strip('-') or "short"
+    slug = re.sub(r"[^a-z0-9\s-]", "", slug)
+    slug = re.sub(r"[\s-]+", "-", slug).strip("-")
+    return slug[:20].strip("-") or "short"

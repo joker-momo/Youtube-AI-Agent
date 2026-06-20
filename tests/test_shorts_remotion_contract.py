@@ -11,6 +11,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 SHORT_BG = REPO / "remotion/src/shorts/ShortBackground.tsx"
 SHORT_VIDEO = REPO / "remotion/src/ShortVideo.tsx"
+ROOT = REPO / "remotion/src/Root.tsx"
+SHORT_MEDIA_LAYER = REPO / "remotion/src/shorts/ShortMediaLayer.tsx"
+VISUAL_TIMELINE = REPO / "remotion/src/shorts/VisualTimeline.tsx"
 
 
 def _read(p: Path) -> str:
@@ -99,3 +102,41 @@ def test_layout_payload_title_fallback_source_contract():
     helper = helper[: helper.index("\n}") + 2]
     # Fallback chain still references layout_payload?.title.
     assert "title" in helper
+
+
+# ── PR B: compiled visual schedule handoff drives timeline rendering ────────
+
+def test_root_metadata_prefers_compiled_schedule_duration():
+    src = _read(ROOT)
+    assert "visual_schedule?.total_duration_in_frames" in src
+    assert "render?.duration_in_frames" in src
+    schedule_idx = src.find("visual_schedule?.total_duration_in_frames")
+    render_idx = src.find("render?.duration_in_frames")
+    sec_idx = src.find("duration_sec * fps")
+    assert -1 not in (schedule_idx, render_idx, sec_idx)
+    assert schedule_idx < render_idx < sec_idx
+
+
+def test_short_video_routes_schedule_to_visual_timeline():
+    src = _read(SHORT_VIDEO)
+    assert "VisualTimeline" in src
+    assert "props.visual_schedule" in src
+    assert "sceneBoundaries" in src
+    assert "Missing visual schedule boundary" in src
+
+
+def test_visual_timeline_renders_compiled_tracks_with_runtime_guards():
+    src = _read(VISUAL_TIMELINE)
+    assert "schedule.schema_version !== 2" in src
+    assert "track.loop_policy !== 'forbid'" in src
+    assert "track.from_frame" in src
+    assert "track.duration_in_frames" in src
+    assert "track.trim_before_in_frames" in src
+    assert "track.trim_end_in_frames" in src
+
+
+def test_short_media_layer_uses_remotion_frame_trims():
+    src = _read(SHORT_MEDIA_LAYER)
+    assert "trimBefore={trimBefore}" in src
+    assert "trimAfter={trimAfter}" in src
+    assert "startFrom" not in src

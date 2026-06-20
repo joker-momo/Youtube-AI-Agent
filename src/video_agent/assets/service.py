@@ -14,6 +14,15 @@ from video_agent.assets.library import AssetLibrary
 from video_agent.assets.providers import DEFAULT_HEADERS, StockPhotoClient
 from video_agent.assets.query_cache import QueryCache
 from video_agent.contracts import repo_root
+from video_agent.shorts.visual_acquisition import compile_span_search_queries
+from video_agent.shorts.visual_candidate_scoring import (
+    artifact_candidate_record,
+    merge_query_origin,
+    metadata_identity,
+)
+from video_agent.shorts.visual_candidate_scoring import (
+    select_provisional_span_candidate as _select_provisional_span_candidate,
+)
 
 _IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 
@@ -841,6 +850,92 @@ class StockAssetService:
 
         # Tier 5 — block + review (returns None)
         return None
+
+    def get_visual_span_candidates(
+        self,
+        *,
+        acquisition_context: dict[str, Any],
+        budget: Any,
+    ) -> list[dict[str, Any]]:
+        """PR C metadata-only span search.
+
+        Searches provider metadata for the complete visual span, deduplicates by
+        provider identity (or normalized metadata identity), and returns artifact
+        safe candidate records. It never downloads or materializes assets.
+        """
+        provider = str(
+            (((self.visual_config.get("visual_quality_flow") or {}).get("acquisition") or {}).get("provider"))
+            or (self.providers[0] if self.providers else "pexels_video")
+        )
+        providers = [provider] if provider else list(self.providers)
+        queries = compile_span_search_queries(
+            acquisition_context,
+            locale=str(acquisition_context.get("locale") or "es-ES"),
+            provider=provider,
+        )
+        flat_queries: list[tuple[str, str]] = []
+        for query_class in ("primary", "alternates", "equivalent_action"):
+            for query in queries.get(query_class) or []:
+                flat_queries.append((query_class, query))
+        flat_queries = flat_queries[: max(0, int(getattr(budget, "max_queries", 1)))]
+
+        filters = _stock_filters(
+            self.visual_config,
+            scene_duration_sec=int(float(acquisition_context.get("planned_duration_sec") or 0.0)),
+        )
+        filters["per_page"] = int(getattr(budget, "metadata_candidates_per_query", filters.get("per_page", 8)))
+        ttl_hours = int(self.visual_config.get("query_cache_ttl_hours", 24))
+        config = ((self.visual_config.get("visual_quality_flow") or {}).get("acquisition") or {})
+        records_by_identity: dict[tuple[str, str], dict[str, Any]] = {}
+        for query_class, query in flat_queries:
+            for provider_name in providers:
+                response = self.cache.get(provider_name, query, filters)
+                if response is None:
+                    try:
+                        response = self.stock_client.search(provider_name, query, filters)
+                    except Exception as exc:  # noqa: BLE001 - report-only metadata search degrades safely.
+                        err = {
+                            "provider": provider_name,
+                            "error_type": exc.__class__.__name__,
+                            "message": str(exc),
+                            "stage": "visual_span_metadata_search",
+                        }
+                        if err not in self.last_errors:
+                            self.last_errors.append(err)
+                        continue
+                    self.cache.set(provider_name, query, filters, response, ttl_hours=ttl_hours)
+                for candidate in self.stock_client.normalize(provider_name, response):
+                    identity = metadata_identity(candidate)
+                    if identity in records_by_identity:
+                        merge_query_origin(records_by_identity[identity], query=query, query_class=query_class)
+                        continue
+                    record = artifact_candidate_record(
+                        candidate,
+                        context=acquisition_context,
+                        query=query,
+                        query_class=query_class,
+                        config=config,
+                    )
+                    records_by_identity[identity] = record
+                    if len(records_by_identity) >= int(getattr(budget, "max_unique_metadata_candidates", 12)):
+                        return list(records_by_identity.values())
+        return list(records_by_identity.values())
+
+    def select_provisional_span_candidate(
+        self,
+        *,
+        acquisition_context: dict[str, Any],
+        candidates: list[dict[str, Any]],
+        recent_visual_memory: dict[str, Any],
+        config: dict[str, Any],
+    ) -> dict[str, Any]:
+        """PR C metadata-only provisional selection. Never render-eligible."""
+        return _select_provisional_span_candidate(
+            acquisition_context=acquisition_context,
+            candidates=candidates,
+            recent_visual_memory=recent_visual_memory,
+            config=config,
+        )
 
     def _record_image_gen(
         self, prompt: str, scene: dict[str, Any], attempt: int, *,

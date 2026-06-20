@@ -57,6 +57,56 @@ export type CropPlan = {
   reason?: string;
 };
 
+export type CompiledSceneBoundary = {
+  scene_id: string;
+  from_frame: number;
+  duration_in_frames: number;
+  end_frame_exclusive: number;
+  is_graphic?: boolean;
+};
+
+export type CompiledVisualTrack = {
+  track_id: string;
+  track_type: 'background_media';
+  visual_span_id: string;
+  visual_beat_id?: string | null;
+  scene_ids: string[];
+  asset_ref: string;
+  asset_id?: string | null;
+  provider?: string | null;
+  render_media_kind: 'video' | 'image';
+  source_media_kind: 'native_video' | 'image_backed_video' | 'native_image' | 'generated_placeholder';
+  from_frame: number;
+  duration_in_frames: number;
+  end_frame_exclusive: number;
+  trim_before_in_frames: number;
+  trim_timebase_fps: number;
+  trim_end_in_frames?: number | null;
+  source_duration_sec?: number | null;
+  playback_rate: number;
+  loop_policy: 'forbid' | 'allow_if_safe';
+  crop_plan?: CropPlan;
+  motion_plan?: {
+    name?: string;
+    apply_to_native_video?: boolean;
+  };
+  overlay_policy?: 'scene_controlled';
+  z_index?: number;
+};
+
+export type CompiledAssetSchedule = {
+  schema_version: 2;
+  contract_revision?: string;
+  compiler_version?: number;
+  short_id?: string;
+  fps: number;
+  timing_source?: 'tts_final' | 'scene_plan';
+  scene_version?: number;
+  total_duration_in_frames: number;
+  scene_boundaries: CompiledSceneBoundary[];
+  tracks: CompiledVisualTrack[];
+};
+
 export type Scene = {
   id: string;
   duration_sec: number;
@@ -93,7 +143,7 @@ export type RenderProps = {
       text: string;
     };
   };
-  render: {fps: number; resolution: string; duration_sec: number; subtitles?: SubtitleConfig};
+  render: {fps: number; resolution: string; duration_sec: number; duration_in_frames?: number; subtitles?: SubtitleConfig};
   scenes: Scene[];
   audio: {narration: string | null; music: string | null};
   seo: {
@@ -119,6 +169,7 @@ export type RenderProps = {
     // Defaults to false to keep the opening frame clean.
     show_channel_name_overlay?: boolean;
   };
+  visual_schedule?: CompiledAssetSchedule | null;
 };
 
 export const mediaSrc = (path: string): string => {

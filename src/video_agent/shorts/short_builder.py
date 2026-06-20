@@ -4,6 +4,7 @@ All side-effecting steps (LLM, Kokoro TTS, ffmpeg mix, Remotion render, cover)
 are injected so the orchestration is unit-testable; real implementations are the
 defaults used by the autopilot.
 """
+
 from __future__ import annotations
 
 import datetime
@@ -91,6 +92,12 @@ from video_agent.shorts.builder.stages.script import (
     _stage_qa_script,
     _stage_script,
     _stage_spoken_humanization,
+)
+from video_agent.shorts.builder.stages.visual_acquisition import (
+    _stage_visual_acquisition,
+)
+from video_agent.shorts.builder.stages.visual_local_qa import (
+    _stage_visual_local_qa,
 )
 from video_agent.shorts.builder.stages.visual_schedule import (
     _stage_visual_schedule,
@@ -208,6 +215,7 @@ __all__ = [
     "_stage_qa_script",
     "_stage_anti_ai_review",
     "_stage_visual_spans",
+    "_stage_visual_local_qa",
     "_stage_visual_schedule",
     "_stage_retention_plan",
     "_stage_render",
@@ -318,7 +326,9 @@ def _build_short_impl(
     # so a browser failure never consumes a creative scene-regeneration attempt.
     max_chatgpt_provider_retries = 0
     music_track = short_plan.get("music_track")
-    cover_words = int(((channel_config.get("shorts") or {}).get("cover") or {}).get("text_max_words", 5))
+    cover_words = int(
+        ((channel_config.get("shorts") or {}).get("cover") or {}).get("text_max_words", 5)
+    )
 
     atomic_write_json(_jd / paths.SHORT_IDEA_FILE, short_plan)
 
@@ -340,28 +350,153 @@ def _build_short_impl(
         "music_track": music_track,
         "source_scene_ids": short_plan.get("source_scene_ids") or short_plan.get("scene_ids") or [],
         "voice": {
-            "provider": (channel_config.get("shorts") or {}).get("tts", {}).get("provider", "kokoro"),
-            "voice_id": (channel_config.get("shorts") or {}).get("tts", {}).get("voice_id", "ef_dora"),
+            "provider": (channel_config.get("shorts") or {})
+            .get("tts", {})
+            .get("provider", "kokoro"),
+            "voice_id": (channel_config.get("shorts") or {})
+            .get("tts", {})
+            .get("voice_id", "ef_dora"),
             "speed": (channel_config.get("shorts") or {}).get("tts", {}).get("speed", 1.07),
         },
     }
 
     stages = [
-        {"name": "retention_plan", "label": "Retention Plan", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
-        {"name": "script", "label": "Short Script", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
-        {"name": "qa_script", "label": "QA Script", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
-        {"name": "spoken_humanization", "label": "Spoken Humanization", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
-        {"name": "scenes", "label": "Short Scenes", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
-        {"name": "visual_rhythm_plan", "label": "Visual Rhythm Plan", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
-        {"name": "qa_scenes", "label": "QA Scenes", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
-        {"name": "anti_ai_review", "label": "Anti-AI Review", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
-        {"name": "visual_spans", "label": "Visual Spans", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
-        {"name": "background", "label": "Background Assets", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
-        {"name": "audio", "label": "Audio TTS & Mix", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
-        {"name": "visual_schedule", "label": "Visual Schedule", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
-        {"name": "seo", "label": "Short SEO", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
-        {"name": "render", "label": "Video & Cover Render", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
-        {"name": "performance_memory", "label": "Performance Memory", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
+        {
+            "name": "retention_plan",
+            "label": "Retention Plan",
+            "status": "pending",
+            "started_at": None,
+            "completed_at": None,
+            "actual_seconds": None,
+        },
+        {
+            "name": "script",
+            "label": "Short Script",
+            "status": "pending",
+            "started_at": None,
+            "completed_at": None,
+            "actual_seconds": None,
+        },
+        {
+            "name": "qa_script",
+            "label": "QA Script",
+            "status": "pending",
+            "started_at": None,
+            "completed_at": None,
+            "actual_seconds": None,
+        },
+        {
+            "name": "spoken_humanization",
+            "label": "Spoken Humanization",
+            "status": "pending",
+            "started_at": None,
+            "completed_at": None,
+            "actual_seconds": None,
+        },
+        {
+            "name": "scenes",
+            "label": "Short Scenes",
+            "status": "pending",
+            "started_at": None,
+            "completed_at": None,
+            "actual_seconds": None,
+        },
+        {
+            "name": "visual_rhythm_plan",
+            "label": "Visual Rhythm Plan",
+            "status": "pending",
+            "started_at": None,
+            "completed_at": None,
+            "actual_seconds": None,
+        },
+        {
+            "name": "qa_scenes",
+            "label": "QA Scenes",
+            "status": "pending",
+            "started_at": None,
+            "completed_at": None,
+            "actual_seconds": None,
+        },
+        {
+            "name": "anti_ai_review",
+            "label": "Anti-AI Review",
+            "status": "pending",
+            "started_at": None,
+            "completed_at": None,
+            "actual_seconds": None,
+        },
+        {
+            "name": "visual_spans",
+            "label": "Visual Spans",
+            "status": "pending",
+            "started_at": None,
+            "completed_at": None,
+            "actual_seconds": None,
+        },
+        {
+            "name": "visual_acquisition",
+            "label": "Visual Acquisition",
+            "status": "pending",
+            "started_at": None,
+            "completed_at": None,
+            "actual_seconds": None,
+        },
+        {
+            "name": "background",
+            "label": "Background Assets",
+            "status": "pending",
+            "started_at": None,
+            "completed_at": None,
+            "actual_seconds": None,
+        },
+        {
+            "name": "audio",
+            "label": "Audio TTS & Mix",
+            "status": "pending",
+            "started_at": None,
+            "completed_at": None,
+            "actual_seconds": None,
+        },
+        {
+            "name": "visual_local_qa",
+            "label": "Visual Local QA",
+            "status": "pending",
+            "started_at": None,
+            "completed_at": None,
+            "actual_seconds": None,
+        },
+        {
+            "name": "visual_schedule",
+            "label": "Visual Schedule",
+            "status": "pending",
+            "started_at": None,
+            "completed_at": None,
+            "actual_seconds": None,
+        },
+        {
+            "name": "seo",
+            "label": "Short SEO",
+            "status": "pending",
+            "started_at": None,
+            "completed_at": None,
+            "actual_seconds": None,
+        },
+        {
+            "name": "render",
+            "label": "Video & Cover Render",
+            "status": "pending",
+            "started_at": None,
+            "completed_at": None,
+            "actual_seconds": None,
+        },
+        {
+            "name": "performance_memory",
+            "label": "Performance Memory",
+            "status": "pending",
+            "started_at": None,
+            "completed_at": None,
+            "actual_seconds": None,
+        },
     ]
 
     started_at = datetime.datetime.now(datetime.UTC).isoformat()
@@ -401,12 +536,13 @@ def _build_short_impl(
     def check_stop():
         if (long_job_dir / ".stop_requested").exists() or (sd / ".stop_requested").exists():
             from fastapi import HTTPException
+
             raise HTTPException(
                 status_code=409,
                 detail={
                     "error": "Stop requested by operator.",
                     "stop_requested": True,
-                }
+                },
             )
 
     script_qa_result: dict[str, Any] = {"verdict": "FAIL", "issues": ["not_generated"]}
@@ -439,7 +575,7 @@ def _build_short_impl(
             "- Preserve source fidelity.",
             "- Preserve idea_contract.original_count when must_preserve_count=true.",
             "- Do not invent unsupported claims.",
-            "- Do not use unsafe/medical fear framing."
+            "- Do not use unsafe/medical fear framing.",
         ]
 
     # Build the shared context object for per-stage functions.
@@ -497,7 +633,9 @@ def _build_short_impl(
         if _script_result.signal is StageSignal.DONE:
             short_script = _ctx.extras["short_script"]
             script_qa_result = _ctx.extras.get("script_qa_result", script_qa_result)
-            normalized_script_issues = _ctx.extras.get("normalized_script_issues", normalized_script_issues)
+            normalized_script_issues = _ctx.extras.get(
+                "normalized_script_issues", normalized_script_issues
+            )
             prev_script_hash = _ctx.extras.get("prev_script_hash")
             break
         if _script_result.signal is StageSignal.RESTART_SCRIPT:
@@ -516,7 +654,9 @@ def _build_short_impl(
 
         short_script = _ctx.extras["short_script"]
         script_qa_result = _ctx.extras.get("script_qa_result", script_qa_result)
-        normalized_script_issues = _ctx.extras.get("normalized_script_issues", normalized_script_issues)
+        normalized_script_issues = _ctx.extras.get(
+            "normalized_script_issues", normalized_script_issues
+        )
         prev_script_hash = _ctx.extras.get("prev_script_hash")
 
         _ctx.extras["short_script"] = short_script
@@ -571,6 +711,13 @@ def _build_short_impl(
         _stage_visual_spans(_ctx)
         short_scenes = _ctx.extras["short_scenes"]
 
+        # Stage: Visual acquisition — PR C metadata-only span search. In
+        # report_only it writes shadow artifacts only and never changes assets,
+        # schedules, final props, or render behavior.
+        _ctx.extras["short_scenes"] = short_scenes
+        _ctx.extras["visual_spans"] = _ctx.extras.get("visual_spans") or {}
+        _stage_visual_acquisition(_ctx)
+
         # Stage: Background assets — resolve each scene's background (Pexels
         # video/photo, ChatGPT image, or placeholder) BEFORE audio, reporting the
         # source scene-by-scene so the UI shows exactly where each came from.
@@ -591,6 +738,13 @@ def _build_short_impl(
         duration_sec = _ctx.extras["duration_sec"]
         if _audio_result.returns is not None:
             return _audio_result.returns
+
+        # Stage: Visual local QA — PR D finalist download, deterministic local
+        # analysis, final-duration revalidation, and bounded trim selection.
+        _ctx.extras["short_scenes"] = short_scenes
+        _local_qa_result = _stage_visual_local_qa(_ctx)
+        if _local_qa_result.returns is not None:
+            return _local_qa_result.returns
 
         # Stage: Visual schedule — compile the schema-v2 frame contract from final
         # audio-corrected scene timing (spec §18/§22). report_only persists
@@ -615,32 +769,45 @@ def _build_short_impl(
         )
 
         # Save finalized metadata to status
-        status.update({
-            "hook": hook,
-            "cover_text": cover_text,
-            "duration_sec": round(duration_sec, 1),
-            "qa_verdict": "PASS",
-            "regeneration_attempts": total_regeneration_attempts,
-            "qa_scenes_attempts": scenes_attempts,
-            "qa_scenes_structural_attempts": structural_attempts,
-            "qa_scenes_product_attempts": product_attempts,
-        })
+        status.update(
+            {
+                "hook": hook,
+                "cover_text": cover_text,
+                "duration_sec": round(duration_sec, 1),
+                "qa_verdict": "PASS",
+                "regeneration_attempts": total_regeneration_attempts,
+                "qa_scenes_attempts": scenes_attempts,
+                "qa_scenes_structural_attempts": structural_attempts,
+                "qa_scenes_product_attempts": product_attempts,
+            }
+        )
         write_short_status(long_job_dir, short_id, status)
 
         if require_render_confirmation:
-            _write_render_props(sd, short_scenes, channel_config, music_track)
+            _write_render_props(
+                sd,
+                short_scenes,
+                channel_config,
+                music_track,
+                visual_schedule=_ctx.extras.get("visual_schedule"),
+                scene_version=getattr(
+                    _ctx.extras.get("scene_pipeline_state"), "current_scenes_version", None
+                ),
+            )
             update_stage("audio", "pending")
             update_stage("render", "pending")
-            status.update({
-                "status": "ready_for_render",
-                "rendered": False,
-                "uploaded": False,
-                "youtube_url": "",
-                "requires_user_review": False,
-                "requires_render_confirmation": True,
-                "video_path": None,
-                "cover_path": None,
-            })
+            status.update(
+                {
+                    "status": "ready_for_render",
+                    "rendered": False,
+                    "uploaded": False,
+                    "youtube_url": "",
+                    "requires_user_review": False,
+                    "requires_render_confirmation": True,
+                    "video_path": None,
+                    "cover_path": None,
+                }
+            )
             write_short_status(long_job_dir, short_id, status)
             return status
 
@@ -648,7 +815,16 @@ def _build_short_impl(
         try:
             check_stop()
             mix_fn(sd, narration_wav, music_track, channel_config, duration_sec)
-            _write_render_props(sd, short_scenes, channel_config, music_track)
+            _write_render_props(
+                sd,
+                short_scenes,
+                channel_config,
+                music_track,
+                visual_schedule=_ctx.extras.get("visual_schedule"),
+                scene_version=getattr(
+                    _ctx.extras.get("scene_pipeline_state"), "current_scenes_version", None
+                ),
+            )
             update_stage("audio", "completed")
         except Exception as exc:
             update_stage("audio", "failed")
@@ -669,7 +845,10 @@ def _build_short_impl(
     # a hard blocker stops the pipeline with an explicit, reviewable reason; the
     # generic "QA failed after max regeneration attempts" message is never the
     # source of truth — the structured decision below is.
-    if script_qa_result["verdict"] not in ("PASS", "WARN") or scenes_qa_result["verdict"] not in ("PASS", "WARN"):
+    if script_qa_result["verdict"] not in ("PASS", "WARN") or scenes_qa_result["verdict"] not in (
+        "PASS",
+        "WARN",
+    ):
         if script_qa_result["verdict"] not in ("PASS", "WARN"):
             fail_stage = "qa_script"
             blocker_details = _qa_blocker_details(script_qa_result)
@@ -701,21 +880,23 @@ def _build_short_impl(
         for s in status["stages"]:
             if s["status"] == "pending":
                 s["status"] = "skipped"
-        status.update({
-            "status": "needs_review",
-            "rendered": False,
-            "uploaded": False,
-            "youtube_url": "",
-            "requires_user_review": True,
-            "qa_verdict": "FAIL",
-            "failure_stage": fail_stage,
-            "failure_reason": failure_reason,
-            "duration_sec": round(duration_sec, 1),
-            "regeneration_attempts": total_regeneration_attempts,
-            "qa_scenes_attempts": scenes_attempts,
-            "qa_scenes_structural_attempts": structural_attempts,
-            "qa_scenes_product_attempts": product_attempts,
-        })
+        status.update(
+            {
+                "status": "needs_review",
+                "rendered": False,
+                "uploaded": False,
+                "youtube_url": "",
+                "requires_user_review": True,
+                "qa_verdict": "FAIL",
+                "failure_stage": fail_stage,
+                "failure_reason": failure_reason,
+                "duration_sec": round(duration_sec, 1),
+                "regeneration_attempts": total_regeneration_attempts,
+                "qa_scenes_attempts": scenes_attempts,
+                "qa_scenes_structural_attempts": structural_attempts,
+                "qa_scenes_product_attempts": product_attempts,
+            }
+        )
         write_short_status(long_job_dir, short_id, status)
         return status
 
@@ -723,12 +904,14 @@ def _build_short_impl(
     _stage_render(_ctx)
 
     # --- Stage: performance_memory (final, after render) ---
-    _ctx.extras.update({
-        "short_script": short_script,
-        "short_scenes": short_scenes,
-        "retention_plan": retention_plan,
-        "anti_ai_regeneration_attempts": anti_ai_regeneration_attempts,
-    })
+    _ctx.extras.update(
+        {
+            "short_script": short_script,
+            "short_scenes": short_scenes,
+            "retention_plan": retention_plan,
+            "anti_ai_regeneration_attempts": anti_ai_regeneration_attempts,
+        }
+    )
     _stage_performance_memory(_ctx)
 
     return status

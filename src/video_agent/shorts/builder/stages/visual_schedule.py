@@ -17,6 +17,7 @@ Mode behavior (§22):
 This stage only produces artifacts + context. Renderer activation is decided
 later by the final ``json/render_props.json`` (Step 3), never by this stage.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -89,6 +90,7 @@ def _stage_visual_schedule(ctx: BuildContext) -> StageResult:
             fps=fps,
             timing_source=timing_source,
             scene_version=scene_version,
+            trim_window_plan=ctx.extras.get("trim_window_plan"),
         )
         validation = asset_schedule.validate_compiled_asset_schedule(
             schedule, short_scenes, render_fps=fps, expected_scene_version=scene_version
@@ -109,7 +111,9 @@ def _stage_visual_schedule(ctx: BuildContext) -> StageResult:
             "manifest_adapter_warnings": resolved.get("warnings", []),
             "track_count": len(schedule["tracks"]),
             "continuous_clip_count": sum(
-                1 for t in schedule["tracks"] if t.get("selection_debug", {}).get("mode") == "continuous_clip"
+                1
+                for t in schedule["tracks"]
+                if t.get("selection_debug", {}).get("mode") == "continuous_clip"
             ),
         }
 
@@ -122,7 +126,9 @@ def _stage_visual_schedule(ctx: BuildContext) -> StageResult:
         ctx.extras["visual_schedule_hash"] = schedule_hash
 
         if mode == "enforced" and validation["verdict"] != "PASS":
-            ctx.update_stage("visual_schedule", "failed", verdict="FAIL", errors=validation["errors"])
+            ctx.update_stage(
+                "visual_schedule", "failed", verdict="FAIL", errors=validation["errors"]
+            )
             ctx.status["status"] = "failed"
             write_short_status(ctx.long_job_dir, short_id, ctx.status)
             return StageResult(

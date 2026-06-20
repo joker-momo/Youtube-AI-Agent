@@ -156,6 +156,7 @@ def render_short_video(
             job_dir=short_dir,
             render=True,
             require_operator_qa=False,
+            prepared_short=True,
             # Let the operator press Stop mid-render: render_with_remotion polls
             # this path and SIGTERMs the Remotion subprocess when it appears.
             stop_request_path=stop_request_path,

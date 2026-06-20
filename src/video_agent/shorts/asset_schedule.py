@@ -17,6 +17,7 @@ Phase 2 scope (this module):
 Everything here is pure except an optional ffprobe duration probe for native
 candidates missing ``source_duration_sec`` (§16.1).
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -105,9 +106,7 @@ def _derive_media_kinds(entry: dict[str, Any]) -> tuple[str, str | None]:
         or provider in VIDEO_TIERS
         or provider.endswith("_video")
     )
-    is_image_source = (
-        media_kind == "image" or tier in IMAGE_TIERS or provider == "ai_generated"
-    )
+    is_image_source = media_kind == "image" or tier in IMAGE_TIERS or provider == "ai_generated"
 
     if is_placeholder:
         return render_media_kind, GENERATED_PLACEHOLDER
@@ -193,11 +192,7 @@ def adapt_assets_manifest(
         source_duration_sec = entry.get("source_duration_sec")
 
         # Base continuity eligibility (span-specific duration checked later).
-        eligible = (
-            source_media_kind == NATIVE_VIDEO
-            and exists
-            and not rejected
-        )
+        eligible = source_media_kind == NATIVE_VIDEO and exists and not rejected
 
         scenes_out[scene_id] = {
             "scene_id": scene_id,
@@ -211,14 +206,18 @@ def adapt_assets_manifest(
             "render_media_kind": render_media_kind,
             "source_media_kind": source_media_kind,
             "source_duration_sec": (
-                float(source_duration_sec) if isinstance(source_duration_sec, (int, float)) else None
+                float(source_duration_sec)
+                if isinstance(source_duration_sec, (int, float))
+                else None
             ),
             "selection_score": float(score) if isinstance(score, (int, float)) else None,
             "asset_match_status": match_status,
             "semantic_rejected": rejected,
             "semantic_rejection_source": rejection_source,
             "semantic_rejection_asset_match": sel.get("asset_match_status") if rejected else None,
-            "rejection_reasons": list(sel.get("rejection_reasons") or entry.get("rejection_reasons") or []),
+            "rejection_reasons": list(
+                sel.get("rejection_reasons") or entry.get("rejection_reasons") or []
+            ),
             "exists": exists,
             "eligible_for_multi_scene_continuity": eligible,
             "crop_plan": entry.get("crop_plan"),
@@ -313,6 +312,7 @@ def _legacy_track(
     scene: dict[str, Any],
     boundary: dict[str, Any],
     adapted: dict[str, Any] | None,
+    fps: int,
 ) -> dict[str, Any]:
     smk = (adapted or {}).get("source_media_kind") or GENERATED_PLACEHOLDER
     return {
@@ -330,7 +330,7 @@ def _legacy_track(
         "duration_in_frames": boundary["duration_in_frames"],
         "end_frame_exclusive": boundary["end_frame_exclusive"],
         "trim_before_in_frames": 0,
-        "trim_timebase_fps": 0,
+        "trim_timebase_fps": fps,
         "trim_end_in_frames": None,
         "source_duration_sec": (adapted or {}).get("source_duration_sec"),
         "playback_rate": 1.0,
@@ -347,6 +347,63 @@ def _legacy_track(
     }
 
 
+def _trim_plan_by_span(trim_window_plan: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    return {
+        str(span.get("visual_span_id")): span
+        for span in (trim_window_plan or {}).get("spans") or []
+        if span.get("visual_span_id") and span.get("final_candidate_id")
+    }
+
+
+def _pr_d_track(
+    track_id: str,
+    span_id: str,
+    member_ids: list[str],
+    first_b: dict[str, Any],
+    last_b: dict[str, Any],
+    trim: dict[str, Any],
+    fps: int,
+) -> dict[str, Any]:
+    duration_in_frames = last_b["end_frame_exclusive"] - first_b["from_frame"]
+    return {
+        "track_id": track_id,
+        "track_type": "background_media",
+        "visual_span_id": span_id,
+        "visual_beat_id": None,
+        "scene_ids": list(member_ids),
+        "asset_ref": trim.get("asset_ref")
+        or trim.get("public_ref")
+        or trim.get("local_path")
+        or "",
+        "asset_id": trim.get("final_candidate_id"),
+        "provider": trim.get("provider"),
+        "provider_asset_id": trim.get("provider_asset_id"),
+        "render_media_kind": "video",
+        "source_media_kind": NATIVE_VIDEO,
+        "from_frame": first_b["from_frame"],
+        "duration_in_frames": duration_in_frames,
+        "end_frame_exclusive": last_b["end_frame_exclusive"],
+        "trim_before_in_frames": int(trim.get("selected_window_start_in_frames") or 0),
+        "trim_timebase_fps": int(trim.get("trim_timebase_fps") or fps),
+        "trim_end_in_frames": int(trim.get("selected_window_end_in_frames") or duration_in_frames),
+        "source_duration_sec": trim.get("source_duration_sec"),
+        "playback_rate": 1.0,
+        "loop_policy": "forbid",
+        "crop_plan": trim.get("crop_plan")
+        or {"mode": "cover", "anchor": "center", "scale": 1.0, "target": ""},
+        "motion_plan": {"name": "none", "apply_to_native_video": False},
+        "overlay_policy": "scene_controlled",
+        "z_index": 0,
+        "selection_debug": {
+            "mode": "visual_quality_flow_pr_d",
+            "window_score": trim.get("window_score"),
+            "motion_band": trim.get("motion_band"),
+            "crop_stability_score": trim.get("crop_stability_score"),
+            "qa_verdict": (trim.get("qa") or {}).get("verdict"),
+        },
+    }
+
+
 def compile_asset_schedule(
     *,
     short_id: str,
@@ -356,6 +413,7 @@ def compile_asset_schedule(
     fps: int,
     timing_source: str,
     scene_version: int,
+    trim_window_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compile the schema-v2 schedule from final scene timing + spans + adapted
     manifest. Deterministic; no provider acquisition (§17)."""
@@ -364,6 +422,7 @@ def compile_asset_schedule(
     by_id = {b["scene_id"]: b for b in boundaries}
     scene_by_id = {_scene_id(s, i): s for i, s in enumerate(scenes)}
     adapted_scenes = (resolved_visuals or {}).get("scenes") or {}
+    trims_by_span = _trim_plan_by_span(trim_window_plan)
 
     tracks: list[dict[str, Any]] = []
     track_n = 0
@@ -383,6 +442,15 @@ def compile_asset_schedule(
             continue
         # Graphic spans omit the background track (full-screen graphic scene).
         if all(_is_graphic_scene(s) for s in member_scenes):
+            continue
+
+        pr_d_trim = trims_by_span.get(str(span_id))
+        if pr_d_trim:
+            first_b = by_id[member_ids[0]]
+            last_b = by_id[member_ids[-1]]
+            tracks.append(
+                _pr_d_track(_next_track_id(), span_id, member_ids, first_b, last_b, pr_d_trim, fps)
+            )
             continue
 
         span_seconds = sum(_scene_duration(s) for s in member_scenes)
@@ -443,7 +511,9 @@ def compile_asset_schedule(
                 if _is_graphic_scene(scene):
                     continue
                 tracks.append(
-                    _legacy_track(_next_track_id(), span_id, scene, by_id[m], adapted_scenes.get(m))
+                    _legacy_track(
+                        _next_track_id(), span_id, scene, by_id[m], adapted_scenes.get(m), fps
+                    )
                 )
 
     total_frames = boundaries[-1]["end_frame_exclusive"] if boundaries else 0
@@ -483,10 +553,24 @@ def compute_schedule_hash(schedule: dict[str, Any], *, public_job_id: str = "") 
             {
                 k: tr.get(k)
                 for k in (
-                    "track_id", "visual_span_id", "scene_ids", "asset_ref", "asset_id",
-                    "render_media_kind", "source_media_kind", "from_frame", "duration_in_frames",
-                    "end_frame_exclusive", "trim_before_in_frames", "trim_timebase_fps",
-                    "playback_rate", "loop_policy", "crop_plan", "motion_plan",
+                    "track_id",
+                    "visual_span_id",
+                    "scene_ids",
+                    "asset_ref",
+                    "asset_id",
+                    "provider_asset_id",
+                    "render_media_kind",
+                    "source_media_kind",
+                    "from_frame",
+                    "duration_in_frames",
+                    "end_frame_exclusive",
+                    "trim_before_in_frames",
+                    "trim_timebase_fps",
+                    "trim_end_in_frames",
+                    "playback_rate",
+                    "loop_policy",
+                    "crop_plan",
+                    "motion_plan",
                 )
             }
             for tr in schedule.get("tracks") or []
@@ -532,7 +616,9 @@ def validate_compiled_asset_schedule(
                 errors.append(f"scene_boundary_order_mismatch:{got.get('scene_id')}")
             if got.get("from_frame") != cursor:
                 errors.append(f"scene_boundary_not_cumulative:{got.get('scene_id')}")
-            if got.get("end_frame_exclusive") != got.get("from_frame", 0) + got.get("duration_in_frames", 0):
+            if got.get("end_frame_exclusive") != got.get("from_frame", 0) + got.get(
+                "duration_in_frames", 0
+            ):
                 errors.append(f"scene_boundary_end_mismatch:{got.get('scene_id')}")
             cursor = got.get("end_frame_exclusive", cursor)
         total = schedule.get("total_duration_in_frames")
@@ -543,7 +629,9 @@ def validate_compiled_asset_schedule(
     nongraphic_frames_covered: dict[int, int] = {}
     for tr in schedule.get("tracks") or []:
         tid = tr.get("track_id")
-        if tr.get("end_frame_exclusive") != tr.get("from_frame", 0) + tr.get("duration_in_frames", 0):
+        if tr.get("end_frame_exclusive") != tr.get("from_frame", 0) + tr.get(
+            "duration_in_frames", 0
+        ):
             errors.append(f"track_end_mismatch:{tid}")
         if tr.get("playback_rate") != 1.0:
             errors.append(f"playback_rate_not_1:{tid}")
@@ -551,6 +639,23 @@ def validate_compiled_asset_schedule(
             errors.append(f"loop_policy_not_forbid:{tid}")
         if (tr.get("trim_before_in_frames") or 0) < 0:
             errors.append(f"negative_trim:{tid}")
+        trim_start = int(tr.get("trim_before_in_frames") or 0)
+        trim_end = tr.get("trim_end_in_frames")
+        if trim_end is not None:
+            try:
+                trim_end_i = int(trim_end)
+                if trim_end_i <= trim_start:
+                    errors.append(f"trim_end_not_after_start:{tid}")
+                if trim_end_i - trim_start < int(tr.get("duration_in_frames") or 0):
+                    errors.append(f"trim_window_shorter_than_track:{tid}")
+                source_duration = tr.get("source_duration_sec")
+                timebase = int(tr.get("trim_timebase_fps") or fps or 1)
+                if isinstance(source_duration, (int, float)) and trim_end_i > seconds_to_frames(
+                    float(source_duration), timebase
+                ):
+                    errors.append(f"trim_end_exceeds_source_duration:{tid}")
+            except (TypeError, ValueError):
+                errors.append(f"trim_end_invalid:{tid}")
         ref = str(tr.get("asset_ref") or "")
         if not ref:
             errors.append(f"empty_asset_ref:{tid}")
@@ -565,7 +670,9 @@ def validate_compiled_asset_schedule(
                 errors.append(f"native_video_synthetic_drift:{tid}")
         # member scenes exist + contiguous + range == union of member boundaries
         sids = tr.get("scene_ids") or []
-        idxs = [next((i for i, b in enumerate(boundaries) if b["scene_id"] == s), None) for s in sids]
+        idxs = [
+            next((i for i, b in enumerate(boundaries) if b["scene_id"] == s), None) for s in sids
+        ]
         if any(i is None for i in idxs):
             errors.append(f"track_scene_missing:{tid}")
         elif idxs != list(range(idxs[0], idxs[0] + len(idxs))):
@@ -600,8 +707,13 @@ def validate_compiled_asset_schedule(
                 break
 
     # version / timing
-    if expected_scene_version is not None and schedule.get("scene_version") != expected_scene_version:
-        errors.append(f"scene_version_mismatch:{schedule.get('scene_version')}!={expected_scene_version}")
+    if (
+        expected_scene_version is not None
+        and schedule.get("scene_version") != expected_scene_version
+    ):
+        errors.append(
+            f"scene_version_mismatch:{schedule.get('scene_version')}!={expected_scene_version}"
+        )
     if schedule.get("timing_source") not in ("tts_final", "scene_plan"):
         warnings.append(f"unknown_timing_source:{schedule.get('timing_source')}")
 

@@ -11,6 +11,7 @@
         "fps": { "type": "number", "minimum": 1 },
         "resolution": { "type": "string" },
         "duration_sec": { "type": "number", "minimum": 0 },
+        "duration_in_frames": { "type": "integer", "minimum": 1 },
         "subtitles": {
           "type": "object",
           "properties": {
@@ -74,6 +75,84 @@
       }
     },
     "audio": { "type": "object" },
-    "seo": { "type": "object" }
+    "seo": { "type": "object" },
+    "visual_schedule": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["schema_version", "fps", "total_duration_in_frames", "scene_boundaries", "tracks"],
+          "properties": {
+            "schema_version": { "const": 2 },
+            "contract_revision": { "type": "string" },
+            "compiler_version": { "type": "integer" },
+            "short_id": { "type": "string" },
+            "fps": { "type": "number", "minimum": 1 },
+            "timing_source": { "enum": ["tts_final", "scene_plan"] },
+            "scene_version": { "type": "integer", "minimum": 1 },
+            "total_duration_in_frames": { "type": "integer", "minimum": 1 },
+            "scene_boundaries": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["scene_id", "from_frame", "duration_in_frames", "end_frame_exclusive"],
+                "properties": {
+                  "scene_id": { "type": "string" },
+                  "from_frame": { "type": "integer", "minimum": 0 },
+                  "duration_in_frames": { "type": "integer", "minimum": 1 },
+                  "end_frame_exclusive": { "type": "integer", "minimum": 1 },
+                  "is_graphic": { "type": "boolean" }
+                },
+                "additionalProperties": true
+              }
+            },
+            "tracks": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "track_id", "track_type", "visual_span_id", "scene_ids", "asset_ref",
+                  "render_media_kind", "source_media_kind", "from_frame", "duration_in_frames",
+                  "end_frame_exclusive", "trim_before_in_frames", "trim_timebase_fps",
+                  "playback_rate", "loop_policy"
+                ],
+                "properties": {
+                  "track_id": { "type": "string" },
+                  "track_type": { "const": "background_media" },
+                  "visual_span_id": { "type": "string" },
+                  "visual_beat_id": { "type": ["string", "null"] },
+                  "scene_ids": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "asset_ref": { "type": "string" },
+                  "asset_id": { "type": ["string", "null"] },
+                  "provider": { "type": ["string", "null"] },
+                  "render_media_kind": { "enum": ["video", "image"] },
+                  "source_media_kind": {
+                    "enum": ["native_video", "image_backed_video", "native_image", "generated_placeholder"]
+                  },
+                  "from_frame": { "type": "integer", "minimum": 0 },
+                  "duration_in_frames": { "type": "integer", "minimum": 1 },
+                  "end_frame_exclusive": { "type": "integer", "minimum": 1 },
+                  "trim_before_in_frames": { "type": "integer", "minimum": 0 },
+                  "trim_timebase_fps": { "type": "integer", "minimum": 1 },
+                  "trim_end_in_frames": { "type": ["integer", "null"], "minimum": 1 },
+                  "source_duration_sec": { "type": ["number", "null"], "minimum": 0 },
+                  "playback_rate": { "type": "number", "minimum": 0 },
+                  "loop_policy": { "enum": ["forbid", "allow_if_safe"] },
+                  "crop_plan": { "type": "object" },
+                  "motion_plan": { "type": "object" },
+                  "overlay_policy": { "const": "scene_controlled" },
+                  "z_index": { "type": "integer" }
+                },
+                "additionalProperties": true
+              }
+            }
+          },
+          "additionalProperties": true
+        }
+      ]
+    }
   }
 }

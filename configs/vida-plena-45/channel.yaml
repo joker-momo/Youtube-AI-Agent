@@ -242,6 +242,35 @@ shorts:
       production_boundary_check_enabled: true
     public_assets:
       unique_short_namespace: true
+  visual_quality_flow:
+    enabled: true
+    mode: report_only              # disabled | report_only | enforced
+    acquisition:
+      span_aware: true
+      provider: pexels_video
+      allow_text_query_hints: true
+      download_policy: none        # none | selected_only | top_finalists
+      trim_margin_sec: 1.0
+      minimum_width: 720
+      minimum_height: 720
+      max_queries_by_importance:
+        critical: 4
+        high: 3
+        normal: 2
+        low: 1
+    local_qa:
+      enabled: true
+      max_runner_ups: 2
+      semantic_adapter: none
+      detector_adapter: none
+      critical_fail_closed: true
+      report_only_never_blocks_render: true
+    trim_selector:
+      stride_sec: 0.5
+      max_windows: 24
+      reject_black_ratio: 0.05
+      reject_unstable_motion: true
+      dynamic_crop: false
   studio:
     enabled: true
     job_list_policy: "all_with_disabled_ineligible"

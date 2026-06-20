@@ -81,6 +81,28 @@
   path: skip re-running `prepare_assets`/TTS, build final `render_props.json` once
   via the shared builder, embed the validated schedule. Rerender entry points
   inventoried in `docs/implementation/shorts_rerender_entrypoint_audit.md`.
+- **Visual acquisition context** *(v4.0.3 PR C)* — metadata-only, report-only
+  search contract for one validated visual span. Uses scene-plan duration buckets
+  and structured tags, never final frame timing. Built by
+  `src/video_agent/shorts/visual_acquisition.py`; artifact
+  `visual_acquisition_context.json`.
+- **Visual metadata QA** *(v4.0.3 PR C)* — capability-aware QA artifact for
+  provider metadata search and provisional selections. It may record
+  `CAPABILITY_REDUCED`, but never claims pixel/semantic validation or render
+  eligibility. Built by
+  `src/video_agent/shorts/builder/stages/visual_acquisition.py`; artifact
+  `visual_span_metadata_qa.json`.
+- **Visual local QA** *(v4.0.3 PR D)* — bounded finalist download plus
+  deterministic local media analysis after final TTS/audio-tail timing. It
+  promotes, replaces, or rejects PR C provisional selections and records
+  capability-qualified candidate/span QA. Built by
+  `src/video_agent/shorts/builder/stages/visual_local_qa.py`; artifact
+  `visual_span_asset_qa.json`.
+- **Trim window plan** *(v4.0.3 PR D)* — final frame-based source trim contract
+  for locally validated visual-span assets. It is compiled into
+  `compiled_asset_schedule.json` and keeps playback rate at 1.0 with loop policy
+  `forbid`. Built by `src/video_agent/shorts/visual_local_analysis.py`; artifact
+  `trim_window_plan.json`.
 
 ## Quality gates (QA)
 

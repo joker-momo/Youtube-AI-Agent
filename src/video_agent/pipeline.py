@@ -77,6 +77,11 @@ class OperatorRenderOptions:
     require_operator_qa: bool = True
     tts_override: dict | None = None
     stop_request_path: Path | None = None
+    # Prepared Shorts have already completed scene validation, background
+    # acquisition, crop planning, TTS, and audio mix in the Shorts builder.
+    # Render must consume those exact artifacts instead of re-entering the
+    # generic prepare_assets/TTS path.
+    prepared_short: bool = False
     # Send Telegram notify after render completes. Full pipeline sets this False
     # to avoid duplicating the final job_done notify; single-stage re-renders set True.
     notify_telegram: bool = False
@@ -796,6 +801,60 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
                 scene["word_segments"] = ws["word_segments"]
 
     is_short_job = _is_short_job_dir(job_dir, channel_config)
+    if options.prepared_short:
+        from video_agent.shorts import paths as short_paths
+        from video_agent.shorts.builder.render_props import build_prepared_short_render_props
+
+        handoff = read_json(_resolve_json_file(job_dir, short_paths.SHORT_RENDER_PROPS_FILE))
+        assets_manifest = read_json(_resolve_json_file(job_dir, "assets_manifest.json"))
+        branding = _prepare_branding(channel_config)
+        visual_mode = str(
+            ((channel_config.get("shorts") or {}).get("visual_timeline") or {}).get("mode")
+            or "disabled"
+        )
+        render_props = build_prepared_short_render_props(
+            short_dir=job_dir,
+            channel_config=channel_config,
+            style=style,
+            scenes=scene_doc,
+            assets_manifest=assets_manifest,
+            seo=seo,
+            branding=branding,
+            handoff=handoff,
+            visual_timeline_mode=visual_mode,
+        )
+        write_json(job_dir / ARTIFACT_RENDER_PROPS, render_props)
+        validate_json(render_props, root / "schemas/render-props.schema.json")
+
+        visual_review = _write_visual_review(job_dir, job_id, assets_manifest, scene_doc)
+        create_visual_contact_sheet(job_dir, visual_review)
+        _validate_visual_review(visual_review)
+
+        video_path = None
+        if options.render:
+            video_path = job_dir / ARTIFACT_VIDEO
+            render_with_remotion(
+                job_dir / ARTIFACT_RENDER_PROPS,
+                video_path,
+                job_dir / "thumbnail.jpg",
+                stop_request_path=options.stop_request_path,
+                notify_telegram=options.notify_telegram,
+            )
+            logger.log("RENDERED", {"job_id": job_id, "video_path": str(video_path), "cost_usd": 0})
+
+        idea = {"topic": seo.get("title") or job_id}
+        report_path = _write_report(job_dir, job_id, channel_config, idea, options.render, visual_review)
+        write_operator_review(job_dir)
+        logger.log("OPERATOR_RENDER_COMPLETED", {"job_id": job_id, "cost_usd": 0})
+        return PipelineResult(
+            job_id=job_id,
+            job_dir=job_dir,
+            video_path=video_path if video_path and video_path.exists() else None,
+            thumbnail_path=job_dir / "thumbnail.jpg",
+            seo_path=job_dir / "seo.json",
+            report_path=report_path,
+        )
+
     short_duration_snapshot = _snapshot_scene_durations(scene_doc) if is_short_job else {}
 
     # ── Duration sync: recalculate long-form scene duration_sec from actual audio ─

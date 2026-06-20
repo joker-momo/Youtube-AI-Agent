@@ -92,6 +92,9 @@ from video_agent.shorts.builder.stages.script import (
     _stage_script,
     _stage_spoken_humanization,
 )
+from video_agent.shorts.builder.stages.visual_spans import (
+    _stage_visual_spans,
+)
 from video_agent.shorts.builder.status import _update_short_stage
 
 # Back-compat facade: stages were extracted into builder.stages.* and the
@@ -201,6 +204,7 @@ __all__ = [
     "_stage_script",
     "_stage_qa_script",
     "_stage_anti_ai_review",
+    "_stage_visual_spans",
     "_stage_retention_plan",
     "_stage_render",
     "_stage_performance_memory",
@@ -347,6 +351,7 @@ def _build_short_impl(
         {"name": "visual_rhythm_plan", "label": "Visual Rhythm Plan", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "qa_scenes", "label": "QA Scenes", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "anti_ai_review", "label": "Anti-AI Review", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
+        {"name": "visual_spans", "label": "Visual Spans", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "background", "label": "Background Assets", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "audio", "label": "Audio TTS & Mix", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "seo", "label": "Short SEO", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
@@ -552,6 +557,14 @@ def _build_short_impl(
         if _anti_ai_result.signal is StageSignal.RESTART_SCRIPT:
             script_feedback = _ctx.extras["script_feedback"]
             continue
+
+        # Stage: Visual spans — report-only grouping over contiguous scenes
+        # (spec v3.2.3 §18/§19). Acquires no media, changes no duration, and on
+        # the report_only default never breaks the build; legacy render unchanged.
+        _ctx.extras["short_scenes"] = short_scenes
+        _ctx.extras["scene_pipeline_state"] = state
+        _stage_visual_spans(_ctx)
+        short_scenes = _ctx.extras["short_scenes"]
 
         # Stage: Background assets — resolve each scene's background (Pexels
         # video/photo, ChatGPT image, or placeholder) BEFORE audio, reporting the

@@ -41,7 +41,13 @@ SHORT_AUDIO_SYNC_SUMMARY_FILE = "audio_sync_summary.json"
 SHORT_CALL_BUDGET_SUMMARY_FILE = "call_budget_summary.json"
 SHORT_FAILURE_REPORT_FILE = "short_failure_report.json"
 SHORT_QA_DECISION_SUMMARY_FILE = "qa_decision_summary.json"
-SHORT_RENDER_PROPS_FILE = "short_render_props.json"
+SHORT_RENDER_PROPS_FILE = "short_render_props.json"  # builder→render handoff supplement
+# Visual-span + compiled-timeline artifacts (spec v3.2.3 §7). All live under json/.
+SHORT_VISUAL_SPANS_FILE = "visual_spans.json"
+SHORT_VISUAL_SPAN_QA_FILE = "visual_span_qa.json"
+SHORT_COMPILED_ASSET_SCHEDULE_FILE = "compiled_asset_schedule.json"
+SHORT_COMPILED_ASSET_SCHEDULE_QA_FILE = "compiled_asset_schedule_qa.json"
+SHORT_RENDER_CONTINUITY_QA_FILE = "render_continuity_qa.json"
 SHORT_LLM_HISTORY_FILE = "llm_history.jsonl"  # all ChatGPT + Gemini prompts/responses
 SHORT_COVER_FILE = "short_cover.jpg"
 SHORT_THUMBNAIL_FILE = "thumbnail.jpg"

@@ -290,6 +290,19 @@ def normalize_short_scenes(scenes_doc: dict, short_script: dict) -> dict:
         sc.setdefault("visual_importance", "normal")
         sc.setdefault("asset_strategy", "stock_ok")
         sc.setdefault("required_visual_evidence", {})
+        # Visual-span planner hints (spec §8): preserve valid planner values
+        # verbatim, never invent. Absence ⇒ implicit one-scene span downstream.
+        # Do NOT add semantic_segment_id; do NOT default visual_span_id.
+        _span_id = str(sc.get("visual_span_id") or "").strip()
+        if _span_id:
+            sc["visual_span_id"] = _span_id
+        else:
+            sc.pop("visual_span_id", None)
+        _span_intent = str(sc.get("visual_span_intent") or "").strip()
+        if _span_intent:
+            sc["visual_span_intent"] = _span_intent
+        else:
+            sc.pop("visual_span_intent", None)
         if sc["layout"] in ("short_hook", "short_cta") and sc["visual_importance"] == "normal":
             sc["visual_importance"] = "critical"
         elif "bridge" in sc["layout"] and sc["visual_importance"] == "normal":

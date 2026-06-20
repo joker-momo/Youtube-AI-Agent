@@ -209,6 +209,39 @@ budget:
   max_cost_per_video_usd: 0
 shorts:
   enabled: true
+  # Visual span / compiled visual timeline (spec v3.2.3 §29). PR A ships the
+  # report-only span planner; mode stays report_only until all Phase 2 gates
+  # pass. Do not switch to enforced by default.
+  visual_timeline:
+    enabled: true
+    mode: report_only              # disabled | report_only | enforced
+    schedule_schema_version: 2
+    on_invalid_schedule: fail
+    rollback:
+      allow_legacy_renderer: false
+      reason: ""
+    span_planning:
+      isolate_hook: true
+      isolate_cta: true
+      isolate_graphic_scenes: true
+      max_scenes_per_span: 3
+      max_span_sec: 10.0
+    continuous_clip:
+      enabled: true
+      playback_rate: 1.0
+      allow_loop: false
+      require_native_video_for_multi_scene: true
+      image_max_hold_sec: 2.5
+      near_static_max_hold_sec: 3.5
+      low_motion_max_hold_sec: 5.0
+      normal_motion_max_hold_sec: 8.0
+    qa:
+      local_only: true
+      fail_closed_for_critical: true
+      require_exact_continuity_fixture: true
+      production_boundary_check_enabled: true
+    public_assets:
+      unique_short_namespace: true
   studio:
     enabled: true
     job_list_policy: "all_with_disabled_ineligible"

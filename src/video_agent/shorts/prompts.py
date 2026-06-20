@@ -552,7 +552,9 @@ def short_scene_prompt_v6(
         '        "forbidden_pose": ["string"],\n'
         '        "forbidden_context": ["string"],\n'
         '        "forbidden_mood": ["string"]\n'
-        "      }\n"
+        "      },\n"
+        '      "visual_span_id": "vs01 (optional)",\n'
+        '      "visual_span_intent": "optional: what the shared continuous visual shows across the span"\n'
         "    }\n"
         "  ],\n"
         "  \"qa\": {\n"
@@ -588,6 +590,17 @@ def short_scene_prompt_v6(
         "- visual_importance: 'critical' for hook/payoff/key-item scenes, 'bridge' for connective scenes, else 'normal'.\n"
         "- asset_strategy: 'stock_ok' (default), 'ai_image_preferred' for hard-to-find specific visuals, 'graphic_fallback' for data/lists.\n"
         "- required_visual_evidence: for critical scenes, fill required_actions/required_objects/subject_pose/visibility plus forbidden_pose/forbidden_context/forbidden_mood. Leave lists empty when not relevant.\n\n"
+        "VISUAL SPAN GROUPING (optional, helps continuity — do NOT change durations for it):\n"
+        "- visual_span_id: give the SAME id to 2-3 CONTIGUOUS scenes only when ONE coherent visual\n"
+        "  action, environment, or evidence context can serve all of them (one continuous shot).\n"
+        "- Reuse a span id across adjacent scenes only; never reuse a span id non-contiguously.\n"
+        "- Do NOT group scenes just because the topic is broadly similar or they are adjacent.\n"
+        "- Isolate (own span) by default: the hook, the CTA, and any full-screen graphic scene.\n"
+        "- Prefer at most 3 scenes per span. One strong clip may cover several narration sentences.\n"
+        "- Never group scenes whose required vs forbidden visual evidence contradict each other.\n"
+        "- Prefer continuity when it adds calm, realistic pacing — but never to keep a stale or\n"
+        "  semantically weak shot on screen. Leave visual_span_id empty if unsure (it defaults to a\n"
+        "  one-scene span). A local validator re-checks and repairs grouping; it is authoritative.\n\n"
         "RETENTION / RHYTHM REQUIREMENTS:\n"
         "- Align each scene with a retention beat when possible.\n"
         "- Add optional retention_function, rhythm_tag, and pattern_interrupt fields per scene.\n"

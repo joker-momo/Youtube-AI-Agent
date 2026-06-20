@@ -76,6 +76,10 @@ export type Scene = {
   planner_warnings?: string[];
   first_frame_plan?: FirstFramePlan;
   crop_plan?: CropPlan;
+  // Visual-span grouping hints (spec v3.2.3 §8/§25). Planning input only; the
+  // renderer ignores these until the compiled VisualTimeline lands (PR B).
+  visual_span_id?: string;
+  visual_span_intent?: string;
 };
 
 export type RenderProps = {

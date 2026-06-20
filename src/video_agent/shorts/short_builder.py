@@ -96,8 +96,14 @@ from video_agent.shorts.builder.stages.script import (
 from video_agent.shorts.builder.stages.visual_acquisition import (
     _stage_visual_acquisition,
 )
+from video_agent.shorts.builder.stages.visual_beats import (
+    _stage_visual_beats,
+)
 from video_agent.shorts.builder.stages.visual_local_qa import (
     _stage_visual_local_qa,
+)
+from video_agent.shorts.builder.stages.visual_performance import (
+    _stage_visual_performance,
 )
 from video_agent.shorts.builder.stages.visual_schedule import (
     _stage_visual_schedule,
@@ -215,7 +221,9 @@ __all__ = [
     "_stage_qa_script",
     "_stage_anti_ai_review",
     "_stage_visual_spans",
+    "_stage_visual_beats",
     "_stage_visual_local_qa",
+    "_stage_visual_performance",
     "_stage_visual_schedule",
     "_stage_retention_plan",
     "_stage_render",
@@ -466,6 +474,14 @@ def _build_short_impl(
             "actual_seconds": None,
         },
         {
+            "name": "visual_beats",
+            "label": "Visual Beats",
+            "status": "pending",
+            "started_at": None,
+            "completed_at": None,
+            "actual_seconds": None,
+        },
+        {
             "name": "visual_schedule",
             "label": "Visual Schedule",
             "status": "pending",
@@ -492,6 +508,14 @@ def _build_short_impl(
         {
             "name": "performance_memory",
             "label": "Performance Memory",
+            "status": "pending",
+            "started_at": None,
+            "completed_at": None,
+            "actual_seconds": None,
+        },
+        {
+            "name": "visual_performance",
+            "label": "Visual Performance",
             "status": "pending",
             "started_at": None,
             "completed_at": None,
@@ -746,6 +770,14 @@ def _build_short_impl(
         if _local_qa_result.returns is not None:
             return _local_qa_result.returns
 
+        # Stage: Visual beats — PR E bounded visual-plan selection over PR D
+        # trims/assets. Disabled by default; report_only writes artifacts without
+        # changing render activation.
+        _ctx.extras["short_scenes"] = short_scenes
+        _beats_result = _stage_visual_beats(_ctx)
+        if _beats_result.returns is not None:
+            return _beats_result.returns
+
         # Stage: Visual schedule — compile the schema-v2 frame contract from final
         # audio-corrected scene timing (spec §18/§22). report_only persists
         # artifacts only; it never activates the renderer or fails the build.
@@ -913,5 +945,6 @@ def _build_short_impl(
         }
     )
     _stage_performance_memory(_ctx)
+    _stage_visual_performance(_ctx)
 
     return status

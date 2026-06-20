@@ -29,8 +29,8 @@ from video_agent.shorts.frames import seconds_to_frames
 from video_agent.shorts.visual_spans import _is_graphic_scene, _scene_duration, _scene_id
 
 SCHEMA_VERSION = 2
-CONTRACT_REVISION = "3.2.3"
-COMPILER_VERSION = 1
+CONTRACT_REVISION = "4.0.3"
+COMPILER_VERSION = 2
 
 VIDEO_CONTAINER_EXTS = {".mp4", ".mov", ".webm"}
 IMAGE_CONTAINER_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
@@ -363,13 +363,17 @@ def _pr_d_track(
     last_b: dict[str, Any],
     trim: dict[str, Any],
     fps: int,
+    *,
+    visual_beat_id: str | None = None,
+    visual_plan_id: str | None = None,
+    visual_plan_mode: str | None = None,
 ) -> dict[str, Any]:
     duration_in_frames = last_b["end_frame_exclusive"] - first_b["from_frame"]
     return {
         "track_id": track_id,
         "track_type": "background_media",
         "visual_span_id": span_id,
-        "visual_beat_id": None,
+        "visual_beat_id": visual_beat_id,
         "scene_ids": list(member_ids),
         "asset_ref": trim.get("asset_ref")
         or trim.get("public_ref")
@@ -395,11 +399,89 @@ def _pr_d_track(
         "overlay_policy": "scene_controlled",
         "z_index": 0,
         "selection_debug": {
-            "mode": "visual_quality_flow_pr_d",
+            "mode": f"visual_plan:{visual_plan_mode}"
+            if visual_plan_mode
+            else "visual_quality_flow_pr_d",
+            "visual_plan_id": visual_plan_id,
             "window_score": trim.get("window_score"),
             "motion_band": trim.get("motion_band"),
             "crop_stability_score": trim.get("crop_stability_score"),
             "qa_verdict": (trim.get("qa") or {}).get("verdict"),
+        },
+    }
+
+
+def _visual_beat_plan_by_span(visual_beat_plan: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for span in (visual_beat_plan or {}).get("spans") or []:
+        span_id = str(span.get("visual_span_id") or "")
+        selected = span.get("selected_plan")
+        if span_id and isinstance(selected, dict):
+            out[span_id] = selected
+    return out
+
+
+def _visual_plan_track(
+    *,
+    track_id: str,
+    span_id: str,
+    plan: dict[str, Any],
+    beat: dict[str, Any],
+    scene_by_id: dict[str, dict[str, Any]],
+    by_id: dict[str, dict[str, Any]],
+    adapted_scenes: dict[str, dict[str, Any]],
+    fps: int,
+) -> dict[str, Any] | None:
+    if str(beat.get("type") or "") == "graphic":
+        return None
+    scene_ids = [str(sid) for sid in (beat.get("scene_ids") or []) if str(sid) in scene_by_id]
+    if not scene_ids:
+        return None
+    first_b = by_id[scene_ids[0]]
+    last_b = by_id[scene_ids[-1]]
+    first_scene = scene_by_id[scene_ids[0]]
+    adapted = adapted_scenes.get(scene_ids[0])
+    source_media_kind = beat.get("source_media_kind") or (adapted or {}).get("source_media_kind")
+    duration_in_frames = last_b["end_frame_exclusive"] - first_b["from_frame"]
+    trim_start = int(beat.get("selected_window_start_in_frames") or 0)
+    trim_end = beat.get("selected_window_end_in_frames")
+    return {
+        "track_id": track_id,
+        "track_type": "background_media",
+        "visual_span_id": span_id,
+        "visual_beat_id": beat.get("beat_id"),
+        "scene_ids": scene_ids,
+        "asset_ref": beat.get("asset_ref")
+        or (adapted or {}).get("public_ref")
+        or (adapted or {}).get("local_path")
+        or "",
+        "asset_id": beat.get("asset_id") or (adapted or {}).get("asset_id"),
+        "provider": beat.get("provider") or (adapted or {}).get("provider"),
+        "provider_asset_id": beat.get("provider_asset_id")
+        or (adapted or {}).get("provider_asset_id"),
+        "render_media_kind": beat.get("render_media_kind")
+        or (adapted or {}).get("render_media_kind")
+        or "video",
+        "source_media_kind": source_media_kind or GENERATED_PLACEHOLDER,
+        "from_frame": first_b["from_frame"],
+        "duration_in_frames": duration_in_frames,
+        "end_frame_exclusive": last_b["end_frame_exclusive"],
+        "trim_before_in_frames": trim_start,
+        "trim_timebase_fps": int(beat.get("trim_timebase_fps") or fps),
+        "trim_end_in_frames": int(trim_end) if isinstance(trim_end, (int, float)) else None,
+        "source_duration_sec": beat.get("source_duration_sec")
+        or (adapted or {}).get("source_duration_sec"),
+        "playback_rate": 1.0,
+        "loop_policy": "forbid",
+        "crop_plan": beat.get("crop_plan") or _crop_plan(adapted, first_scene),
+        "motion_plan": _motion_plan(source_media_kind, first_scene),
+        "overlay_policy": "scene_controlled",
+        "z_index": 0,
+        "selection_debug": {
+            "mode": f"visual_plan:{plan.get('mode')}",
+            "visual_plan_id": plan.get("plan_id"),
+            "boundary_reason": beat.get("boundary_reason"),
+            "inside_scene_boundary": bool(beat.get("inside_scene_boundary", False)),
         },
     }
 
@@ -414,6 +496,7 @@ def compile_asset_schedule(
     timing_source: str,
     scene_version: int,
     trim_window_plan: dict[str, Any] | None = None,
+    visual_beat_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compile the schema-v2 schedule from final scene timing + spans + adapted
     manifest. Deterministic; no provider acquisition (§17)."""
@@ -423,6 +506,7 @@ def compile_asset_schedule(
     scene_by_id = {_scene_id(s, i): s for i, s in enumerate(scenes)}
     adapted_scenes = (resolved_visuals or {}).get("scenes") or {}
     trims_by_span = _trim_plan_by_span(trim_window_plan)
+    visual_plans_by_span = _visual_beat_plan_by_span(visual_beat_plan)
 
     tracks: list[dict[str, Any]] = []
     track_n = 0
@@ -444,12 +528,41 @@ def compile_asset_schedule(
         if all(_is_graphic_scene(s) for s in member_scenes):
             continue
 
+        selected_plan = visual_plans_by_span.get(str(span_id))
+        if selected_plan and selected_plan.get("mode") in {"two_clip", "clip_plus_graphic"}:
+            for beat in selected_plan.get("beats") or []:
+                track = _visual_plan_track(
+                    track_id=_next_track_id(),
+                    span_id=span_id,
+                    plan=selected_plan,
+                    beat=beat,
+                    scene_by_id=scene_by_id,
+                    by_id=by_id,
+                    adapted_scenes=adapted_scenes,
+                    fps=fps,
+                )
+                if track is not None:
+                    tracks.append(track)
+            continue
+
         pr_d_trim = trims_by_span.get(str(span_id))
         if pr_d_trim:
             first_b = by_id[member_ids[0]]
             last_b = by_id[member_ids[-1]]
+            beat = (selected_plan.get("beats") or [None])[0] if selected_plan else None
             tracks.append(
-                _pr_d_track(_next_track_id(), span_id, member_ids, first_b, last_b, pr_d_trim, fps)
+                _pr_d_track(
+                    _next_track_id(),
+                    span_id,
+                    member_ids,
+                    first_b,
+                    last_b,
+                    pr_d_trim,
+                    fps,
+                    visual_beat_id=(beat or {}).get("beat_id") if isinstance(beat, dict) else None,
+                    visual_plan_id=selected_plan.get("plan_id") if selected_plan else None,
+                    visual_plan_mode=selected_plan.get("mode") if selected_plan else None,
+                )
             )
             continue
 
@@ -555,6 +668,7 @@ def compute_schedule_hash(schedule: dict[str, Any], *, public_job_id: str = "") 
                 for k in (
                     "track_id",
                     "visual_span_id",
+                    "visual_beat_id",
                     "scene_ids",
                     "asset_ref",
                     "asset_id",

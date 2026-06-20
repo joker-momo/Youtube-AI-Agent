@@ -271,6 +271,20 @@ shorts:
       reject_black_ratio: 0.05
       reject_unstable_motion: true
       dynamic_crop: false
+    beat_planner:
+      enabled: false
+      max_non_legacy_plans: 3
+      simplicity_margin_points: 3
+      allow_inside_scene_boundary: false
+      modes:
+        - continuous_clip
+        - two_clip
+        - clip_plus_graphic
+    rollout:
+      capture_features: true
+      capture_manual_review: true
+      auto_adjust_weights: false
+      min_report_sample_size: 5
   studio:
     enabled: true
     job_list_policy: "all_with_disabled_ineligible"

@@ -91,6 +91,7 @@ def _stage_visual_schedule(ctx: BuildContext) -> StageResult:
             timing_source=timing_source,
             scene_version=scene_version,
             trim_window_plan=ctx.extras.get("trim_window_plan"),
+            visual_beat_plan=ctx.extras.get("visual_beat_plan"),
         )
         validation = asset_schedule.validate_compiled_asset_schedule(
             schedule, short_scenes, render_fps=fps, expected_scene_version=scene_version
@@ -113,7 +114,16 @@ def _stage_visual_schedule(ctx: BuildContext) -> StageResult:
             "continuous_clip_count": sum(
                 1
                 for t in schedule["tracks"]
-                if t.get("selection_debug", {}).get("mode") == "continuous_clip"
+                if t.get("selection_debug", {}).get("mode")
+                in {
+                    "continuous_clip",
+                    "visual_plan:continuous_clip",
+                }
+            ),
+            "visual_plan_track_count": sum(
+                1
+                for t in schedule["tracks"]
+                if str(t.get("selection_debug", {}).get("mode") or "").startswith("visual_plan:")
             ),
         }
 
@@ -147,6 +157,7 @@ def _stage_visual_schedule(ctx: BuildContext) -> StageResult:
             timing_source=timing_source,
             track_count=qa_artifact["track_count"],
             continuous_clip_count=qa_artifact["continuous_clip_count"],
+            visual_plan_track_count=qa_artifact["visual_plan_track_count"],
         )
         return _PROCEED
     except Exception as exc:  # noqa: BLE001 — report-only must not break the build

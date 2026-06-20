@@ -103,6 +103,30 @@
   `compiled_asset_schedule.json` and keeps playback rate at 1.0 with loop policy
   `forbid`. Built by `src/video_agent/shorts/visual_local_analysis.py`; artifact
   `trim_window_plan.json`.
+- **Visual beat plan** *(v4.0.3 PR E)* — bounded non-legacy plan selection over
+  PR D-validated assets. Compares at most three `continuous_clip`, `two_clip`,
+  and `clip_plus_graphic` plans, then chooses the simplest plan within the
+  configured score margin. Built by
+  `src/video_agent/shorts/visual_beat_planner.py`; artifact
+  `visual_beat_plan.json`.
+- **Visual sequence QA** *(v4.0.3 PR E)* — sequence-level QA over selected beats
+  and expected tracks, not raw scene count. It records plan distribution,
+  simplicity decisions, cut-count changes, and sequence warnings without PR F
+  performance analytics. Built by
+  `src/video_agent/shorts/visual_sequence_qa.py`; artifact
+  `visual_sequence_qa.json`.
+- **Visual performance features** *(v4.0.3 PR F)* — versioned report-only
+  feature vector for completed Shorts. It joins available YouTube metrics by
+  stable IDs, captures optional manual review, and records proof that no
+  production weights/config changed automatically. Built by
+  `src/video_agent/shorts/visual_performance.py`; artifact
+  `visual_performance_features.json`.
+- **Visual performance report** *(v4.0.3 PR F)* — offline report over visual
+  feature samples. Findings must include sample count, date range, channel,
+  caveats, and confounders, and must say insufficient evidence when sample or
+  metric coverage is too small. Built by
+  `src/video_agent/shorts/visual_performance.py`; artifact
+  `visual_performance_report.json`.
 
 ## Quality gates (QA)
 

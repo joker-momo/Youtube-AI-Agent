@@ -92,6 +92,9 @@ from video_agent.shorts.builder.stages.script import (
     _stage_script,
     _stage_spoken_humanization,
 )
+from video_agent.shorts.builder.stages.visual_schedule import (
+    _stage_visual_schedule,
+)
 from video_agent.shorts.builder.stages.visual_spans import (
     _stage_visual_spans,
 )
@@ -205,6 +208,7 @@ __all__ = [
     "_stage_qa_script",
     "_stage_anti_ai_review",
     "_stage_visual_spans",
+    "_stage_visual_schedule",
     "_stage_retention_plan",
     "_stage_render",
     "_stage_performance_memory",
@@ -354,6 +358,7 @@ def _build_short_impl(
         {"name": "visual_spans", "label": "Visual Spans", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "background", "label": "Background Assets", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "audio", "label": "Audio TTS & Mix", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
+        {"name": "visual_schedule", "label": "Visual Schedule", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "seo", "label": "Short SEO", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "render", "label": "Video & Cover Render", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
         {"name": "performance_memory", "label": "Performance Memory", "status": "pending", "started_at": None, "completed_at": None, "actual_seconds": None},
@@ -586,6 +591,14 @@ def _build_short_impl(
         duration_sec = _ctx.extras["duration_sec"]
         if _audio_result.returns is not None:
             return _audio_result.returns
+
+        # Stage: Visual schedule — compile the schema-v2 frame contract from final
+        # audio-corrected scene timing (spec §18/§22). report_only persists
+        # artifacts only; it never activates the renderer or fails the build.
+        _ctx.extras["short_scenes"] = short_scenes
+        _schedule_result = _stage_visual_schedule(_ctx)
+        if _schedule_result.returns is not None:
+            return _schedule_result.returns
 
         # Stage 5: SEO (Only runs after audio_fit passes!)
         _ctx.extras["short_script"] = short_script

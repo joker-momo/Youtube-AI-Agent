@@ -174,6 +174,13 @@ def _stage_background(ctx: BuildContext) -> None:
             )
 
         ctx.background_fn(sd, short_scenes, ctx.channel_config, on_scene_resolved=_on_scene_bg)
+        # Load the resolved assets manifest into context for the schedule stage
+        # (spec §20). Keep background_fn backward compatible — it need not return it.
+        manifest_path = ctx.json_dir / "assets_manifest.json"
+        if manifest_path.exists():
+            from video_agent.utils.json_io import read_json
+
+            ctx.extras["assets_manifest"] = read_json(manifest_path)
         ctx.update_stage("background", "completed", per_scene=bg_sources)
     except Exception as exc:
         ctx.update_stage("background", "failed", error=str(exc))

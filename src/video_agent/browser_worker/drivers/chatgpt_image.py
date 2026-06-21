@@ -181,21 +181,18 @@ class ChatGPTImageDriver:
     """Driver for ChatGPT image generation.
 
     Flow per call:
-      1. Open a temporary (ephemeral) chat — supports image gen, leaves no
-         history, needs no project/teardown. Falls back to a ChatGPT Project
-         (or a plain new chat) only if temporary mode is unavailable.
+      1. Open a normal, non-temporary ChatGPT conversation.
       2. Select "Create image" mode and 16:9.
       3. Send the prompt, wait for an assistant <img> to appear.
       4. Download the rendered image bytes via Playwright APIRequest.
+      5. Delete the conversation to avoid leaving history clutter.
     """
 
     def __init__(self, page: "Page") -> None:
         self.page = page
         self._opened = False
-        # True once a real ChatGPT Project has been created for this image
-        # session. When the Projects UI is unavailable (post-2026 sidebar
-        # redesign) we fall back to a plain new chat and this stays False so
-        # cleanup skips the (now non-existent) project deletion.
+        # Kept for back-compat with the old Project cleanup path. The current
+        # image flow always uses normal chats and deletes the conversation.
         self._used_project = False
 
     async def open(self) -> None:
@@ -248,7 +245,7 @@ class ChatGPTImageDriver:
             except Exception:
                 break
 
-        if _is_login_url(self.page.url):
+        if _is_login_url(str(getattr(self.page, "url", "") or "")):
             shot = await save_trace_screenshot(self.page, prefix="chatgpt-image-login")
             raise LoginRequiredError(
                 "ChatGPT profile is signed out. Open http://localhost:7900 to sign in.",
@@ -394,9 +391,9 @@ class ChatGPTImageDriver:
     async def _start_new_chat(self) -> None:
         """Open a fresh, normal (non-temporary) chat for image generation.
 
-        Used as a fallback when ChatGPT's Projects UI is unavailable. A plain
-        new chat exposes the same "Create image" tool + composer, so image gen
-        works without a Project wrapper.
+        A plain new chat exposes the "Create image" tool + composer, unlike
+        temporary chats in accounts where image generation is disabled there.
+        The conversation is deleted after the image is downloaded.
         """
         try:
             await self.page.goto(
@@ -412,70 +409,31 @@ class ChatGPTImageDriver:
         await human_pause(self.page, min_ms=300, max_ms=700)
 
     async def _start_temporary_chat(self) -> bool:
-        """Open a temporary (ephemeral) chat for image generation.
+        """Temporary chats are intentionally disabled for image generation."""
+        raise BrowserDriverError(
+            "ChatGPT image generation must use a normal chat, not temporary chat."
+        )
 
-        Temporary chat exposes the same "Create image" tool + composer, leaves
-        nothing in history, needs no Project wrapper and no teardown deletion —
-        the fastest, cleanest path. (The older "image gen is projects-only"
-        assumption no longer holds after the sidebar redesign.)
+    async def _ensure_image_session(self, project_name: str) -> bool:
+        """Prepare a chat for image generation.
 
-        Returns ``True`` when temporary mode is confirmed. Raises
-        ``LoginRequiredError`` if the profile is signed out.
+        Always uses a normal, non-temporary conversation. Temporary chats are
+        deliberately avoided because some ChatGPT accounts disable image
+        generation there; Projects are also avoided to keep the flow simple.
+
+        Returns ``False`` because no Project is created. Teardown deletes the
+        just-used normal conversation.
         """
-        from video_agent.browser_worker.drivers.chatgpt import _ensure_temporary_chat
-
-        confirmed = await _ensure_temporary_chat(self.page)
-        if _is_login_url(self.page.url):
+        _ = project_name
+        await self._start_new_chat()
+        if _is_login_url(str(getattr(self.page, "url", "") or "")):
             shot = await save_trace_screenshot(self.page, prefix="chatgpt-image-login")
             raise LoginRequiredError(
                 "ChatGPT profile is signed out. Open http://localhost:7900 to sign in.",
                 screenshot_path=shot,
             )
-        await human_pause(self.page, min_ms=300, max_ms=700)
-        return confirmed
-
-    async def _ensure_image_session(self, project_name: str) -> bool:
-        """Prepare a chat for image generation.
-
-        Primary path is a temporary (ephemeral) chat — it supports image gen,
-        leaves no history and needs no project/teardown. Falls back to a ChatGPT
-        Project (grouped + deletable) and finally a plain new chat if temporary
-        mode is unavailable.
-
-        Returns ``True`` if a real Project was created (and must be deleted on
-        teardown), ``False`` otherwise.
-        """
-        try:
-            if await self._start_temporary_chat():
-                self._used_project = False
-                return False
-            print(
-                "[chatgpt-image] Temporary chat not confirmed; "
-                "trying project/new-chat.",
-                flush=True,
-            )
-        except LoginRequiredError:
-            raise
-        except Exception as exc:
-            print(
-                f"[chatgpt-image] Temporary-chat path unavailable ({exc}); "
-                f"trying project/new-chat.",
-                flush=True,
-            )
-
-        try:
-            await self._create_project(project_name)
-            self._used_project = True
-            return True
-        except BrowserDriverError as exc:
-            print(
-                f"[chatgpt-image] Projects flow unavailable ({exc}); "
-                f"falling back to a normal new chat.",
-                flush=True,
-            )
-            await self._start_new_chat()
-            self._used_project = False
-            return False
+        self._used_project = False
+        return False
 
     async def _focus_composer(self) -> "Locator":
         composer = None
@@ -714,7 +672,7 @@ class ChatGPTImageDriver:
         response_timeout_ms: int = 240_000,
         aspect_ratio: str = "16:9",
     ) -> dict:
-        """End-to-end: create project, send prompt, save image to ``out_path``.
+        """End-to-end: create normal chat, send prompt, save image to ``out_path``.
 
         Returns ``{src, local_path, project_name, bytes}``.
         """
@@ -759,7 +717,7 @@ class ChatGPTImageDriver:
         response_timeout_ms: int = 240_000,
         aspect_ratio: str = "16:9",
     ) -> list[dict]:
-        """Generate multiple photorealistic images sequentially in the same ChatGPT project chat session."""
+        """Generate multiple photorealistic images sequentially in one normal chat session."""
         if not self._opened:
             await self.open()
         if not prompts:
@@ -896,9 +854,9 @@ class ChatGPTImageDriver:
     async def _teardown_image_session(self, project_name: str) -> None:
         """Clean up after an image session (best-effort, never raises).
 
-        Deletes the ChatGPT Project when one was created, or the normal chat
-        when the new-chat fallback was used — so neither path leaves clutter
-        that bloats request headers and eventually triggers HTTP 431.
+        Deletes the normal chat used for image generation so it does not leave
+        history clutter that bloats request headers and eventually triggers
+        HTTP 431.
         """
         try:
             if self._used_project:

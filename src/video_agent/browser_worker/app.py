@@ -638,13 +638,12 @@ class ImagePromptRequest(BaseModel):
 
 @app.post("/chatgpt/image")
 async def chatgpt_image(payload: ImagePromptRequest) -> dict:
-    """One-shot ChatGPT image generation via the Projects workflow.
+    """One-shot ChatGPT image generation via a normal chat conversation.
 
-    Opens a new Chromium page, creates a project named
-    ``payload.project_name``, sends ``payload.prompt`` as an image-gen
-    request, downloads the resulting image to ``payload.out_path``,
-    and closes the page. Each call creates a fresh project so images
-    stay organised per video / per scene.
+    Opens a new Chromium page, starts a non-temporary ChatGPT conversation,
+    sends ``payload.prompt`` as an image-gen request, downloads the resulting
+    image to ``payload.out_path``, deletes the conversation to avoid history
+    clutter, and closes the page.
     """
     from playwright.async_api import async_playwright
 
@@ -746,7 +745,7 @@ class BatchImagePromptRequest(BaseModel):
 
 @app.post("/chatgpt/image/batch")
 async def chatgpt_image_batch(payload: BatchImagePromptRequest) -> dict:
-    """Sequential ChatGPT image generation in a single project chat session."""
+    """Sequential ChatGPT image generation in one normal chat, then delete it."""
     from playwright.async_api import async_playwright
 
     from video_agent.browser_worker.drivers import ChatGPTImageDriver

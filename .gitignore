@@ -50,3 +50,6 @@ queue.db
 
 # Personal Claude Code overrides
 .claude/settings.local.json
+
+# Generated continuity render-proof fixture (deterministic, rebuilt on demand)
+remotion/public/test_fixtures/

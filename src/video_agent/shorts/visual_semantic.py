@@ -248,11 +248,33 @@ class _VlmWorkerClient:
     own process). Isolation is required because the MLX/Metal VLM crashes when
     co-resident with the torch vision tiers on 16GB Apple Silicon."""
 
-    def __init__(self, model_id: str) -> None:
+    def __init__(self, model_id: str, *, load_timeout: float = 180.0, judge_timeout: float = 120.0) -> None:
         self.model_id = model_id
+        self.load_timeout = load_timeout
+        self.judge_timeout = judge_timeout
         self._proc: subprocess.Popen | None = None
         self._ready = False
         self._broken = False
+
+    def _readline(self, timeout: float) -> str | None:
+        """Read one line from the worker, or None on timeout (so a hung/OOM-killed
+        worker degrades to CAPABILITY_UNAVAILABLE instead of hanging the build)."""
+        import select
+
+        if self._proc is None or self._proc.stdout is None:
+            return None
+        ready, _, _ = select.select([self._proc.stdout], [], [], timeout)
+        if not ready:
+            return None
+        return self._proc.stdout.readline()
+
+    def _kill(self) -> None:
+        self._broken = True
+        if self._proc is not None:
+            try:
+                self._proc.kill()
+            except Exception:  # noqa: BLE001
+                pass
 
     def ensure(self) -> bool:
         if self._proc is not None:
@@ -273,12 +295,12 @@ class _VlmWorkerClient:
                 [sys.executable, worker, self.model_id],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=env, bufsize=1,
             )
-            line = self._proc.stdout.readline() if self._proc.stdout else ""  # blocks until model loads
+            line = self._readline(self.load_timeout)  # bounded wait for model load
             self._ready = bool(json.loads(line or "{}").get("ready"))
         except Exception:  # noqa: BLE001
             self._ready = False
         if not self._ready:
-            self._broken = True
+            self._kill()
         return self._ready
 
     def judge(self, image_paths: list[str], question: str, *, max_tokens: int = 160) -> str | None:
@@ -289,8 +311,11 @@ class _VlmWorkerClient:
                 json.dumps({"image_paths": image_paths, "question": question, "max_tokens": max_tokens}) + "\n"
             )
             self._proc.stdin.flush()
-            resp = json.loads(self._proc.stdout.readline() or "{}")
-            return resp.get("text")
+            line = self._readline(self.judge_timeout)
+            if line is None:  # worker hung → degrade, don't block the build
+                self._kill()
+                return None
+            return json.loads(line or "{}").get("text")
         except Exception:  # noqa: BLE001
             self._broken = True
             return None

@@ -289,7 +289,9 @@ class QwenVlJudgeAdapter:
         try:
             prompt = apply_chat_template(self._proc, self._model.config, question, num_images=len(images))
             answer = generate(self._model, self._proc, prompt, images, max_tokens=160, verbose=False)
-            verdict = _parse_vlm_json(answer if isinstance(answer, str) else str(answer))
+            # mlx-vlm returns a GenerationResult (text in .text), not a bare string.
+            text = getattr(answer, "text", None) or (answer if isinstance(answer, str) else str(answer))
+            verdict = _parse_vlm_json(text)
         except Exception as exc:  # noqa: BLE001
             return [_evidence("scene:brand_intent", "UNKNOWN", source="optional_semantic_model",
                               model=self.cfg.vlm_model, model_version=self.cfg.vlm_model,

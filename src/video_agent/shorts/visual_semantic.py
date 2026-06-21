@@ -342,7 +342,10 @@ class GroundingDinoForbiddenAdapter:
         try:
             from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
 
-            self._device = _resolve_torch_device(self.cfg.device)
+            # Grounding DINO uses ops (torch.cummax) not implemented on Metal/MPS,
+            # so default to CPU (base model is fast enough one-shot). Honor an
+            # explicit non-auto device if the operator forces it.
+            self._device = "cpu" if self.cfg.device in ("auto", "cpu") else _resolve_torch_device(self.cfg.device)
             self._proc = AutoProcessor.from_pretrained(self.cfg.detector_model)
             self._model = (
                 AutoModelForZeroShotObjectDetection.from_pretrained(self.cfg.detector_model)
@@ -378,10 +381,12 @@ class GroundingDinoForbiddenAdapter:
                 inputs = self._proc(images=img, text=text, return_tensors="pt").to(self._device)
                 outputs = self._model(**inputs)
                 results = self._proc.post_process_grounded_object_detection(
-                    outputs, inputs.input_ids, box_threshold=self.cfg.detector_box_threshold,
+                    outputs, inputs.input_ids, threshold=self.cfg.detector_box_threshold,
                     text_threshold=0.25, target_sizes=[img.size[::-1]],
                 )[0]
-                for label, score in zip(results.get("labels", []), results.get("scores", []), strict=False):
+                # transformers renamed the matched-phrase key to ``text_labels``.
+                labels = results.get("text_labels") or results.get("labels") or []
+                for label, score in zip(labels, results.get("scores", []), strict=False):
                     s = float(score)
                     key = str(label).strip().lower()
                     if s > present.get(key, 0.0):

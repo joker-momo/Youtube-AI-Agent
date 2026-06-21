@@ -36,6 +36,17 @@ DEFAULT_SIGLIP_MODEL = "google/siglip2-base-patch16-224"
 DEFAULT_VLM_MODEL = "mlx-community/Qwen2.5-VL-7B-Instruct-4bit"
 DEFAULT_DINO_MODEL = "IDEA-Research/grounding-dino-base"
 
+# Generic off-topic prompts the intended subject must out-rank (relative scoring).
+# Cover the real failure modes seen on short-05: dog, feet-POV, urban/cars, child.
+SIGLIP_DISTRACTORS = [
+    "a dog",
+    "a close-up of feet or shoes",
+    "an empty city street with cars",
+    "a young child",
+    "plain text on a solid background",
+    "an indoor office or store",
+]
+
 
 @dataclass(frozen=True)
 class SemanticConfig:
@@ -49,8 +60,7 @@ class SemanticConfig:
     vlm_model: str = DEFAULT_VLM_MODEL
     detector_model: str = DEFAULT_DINO_MODEL
     device: str = "auto"  # auto | mps | cpu (VLM always MLX on Apple Silicon)
-    siglip_support_threshold: float = 0.18  # cosine sim above → topic SUPPORTED
-    siglip_reject_threshold: float = 0.05  # below → topic CONTRADICTED (cheap reject)
+    siglip_reject_margin: float = 1.0  # logit margin a distractor must beat intent by → CONTRADICTED
     detector_box_threshold: float = 0.35  # forbidden object present above this
     max_frames: int = 4  # frames sampled per clip for semantic passes
 
@@ -77,8 +87,7 @@ def resolve_semantic_config(local_qa_cfg: dict[str, Any]) -> SemanticConfig:
         vlm_model=str(models.get("vlm") or DEFAULT_VLM_MODEL),
         detector_model=str(models.get("detector") or DEFAULT_DINO_MODEL),
         device=str(local_qa_cfg.get("device") or "auto"),
-        siglip_support_threshold=float(thresholds.get("siglip_support", 0.18)),
-        siglip_reject_threshold=float(thresholds.get("siglip_reject", 0.05)),
+        siglip_reject_margin=float(thresholds.get("siglip_reject_margin", 1.0)),
         detector_box_threshold=float(thresholds.get("detector_box", 0.35)),
         max_frames=int(local_qa_cfg.get("semantic_max_frames", 4)),
     )
@@ -196,29 +205,38 @@ class SigLipTopicAdapter:
                               reason="siglip unavailable (lib/weights missing)")]
         import torch
 
-        prompts = [visual_intent or "the described scene"] + [
+        # SigLIP absolute sigmoid scores are tiny and topic-uncalibrated; the robust
+        # signal is RELATIVE — does the intended subject out-rank generic off-topic
+        # distractors? (Validated on real footage: dog/feet clips rank a distractor
+        # highest, walker clips rank the intent highest.)
+        targets = [visual_intent or "the described scene"] + [
             t.replace("_", " ") for t in (required_tags.get("required_subject_tags") or [])
         ]
+        prompts = targets + SIGLIP_DISTRACTORS
         with torch.no_grad():
-            inputs = self._proc(text=prompts, images=images, return_tensors="pt", padding=True).to(self._device)
-            out = self._model(**inputs)
-            # mean cosine similarity of each prompt across sampled frames
-            sims = out.logits_per_text.softmax(dim=-1).mean(dim=-1).tolist() if hasattr(out, "logits_per_text") else []
-            raw = out.logits_per_text.mean(dim=-1).sigmoid().tolist() if hasattr(out, "logits_per_text") else sims
+            inputs = self._proc(text=prompts, images=images, return_tensors="pt",
+                                padding="max_length").to(self._device)
+            # logits_per_image: [n_images, n_prompts] → mean over frames
+            scores = self._model(**inputs).logits_per_image.float().mean(dim=0).tolist()
+        n_targets = len(targets)
+        distractor_best = max(scores[n_targets:]) if len(scores) > n_targets else float("-inf")
         records: list[dict[str, Any]] = []
-        for label, score in zip(["topic:visual_intent"] + [
+        labels = ["topic:visual_intent"] + [
             f"required_subject:{t}" for t in (required_tags.get("required_subject_tags") or [])
-        ], raw, strict=False):
-            if score >= self.cfg.siglip_support_threshold:
+        ]
+        for idx, label in enumerate(labels):
+            target = scores[idx]
+            margin = target - distractor_best
+            if margin >= 0:
                 status = "SUPPORTED"
-            elif score <= self.cfg.siglip_reject_threshold:
+            elif margin <= -self.cfg.siglip_reject_margin:
                 status = "CONTRADICTED"
             else:
                 status = "UNKNOWN"
             records.append(_evidence(label, status, source="optional_semantic_model",
                                      model=self.cfg.siglip_model, model_version=self.cfg.siglip_model,
-                                     asset_id=asset_id, confidence=round(float(score), 4),
-                                     reason=f"siglip image-text similarity={score:.3f}"))
+                                     asset_id=asset_id, confidence=round(float(margin), 3),
+                                     reason=f"siglip intent-vs-distractor logit margin={margin:.2f}"))
         return records
 
 

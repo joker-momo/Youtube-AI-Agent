@@ -189,16 +189,21 @@ def _qa_verdict(records: list[dict[str, Any]], candidate_verdict: str) -> str:
         return "FAIL"
     # Hard semantic rejection ONLY when the footage is genuinely wrong (§16/§17):
     #   - a grounded forbidden object is present (e.g. a dog), or
-    #   - the required SUBJECT is contradicted (e.g. no mature adult in frame).
+    #   - the required SUBJECT is contradicted (e.g. no mature adult in frame), or
+    #   - the overall TOPIC is contradicted (SigLIP off-topic — reliably catches the
+    #     dog / feet-POV clips).
     # Action / environment / brand contradictions are ADVISORY: a snowy-vs-sunny or
-    # one-person-vs-couple detail must not reject otherwise on-subject footage.
-    # (Treating every contradiction as FAIL dropped 4/6 spans to legacy fallback.)
+    # one-person-vs-couple detail must not reject otherwise on-topic, on-subject
+    # footage. (Treating EVERY contradiction as FAIL dropped good spans to fallback;
+    # treating NONE let the dog/feet through.)
     for r in records:
         status = r.get("status")
         req = str(r.get("requirement") or "")
         if status == "CONFIRMED_PRESENT" and req.startswith("forbidden"):
             return "FAIL"
-        if status == "CONTRADICTED" and req.startswith("required_subject"):
+        if status == "CONTRADICTED" and (
+            req.startswith("required_subject") or req == "topic:visual_intent"
+        ):
             return "FAIL"
     if any(r.get("status") in ("CAPABILITY_UNAVAILABLE", "UNKNOWN") for r in records):
         return "CAPABILITY_REDUCED"

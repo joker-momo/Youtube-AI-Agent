@@ -125,6 +125,11 @@ def test_qa_verdict_subject_contradicted_is_fail() -> None:
     assert _qa_verdict([_ev("required_subject:adult_45_plus", "CONTRADICTED")], "PASS") == "FAIL"
 
 
+def test_qa_verdict_topic_contradicted_is_fail() -> None:
+    # SigLIP off-topic rejection (dog / feet-POV) is a hard gate.
+    assert _qa_verdict([_ev("topic:visual_intent", "CONTRADICTED")], "PASS") == "FAIL"
+
+
 def test_qa_verdict_advisory_contradiction_passes() -> None:
     # action / environment / brand contradictions are advisory — a snowy-vs-sunny
     # detail must NOT reject an otherwise on-subject clip (over-rejection fix).

@@ -21,6 +21,7 @@ from video_agent.shorts.visual_local_analysis import (
     TrimWindowConfig,
     select_trim_window,
 )
+from video_agent.shorts.visual_semantic import build_semantic_analyzer
 from video_agent.storage.atomic import atomic_write_json
 
 
@@ -80,33 +81,34 @@ def _trim_config(cfg: dict[str, Any]) -> TrimWindowConfig:
     )
 
 
-def _semantic_records(
-    span: dict[str, Any],
-    *,
-    candidate_id: str | None,
-    local_qa: dict[str, Any],
-) -> list[dict[str, Any]]:
-    semantic_available = str(local_qa.get("semantic_adapter") or "none") != "none"
-    detector_available = str(local_qa.get("detector_adapter") or "none") != "none"
+_REQUIRED_FIELDS = (
+    "required_subject_tags",
+    "required_action_tags",
+    "required_environment_tags",
+    "required_evidence_tags",
+)
+_FORBIDDEN_FIELDS = (
+    "forbidden_subject_tags",
+    "forbidden_action_tags",
+    "forbidden_evidence_tags",
+)
+
+
+def _placeholder_records(span: dict[str, Any], candidate_id: str | None) -> list[dict[str, Any]]:
+    """Baseline (no semantic adapter): every semantic requirement is unverified.
+    Unknown is never PASS (§12A); absence of capability cannot confirm anything."""
     records: list[dict[str, Any]] = []
-    for prefix, field in (
-        ("required_subject", "required_subject_tags"),
-        ("required_action", "required_action_tags"),
-        ("required_environment", "required_environment_tags"),
-        ("required_evidence", "required_evidence_tags"),
-    ):
+    for field in _REQUIRED_FIELDS:
+        prefix = field[: -len("_tags")]
         for token in span.get(field) or []:
-            available = semantic_available or (prefix == "required_subject" and detector_available)
             records.append(
                 {
                     "requirement": f"{prefix}:{token}",
-                    "status": "UNKNOWN" if available else "CAPABILITY_UNAVAILABLE",
-                    "capability_source": "optional_semantic_model" if available else "unknown",
+                    "status": "CAPABILITY_UNAVAILABLE",
+                    "capability_source": "unknown",
                     "asset_id": candidate_id,
                     "confidence": None,
-                    "reason": "optional semantic/detector adapter unavailable"
-                    if not available
-                    else "adapter integration point present; no deterministic semantic PASS claimed",
+                    "reason": "no local semantic/detector adapter enabled",
                 }
             )
     for token in span.get("forbidden_evidence_tags") or []:
@@ -121,6 +123,44 @@ def _semantic_records(
             }
         )
     return records
+
+
+def _semantic_records(
+    span: dict[str, Any],
+    *,
+    candidate_id: str | None,
+    local_qa: dict[str, Any],
+    semantic_analyzer: Any = None,
+    video_path: str | None = None,
+    duration_sec: float = 0.0,
+) -> list[dict[str, Any]]:
+    """Real local-semantic evidence for the selected finalist when an adapter is
+    enabled and a downloaded clip exists; otherwise the unverified baseline."""
+    if semantic_analyzer is None or not video_path:
+        return _placeholder_records(span, candidate_id)
+    required = {f: list(span.get(f) or []) for f in _REQUIRED_FIELDS}
+    forbidden = {f: list(span.get(f) or []) for f in _FORBIDDEN_FIELDS}
+    try:
+        records = semantic_analyzer.analyze_span(
+            video_path=video_path,
+            duration_sec=duration_sec,
+            required_tags=required,
+            forbidden_tags=forbidden,
+            visual_intent=str(span.get("visual_intent") or ""),
+            asset_id=candidate_id,
+        )
+    except Exception as exc:  # noqa: BLE001 - semantic failure degrades, never crashes the build
+        return _placeholder_records(span, candidate_id) + [
+            {
+                "requirement": "semantic:cascade",
+                "status": "CAPABILITY_UNAVAILABLE",
+                "capability_source": "unknown",
+                "asset_id": candidate_id,
+                "confidence": None,
+                "reason": f"semantic cascade error: {exc.__class__.__name__}",
+            }
+        ]
+    return records or _placeholder_records(span, candidate_id)
 
 
 def _candidate_verdict(
@@ -147,9 +187,15 @@ def _candidate_verdict(
 def _qa_verdict(records: list[dict[str, Any]], candidate_verdict: str) -> str:
     if candidate_verdict == "FAIL":
         return "FAIL"
-    if any(r.get("status") == "CAPABILITY_UNAVAILABLE" for r in records):
-        return "CAPABILITY_REDUCED"
-    if any(r.get("status") == "UNKNOWN" for r in records):
+    # Hard semantic rejection: a grounded forbidden object or a contradicted
+    # required element means the footage is wrong, not merely unverified (§12A/§34).
+    for r in records:
+        status = r.get("status")
+        if status == "CONTRADICTED":
+            return "FAIL"
+        if status == "CONFIRMED_PRESENT" and str(r.get("requirement") or "").startswith("forbidden"):
+            return "FAIL"
+    if any(r.get("status") in ("CAPABILITY_UNAVAILABLE", "UNKNOWN") for r in records):
         return "CAPABILITY_REDUCED"
     return "PASS"
 
@@ -179,6 +225,9 @@ def _stage_visual_local_qa(ctx: BuildContext) -> StageResult:
         trim_cfg = _trim_config(cfg)
         analyzer = LocalVisualAnalyzer(stride_sec=trim_cfg.stride_sec)
         downloader = FinalistDownloader()
+        # Optional local semantic cascade (SigLIP2 → Qwen-VL → Grounding DINO).
+        # None when semantic_adapter=none (default) → baseline path unaffected.
+        semantic_analyzer = build_semantic_analyzer(local_qa)
         short_scenes = ctx.extras.get("short_scenes") or {}
         acquisition = ctx.extras.get("visual_acquisition_context") or {}
         candidates_doc = ctx.extras.get("visual_span_candidates") or {}
@@ -260,6 +309,9 @@ def _stage_visual_local_qa(ctx: BuildContext) -> StageResult:
                 span,
                 candidate_id=final.get("candidate_id") if final else None,
                 local_qa=local_qa,
+                semantic_analyzer=semantic_analyzer,
+                video_path=(final or {}).get("local_path") if final else None,
+                duration_sec=float((final_analysis or {}).get("actual_duration_sec") or 0.0),
             )
             span_verdict = _qa_verdict(semantic_records, "PASS" if final else "FAIL")
             final_id = final.get("candidate_id") if final else None

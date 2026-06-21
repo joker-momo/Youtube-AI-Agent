@@ -1,0 +1,447 @@
+"""Optional local semantic vision adapters (spec v4.0.3 §12A, §13, §38).
+
+Quality-first three-tier cascade, all **local**, feature-flagged, default OFF:
+
+    SigLIP-2        topic pre-filter  — is the clip broadly on-topic?
+    Qwen2.5-VL-7B   holistic judge    — right subject(45+) / action / scene / brand?
+    Grounding DINO  forbidden grounding — is a forbidden object actually present?
+
+Design rules (non-negotiable):
+- Baseline pipeline correctness NEVER depends on these. A missing library or model
+  weight yields ``CAPABILITY_UNAVAILABLE`` evidence — never a PASS for a critical
+  semantic requirement (§12A.3).
+- Forbidden critical evidence is grounded by the detector (Grounding DINO), not the
+  VLM alone (§38: "critical forbidden evidence should not rely on CLIP alone";
+  VLMs hallucinate).
+- 100% local: no media is sent to any remote service.
+- Models are loaded lazily and cached; on Apple Silicon SigLIP/DINO use MPS and the
+  VLM uses MLX (native), per project priority #4.
+
+Evidence statuses (§12A.2): CONFIRMED_PRESENT, CONFIRMED_ABSENT, SUPPORTED,
+CONTRADICTED, UNKNOWN, CAPABILITY_UNAVAILABLE.
+"""
+from __future__ import annotations
+
+import subprocess
+import tempfile
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from PIL.Image import Image
+
+# Default model ids — quality-first picks, overridable via config.
+DEFAULT_SIGLIP_MODEL = "google/siglip2-base-patch16-224"
+DEFAULT_VLM_MODEL = "mlx-community/Qwen2.5-VL-7B-Instruct-4bit"
+DEFAULT_DINO_MODEL = "IDEA-Research/grounding-dino-base"
+
+
+@dataclass(frozen=True)
+class SemanticConfig:
+    """Resolved semantic-adapter configuration (from shorts.visual_quality_flow.local_qa)."""
+
+    enabled: bool = False
+    use_siglip: bool = True
+    use_vlm: bool = True
+    use_detector: bool = True
+    siglip_model: str = DEFAULT_SIGLIP_MODEL
+    vlm_model: str = DEFAULT_VLM_MODEL
+    detector_model: str = DEFAULT_DINO_MODEL
+    device: str = "auto"  # auto | mps | cpu (VLM always MLX on Apple Silicon)
+    siglip_support_threshold: float = 0.18  # cosine sim above → topic SUPPORTED
+    siglip_reject_threshold: float = 0.05  # below → topic CONTRADICTED (cheap reject)
+    detector_box_threshold: float = 0.35  # forbidden object present above this
+    max_frames: int = 4  # frames sampled per clip for semantic passes
+
+
+def resolve_semantic_config(local_qa_cfg: dict[str, Any]) -> SemanticConfig:
+    """Build a :class:`SemanticConfig` from the local_qa config block.
+
+    ``semantic_adapter: none`` (default) → disabled. ``clip`` enables only SigLIP;
+    ``clip_vlm`` enables SigLIP+VLM; ``full`` enables all three. ``detector_adapter``
+    independently forces the detector on.
+    """
+    adapter = str(local_qa_cfg.get("semantic_adapter") or "none").strip().lower()
+    detector_flag = str(local_qa_cfg.get("detector_adapter") or "none").strip().lower()
+    if adapter == "none" and detector_flag == "none":
+        return SemanticConfig(enabled=False)
+    models = local_qa_cfg.get("semantic_models") or {}
+    thresholds = local_qa_cfg.get("semantic_thresholds") or {}
+    return SemanticConfig(
+        enabled=True,
+        use_siglip=adapter in {"clip", "clip_vlm", "full"},
+        use_vlm=adapter in {"clip_vlm", "full"},
+        use_detector=adapter == "full" or detector_flag not in {"none", ""},
+        siglip_model=str(models.get("siglip") or DEFAULT_SIGLIP_MODEL),
+        vlm_model=str(models.get("vlm") or DEFAULT_VLM_MODEL),
+        detector_model=str(models.get("detector") or DEFAULT_DINO_MODEL),
+        device=str(local_qa_cfg.get("device") or "auto"),
+        siglip_support_threshold=float(thresholds.get("siglip_support", 0.18)),
+        siglip_reject_threshold=float(thresholds.get("siglip_reject", 0.05)),
+        detector_box_threshold=float(thresholds.get("detector_box", 0.35)),
+        max_frames=int(local_qa_cfg.get("semantic_max_frames", 4)),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Frame sampling (local ffmpeg)
+# --------------------------------------------------------------------------- #
+def extract_frames(video_path: Path, timestamps_sec: list[float]) -> list[Image]:
+    """Extract frames at the given timestamps as PIL images (local ffmpeg)."""
+    from PIL import Image
+
+    images: list[Image.Image] = []
+    with tempfile.TemporaryDirectory() as td:
+        for i, ts in enumerate(timestamps_sec):
+            out = Path(td) / f"f{i:02d}.jpg"
+            proc = subprocess.run(
+                ["ffmpeg", "-hide_banner", "-loglevel", "error", "-ss", f"{max(0.0, ts):.3f}",
+                 "-i", str(video_path), "-frames:v", "1", "-q:v", "3", str(out)],
+                capture_output=True,
+            )
+            if proc.returncode == 0 and out.exists():
+                images.append(Image.open(out).convert("RGB").copy())
+    return images
+
+
+def default_timestamps(duration_sec: float, max_frames: int) -> list[float]:
+    """First-frame-biased sample timestamps (first frame matters most, §8/§23)."""
+    if duration_sec <= 0:
+        return [0.0]
+    if max_frames <= 1:
+        return [0.0]
+    pts = [0.0, min(0.5, duration_sec)]  # bias toward the first second
+    n = max_frames - len(pts)
+    for k in range(n):
+        pts.append(duration_sec * (k + 1) / (n + 1))
+    return sorted(set(round(p, 3) for p in pts if 0 <= p <= duration_sec))[:max_frames]
+
+
+def _evidence(
+    requirement: str, status: str, *, source: str, model: str, model_version: str | None,
+    asset_id: str | None, confidence: float | None, reason: str,
+) -> dict[str, Any]:
+    return {
+        "requirement": requirement, "status": status, "capability_source": source,
+        "model": model, "model_version": model_version, "asset_id": asset_id,
+        "confidence": confidence, "reason": reason,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Adapter protocol + lazy model singletons
+# --------------------------------------------------------------------------- #
+class FrameSemanticAdapter(Protocol):
+    name: str
+
+    def available(self) -> bool: ...
+
+    def evaluate(
+        self, images: list[Image], *, required_tags: dict[str, list[str]],
+        forbidden_tags: dict[str, list[str]], visual_intent: str, asset_id: str | None,
+    ) -> list[dict[str, Any]]: ...
+
+
+def _resolve_torch_device(pref: str) -> str:
+    try:
+        import torch
+
+        if pref == "cpu":
+            return "cpu"
+        if torch.backends.mps.is_available():
+            return "mps"
+    except Exception:  # noqa: BLE001
+        return "cpu"
+    return "cpu"
+
+
+class SigLipTopicAdapter:
+    """Cheap topic pre-filter via SigLIP-2 (transformers, MPS). Records SUPPORTED /
+    CONTRADICTED / UNKNOWN for the span's overall visual intent + required subjects."""
+
+    name = "siglip"
+
+    def __init__(self, cfg: SemanticConfig) -> None:
+        self.cfg = cfg
+        self._model = None
+        self._proc = None
+        self._device = "cpu"
+        self._loaded = False
+        self._broken = False
+
+    def _load(self) -> bool:
+        if self._loaded:
+            return self._model is not None
+        self._loaded = True
+        try:
+            from transformers import AutoModel, AutoProcessor
+
+            self._device = _resolve_torch_device(self.cfg.device)
+            self._model = AutoModel.from_pretrained(self.cfg.siglip_model).to(self._device).eval()
+            self._proc = AutoProcessor.from_pretrained(self.cfg.siglip_model)
+        except Exception:  # noqa: BLE001 - missing lib/weights → unavailable
+            self._model = None
+            self._broken = True
+        return self._model is not None
+
+    def available(self) -> bool:
+        return self._load()
+
+    def evaluate(self, images, *, required_tags, forbidden_tags, visual_intent, asset_id):
+        if not images or not self._load():
+            return [_evidence("topic:visual_intent", "CAPABILITY_UNAVAILABLE",
+                              source="optional_semantic_model", model=self.cfg.siglip_model,
+                              model_version=None, asset_id=asset_id, confidence=None,
+                              reason="siglip unavailable (lib/weights missing)")]
+        import torch
+
+        prompts = [visual_intent or "the described scene"] + [
+            t.replace("_", " ") for t in (required_tags.get("required_subject_tags") or [])
+        ]
+        with torch.no_grad():
+            inputs = self._proc(text=prompts, images=images, return_tensors="pt", padding=True).to(self._device)
+            out = self._model(**inputs)
+            # mean cosine similarity of each prompt across sampled frames
+            sims = out.logits_per_text.softmax(dim=-1).mean(dim=-1).tolist() if hasattr(out, "logits_per_text") else []
+            raw = out.logits_per_text.mean(dim=-1).sigmoid().tolist() if hasattr(out, "logits_per_text") else sims
+        records: list[dict[str, Any]] = []
+        for label, score in zip(["topic:visual_intent"] + [
+            f"required_subject:{t}" for t in (required_tags.get("required_subject_tags") or [])
+        ], raw, strict=False):
+            if score >= self.cfg.siglip_support_threshold:
+                status = "SUPPORTED"
+            elif score <= self.cfg.siglip_reject_threshold:
+                status = "CONTRADICTED"
+            else:
+                status = "UNKNOWN"
+            records.append(_evidence(label, status, source="optional_semantic_model",
+                                     model=self.cfg.siglip_model, model_version=self.cfg.siglip_model,
+                                     asset_id=asset_id, confidence=round(float(score), 4),
+                                     reason=f"siglip image-text similarity={score:.3f}"))
+        return records
+
+
+class QwenVlJudgeAdapter:
+    """Holistic judge via Qwen2.5-VL-7B on MLX (Apple Silicon native). Judges
+    subject demographic, action, environment, and brand fit from sampled frames."""
+
+    name = "vlm"
+
+    def __init__(self, cfg: SemanticConfig) -> None:
+        self.cfg = cfg
+        self._model = None
+        self._proc = None
+        self._loaded = False
+
+    def _load(self) -> bool:
+        if self._loaded:
+            return self._model is not None
+        self._loaded = True
+        try:
+            from mlx_vlm import load  # type: ignore
+
+            self._model, self._proc = load(self.cfg.vlm_model)
+        except Exception:  # noqa: BLE001 - mlx_vlm/weights missing → unavailable
+            self._model = None
+        return self._model is not None
+
+    def available(self) -> bool:
+        return self._load()
+
+    def evaluate(self, images, *, required_tags, forbidden_tags, visual_intent, asset_id):
+        if not images or not self._load():
+            return [_evidence("scene:brand_intent", "CAPABILITY_UNAVAILABLE",
+                              source="optional_semantic_model", model=self.cfg.vlm_model,
+                              model_version=None, asset_id=asset_id, confidence=None,
+                              reason="qwen-vl (mlx) unavailable")]
+        from mlx_vlm import generate  # type: ignore
+        from mlx_vlm.prompt_utils import apply_chat_template  # type: ignore
+
+        req = ", ".join(
+            t.replace("_", " ") for k in ("required_subject_tags", "required_action_tags",
+                                          "required_environment_tags") for t in (required_tags.get(k) or [])
+        )
+        question = (
+            f"This footage is for a calm health/wellness Short for adults 45+. Intended scene: "
+            f"'{visual_intent}'. Required elements: {req or 'mature adult, calm wellness context'}. "
+            "Answer strictly as JSON {subject_ok:bool, action_ok:bool, environment_ok:bool, "
+            "brand_fit:bool, reason:str} — subject_ok means a clearly mature adult (45+) is the focus."
+        )
+        try:
+            prompt = apply_chat_template(self._proc, self._model.config, question, num_images=len(images))
+            answer = generate(self._model, self._proc, prompt, images, max_tokens=160, verbose=False)
+            verdict = _parse_vlm_json(answer if isinstance(answer, str) else str(answer))
+        except Exception as exc:  # noqa: BLE001
+            return [_evidence("scene:brand_intent", "UNKNOWN", source="optional_semantic_model",
+                              model=self.cfg.vlm_model, model_version=self.cfg.vlm_model,
+                              asset_id=asset_id, confidence=None, reason=f"vlm inference error: {exc}")]
+        records: list[dict[str, Any]] = []
+        for key, requirement in (("subject_ok", "required_subject:age_band_45_plus"),
+                                 ("action_ok", "required_action:intended_action"),
+                                 ("environment_ok", "required_environment:intended_environment"),
+                                 ("brand_fit", "scene:brand_intent")):
+            val = verdict.get(key)
+            status = "SUPPORTED" if val is True else "CONTRADICTED" if val is False else "UNKNOWN"
+            records.append(_evidence(requirement, status, source="optional_semantic_model",
+                                     model=self.cfg.vlm_model, model_version=self.cfg.vlm_model,
+                                     asset_id=asset_id, confidence=None,
+                                     reason=str(verdict.get("reason") or "vlm judgment")))
+        return records
+
+
+def _parse_vlm_json(text: str) -> dict[str, Any]:
+    import json
+    import re
+
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if not match:
+        return {}
+    try:
+        return json.loads(match.group(0))
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+class GroundingDinoForbiddenAdapter:
+    """Authoritative forbidden-object grounding via Grounding DINO (transformers,
+    MPS). Only escalates to CONFIRMED_PRESENT (→ CONTRADICTED for a forbidden tag)
+    when an object is actually detected above threshold — never hallucinated."""
+
+    name = "detector"
+
+    def __init__(self, cfg: SemanticConfig) -> None:
+        self.cfg = cfg
+        self._model = None
+        self._proc = None
+        self._device = "cpu"
+        self._loaded = False
+
+    def _load(self) -> bool:
+        if self._loaded:
+            return self._model is not None
+        self._loaded = True
+        try:
+            from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
+
+            self._device = _resolve_torch_device(self.cfg.device)
+            self._proc = AutoProcessor.from_pretrained(self.cfg.detector_model)
+            self._model = (
+                AutoModelForZeroShotObjectDetection.from_pretrained(self.cfg.detector_model)
+                .to(self._device)
+                .eval()
+            )
+        except Exception:  # noqa: BLE001
+            self._model = None
+        return self._model is not None
+
+    def available(self) -> bool:
+        return self._load()
+
+    def evaluate(self, images, *, required_tags, forbidden_tags, visual_intent, asset_id):
+        forbidden = [
+            t.replace("_", " ")
+            for k in ("forbidden_subject_tags", "forbidden_evidence_tags", "forbidden_action_tags")
+            for t in (forbidden_tags.get(k) or [])
+        ]
+        if not forbidden:
+            return []
+        if not images or not self._load():
+            return [_evidence(f"forbidden_evidence:{t}", "CAPABILITY_UNAVAILABLE",
+                              source="optional_semantic_model", model=self.cfg.detector_model,
+                              model_version=None, asset_id=asset_id, confidence=None,
+                              reason="grounding-dino unavailable") for t in forbidden]
+        import torch
+
+        text = ". ".join(forbidden) + "."
+        present: dict[str, float] = {}
+        with torch.no_grad():
+            for img in images:
+                inputs = self._proc(images=img, text=text, return_tensors="pt").to(self._device)
+                outputs = self._model(**inputs)
+                results = self._proc.post_process_grounded_object_detection(
+                    outputs, inputs.input_ids, box_threshold=self.cfg.detector_box_threshold,
+                    text_threshold=0.25, target_sizes=[img.size[::-1]],
+                )[0]
+                for label, score in zip(results.get("labels", []), results.get("scores", []), strict=False):
+                    s = float(score)
+                    key = str(label).strip().lower()
+                    if s > present.get(key, 0.0):
+                        present[key] = s
+        records: list[dict[str, Any]] = []
+        for tag in forbidden:
+            score = max((v for k, v in present.items() if tag in k or k in tag), default=0.0)
+            if score >= self.cfg.detector_box_threshold:
+                records.append(_evidence(f"forbidden_evidence:{tag}", "CONFIRMED_PRESENT",
+                                         source="deterministic_local", model=self.cfg.detector_model,
+                                         model_version=self.cfg.detector_model, asset_id=asset_id,
+                                         confidence=round(score, 4),
+                                         reason=f"grounding-dino detected forbidden '{tag}' (score={score:.2f})"))
+            else:
+                records.append(_evidence(f"forbidden_evidence:{tag}", "UNKNOWN",
+                                         source="optional_semantic_model", model=self.cfg.detector_model,
+                                         model_version=self.cfg.detector_model, asset_id=asset_id,
+                                         confidence=None,
+                                         reason="forbidden object not detected (absence is not confirmation)"))
+        return records
+
+
+# --------------------------------------------------------------------------- #
+# Cascade
+# --------------------------------------------------------------------------- #
+@dataclass
+class CascadeSemanticAnalyzer:
+    cfg: SemanticConfig
+    adapters: list[FrameSemanticAdapter] = field(default_factory=list)
+
+    def capability_summary(self) -> dict[str, bool]:
+        return {a.name: bool(a.available()) for a in self.adapters}
+
+    def analyze_span(
+        self, *, video_path: str | Path | None, duration_sec: float,
+        required_tags: dict[str, list[str]], forbidden_tags: dict[str, list[str]],
+        visual_intent: str, asset_id: str | None,
+    ) -> list[dict[str, Any]]:
+        """Run the enabled cascade over sampled frames; return §12A evidence records.
+
+        The cheap SigLIP tier runs first; if it CONTRADICTS the topic, the expensive
+        VLM is skipped (cost gate, §14/§38) but the detector still runs for forbidden
+        grounding. Any adapter that cannot load contributes CAPABILITY_UNAVAILABLE.
+        """
+        if not video_path or not Path(video_path).exists():
+            return [_evidence("topic:visual_intent", "CAPABILITY_UNAVAILABLE",
+                              source="unknown", model="none", model_version=None,
+                              asset_id=asset_id, confidence=None,
+                              reason="no local finalist file to analyze")]
+        images = extract_frames(Path(video_path), default_timestamps(duration_sec, self.cfg.max_frames))
+        kw = dict(required_tags=required_tags, forbidden_tags=forbidden_tags,
+                  visual_intent=visual_intent, asset_id=asset_id)
+        records: list[dict[str, Any]] = []
+        topic_contradicted = False
+        for adapter in self.adapters:
+            if adapter.name == "vlm" and topic_contradicted:
+                continue  # cheap gate already rejected the topic; skip expensive judge
+            recs = adapter.evaluate(images, **kw)
+            records.extend(recs)
+            if adapter.name == "siglip":
+                topic_contradicted = any(
+                    r["requirement"] == "topic:visual_intent" and r["status"] == "CONTRADICTED"
+                    for r in recs
+                )
+        return records
+
+
+def build_semantic_analyzer(local_qa_cfg: dict[str, Any]) -> CascadeSemanticAnalyzer | None:
+    """Factory: returns a configured cascade, or ``None`` when semantic adapters are
+    off (``semantic_adapter: none``) so the baseline path is completely unaffected."""
+    cfg = resolve_semantic_config(local_qa_cfg or {})
+    if not cfg.enabled:
+        return None
+    adapters: list[FrameSemanticAdapter] = []
+    if cfg.use_siglip:
+        adapters.append(SigLipTopicAdapter(cfg))
+    if cfg.use_vlm:
+        adapters.append(QwenVlJudgeAdapter(cfg))
+    if cfg.use_detector:
+        adapters.append(GroundingDinoForbiddenAdapter(cfg))
+    return CascadeSemanticAnalyzer(cfg=cfg, adapters=adapters)

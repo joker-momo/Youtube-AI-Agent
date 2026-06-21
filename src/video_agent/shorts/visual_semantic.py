@@ -22,6 +22,7 @@ CONTRADICTED, UNKNOWN, CAPABILITY_UNAVAILABLE.
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
@@ -87,7 +88,9 @@ def resolve_semantic_config(local_qa_cfg: dict[str, Any]) -> SemanticConfig:
         vlm_model=str(models.get("vlm") or DEFAULT_VLM_MODEL),
         detector_model=str(models.get("detector") or DEFAULT_DINO_MODEL),
         device=str(local_qa_cfg.get("device") or "auto"),
-        siglip_reject_margin=float(thresholds.get("siglip_reject_margin", 1.0)),
+        siglip_reject_margin=float(
+            thresholds.get("siglip_reject_margin", thresholds.get("siglip_reject", 1.0))
+        ),
         detector_box_threshold=float(thresholds.get("detector_box", 0.35)),
         max_frames=int(local_qa_cfg.get("semantic_max_frames", 4)),
     )
@@ -240,42 +243,90 @@ class SigLipTopicAdapter:
         return records
 
 
+class _VlmWorkerClient:
+    """Manages a persistent MLX VLM worker subprocess (loads the model once, in its
+    own process). Isolation is required because the MLX/Metal VLM crashes when
+    co-resident with the torch vision tiers on 16GB Apple Silicon."""
+
+    def __init__(self, model_id: str) -> None:
+        self.model_id = model_id
+        self._proc: subprocess.Popen | None = None
+        self._ready = False
+        self._broken = False
+
+    def ensure(self) -> bool:
+        if self._proc is not None:
+            return self._ready
+        if self._broken:
+            return False
+        import os
+        import sys
+
+        worker = str(Path(__file__).resolve().parent / "vlm_worker.py")
+        # OBJC_DISABLE_INITIALIZE_FORK_SAFETY: spawning a child after torch/Metal is
+        # initialized triggers the macOS Objective-C fork-safety abort; this disables
+        # it for the (immediately exec'd) worker. TOKENIZERS/HF: quiet + offline-ish.
+        env = {**os.environ, "TOKENIZERS_PARALLELISM": "false", "HF_HUB_DISABLE_TELEMETRY": "1",
+               "OBJC_DISABLE_INITIALIZE_FORK_SAFETY": "YES"}
+        try:
+            self._proc = subprocess.Popen(  # noqa: S603 - fixed local worker script
+                [sys.executable, worker, self.model_id],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=env, bufsize=1,
+            )
+            line = self._proc.stdout.readline() if self._proc.stdout else ""  # blocks until model loads
+            self._ready = bool(json.loads(line or "{}").get("ready"))
+        except Exception:  # noqa: BLE001
+            self._ready = False
+        if not self._ready:
+            self._broken = True
+        return self._ready
+
+    def judge(self, image_paths: list[str], question: str, *, max_tokens: int = 160) -> str | None:
+        if not self.ensure() or self._proc is None or self._proc.stdin is None or self._proc.stdout is None:
+            return None
+        try:
+            self._proc.stdin.write(
+                json.dumps({"image_paths": image_paths, "question": question, "max_tokens": max_tokens}) + "\n"
+            )
+            self._proc.stdin.flush()
+            resp = json.loads(self._proc.stdout.readline() or "{}")
+            return resp.get("text")
+        except Exception:  # noqa: BLE001
+            self._broken = True
+            return None
+
+    def close(self) -> None:
+        if self._proc and self._proc.stdin:
+            try:
+                self._proc.stdin.write(json.dumps({"cmd": "quit"}) + "\n")
+                self._proc.stdin.flush()
+                self._proc.wait(timeout=5)
+            except Exception:  # noqa: BLE001
+                self._proc.kill()
+
+
 class QwenVlJudgeAdapter:
-    """Holistic judge via Qwen2.5-VL-7B on MLX (Apple Silicon native). Judges
+    """Holistic judge via Qwen2.5-VL on MLX, run in an ISOLATED subprocess worker
+    (the MLX VLM crashes co-resident with the torch vision tiers on 16GB). Judges
     subject demographic, action, environment, and brand fit from sampled frames."""
 
     name = "vlm"
 
     def __init__(self, cfg: SemanticConfig) -> None:
         self.cfg = cfg
-        self._model = None
-        self._proc = None
-        self._loaded = False
-
-    def _load(self) -> bool:
-        if self._loaded:
-            return self._model is not None
-        self._loaded = True
-        try:
-            from mlx_vlm import load  # type: ignore
-
-            self._model, self._proc = load(self.cfg.vlm_model)
-        except Exception:  # noqa: BLE001 - mlx_vlm/weights missing → unavailable
-            self._model = None
-        return self._model is not None
+        self._worker = _VlmWorkerClient(cfg.vlm_model)
 
     def available(self) -> bool:
-        return self._load()
+        return self._worker.ensure()
 
     def evaluate(self, images, *, required_tags, forbidden_tags, visual_intent, asset_id):
-        if not images or not self._load():
+        def _unavailable(reason: str) -> list[dict[str, Any]]:
             return [_evidence("scene:brand_intent", "CAPABILITY_UNAVAILABLE",
                               source="optional_semantic_model", model=self.cfg.vlm_model,
-                              model_version=None, asset_id=asset_id, confidence=None,
-                              reason="qwen-vl (mlx) unavailable")]
-        from mlx_vlm import generate  # type: ignore
-        from mlx_vlm.prompt_utils import apply_chat_template  # type: ignore
+                              model_version=None, asset_id=asset_id, confidence=None, reason=reason)]
 
+        if not images:
+            return _unavailable("no frames to judge")
         req = ", ".join(
             t.replace("_", " ") for k in ("required_subject_tags", "required_action_tags",
                                           "required_environment_tags") for t in (required_tags.get(k) or [])
@@ -286,16 +337,16 @@ class QwenVlJudgeAdapter:
             "Answer strictly as JSON {subject_ok:bool, action_ok:bool, environment_ok:bool, "
             "brand_fit:bool, reason:str} — subject_ok means a clearly mature adult (45+) is the focus."
         )
-        try:
-            prompt = apply_chat_template(self._proc, self._model.config, question, num_images=len(images))
-            answer = generate(self._model, self._proc, prompt, images, max_tokens=160, verbose=False)
-            # mlx-vlm returns a GenerationResult (text in .text), not a bare string.
-            text = getattr(answer, "text", None) or (answer if isinstance(answer, str) else str(answer))
-            verdict = _parse_vlm_json(text)
-        except Exception as exc:  # noqa: BLE001
-            return [_evidence("scene:brand_intent", "UNKNOWN", source="optional_semantic_model",
-                              model=self.cfg.vlm_model, model_version=self.cfg.vlm_model,
-                              asset_id=asset_id, confidence=None, reason=f"vlm inference error: {exc}")]
+        with tempfile.TemporaryDirectory() as td:
+            paths_list: list[str] = []
+            for i, im in enumerate(images):
+                p = Path(td) / f"f{i}.jpg"
+                im.save(p)
+                paths_list.append(str(p))
+            text = self._worker.judge(paths_list, question)
+        if text is None:
+            return _unavailable("qwen-vl worker unavailable (mlx/weights missing or crashed)")
+        verdict = _parse_vlm_json(text)
         records: list[dict[str, Any]] = []
         for key, requirement in (("subject_ok", "required_subject:age_band_45_plus"),
                                  ("action_ok", "required_action:intended_action"),

@@ -130,6 +130,41 @@ class _Analyzer:
         }
 
 
+class _PassAnalyzer:
+    def analyze(self, path, *, required_frames, fps):
+        return {
+            "decode": {"verdict": "PASS"},
+            "actual_duration_in_frames": 180,
+            "actual_duration_sec": 6.0,
+            "fps": fps,
+            "black_frame_ratio": 0.0,
+            "motion_band": "normal_motion",
+            "technical_quality": {"verdict": "PASS", "sharpness_score": 80.0},
+            "crop_feasibility": {"full_window_feasible": True, "crop_stability_score": 0.9},
+            "sampled_frames": [],
+        }
+
+
+class _SemanticRejectWinner:
+    def analyze_span(self, **kw):
+        asset_id = kw.get("asset_id")
+        status = "CONTRADICTED" if asset_id == "pexels_video-winner" else "SUPPORTED"
+        return [
+            {
+                # required_subject is a HARD gate (a contradicted subject = wrong
+                # footage); action/environment/brand are advisory.
+                "requirement": "required_subject:age_band_45_plus",
+                "status": status,
+                "capability_source": "optional_semantic_model",
+                "model": "fake-vlm",
+                "model_version": "fake-vlm",
+                "asset_id": asset_id,
+                "confidence": None,
+                "reason": "semantic gate test",
+            }
+        ]
+
+
 def _ctx(tmp_path: Path, *, mode: str = "report_only", critical: bool = False) -> SimpleNamespace:
     json_dir = tmp_path / "json"
     json_dir.mkdir(parents=True, exist_ok=True)
@@ -217,6 +252,36 @@ def test_report_only_capability_reduced_does_not_block_render(tmp_path: Path, mo
     assert result.returns is None
     assert ("visual_local_qa", "completed") in ctx.calls
     assert ctx.status["status"] == "generating"
+
+
+def test_semantic_fail_rejects_winner_and_tries_runner(tmp_path: Path, monkeypatch) -> None:
+    downloader = _Downloader()
+    monkeypatch.setattr(
+        "video_agent.shorts.builder.stages.visual_local_qa.FinalistDownloader",
+        lambda *a, **k: downloader,
+    )
+    monkeypatch.setattr(
+        "video_agent.shorts.builder.stages.visual_local_qa.LocalVisualAnalyzer",
+        lambda *a, **k: _PassAnalyzer(),
+    )
+    monkeypatch.setattr(
+        "video_agent.shorts.builder.stages.visual_local_qa.build_semantic_analyzer",
+        lambda *a, **k: _SemanticRejectWinner(),
+    )
+    ctx = _ctx(tmp_path)
+    ctx.channel_config["shorts"]["visual_quality_flow"]["local_qa"]["semantic_adapter"] = "clip_vlm"
+
+    result = _stage_visual_local_qa(ctx)
+
+    assert result.returns is None
+    assert downloader.downloaded == ["pexels_video-winner", "pexels_video-runner"]
+    asset_qa = json.loads((ctx.json_dir / paths.SHORT_VISUAL_SPAN_ASSET_QA_FILE).read_text())
+    span_qa = asset_qa["spans"][0]
+    assert span_qa["final_selection_status"] == "replaced"
+    assert span_qa["final_candidate_id"] == "pexels_video-runner"
+    assert span_qa["candidate_qa"][0]["qa"]["verdict"] == "FAIL"
+    assert span_qa["candidate_qa"][0]["qa"]["rejection_reasons"] == ["semantic_mismatch"]
+    assert span_qa["candidate_qa"][1]["qa"]["verdict"] == "PASS"
 
 
 def test_enforced_critical_missing_semantic_capability_fails_closed(

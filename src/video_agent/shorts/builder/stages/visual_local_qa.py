@@ -187,13 +187,18 @@ def _candidate_verdict(
 def _qa_verdict(records: list[dict[str, Any]], candidate_verdict: str) -> str:
     if candidate_verdict == "FAIL":
         return "FAIL"
-    # Hard semantic rejection: a grounded forbidden object or a contradicted
-    # required element means the footage is wrong, not merely unverified (§12A/§34).
+    # Hard semantic rejection ONLY when the footage is genuinely wrong (§16/§17):
+    #   - a grounded forbidden object is present (e.g. a dog), or
+    #   - the required SUBJECT is contradicted (e.g. no mature adult in frame).
+    # Action / environment / brand contradictions are ADVISORY: a snowy-vs-sunny or
+    # one-person-vs-couple detail must not reject otherwise on-subject footage.
+    # (Treating every contradiction as FAIL dropped 4/6 spans to legacy fallback.)
     for r in records:
         status = r.get("status")
-        if status == "CONTRADICTED":
+        req = str(r.get("requirement") or "")
+        if status == "CONFIRMED_PRESENT" and req.startswith("forbidden"):
             return "FAIL"
-        if status == "CONFIRMED_PRESENT" and str(r.get("requirement") or "").startswith("forbidden"):
+        if status == "CONTRADICTED" and req.startswith("required_subject"):
             return "FAIL"
     if any(r.get("status") in ("CAPABILITY_UNAVAILABLE", "UNKNOWN") for r in records):
         return "CAPABILITY_REDUCED"
@@ -250,6 +255,7 @@ def _stage_visual_local_qa(ctx: BuildContext) -> StageResult:
             final: dict[str, Any] | None = None
             final_trim: dict[str, Any] | None = None
             final_analysis: dict[str, Any] | None = None
+            final_semantic_records: list[dict[str, Any]] = []
 
             for cid in _finalist_ids(selection, max_runner_ups=max_runner_ups):
                 candidate = candidates_by_span.get(span_id, {}).get(cid)
@@ -285,6 +291,20 @@ def _stage_visual_local_qa(ctx: BuildContext) -> StageResult:
                     trim=trim,
                     error=error,
                 )
+                semantic_records: list[dict[str, Any]] = []
+                if verdict == "PASS" and downloaded and trim and trim.get("status") == "selected":
+                    semantic_records = _semantic_records(
+                        span,
+                        candidate_id=downloaded.get("candidate_id"),
+                        local_qa=local_qa,
+                        semantic_analyzer=semantic_analyzer,
+                        video_path=downloaded.get("local_path"),
+                        duration_sec=float((analysis or {}).get("actual_duration_sec") or 0.0),
+                    )
+                    semantic_verdict = _qa_verdict(semantic_records, verdict)
+                    if semantic_verdict == "FAIL":
+                        rejection_reasons.append("semantic_mismatch")
+                    verdict = semantic_verdict
                 candidate_qas.append(
                     {
                         "candidate_id": cid,
@@ -296,16 +316,20 @@ def _stage_visual_local_qa(ctx: BuildContext) -> StageResult:
                         "public_ref": (downloaded or {}).get("public_ref"),
                         "analysis": analysis,
                         "trim_window": trim,
+                        "evidence_records": semantic_records,
                         "qa": {"verdict": verdict, "rejection_reasons": rejection_reasons},
                     }
                 )
-                if verdict == "PASS" and downloaded and trim and trim.get("status") == "selected":
+                if verdict in {"PASS", "CAPABILITY_REDUCED"} and downloaded and trim and trim.get(
+                    "status"
+                ) == "selected":
                     final = downloaded
                     final_trim = trim
                     final_analysis = analysis
+                    final_semantic_records = semantic_records
                     break
 
-            semantic_records = _semantic_records(
+            semantic_records = final_semantic_records or _semantic_records(
                 span,
                 candidate_id=final.get("candidate_id") if final else None,
                 local_qa=local_qa,

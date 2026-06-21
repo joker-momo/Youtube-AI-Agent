@@ -61,11 +61,12 @@ def test_resolve_config_models_and_thresholds() -> None:
     cfg = vs.resolve_semantic_config({
         "semantic_adapter": "full",
         "semantic_models": {"vlm": "custom/vlm"},
-        "semantic_thresholds": {"detector_box": 0.5},
+        "semantic_thresholds": {"detector_box": 0.5, "siglip_reject": 0.05},
     })
     assert cfg.enabled and cfg.use_siglip and cfg.use_vlm and cfg.use_detector
     assert cfg.vlm_model == "custom/vlm"
     assert cfg.detector_box_threshold == 0.5
+    assert cfg.siglip_reject_margin == 0.05
 
 
 # --------------------------------------------------------------------------- #
@@ -120,8 +121,19 @@ def test_default_timestamps_first_frame_biased() -> None:
 # --------------------------------------------------------------------------- #
 # stage verdict + records integration
 # --------------------------------------------------------------------------- #
-def test_qa_verdict_contradicted_is_fail() -> None:
+def test_qa_verdict_subject_contradicted_is_fail() -> None:
     assert _qa_verdict([_ev("required_subject:adult_45_plus", "CONTRADICTED")], "PASS") == "FAIL"
+
+
+def test_qa_verdict_advisory_contradiction_passes() -> None:
+    # action / environment / brand contradictions are advisory — a snowy-vs-sunny
+    # detail must NOT reject an otherwise on-subject clip (over-rejection fix).
+    recs = [
+        _ev("required_subject:age_band_45_plus", "SUPPORTED"),
+        _ev("required_environment:intended_environment", "CONTRADICTED"),
+        _ev("scene:brand_intent", "CONTRADICTED"),
+    ]
+    assert _qa_verdict(recs, "PASS") == "PASS"
 
 
 def test_qa_verdict_forbidden_present_is_fail() -> None:

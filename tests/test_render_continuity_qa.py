@@ -6,6 +6,7 @@ runs without a real render. The real ffprobe/ffmpeg path is covered by the
 """
 from __future__ import annotations
 
+from video_agent.shorts import render_continuity_qa as rcq
 from video_agent.shorts.render_continuity_qa import RenderProbe, evaluate_render_continuity
 
 
@@ -126,6 +127,32 @@ def test_legacy_no_schedule_skips_boundary_checks() -> None:
     assert qa["verdict"] == "PASS", qa
     assert qa["checks"]["no_black_boundary_frames"] == "N/A"
     assert qa["checks"]["frame_count_matches_schedule"] == "N/A"
+
+
+def test_probe_render_tolerates_na_stream_duration(monkeypatch) -> None:
+    # ffprobe emits "N/A" for stream-level duration on many MP4s; probe_render must
+    # fall back to the container/format duration instead of crashing on float("N/A").
+    calls = {"n": 0}
+
+    def fake_run_json(cmd):
+        calls["n"] += 1
+        if calls["n"] == 1:  # video probe
+            return {
+                "streams": [{
+                    "nb_read_frames": "180", "width": 1080, "height": 1920,
+                    "avg_frame_rate": "30/1", "duration": "N/A",
+                }],
+                "format": {"duration": "6.0"},
+            }
+        return {"streams": [{"index": 1}]}  # audio probe
+
+    monkeypatch.setattr(rcq, "_run_json", fake_run_json)
+    probe = rcq.probe_render(__import__("pathlib").Path("/tmp/x.mp4"))
+    assert probe.decode_ok is True
+    assert probe.frame_count == 180
+    assert probe.duration_sec == 6.0  # from format, not a crash
+    assert probe.width == 1080 and probe.height == 1920
+    assert probe.has_audio is True
 
 
 def test_schedule_hash_recorded() -> None:

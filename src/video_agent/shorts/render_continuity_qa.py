@@ -188,6 +188,17 @@ def _run_json(cmd: list[str]) -> dict[str, Any]:
     return json.loads(proc.stdout or "{}")
 
 
+def _num(value: Any) -> float:
+    """Coerce an ffprobe field to float, tolerating its ``"N/A"`` sentinel and
+    missing/None values (ffprobe emits ``"N/A"`` for fields it can't fill — e.g.
+    stream-level ``duration`` on many MP4s, where the real value is at the
+    container/format level)."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def probe_render(video_path: Path) -> RenderProbe:
     """Decode-accurate probe of the rendered MP4 via ffprobe (counts frames)."""
     try:
@@ -208,7 +219,9 @@ def probe_render(video_path: Path) -> RenderProbe:
         frame_count = int(s.get("nb_read_frames") or 0)
     except (TypeError, ValueError):
         frame_count = 0
-    duration = s.get("duration") or (v.get("format") or {}).get("duration") or 0.0
+    # Stream duration is often "N/A" on MP4 (real value is container-level); fall
+    # back to the format duration. _num tolerates "N/A"/None without raising.
+    duration = _num(s.get("duration")) or _num((v.get("format") or {}).get("duration"))
     rate = str(s.get("avg_frame_rate") or "0/1")
     try:
         num, den = rate.split("/", 1)
@@ -227,9 +240,9 @@ def probe_render(video_path: Path) -> RenderProbe:
 
     return RenderProbe(
         frame_count=frame_count,
-        duration_sec=float(duration or 0.0),
-        width=int(s.get("width") or 0),
-        height=int(s.get("height") or 0),
+        duration_sec=duration,
+        width=int(_num(s.get("width"))),
+        height=int(_num(s.get("height"))),
         fps=fps,
         has_audio=has_audio,
         decode_ok=frame_count > 0,

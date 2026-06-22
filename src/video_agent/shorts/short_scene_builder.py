@@ -303,7 +303,15 @@ def normalize_short_scenes(scenes_doc: dict, short_script: dict) -> dict:
             sc["visual_span_intent"] = _span_intent
         else:
             sc.pop("visual_span_intent", None)
-        if sc["layout"] in ("short_hook", "short_cta") and sc["visual_importance"] == "normal":
+        # Controlled-action scenes (hook / CTA / tip) are action-critical: the tip's
+        # single human action (sit, feet on floor, breathe, write, message) is the
+        # point of the scene. Marking short_tip critical makes the semantic gate
+        # hard-fail a CONTRADICTED required_action (visual_local_qa._qa_verdict
+        # critical=True) so action-wrong stock is routed to a controlled fallback,
+        # while action-correct native footage is still kept. Without this, a
+        # non-critical tip's contradicted action is only advisory and the wrong
+        # clip survives.
+        if sc["layout"] in ("short_hook", "short_cta", "short_tip") and sc["visual_importance"] == "normal":
             sc["visual_importance"] = "critical"
         elif "bridge" in sc["layout"] and sc["visual_importance"] == "normal":
             sc["visual_importance"] = "bridge"

@@ -73,6 +73,7 @@ from video_agent.shorts.builder.stages.media import (
     _stage_fallback_image_gen,
     _stage_performance_memory,
     _stage_render,
+    _stage_render_continuity_qa,
     _stage_retention_plan,
     _stage_seo,
 )
@@ -228,6 +229,7 @@ __all__ = [
     "_stage_visual_schedule",
     "_stage_retention_plan",
     "_stage_render",
+    "_stage_render_continuity_qa",
     "_stage_performance_memory",
     "_stage_background",
     "_stage_audio",
@@ -501,6 +503,14 @@ def _build_short_impl(
         {
             "name": "render",
             "label": "Video & Cover Render",
+            "status": "pending",
+            "started_at": None,
+            "completed_at": None,
+            "actual_seconds": None,
+        },
+        {
+            "name": "render_continuity_qa",
+            "label": "Post-Render Continuity QA",
             "status": "pending",
             "started_at": None,
             "completed_at": None,
@@ -942,6 +952,11 @@ def _build_short_impl(
 
     # --- Stage: render ---
     _stage_render(_ctx)
+
+    # --- Stage: post-render continuity QA (gates the 'rendered' mark) ---
+    _qa_result = _stage_render_continuity_qa(_ctx)
+    if _qa_result.returns is not None:
+        return _qa_result.returns
 
     # --- Stage: performance_memory (final, after render) ---
     _ctx.extras.update(

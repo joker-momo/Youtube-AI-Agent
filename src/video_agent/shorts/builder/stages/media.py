@@ -94,6 +94,86 @@ def _stage_render(ctx: BuildContext) -> None:
         raise exc
 
 
+def _stage_render_continuity_qa(ctx: BuildContext) -> StageResult:
+    """Stage: post-render production continuity QA (spec §34).
+
+    The schedule validator proves the *plan* before render; this verifies the
+    *rendered MP4* matches it — exact frame count, duration, resolution/fps, an
+    audio stream, and no black/dropped frame at the scene-boundary cuts. Runs
+    AFTER ``_stage_render`` and BEFORE the short is marked ``rendered``.
+
+    Gated by ``shorts.visual_timeline.qa.production_boundary_check_enabled``: when
+    enabled a FAIL blocks the ``rendered`` mark and routes the short to
+    needs_review; otherwise the verdict is recorded report-only. The artifact is
+    always written so ``_stage_visual_performance`` can consume it.
+    """
+    from pathlib import Path
+
+    from video_agent.shorts.render_continuity_qa import build_render_continuity_qa
+    from video_agent.utils.json_io import read_json
+
+    short_id = ctx.short_plan["short_id"]
+    qa_cfg = (
+        (((ctx.channel_config or {}).get("shorts") or {}).get("visual_timeline") or {}).get("qa")
+        or {}
+    )
+    enforced = bool(qa_cfg.get("production_boundary_check_enabled"))
+
+    video_path = ctx.extras.get("video_path")
+    if not video_path or not Path(video_path).exists():
+        ctx.update_stage("render_continuity_qa", "skipped", reason="no_video")
+        return _PROCEED
+
+    visual_schedule = ctx.extras.get("visual_schedule")
+    render_props_path = ctx.json_dir / "render_props.json"
+    render_props = read_json(render_props_path) if render_props_path.exists() else {}
+    fps = int(
+        (visual_schedule or {}).get("fps")
+        or (render_props.get("render") or {}).get("fps")
+        or ((ctx.channel_config or {}).get("render") or {}).get("fps")
+        or 30
+    )
+
+    ctx.update_stage("render_continuity_qa", "in_progress")
+    try:
+        qa = build_render_continuity_qa(
+            video_path=Path(video_path),
+            visual_schedule=visual_schedule,
+            render_props=render_props,
+            fps=fps,
+            public_job_id=ctx.long_job_dir.name,
+        )
+    except Exception as exc:  # noqa: BLE001 - QA must not crash the build; record + gate
+        qa = {
+            "verdict": "FAIL",
+            "errors": [f"qa_crashed:{type(exc).__name__}:{exc}"],
+            "checks": {},
+        }
+
+    atomic_write_json(ctx.json_dir / paths.SHORT_RENDER_CONTINUITY_QA_FILE, qa)
+    ctx.extras["render_continuity_qa"] = qa
+    verdict = qa.get("verdict")
+    ctx.update_stage("render_continuity_qa", "completed", verdict=verdict, enforced=enforced)
+
+    if enforced and verdict == "FAIL":
+        ctx.status.update(
+            {
+                "status": "needs_review",
+                "rendered": False,
+                "uploaded": False,
+                "youtube_url": "",
+                "requires_user_review": True,
+                "qa_verdict": "FAIL",
+                "failure_stage": "render_continuity_qa",
+                "failure_reason": "post-render continuity QA FAILED: "
+                + "; ".join(qa.get("errors") or []),
+            }
+        )
+        write_short_status(ctx.long_job_dir, short_id, ctx.status)
+        return StageResult(StageSignal.DONE, returns=ctx.status)
+    return _PROCEED
+
+
 def _stage_performance_memory(ctx: BuildContext) -> None:
     """Stage: performance_memory (final, after render).
 

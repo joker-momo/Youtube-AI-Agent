@@ -118,6 +118,14 @@ def test_default_timestamps_first_frame_biased() -> None:
     assert len(ts) <= 4
 
 
+def test_default_timestamps_three_frames_cover_start_mid_end() -> None:
+    ts = vs.default_timestamps(10.0, 3)
+    assert ts[0] == 0.0  # trim start
+    assert any(4.5 <= t <= 5.5 for t in ts)  # midpoint
+    assert ts[-1] >= 9.5  # trim end (action must persist to the end)
+    assert len(ts) == 3
+
+
 # --------------------------------------------------------------------------- #
 # stage verdict + records integration
 # --------------------------------------------------------------------------- #
@@ -139,6 +147,20 @@ def test_qa_verdict_advisory_contradiction_passes() -> None:
         _ev("scene:brand_intent", "CONTRADICTED"),
     ]
     assert _qa_verdict(recs, "PASS") == "PASS"
+
+
+def test_qa_verdict_action_contradicted_is_advisory_when_not_critical() -> None:
+    # On a normal span a contradicted action must not reject on-subject footage.
+    assert _qa_verdict([_ev("required_action:sit_down", "CONTRADICTED")], "PASS") == "PASS"
+
+
+def test_qa_verdict_action_contradicted_is_fail_when_critical() -> None:
+    # On a CRITICAL span the action IS the point (feet on floor / breathe / write):
+    # topic-matching cooking footage that doesn't show it is wrong footage there.
+    assert (
+        _qa_verdict([_ev("required_action:feet_on_floor", "CONTRADICTED")], "PASS", critical=True)
+        == "FAIL"
+    )
 
 
 def test_qa_verdict_forbidden_present_is_fail() -> None:

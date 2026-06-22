@@ -228,16 +228,23 @@ def _candidate_verdict(
     return ("PASS" if not reasons else "FAIL"), reasons
 
 
-def _qa_verdict(records: list[dict[str, Any]], candidate_verdict: str) -> str:
+def _qa_verdict(
+    records: list[dict[str, Any]], candidate_verdict: str, *, critical: bool = False
+) -> str:
     if candidate_verdict == "FAIL":
         return "FAIL"
     # Hard semantic rejection ONLY when the footage is genuinely wrong (§16/§17):
     #   - a grounded forbidden object is present (e.g. a dog), or
     #   - the required SUBJECT is contradicted (e.g. no mature adult in frame), or
     #   - the overall TOPIC is contradicted (SigLIP off-topic — reliably catches the
-    #     dog / feet-POV clips).
-    # Action / environment / brand contradictions are ADVISORY: a snowy-vs-sunny or
-    # one-person-vs-couple detail must not reject otherwise on-topic, on-subject
+    #     dog / feet-POV clips), or
+    #   - on a CRITICAL span, the required ACTION is contradicted. The action IS the
+    #     point of a critical scene (feet on the floor, slow breathing, writing in a
+    #     notebook); stock that topic-matches but does not show the action is wrong
+    #     footage there, so route it to a controlled fallback. On non-critical spans
+    #     action stays advisory (avoids over-rejecting good on-subject footage).
+    # Environment / brand contradictions remain ADVISORY everywhere: a snowy-vs-sunny
+    # or one-person-vs-couple detail must not reject otherwise on-topic, on-subject
     # footage. (Treating EVERY contradiction as FAIL dropped good spans to fallback;
     # treating NONE let the dog/feet through.)
     for r in records:
@@ -248,6 +255,8 @@ def _qa_verdict(records: list[dict[str, Any]], candidate_verdict: str) -> str:
         if status == "CONTRADICTED" and (
             req.startswith("required_subject") or req == "topic:visual_intent"
         ):
+            return "FAIL"
+        if critical and status == "CONTRADICTED" and req.startswith("required_action"):
             return "FAIL"
     # CAPABILITY_UNAVAILABLE = the model genuinely could not run (missing weights,
     # crash) → we cannot verify → degrade. UNKNOWN = the model RAN but the margin
@@ -372,7 +381,9 @@ def _stage_visual_local_qa(ctx: BuildContext) -> StageResult:
                         video_path=downloaded.get("local_path"),
                         duration_sec=float((analysis or {}).get("actual_duration_sec") or 0.0),
                     )
-                    semantic_verdict = _qa_verdict(semantic_records, verdict)
+                    semantic_verdict = _qa_verdict(
+                        semantic_records, verdict, critical=span.get("visual_importance") == "critical"
+                    )
                     if semantic_verdict == "FAIL":
                         rejection_reasons.append("semantic_mismatch")
                     verdict = semantic_verdict
@@ -416,7 +427,11 @@ def _stage_visual_local_qa(ctx: BuildContext) -> StageResult:
                 video_path=(final or {}).get("local_path") if final else None,
                 duration_sec=float((final_analysis or {}).get("actual_duration_sec") or 0.0),
             )
-            span_verdict = _qa_verdict(semantic_records, "PASS" if final else "FAIL")
+            span_verdict = _qa_verdict(
+                semantic_records,
+                "PASS" if final else "FAIL",
+                critical=span.get("visual_importance") == "critical",
+            )
             final_id = final.get("candidate_id") if final else None
             status = _selection_status(str(provisional_id) if provisional_id else None, final_id)
             span_qa = {

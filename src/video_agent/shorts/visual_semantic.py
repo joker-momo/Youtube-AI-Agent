@@ -125,16 +125,22 @@ def extract_frames(video_path: Path, timestamps_sec: list[float]) -> list[Image]
 
 
 def default_timestamps(duration_sec: float, max_frames: int) -> list[float]:
-    """First-frame-biased sample timestamps (first frame matters most, §8/§23)."""
+    """Sample timestamps across the selected trim. With >=3 frames we cover trim
+    START / MIDPOINT / END so a required action is confirmed to PERSIST across the
+    clip rather than appear in a single lucky frame (a 1-frame sample lets cooking
+    footage pass for "sit down / breathe / write"). The first frame still matters
+    most (§8/§23), so any extra frames bias toward the first second."""
     if duration_sec <= 0:
         return [0.0]
     if max_frames <= 1:
         return [0.0]
-    pts = [0.0, min(0.5, duration_sec)]  # bias toward the first second
-    n = max_frames - len(pts)
-    for k in range(n):
-        pts.append(duration_sec * (k + 1) / (n + 1))
-    return sorted(set(round(p, 3) for p in pts if 0 <= p <= duration_sec))[:max_frames]
+    end = round(max(0.0, duration_sec - 0.05), 3)
+    if max_frames == 2:
+        return sorted({0.0, end})
+    pts = {0.0, round(duration_sec / 2.0, 3), end}
+    for k in range(max_frames - 3):  # extra frames: first-second bias
+        pts.add(round(min(0.4 + 0.3 * k, end), 3))
+    return sorted(pts)[:max_frames]
 
 
 def _evidence(

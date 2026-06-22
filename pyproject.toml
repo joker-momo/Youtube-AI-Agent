@@ -39,6 +39,9 @@ video-agent = "video_agent.cli:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "integration: end-to-end test needing the real render toolchain (node/ffmpeg/Remotion). CI without it: `-m 'not integration'`.",
+]
 
 [tool.ruff]
 # Single tool for PEP 8 lint + black-style format + import sorting.

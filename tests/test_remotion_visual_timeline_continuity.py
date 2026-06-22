@@ -6,9 +6,12 @@ decodes the per-frame marker ROI from the rendered output and asserts the source
 playhead advances 1:1 with no reset / skip / repeat / black across every scene
 boundary. This is the ``exact_fixture_marker`` proof — not a heuristic.
 
-Skips (does not fail) when the render toolchain is unavailable (no node /
-ffmpeg / Remotion node_modules), so the suite stays green in headless CI; it only
-FAILS on an actual continuity violation.
+Marked ``integration``. Skips ONLY when the render toolchain is unavailable
+(no node / ffmpeg / Remotion node_modules) so a CI box without it can deselect
+via ``-m 'not integration'``. Once the toolchain is present, a render error
+(non-zero exit / timeout) FAILS the test — it is never swallowed as a skip,
+because a broken renderer behind a green suite is exactly the regression this
+proof exists to catch.
 """
 from __future__ import annotations
 
@@ -39,10 +42,13 @@ def _render_available() -> bool:
     )
 
 
-pytestmark = pytest.mark.skipif(
-    not _render_available(),
-    reason="render toolchain unavailable (node/ffmpeg/@remotion/renderer)",
-)
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not _render_available(),
+        reason="render toolchain unavailable (node/ffmpeg/@remotion/renderer)",
+    ),
+]
 
 
 def _scene(sid: str, dur: float) -> dict:
@@ -97,14 +103,21 @@ def test_fixed_roi_continuity_exact_marker(tmp_path: Path) -> None:
     out_path = tmp_path / "out.mp4"
     props_path.write_text(json.dumps(_build_props()))
 
+    # The module-level skipif already gates on toolchain availability. If we are
+    # here the toolchain IS present, so a render error is a real regression — it
+    # must FAIL (with stderr), never skip. Skipping would let a broken renderer
+    # ship behind a green suite.
     try:
         subprocess.run(
             ["npx", "--prefix", str(REMOTION), "remotion", "render", "src/index.ts",
              "ShortVideoStandard", str(out_path), f"--props={props_path}"],
             check=True, capture_output=True, cwd=str(REMOTION), timeout=420,
         )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:  # env issue, not a continuity failure
-        pytest.skip(f"Remotion render unavailable in this environment: {str(exc)[:160]}")
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.decode("utf-8", "replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+        pytest.fail(f"Remotion render FAILED (exit {exc.returncode}) — continuity unproven:\n{stderr[-4000:]}")
+    except subprocess.TimeoutExpired as exc:
+        pytest.fail(f"Remotion render TIMED OUT after {exc.timeout}s — continuity unproven")
 
     assert out_path.exists(), "Remotion produced no output"
     vals = cf.decode_video_markers(out_path)

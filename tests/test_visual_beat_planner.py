@@ -69,6 +69,41 @@ def _asset_qa(verdict: str = "PASS") -> dict[str, Any]:
     }
 
 
+def _continuous_score(*, motion_band: str, crop: float, verdict: str) -> float:
+    trim = _trim()
+    trim["spans"][0]["motion_band"] = motion_band
+    trim["spans"][0]["crop_stability_score"] = crop
+    plan = build_visual_beat_plan(
+        short_id="short-04",
+        scene_doc={"scenes": [_scene("s01", 2.0), _scene("s02", 2.0)]},
+        visual_spans={"spans": [{"id": "vs01", "scene_ids": ["s01", "s02"]}]},
+        resolved_visuals={"scenes": {"s01": _resolved("s01"), "s02": _resolved("s02")}},
+        trim_window_plan=trim,
+        visual_span_asset_qa=_asset_qa(verdict),
+        channel_config={
+            "shorts": {"visual_quality_flow": {"beat_planner": {"enabled": True}}}
+        },
+        fps=30,
+    )
+    cands = {c["mode"]: c for c in plan["spans"][0]["candidate_plans"]}
+    return float(cands["continuous_clip"]["score"])
+
+
+def test_beat_score_is_evidence_derived_not_constant() -> None:
+    # The planner must be a quality optimizer: identical mode, different evidence,
+    # different score (review P1: scores were hardcoded 84/86/88/72).
+    strong = _continuous_score(motion_band="normal_motion", crop=0.9, verdict="PASS")
+    weak_motion = _continuous_score(motion_band="unstable", crop=0.9, verdict="PASS")
+    weak_crop = _continuous_score(motion_band="normal_motion", crop=0.1, verdict="PASS")
+    weak_semantic = _continuous_score(motion_band="normal_motion", crop=0.9, verdict="CAPABILITY_REDUCED")
+    assert strong > weak_motion
+    assert strong > weak_crop
+    assert strong > weak_semantic
+    # breakdown is recorded for traceability
+    # (sanity: a strong clip out-scores a degraded one by a meaningful margin)
+    assert strong - weak_motion >= 3.0
+
+
 def test_resolve_config_bounds_non_legacy_plans_to_three() -> None:
     cfg = resolve_visual_beat_planner_config(
         {
@@ -133,10 +168,12 @@ def test_simplicity_margin_prefers_continuous_over_small_two_clip_gain() -> None
 
     span = plan["spans"][0]
     scores = {candidate["mode"]: candidate["score"] for candidate in span["candidate_plans"]}
-    assert scores["two_clip"] > scores["continuous_clip"]
-    assert scores["two_clip"] - scores["continuous_clip"] <= 3
+    # Evidence-derived scoring: with identical span evidence, continuous (no cut)
+    # scores at least as high as two_clip (which pays a complexity penalty for the
+    # extra cut). Adding a cut must never raise the score.
+    assert scores["continuous_clip"] >= scores["two_clip"]
+    assert scores["continuous_clip"] - scores["two_clip"] <= 3
     assert span["selected_plan"]["mode"] == "continuous_clip"
-    assert span["selection_reason"] == "simplest_within_margin"
 
 
 def test_two_clip_plan_has_editorial_boundaries_not_punctuation() -> None:

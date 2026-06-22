@@ -41,6 +41,60 @@ _SIMPLICITY_RANK = {
     "generated_image_fallback": 3,
 }
 
+# Editorial prior per mode. Evidence deltas (semantic, motion, crop, complexity,
+# fallback penalty) move the final score off the prior so the planner is a quality
+# OPTIMIZER, not a constant mode-selector: a weak native clip drops below margin so
+# a graphic/fallback can win, while a strong native clip stays on top.
+_MODE_BASE = {
+    "continuous_clip": 80.0,
+    "two_clip": 80.0,
+    "clip_plus_graphic": 82.0,  # designed infographic adds clarity
+    "generated_image_fallback": 66.0,  # no real footage
+}
+_SEMANTIC_DELTA = {"PASS": 4.0, "CAPABILITY_REDUCED": -4.0, "FAIL": -20.0}
+_MOTION_DELTA = {
+    "normal_motion": 4.0,
+    "low_motion": 2.0,
+    "high_motion": 1.0,
+    "near_static": -2.0,
+    "unstable": -8.0,
+}
+
+
+def _evidence_score(
+    mode: str,
+    *,
+    trim: dict[str, Any] | None,
+    span_qa: dict[str, Any] | None,
+    beats: list[dict[str, Any]],
+) -> tuple[float, dict[str, Any]]:
+    """Deterministic, side-effect-free quality score from already-computed PR D
+    evidence (semantic verdict, motion band, crop stability) plus structural
+    factors (cut count, generated-fallback penalty). Returns (score, breakdown)."""
+    base = _MODE_BASE.get(mode, 78.0)
+    semantic = _SEMANTIC_DELTA.get(_qa_verdict(span_qa), 0.0)
+    motion = _MOTION_DELTA.get(str((trim or {}).get("motion_band") or ""), 0.0)
+    # crop_stability_score lives at the trim-span top level (PR D analysis); 0..1.
+    crop_delta = 4.0 * float((trim or {}).get("crop_stability_score") or 0.0)
+    n_generated = sum(1 for b in beats if b.get("type") == "generated_image")
+    complexity = -1.5 * max(0, len(beats) - 1)
+    # Penalize ONLY the fallback mode for using generated imagery; a graphic beat
+    # inside clip_plus_graphic is a deliberate editorial element, not a fallback.
+    fallback_penalty = -6.0 * n_generated if mode == "generated_image_fallback" else 0.0
+    raw = base + semantic + motion + crop_delta + complexity + fallback_penalty
+    score = round(max(0.0, min(100.0, raw)), 3)
+    breakdown = {
+        "base": base,
+        "semantic_delta": semantic,
+        "motion_delta": motion,
+        "crop_delta": round(crop_delta, 3),
+        "complexity_delta": complexity,
+        "fallback_penalty": fallback_penalty,
+        "motion_band": (trim or {}).get("motion_band"),
+        "semantic_verdict": _qa_verdict(span_qa),
+    }
+    return score, breakdown
+
 
 def resolve_visual_beat_planner_config(channel_config: dict[str, Any]) -> dict[str, Any]:
     """Resolve PR E beat-planner config and clamp the bounded search surface."""
@@ -205,15 +259,18 @@ def _continuous_candidate(
         "boundary_reason": "source clip duration/crop constraint",
         "inside_scene_boundary": False,
     }
-    score = 84.0
+    score, breakdown = _evidence_score(
+        "continuous_clip", trim=trim, span_qa=span_qa, beats=[beat]
+    )
     return {
         "plan_id": f"{span_id}-vp01",
         "mode": "continuous_clip",
-        "score": round(score, 3),
+        "score": score,
         "simplicity_rank": _SIMPLICITY_RANK["continuous_clip"],
         "beats": [beat],
         "candidate_debug": {
             "complexity_penalty": 0,
+            "score_breakdown": breakdown,
             "staleness_policy": "single coherent validated trim; do not cut solely by timer",
         },
     }
@@ -225,6 +282,8 @@ def _two_clip_candidate(
     member_ids: list[str],
     member_scenes: list[dict[str, Any]],
     adapted_scenes: dict[str, dict[str, Any]],
+    trim: dict[str, Any] | None = None,
+    span_qa: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if len(member_ids) < 2 or any(_is_graphic_scene(scene) for scene in member_scenes):
         return None
@@ -241,14 +300,16 @@ def _two_clip_candidate(
         )
         for idx, sid in enumerate(member_ids)
     ]
+    score, breakdown = _evidence_score("two_clip", trim=trim, span_qa=span_qa, beats=beats)
     return {
         "plan_id": f"{span_id}-vp02",
         "mode": "two_clip",
-        "score": 86.0,
+        "score": score,
         "simplicity_rank": _SIMPLICITY_RANK["two_clip"],
         "beats": beats,
         "candidate_debug": {
             "complexity_penalty": 2,
+            "score_breakdown": breakdown,
             "staleness_policy": "scene-boundary cut with explicit editorial reason",
         },
     }
@@ -260,6 +321,8 @@ def _clip_plus_graphic_candidate(
     member_ids: list[str],
     member_scenes: list[dict[str, Any]],
     adapted_scenes: dict[str, dict[str, Any]],
+    trim: dict[str, Any] | None = None,
+    span_qa: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if not any(_is_graphic_scene(scene) for scene in member_scenes):
         return None
@@ -289,14 +352,18 @@ def _clip_plus_graphic_candidate(
                 boundary_reason="graphic explanation adds clarity",
             )
         )
+    score, breakdown = _evidence_score(
+        "clip_plus_graphic", trim=trim, span_qa=span_qa, beats=beats
+    )
     return {
         "plan_id": f"{span_id}-vp03",
         "mode": "clip_plus_graphic",
-        "score": 88.0,
+        "score": score,
         "simplicity_rank": _SIMPLICITY_RANK["clip_plus_graphic"],
         "beats": beats,
         "candidate_debug": {
             "complexity_penalty": 1,
+            "score_breakdown": breakdown,
             "graphic_renderer": "existing_scene_graphic",
         },
     }
@@ -307,6 +374,8 @@ def _generated_image_fallback_candidate(
     span_id: str,
     member_ids: list[str],
     adapted_scenes: dict[str, dict[str, Any]],
+    trim: dict[str, Any] | None = None,
+    span_qa: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     beats: list[dict[str, Any]] = []
     for idx, sid in enumerate(member_ids):
@@ -321,14 +390,18 @@ def _generated_image_fallback_candidate(
                 boundary_reason="no validated Pexels finalist; use generated image fallback",
             )
         )
+    score, breakdown = _evidence_score(
+        "generated_image_fallback", trim=trim, span_qa=span_qa, beats=beats
+    )
     return {
         "plan_id": f"{span_id}-vp04",
         "mode": "generated_image_fallback",
-        "score": 72.0,
+        "score": score,
         "simplicity_rank": _SIMPLICITY_RANK["generated_image_fallback"],
         "beats": beats,
         "candidate_debug": {
             "fallback_reason": "all Pexels finalists rejected or unavailable",
+            "score_breakdown": breakdown,
             "quality_policy": "generated image is preferred over off-topic footage",
         },
     }
@@ -435,6 +508,8 @@ def build_visual_beat_plan(
                 member_ids=member_ids,
                 member_scenes=member_scenes,
                 adapted_scenes=adapted_scenes,
+                trim=trims.get(span_id),
+                span_qa=span_qas.get(span_id),
             )
             if candidate:
                 candidates.append(candidate)
@@ -444,6 +519,8 @@ def build_visual_beat_plan(
                 member_ids=member_ids,
                 member_scenes=member_scenes,
                 adapted_scenes=adapted_scenes,
+                trim=trims.get(span_id),
+                span_qa=span_qas.get(span_id),
             )
             if candidate:
                 candidates.append(candidate)
@@ -452,6 +529,8 @@ def build_visual_beat_plan(
                 span_id=span_id,
                 member_ids=member_ids,
                 adapted_scenes=adapted_scenes,
+                trim=trims.get(span_id),
+                span_qa=span_qas.get(span_id),
             )
             if candidate:
                 candidates.append(candidate)

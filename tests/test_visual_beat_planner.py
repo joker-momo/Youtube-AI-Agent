@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from video_agent.shorts.visual_beat_planner import (
+    _evidence_score,
     build_visual_beat_plan,
     resolve_visual_beat_planner_config,
 )
@@ -102,6 +103,17 @@ def test_beat_score_is_evidence_derived_not_constant() -> None:
     # breakdown is recorded for traceability
     # (sanity: a strong clip out-scores a degraded one by a meaningful margin)
     assert strong - weak_motion >= 3.0
+
+
+def test_missing_span_qa_is_not_scored_as_confident_pass() -> None:
+    # Unverified native (no span_qa) must NOT get the confident-PASS bonus, else
+    # never-validated footage outranks a fallback (review #5).
+    trim = {"motion_band": "normal_motion", "crop_stability_score": 0.9}
+    beats = [{"type": "native_video"}]
+    verified, _ = _evidence_score("continuous_clip", trim=trim, span_qa={"qa": {"verdict": "PASS"}}, beats=beats)
+    unverified, bd = _evidence_score("continuous_clip", trim=trim, span_qa=None, beats=beats)
+    assert unverified < verified
+    assert bd["semantic_verdict"] != "PASS"
 
 
 def test_resolve_config_bounds_non_legacy_plans_to_three() -> None:

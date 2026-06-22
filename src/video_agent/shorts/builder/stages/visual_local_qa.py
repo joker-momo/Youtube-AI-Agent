@@ -58,6 +58,27 @@ def _finalist_ids(selection: dict[str, Any], *, max_runner_ups: int) -> list[str
     return ids
 
 
+# Controlled-action layouts: the scene's single human action is the point (hook =
+# emotional first frame, tip = sit/feet/breathe/write/message, cta = the ask). For
+# these a CONTRADICTED required_action is hard-failed by _qa_verdict so wrong-action
+# stock routes to a controlled fallback. This is scoped per-LAYOUT and does NOT mark
+# the span visual_importance=critical, so the capability-reduced whole-build
+# fail-close (and per-candidate reject) keep their original narrow scope (hook/cta/
+# movement) — a flaky semantic model on a tip degrades, it does not nuke the build.
+_CONTROLLED_ACTION_LAYOUTS = {"short_hook", "hook", "short_cta", "cta", "short_tip"}
+_CONTROLLED_ACTION_FUNCTIONS = {"hook", "cta"}
+
+
+def _controlled_action_scene_ids(short_scenes: dict[str, Any]) -> set[str]:
+    out: set[str] = set()
+    for scene in short_scenes.get("scenes") or []:
+        layout = str(scene.get("layout") or "")
+        rf = str(scene.get("retention_function") or "")
+        if layout in _CONTROLLED_ACTION_LAYOUTS or rf in _CONTROLLED_ACTION_FUNCTIONS:
+            out.add(str(scene.get("id")))
+    return out
+
+
 def _span_required_frames(span: dict[str, Any], short_scenes: dict[str, Any], fps: int) -> int:
     scenes = list(short_scenes.get("scenes") or [])
     boundaries = asset_schedule.build_scene_frame_timeline(scenes, fps)
@@ -312,8 +333,15 @@ def _stage_visual_local_qa(ctx: BuildContext) -> StageResult:
 
         spans_list = list(acquisition.get("spans") or [])
         span_total = len(spans_list)
+        controlled_action_ids = _controlled_action_scene_ids(short_scenes)
         for span_index, span in enumerate(spans_list, start=1):
             span_id = span["visual_span_id"]
+            # Action gate fires for critical spans OR any controlled-action layout
+            # (hook/tip/cta). Layout scope does NOT widen visual_importance, so the
+            # capability-reduced fail-close stays narrow (see _controlled_action_*).
+            action_critical = span.get("visual_importance") == "critical" or any(
+                str(sid) in controlled_action_ids for sid in (span.get("scene_ids") or [])
+            )
             selection = selection_by_span.get(span_id, {})
             required_frames = _span_required_frames(span, short_scenes, fps)
             provisional_id = selection.get("provisional_candidate_id")
@@ -382,7 +410,7 @@ def _stage_visual_local_qa(ctx: BuildContext) -> StageResult:
                         duration_sec=float((analysis or {}).get("actual_duration_sec") or 0.0),
                     )
                     semantic_verdict = _qa_verdict(
-                        semantic_records, verdict, critical=span.get("visual_importance") == "critical"
+                        semantic_records, verdict, critical=action_critical
                     )
                     if semantic_verdict == "FAIL":
                         rejection_reasons.append("semantic_mismatch")
@@ -430,7 +458,7 @@ def _stage_visual_local_qa(ctx: BuildContext) -> StageResult:
             span_verdict = _qa_verdict(
                 semantic_records,
                 "PASS" if final else "FAIL",
-                critical=span.get("visual_importance") == "critical",
+                critical=action_critical,
             )
             final_id = final.get("candidate_id") if final else None
             status = _selection_status(str(provisional_id) if provisional_id else None, final_id)

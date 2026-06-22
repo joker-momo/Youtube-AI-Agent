@@ -155,6 +155,35 @@ def test_probe_render_tolerates_na_stream_duration(monkeypatch) -> None:
     assert probe.has_audio is True
 
 
+def test_boundary_luma_retries_accurate_seek_on_eof_miss(monkeypatch, tmp_path) -> None:
+    # The approximate input-seek can miss the final frame near EOF; boundary_luma
+    # must retry with an accurate output seek before declaring the frame black
+    # (review #3 false black-boundary FAIL).
+    import subprocess as _sp
+
+    from PIL import Image
+
+    calls = {"fast": 0, "accurate": 0}
+
+    def fake_run(cmd, **kw):
+        # accurate path puts -ss AFTER -i; fast path puts -ss before -i.
+        i_idx = cmd.index("-i")
+        ss_idx = cmd.index("-ss")
+        out_path = cmd[-1]
+        if ss_idx < i_idx:  # fast input-seek -> simulate EOF miss (no file written)
+            calls["fast"] += 1
+            return None
+        calls["accurate"] += 1  # accurate -> write a real grey JPEG
+        Image.new("RGB", (16, 16), (120, 120, 120)).save(out_path)
+        return None
+
+    monkeypatch.setattr(_sp, "run", fake_run)
+    monkeypatch.setattr(rcq.subprocess, "run", fake_run)
+    out = rcq.boundary_luma(tmp_path / "x.mp4", [179], fps=30)
+    assert calls["fast"] == 1 and calls["accurate"] == 1
+    assert out[179] is not None and out[179] > 100  # extracted via accurate retry, not black
+
+
 def test_schedule_hash_recorded() -> None:
     qa = evaluate_render_continuity(
         probe=_good_probe(), boundary_luma=_good_boundary_luma(),

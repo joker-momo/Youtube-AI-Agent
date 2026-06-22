@@ -72,7 +72,14 @@ def _evidence_score(
     evidence (semantic verdict, motion band, crop stability) plus structural
     factors (cut count, generated-fallback penalty). Returns (score, breakdown)."""
     base = _MODE_BASE.get(mode, 78.0)
-    semantic = _SEMANTIC_DELTA.get(_qa_verdict(span_qa), 0.0)
+    # Only a clip whose span carries an explicit QA verdict earns the confident PASS
+    # bonus. Missing/absent QA (span_qa None or no verdict) is UNVERIFIED, not good —
+    # scoring it as PASS would let never-validated native outrank a fallback, the
+    # opposite of the optimizer's intent. _qa_verdict() defaults to PASS for the
+    # output artifact, so resolve the verdict explicitly here instead.
+    raw_verdict = ((span_qa or {}).get("qa") or {}).get("verdict")
+    semantic_verdict = str(raw_verdict) if raw_verdict else "CAPABILITY_REDUCED"
+    semantic = _SEMANTIC_DELTA.get(semantic_verdict, 0.0)
     motion = _MOTION_DELTA.get(str((trim or {}).get("motion_band") or ""), 0.0)
     # crop_stability_score lives at the trim-span top level (PR D analysis); 0..1.
     crop_delta = 4.0 * float((trim or {}).get("crop_stability_score") or 0.0)
@@ -91,7 +98,7 @@ def _evidence_score(
         "complexity_delta": complexity,
         "fallback_penalty": fallback_penalty,
         "motion_band": (trim or {}).get("motion_band"),
-        "semantic_verdict": _qa_verdict(span_qa),
+        "semantic_verdict": semantic_verdict,
     }
     return score, breakdown
 

@@ -149,6 +149,24 @@ def test_qa_verdict_advisory_contradiction_passes() -> None:
     assert _qa_verdict(recs, "PASS") == "PASS"
 
 
+def test_controlled_action_scene_ids_scopes_by_layout() -> None:
+    # short_tip / hook / cta scenes are action-controlled WITHOUT being marked
+    # visual_importance=critical (which would widen the capability fail-close).
+    from video_agent.shorts.builder.stages.visual_local_qa import _controlled_action_scene_ids
+
+    scenes = {
+        "scenes": [
+            {"id": "s1", "layout": "short_hook"},
+            {"id": "s2", "layout": "short_tip"},
+            {"id": "s3", "layout": "short_checklist"},
+            {"id": "s4", "layout": "x", "retention_function": "cta"},
+        ]
+    }
+    ids = _controlled_action_scene_ids(scenes)
+    assert ids == {"s1", "s2", "s4"}
+    assert "s3" not in ids  # montage is not action-controlled
+
+
 def test_qa_verdict_action_contradicted_is_advisory_when_not_critical() -> None:
     # On a normal span a contradicted action must not reject on-subject footage.
     assert _qa_verdict([_ev("required_action:sit_down", "CONTRADICTED")], "PASS") == "PASS"

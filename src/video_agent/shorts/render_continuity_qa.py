@@ -259,19 +259,34 @@ def boundary_luma(video_path: Path, frame_nos: list[int], fps: int) -> dict[int,
     out: dict[int, float | None] = {}
     if fps <= 0:
         return {f: None for f in frame_nos}
+
+    def _extract(jpg: Path, ts: float, *, accurate: bool) -> bool:
+        # Fast path: input seek (`-ss` before `-i`) — quick but approximate and can
+        # miss near EOF. Accurate path: output seek (`-ss` after `-i`) decodes to the
+        # timestamp, reliable for the final frame at the cost of speed.
+        if accurate:
+            cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                   "-i", str(video_path), "-ss", f"{ts:.5f}", "-frames:v", "1", str(jpg)]
+        else:
+            cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                   "-ss", f"{ts:.5f}", "-i", str(video_path), "-frames:v", "1", str(jpg)]
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return jpg.exists() and jpg.stat().st_size > 0
+
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         for frame_no in frame_nos:
             ts = max(0.0, frame_no / float(fps))
             jpg = tmp / f"f-{frame_no}.jpg"
-            cmd = [
-                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-                "-ss", f"{ts:.5f}", "-i", str(video_path),
-                "-frames:v", "1", str(jpg),
-            ]
             try:
-                subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                if not jpg.exists() or jpg.stat().st_size == 0:
+                ok = _extract(jpg, ts, accurate=False)
+                if not ok:
+                    # Approximate input-seek missed (common for the very last frame
+                    # near EOF). Retry with accurate output seek before declaring the
+                    # frame black/dropped — otherwise a fine render false-FAILs.
+                    jpg.unlink(missing_ok=True)
+                    ok = _extract(jpg, ts, accurate=True)
+                if not ok:
                     out[frame_no] = None
                     continue
                 with Image.open(jpg) as img:

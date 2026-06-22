@@ -64,6 +64,11 @@ class SemanticConfig:
     siglip_reject_margin: float = 1.0  # logit margin a distractor must beat intent by → CONTRADICTED
     detector_box_threshold: float = 0.35  # forbidden object present above this
     max_frames: int = 4  # frames sampled per clip for semantic passes
+    # Demographic age gate (SigLIP zero-shot) — restores 45+ audience-fit gating
+    # without the OOM-prone VLM. When on, a clip whose people read as young adults
+    # (young out-ranks 45+ by this logit margin) is CONTRADICTED on age_band.
+    age_gate: bool = False
+    age_reject_margin: float = 0.5
 
 
 def resolve_semantic_config(local_qa_cfg: dict[str, Any]) -> SemanticConfig:
@@ -93,6 +98,8 @@ def resolve_semantic_config(local_qa_cfg: dict[str, Any]) -> SemanticConfig:
         ),
         detector_box_threshold=float(thresholds.get("detector_box", 0.35)),
         max_frames=int(local_qa_cfg.get("semantic_max_frames", 4)),
+        age_gate=bool(local_qa_cfg.get("enforce_age_band_45_plus", False)),
+        age_reject_margin=float(thresholds.get("siglip_age_reject", 0.5)),
     )
 
 
@@ -218,7 +225,7 @@ class SigLipTopicAdapter:
         prompts = targets + SIGLIP_DISTRACTORS
         with torch.no_grad():
             inputs = self._proc(text=prompts, images=images, return_tensors="pt",
-                                padding="max_length").to(self._device)
+                                padding="max_length", truncation=True).to(self._device)
             # logits_per_image: [n_images, n_prompts] → mean over frames
             scores = self._model(**inputs).logits_per_image.float().mean(dim=0).tolist()
         n_targets = len(targets)
@@ -240,6 +247,31 @@ class SigLipTopicAdapter:
                                      model=self.cfg.siglip_model, model_version=self.cfg.siglip_model,
                                      asset_id=asset_id, confidence=round(float(margin), 3),
                                      reason=f"siglip intent-vs-distractor logit margin={margin:.2f}"))
+
+        # Demographic age gate (45+ audience fit). Zero-shot SigLIP: if the people
+        # in the clip read as young adults more than as 45+, CONTRADICT age_band so
+        # the span is rejected (→ lazy on-brand AI elderly image). Object/no-person
+        # clips score both prompts similarly → small margin → not rejected.
+        already_checks_age = any(
+            "age_band_45_plus" in t for t in (required_tags.get("required_subject_tags") or [])
+        )
+        if self.cfg.age_gate and not already_checks_age:
+            age_prompts = [
+                "an older adult aged 45 or older, a mature or senior person",
+                "a young adult in their twenties or thirties",
+            ]
+            with torch.no_grad():
+                a_inputs = self._proc(text=age_prompts, images=images, return_tensors="pt",
+                                      padding="max_length", truncation=True).to(self._device)
+                a_scores = self._model(**a_inputs).logits_per_image.float().mean(dim=0).tolist()
+            older_score, young_score = a_scores[0], a_scores[1]
+            age_margin = young_score - older_score  # > 0 → reads younger than 45+
+            age_status = "CONTRADICTED" if age_margin >= self.cfg.age_reject_margin else "SUPPORTED"
+            records.append(_evidence(
+                "required_subject:age_band_45_plus", age_status, source="optional_semantic_model",
+                model=self.cfg.siglip_model, model_version=self.cfg.siglip_model, asset_id=asset_id,
+                confidence=round(float(-age_margin), 3),
+                reason=f"siglip age gate young-vs-45+ margin={age_margin:.2f}"))
         return records
 
 

@@ -18,7 +18,9 @@ import sys
 
 
 def main() -> int:
-    model_id = sys.argv[1] if len(sys.argv) > 1 else "mlx-community/Qwen2.5-VL-3B-Instruct-4bit"
+    # Default matches the production config (channel.yaml visual_quality_flow.vlm)
+    # so an argv-less invocation never silently downloads a second VLM variant.
+    model_id = sys.argv[1] if len(sys.argv) > 1 else "mlx-community/Qwen2.5-VL-7B-Instruct-4bit"
     try:
         from mlx_vlm import generate, load
         from mlx_vlm.prompt_utils import apply_chat_template

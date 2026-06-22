@@ -147,7 +147,7 @@ visuals:
   strategy: "auto"
   source_dir: "asset_library/source"
   providers: ["pexels_video"]
-  fallback_providers: ["pexels"]
+  fallback_providers: []
   query_cache_ttl_hours: 24
   # Long-form videos are 16:9 → request landscape from Pexels.
   # Shorts override this to "portrait" automatically (see shorts.source.prefer_vertical_assets
@@ -209,12 +209,12 @@ budget:
   max_cost_per_video_usd: 0
 shorts:
   enabled: true
-  # Visual span / compiled visual timeline (spec v3.2.3 §29). PR A ships the
-  # report-only span planner; mode stays report_only until all Phase 2 gates
-  # pass. Do not switch to enforced by default.
+  # Visual span / compiled visual timeline (spec v4.0.3). Enforced mode makes
+  # the compiled schedule the renderer contract for Shorts; PR D quality flow
+  # remains report_only until semantic/detector adapters are available.
   visual_timeline:
     enabled: true
-    mode: report_only              # disabled | report_only | enforced
+    mode: enforced                 # disabled | report_only | enforced
     schedule_schema_version: 2
     on_invalid_schedule: fail
     rollback:
@@ -244,12 +244,24 @@ shorts:
       unique_short_namespace: true
   visual_quality_flow:
     enabled: true
-    mode: report_only              # disabled | report_only | enforced
+    mode: enforced                 # disabled | report_only | enforced
+    # Channel-wide visual exclusions: Grounding DINO grounds these as forbidden in
+    # every span, so a wellness channel for CAPABLE 45+ adults never pulls
+    # disability/medical footage even when the literal query matches (e.g. the
+    # hook intent "the chair" was matching wheelchair clips).
+    avoid_visuals:
+      - "wheelchair"
+      - "hospital bed"
+      - "crutches"
+      - "walker mobility frame"
+      - "oxygen mask"
+      - "IV drip"
+      - "hospital room"
     acquisition:
       span_aware: true
       provider: pexels_video
       allow_text_query_hints: true
-      download_policy: none        # none | selected_only | top_finalists
+      download_policy: top_finalists  # none | selected_only | top_finalists
       trim_margin_sec: 1.0
       minimum_width: 720
       minimum_height: 720
@@ -261,8 +273,31 @@ shorts:
     local_qa:
       enabled: true
       max_runner_ups: 2
-      semantic_adapter: none
-      detector_adapter: none
+      # Optional LOCAL semantic vision cascade (spec §38), default OFF so baseline
+      # is unaffected. Quality-first stack, M2-native:
+      #   clip      = SigLIP2 topic pre-filter only
+      #   clip_vlm  = SigLIP2 + Qwen2.5-VL-7B (MLX) holistic judge
+      #   full      = + Grounding DINO forbidden-object grounding
+      # Needs weights downloaded locally (transformers / mlx-vlm). No remote media.
+      # 16GB Apple Silicon: SigLIP + Grounding DINO only (reliable on-device tier).
+      # The Qwen-VL judge (clip_vlm/full) needs >=32GB RAM — it OOMs/hangs here,
+      # though the subprocess worker + timeout make it degrade gracefully if set.
+      semantic_adapter: clip        # none | clip | clip_vlm | full  (16GB tier: SigLIP+DINO; VLM-7B OOMs <32GB)
+      detector_adapter: grounding_dino  # none | grounding_dino
+      device: auto                  # auto | mps | cpu  (VLM always MLX on Apple Silicon)
+      semantic_max_frames: 1
+      semantic_models:
+        siglip: "google/siglip2-base-patch16-224"
+        vlm: "mlx-community/Qwen2.5-VL-7B-Instruct-4bit"
+        detector: "IDEA-Research/grounding-dino-base"
+      semantic_thresholds:
+        siglip_support: 0.18
+        siglip_reject: 0.05
+        detector_box: 0.35
+        siglip_age_reject: 0.5   # young-vs-45+ logit margin → CONTRADICTED age_band
+      # 45+ audience-fit: SigLIP zero-shot age gate (restores the demographic check
+      # the OOM-prone VLM used to do; rejects young-people stock → on-brand AI elderly).
+      enforce_age_band_45_plus: true
       critical_fail_closed: true
       report_only_never_blocks_render: true
     trim_selector:
@@ -272,7 +307,7 @@ shorts:
       reject_unstable_motion: true
       dynamic_crop: false
     beat_planner:
-      enabled: false
+      enabled: true
       max_non_legacy_plans: 3
       simplicity_margin_points: 3
       allow_inside_scene_boundary: false
@@ -280,6 +315,7 @@ shorts:
         - continuous_clip
         - two_clip
         - clip_plus_graphic
+        - generated_image_fallback
     rollout:
       capture_features: true
       capture_manual_review: true
@@ -371,6 +407,15 @@ shorts:
       pause_sentence_ms: 360
       pause_paragraph_ms: 500
       speed_jitter_pct: 3.0
+    # Background music for the Shorts narration mix (read by the TTS/mix pass in
+    # stages/assets._synthesize_narration_and_mix). Without this the mix fell back
+    # to the first file in asset_library/source/bgm (Blue Skies) at a too-quiet
+    # -24 dB. Calm CC0 piano (Pixabay) + a louder, present level for 45+ wellness.
+    music:
+      preferred_track: "Piano Calm - Pixabay.mp3"
+      level_db: -16
+      duck_db: 8
+      voice_gain_db: -4.5
   music:
     enabled: true
     source: "youtube_studio_audio_library"
@@ -414,13 +459,29 @@ music_library:
       use_for: ["food", "daily_habits", "routine", "movement_light"]
       default_volume_db_below_voice: 22
     shorts_sleep_stress:
-      file: "assets/music/nimbus_eveningland.mp3"
-      title: "Nimbus"
-      artist: "Eveningland"
-      source: "YouTube Studio Audio Library"
+      file: "assets/music/piano_calm_pixabay.mp3"
+      title: "Piano Calm"
+      artist: "Music for Video (Pixabay)"
+      source: "Pixabay (CC0, no attribution)"
+      mood: "calm_wellness"
+      use_for: ["sleep", "stress", "calm", "mental_load", "energy", "menopause"]
+      default_volume_db_below_voice: 15
+    shorts_calm_piano:
+      file: "assets/music/please_calm_my_mind_pixabay.mp3"
+      title: "Please Calm My Mind"
+      artist: "Music for Video (Pixabay)"
+      source: "Pixabay (CC0, no attribution)"
       mood: "calm_wellness"
       use_for: ["sleep", "stress", "calm", "mental_load"]
-      default_volume_db_below_voice: 22
+      default_volume_db_below_voice: 15
+    shorts_calm_relax:
+      file: "assets/music/relaxing_sleep_pixabay.mp3"
+      title: "Relaxing Sleep"
+      artist: "Pixabay"
+      source: "Pixabay (CC0, no attribution)"
+      mood: "reflective_sleep"
+      use_for: ["sleep", "stress", "calm", "sleep_deep", "night"]
+      default_volume_db_below_voice: 15
     shorts_deep_calm:
       file: "assets/music/no6_in_my_dreams_esther_abrami.mp3"
       title: "No.6 In My Dreams"

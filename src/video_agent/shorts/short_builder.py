@@ -70,6 +70,7 @@ from video_agent.shorts.builder.snapshots import (
 from video_agent.shorts.builder.stages.media import (
     _stage_audio,
     _stage_background,
+    _stage_fallback_image_gen,
     _stage_performance_memory,
     _stage_render,
     _stage_retention_plan,
@@ -769,6 +770,13 @@ def _build_short_impl(
         _local_qa_result = _stage_visual_local_qa(_ctx)
         if _local_qa_result.returns is not None:
             return _local_qa_result.returns
+
+        # Lazy AI fallback: the background stage skipped ChatGPT for scenes whose
+        # span had a provisional Pexels video. Now that visual_local_qa validated
+        # those clips, generate ChatGPT images ONLY for scenes in spans whose video
+        # was rejected (so generated_image_fallback in visual_beats has a real
+        # image instead of a placeholder). Quality-first, but no wasted gen.
+        _stage_fallback_image_gen(_ctx)
 
         # Stage: Visual beats — PR E bounded visual-plan selection over PR D
         # trims/assets. Disabled by default; report_only writes artifacts without

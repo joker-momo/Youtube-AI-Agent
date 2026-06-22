@@ -4,6 +4,7 @@ from video_agent.shorts.visual_acquisition import (
     build_visual_acquisition_context,
     compile_span_search_queries,
     duration_bucket,
+    resolve_visual_quality_flow_config,
 )
 from video_agent.shorts.visual_vocabulary import normalize_visual_tokens
 
@@ -64,6 +65,28 @@ def test_builds_context_from_structured_span_fields_without_narration() -> None:
     assert len([q for values in queries.values() for q in values]) <= 3
 
 
+def test_channel_avoid_visuals_inject_into_forbidden_subject_tags() -> None:
+    # A wellness channel for capable 45+ adults must never pull medical/disability
+    # footage (e.g. "the chair" intent matched wheelchair clips). Channel-level
+    # avoid_visuals must be injected into forbidden_subject_tags so Grounding DINO
+    # grounds them as forbidden and the span rejects such clips.
+    context = build_visual_acquisition_context(
+        visual_span={"id": "vs01", "scene_ids": ["s01"], "visual_intent": "the chair"},
+        member_scenes=[{"id": "s01", "duration_sec": 2.5}],
+        channel_config={
+            "shorts": {
+                "visual_quality_flow": {
+                    "acquisition": {"trim_margin_sec": 1.0},
+                    "avoid_visuals": ["wheelchair", "hospital bed"],
+                }
+            }
+        },
+    )
+    forbidden = context["spans"][0]["forbidden_subject_tags"]
+    assert "wheelchair" in forbidden
+    assert "hospital bed" in forbidden
+
+
 def test_duration_bucket_boundaries_are_stable() -> None:
     assert duration_bucket(2.99) == "0_to_3_sec"
     assert duration_bucket(3.0) == "3_to_5_sec"
@@ -81,3 +104,31 @@ def test_visual_vocabulary_normalizes_aliases_and_records_unknowns() -> None:
     assert result["tokens"] == ["gentle_walking"]
     assert result["unknown"] == ["custom mobility"]
     assert result["warnings"] == ["unknown_actions:custom mobility"]
+
+
+def test_visual_quality_flow_config_preserves_semantic_local_qa_fields() -> None:
+    cfg = resolve_visual_quality_flow_config(
+        {
+            "shorts": {
+                "visual_quality_flow": {
+                    "local_qa": {
+                        "enabled": True,
+                        "semantic_adapter": "full",
+                        "detector_adapter": "grounding_dino",
+                        "device": "cpu",
+                        "semantic_max_frames": 2,
+                        "semantic_models": {"siglip": "custom/siglip"},
+                        "semantic_thresholds": {"siglip_reject": 0.05},
+                    }
+                }
+            }
+        }
+    )
+
+    local_qa = cfg["local_qa"]
+    assert local_qa["semantic_adapter"] == "full"
+    assert local_qa["detector_adapter"] == "grounding_dino"
+    assert local_qa["device"] == "cpu"
+    assert local_qa["semantic_max_frames"] == 2
+    assert local_qa["semantic_models"]["siglip"] == "custom/siglip"
+    assert local_qa["semantic_thresholds"]["siglip_reject"] == 0.05

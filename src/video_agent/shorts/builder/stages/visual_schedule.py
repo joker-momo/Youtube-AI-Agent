@@ -99,6 +99,16 @@ def _stage_visual_schedule(ctx: BuildContext) -> StageResult:
         schedule["qa"] = validation
         schedule_hash = asset_schedule.compute_schedule_hash(schedule)
 
+        tracks = schedule["tracks"]
+        continuous_tracks = [
+            t
+            for t in tracks
+            if t.get("selection_debug", {}).get("mode")
+            in {
+                "continuous_clip",
+                "visual_plan:continuous_clip",
+            }
+        ]
         qa_artifact = {
             "short_id": short_id,
             "schema_version": schedule["schema_version"],
@@ -110,19 +120,22 @@ def _stage_visual_schedule(ctx: BuildContext) -> StageResult:
             "errors": validation["errors"],
             "warnings": validation["warnings"],
             "manifest_adapter_warnings": resolved.get("warnings", []),
-            "track_count": len(schedule["tracks"]),
-            "continuous_clip_count": sum(
+            "track_count": len(tracks),
+            "continuous_clip_count": len(continuous_tracks),
+            "native_continuous_track_count": sum(
+                1 for t in continuous_tracks if t.get("source_media_kind") == "native_video"
+            ),
+            "image_backed_track_count": sum(
                 1
-                for t in schedule["tracks"]
-                if t.get("selection_debug", {}).get("mode")
-                in {
-                    "continuous_clip",
-                    "visual_plan:continuous_clip",
-                }
+                for t in tracks
+                if t.get("source_media_kind") in {"native_image", "image_backed_video"}
+            ),
+            "graphic_fallback_track_count": sum(
+                1 for t in tracks if t.get("source_media_kind") == "generated_placeholder"
             ),
             "visual_plan_track_count": sum(
                 1
-                for t in schedule["tracks"]
+                for t in tracks
                 if str(t.get("selection_debug", {}).get("mode") or "").startswith("visual_plan:")
             ),
         }
@@ -157,6 +170,7 @@ def _stage_visual_schedule(ctx: BuildContext) -> StageResult:
             timing_source=timing_source,
             track_count=qa_artifact["track_count"],
             continuous_clip_count=qa_artifact["continuous_clip_count"],
+            native_continuous_track_count=qa_artifact["native_continuous_track_count"],
             visual_plan_track_count=qa_artifact["visual_plan_track_count"],
         )
         return _PROCEED

@@ -5,8 +5,9 @@ import re
 import shutil
 import subprocess
 import wave
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from PIL import Image, ImageDraw
 
@@ -16,10 +17,10 @@ from video_agent.assets.visual_diversity.integration import (
     prepare_visual_diversity,
     record_scene_selection,
 )
-from video_agent.contracts import ARTIFACT_ASSETS, repo_root, ARTIFACT_AUDIO_QA, ARTIFACT_SCENES
-from video_agent.tts import build_tts_client, synthesize_scene_track
+from video_agent.contracts import ARTIFACT_ASSETS, ARTIFACT_AUDIO_QA, ARTIFACT_SCENES, repo_root
 from video_agent.qa.tts_report import audio_qa_report, build_tts_report
 from video_agent.storage.public_jobs import prepare_public_job_dir
+from video_agent.tts import build_tts_client, synthesize_scene_track
 from video_agent.utils.json_io import write_json
 
 SUPPORTED_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp")
@@ -44,6 +45,7 @@ def _project_name_from_out_path(out_path: str | Path) -> str:
 def _default_sync_image_gen(prompt: str, out_path: str | Path) -> None:
     import asyncio
     import os
+
     from video_agent.orchestrator.browser_client import BrowserClient
 
     # Default to localhost since the script is mostly run natively on host machine now
@@ -128,7 +130,7 @@ def _write_placeholder_image(
     is_portrait: bool = False
 ) -> None:
     width, height = (1080, 1920) if is_portrait else (1920, 1080)
-    
+
     # Warm brand color pairings for gradient
     color_pairs = [
         ((74, 93, 77), (110, 128, 113)),   # #4A5D4D to #6E8071 (Muted Olive)
@@ -136,16 +138,16 @@ def _write_placeholder_image(
         ((140, 79, 62), (172, 111, 94))    # #8C4F3E to #AC6F5E (Muted Terracotta)
     ]
     color1, color2 = color_pairs[index % len(color_pairs)]
-    
+
     is_standard = not (scene.get("layout") or "").startswith("graphic_")
-    
+
     if is_standard:
         # Create a smooth gradient using upscale bilinear filtering
         base = Image.new("RGB", (1, 2))
         base.putpixel((0, 0), color1)
         base.putpixel((0, 1), color2)
         image = base.resize((width, height), resample=Image.Resampling.BILINEAR)
-        
+
         # Soft paper texture: grid of tiny dots with very low opacity (~3.5%)
         texture = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(texture)
@@ -154,7 +156,7 @@ def _write_placeholder_image(
             for y in range(0, height, 7):
                 draw.point((x, y), fill=dot_color)
         image.paste(texture, (0, 0), texture)
-        
+
         # FIX: Even for standard layouts, draw the text if available so it's not a blank screen
         draw = ImageDraw.Draw(image)
         text_content = scene.get("on_screen_text", "")
@@ -162,7 +164,7 @@ def _write_placeholder_image(
             # Draw semi-transparent background box for readability
             draw.rectangle((0, int(height * 0.7), width, height), fill=_hex_to_rgb(palette["text"]))
             draw.text((int(width * 0.05), int(height * 0.76)), text_content, fill=_hex_to_rgb(palette["accent"]))
-            
+
         image.save(path, quality=92)
     else:
         # Original behavior for graphic layouts (flat color + bottom text box + text)
@@ -332,12 +334,15 @@ def _background_source_label(scene_asset: dict[str, Any]) -> str:
     source = str(scene_asset.get("source") or "")
     provider = str(scene_asset.get("provider") or "").lower()
     tier = str(scene_asset.get("asset_tier") or "").lower()
+    # graphic_fallback is a degraded "no real asset matched" tier — flag it
+    # distinctly BEFORE the generic placeholder check so the report shows WHY a
+    # scene has no real footage/image (was mislabeled "Placeholder").
+    if provider == "graphic_fallback" or tier == "graphic_fallback":
+        return "Graphic fallback"
     if source == "generated_placeholder":
         return "Placeholder"
     if provider == "ai_generated" or tier in {"ai_image", "ai_generated"}:
         return "ChatGPT image"
-    if provider == "graphic_fallback" or tier == "graphic_fallback":
-        return "Graphic"
     if "video" in tier:  # pexels_video
         return "Pexels video"
     if "pexels" in provider or "pexels" in tier:
@@ -354,8 +359,13 @@ def _write_background_report(
     scene_assets: list[dict[str, Any]],
     scene_doc: dict[str, Any],
     vision_rejections: list[dict[str, Any]] | None = None,
+    merge: bool = False,
 ) -> None:
-    """Per-scene background sourcing report consumed by the Shorts Studio UI."""
+    """Per-scene background sourcing report consumed by the Shorts Studio UI.
+
+    When ``merge`` is set, only the scenes in ``scene_assets`` are rewritten and
+    the rest of the existing report is preserved (lazy re-gen pass).
+    """
     motion_by_id = {s.get("id"): s.get("motion") for s in (scene_doc.get("scenes") or [])}
     entries = []
     for a in scene_assets:
@@ -374,6 +384,18 @@ def _write_background_report(
             "motion": motion_by_id.get(sid),
         })
     json_dir.mkdir(parents=True, exist_ok=True)
+    if merge:
+        try:
+            from video_agent.utils.json_io import read_json as _rjr
+            prev = (_rjr(json_dir / "background_report.json") or {}).get("scenes") or []
+        except Exception:
+            prev = []
+        fresh_ids = {e["scene_id"] for e in entries}
+        by_id = {e["scene_id"]: e for e in prev if e.get("scene_id") not in fresh_ids}
+        for e in entries:
+            by_id[e["scene_id"]] = e
+        order = [s.get("id") for s in (scene_doc.get("scenes") or [])]
+        entries = [by_id[i] for i in order if i in by_id] or list(by_id.values())
     report: dict[str, Any] = {"scenes": entries}
     if vision_rejections:
         report["vision_rejections"] = vision_rejections
@@ -431,7 +453,7 @@ def _synthesize_narration_and_mix(
                 _wj(job_dir / "tts_report.json", report)
             except Exception:
                 pass
-        except Exception as exc:
+        except Exception:
             # Fallback for environments without optional TTS runtime deps
             # or network/model bootstrap failures in external providers.
             _write_silent_wav(narration_path, int(scene_doc["total_duration_sec"]))
@@ -533,6 +555,7 @@ def prepare_assets(
     render_tts: bool = True,
     on_scene_resolved: Callable[[dict[str, Any]], None] | None = None,
     vision_qa_fn: Callable[[dict[str, Any], str], dict[str, Any]] | None = None,
+    only_scene_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     assets_dir = job_dir / "assets"
     assets_dir.mkdir(parents=True, exist_ok=True)
@@ -544,9 +567,8 @@ def prepare_assets(
     public_assets_dir = prepare_public_job_dir(workspace_root, job_dir.name) / "assets"
     public_assets_dir.mkdir(parents=True, exist_ok=True)
     palette = style_dna["palette"]
-    colors = [_hex_to_rgb(palette["background"]), _hex_to_rgb(palette["primary"]), _hex_to_rgb(palette["secondary"])]
     visual_config = visual_config or {}
-    
+
     # Determine portrait default dynamically
     is_portrait = (visual_config.get("orientation") == "portrait")
     if not is_portrait:
@@ -588,6 +610,10 @@ def prepare_assets(
     scene_assets: list[dict[str, Any]] = []
     num_scenes = len(scene_doc["scenes"])
     for index, scene in enumerate(scene_doc["scenes"] if render_backgrounds else []):
+        # Targeted re-gen pass (lazy AI fallback): resolve only the requested
+        # scenes and merge into the existing manifest/report further below.
+        if only_scene_ids is not None and scene["id"] not in only_scene_ids:
+            continue
         _write_audio_progress(job_dir, round((index / num_scenes) * 50.0, 1), f"visuals (scene {index+1}/{num_scenes})")
         # Emit BEFORE acquiring so the UI shows the scene currently being fetched
         # (acquisition — esp. ChatGPT image gen — can take many seconds).
@@ -606,15 +632,9 @@ def prepare_assets(
         local_image = primary_asset or _find_local_scene_image(scene["id"], source_dir)
         stock_asset = None
         scene_dur = float(scene.get("duration_sec") or 30)
-        # Graphic scenes (layout graphic_*) render on a clean/paper/radial card and
-        # only show a media background when background_mode == "video_blur" (see
-        # remotion GraphicBackground). Acquiring stock/AI footage for the common
-        # paper-mode case wastes a ChatGPT image gen per graphic scene and is never
-        # shown, so skip acquisition unless the scene explicitly asks for blur.
         _layout = str(scene.get("layout") or "")
-        _bg_mode = (scene.get("layout_payload") or {}).get("background_mode") or scene.get("background_mode")
-        graphic_skips_media = _layout.startswith("graphic_") and _bg_mode != "video_blur"
-        if not local_image and stock_service and not graphic_skips_media:
+        was_graphic_layout = _layout.startswith("graphic_")
+        if not local_image and stock_service:
             stock_asset = stock_service.get_scene_asset(scene, channel_id, job_dir.name)
         # Force all scene backgrounds to video so Remotion always renders OffthreadVideo.
         asset_suffix = ".mp4"
@@ -693,15 +713,11 @@ def prepare_assets(
         shutil.copy2(image_path, public_image_path)
         public_ref = f"jobs/{job_dir.name}/assets/{image_path.name}"
         scene["asset_refs"]["background"] = public_ref
-        
-        if (stock_asset and stock_asset.get("provider") == "graphic_fallback"
-                and (scene.get("layout") or "").startswith("graphic_")):
-            scene["asset_refs"]["background"] = ""
-            scene["background_mode"] = "paper"
-        elif graphic_skips_media:
-            # Clean graphic card with no media background (acquisition skipped).
-            scene["asset_refs"]["background"] = ""
-            scene.setdefault("background_mode", "paper")
+
+        if was_graphic_layout and stock_asset and stock_asset.get("provider") == "ai_generated":
+            scene["generated_image_source_layout"] = _layout
+            scene["layout"] = "short_tip"
+            scene["background_mode"] = "generated_image"
         scene_asset = {
             "scene_id": scene["id"],
             "background": str(image_path.resolve()),
@@ -712,11 +728,6 @@ def prepare_assets(
         scene_asset.update(extra_manifest)
         scene_asset["background_source"] = _background_source_label(scene_asset)
         scene_asset["media_kind"] = media_kind
-        if graphic_skips_media:
-            # Honest report label: this scene renders as a clean graphic card with
-            # no media background (no stock/AI was fetched on purpose).
-            scene_asset["background_source"] = "Graphic (card)"
-            scene_asset["media_kind"] = "image"
         scene_assets.append(scene_asset)
         if on_scene_resolved is not None:
             try:
@@ -751,6 +762,7 @@ def prepare_assets(
         _write_background_report(
             job_dir / "json", scene_assets, scene_doc,
             vision_rejections=(stock_service.vision_rejections if stock_service else None),
+            merge=only_scene_ids is not None,
         )
 
     audio_metadata: dict[str, Any] = {}
@@ -772,7 +784,20 @@ def prepare_assets(
 
     # Build the manifest. When this pass only ran TTS (Shorts phase 2), reuse the
     # scene list written by the earlier background pass so we never clobber it.
-    if render_backgrounds:
+    if render_backgrounds and only_scene_ids is not None:
+        # Lazy re-gen merge: replace only the re-genned scenes, keep the rest.
+        try:
+            from video_agent.utils.json_io import read_json as _rj3
+            prev = _rj3(job_dir / ARTIFACT_ASSETS) or {}
+        except Exception:
+            prev = {}
+        prev_scenes = prev.get("scenes", []) if isinstance(prev, dict) else []
+        fresh = {a["scene_id"]: a for a in scene_assets}
+        manifest_scenes = [fresh.get(s.get("scene_id"), s) for s in prev_scenes]
+        thumbnail_source = (prev.get("thumbnail_source") if isinstance(prev, dict) else None) or (
+            manifest_scenes[0].get("background") if manifest_scenes else None
+        )
+    elif render_backgrounds:
         manifest_scenes = scene_assets
         thumbnail_source = scene_assets[0]["background"] if scene_assets else None
     else:
@@ -785,8 +810,24 @@ def prepare_assets(
         manifest_scenes = prev.get("scenes", [])
         thumbnail_source = prev.get("thumbnail_source")
 
+    if render_tts:
+        audio_block: dict[str, Any] = {
+            "narration": public_narration_ref, "music": public_music_ref, **audio_metadata
+        }
+    else:
+        # This pass produced no audio (background-only or lazy fallback re-gen) —
+        # preserve the audio block the TTS/mix pass already wrote so we never
+        # clobber it back to nulls (that silenced the rendered video).
+        try:
+            from video_agent.utils.json_io import read_json as _rja
+            _prevm = _rja(job_dir / ARTIFACT_ASSETS) or {}
+        except Exception:
+            _prevm = {}
+        audio_block = (_prevm.get("audio") if isinstance(_prevm, dict) else None) or {
+            "narration": public_narration_ref, "music": public_music_ref, **audio_metadata
+        }
     manifest = {
-        "audio": {"narration": public_narration_ref, "music": public_music_ref, **audio_metadata},
+        "audio": audio_block,
         "scenes": manifest_scenes,
         "thumbnail_source": thumbnail_source,
     }

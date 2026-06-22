@@ -119,6 +119,30 @@ def test_descends_to_ai_gen_when_no_strict_stock():
     assert asset.get("media_type") == "image"
 
 
+def test_skip_ai_fallback_flag_defers_chatgpt_for_video_covered_scene():
+    # Lazy AI policy: a scene whose span already has a provisional Pexels VIDEO
+    # finalist carries _skip_ai_fallback=True -> the cascade must NOT call ChatGPT
+    # image gen; it degrades to a graphic_fallback placeholder instead (AI is
+    # generated later only if visual_local_qa rejects the span video).
+    calls = {"n": 0}
+
+    def fake_gen(prompt, out_path):
+        calls["n"] += 1
+
+    svc = _service(
+        {
+            "pexels_video": [_cand("vid-weak", "pexels_video", _WEAK_TAGS)],
+            "pexels": [_cand("photo-weak", "pexels", _WEAK_TAGS, media_type="photo")],
+        },
+        image_gen_fn=fake_gen,
+    )
+    scene = {**_scene(), "_skip_ai_fallback": True}
+    asset = svc.get_scene_asset(scene, channel_id="ch", job_id="job")
+    assert calls["n"] == 0  # ChatGPT NOT invoked
+    assert asset is not None
+    assert asset["asset_tier"] == "graphic_fallback"
+
+
 def test_weak_stock_fallback_when_no_ai_and_no_strict():
     # No photo provider data, no image_gen -> key scene should graphic_fallback
     svc = _service({"pexels_video": [_cand("vid-weak", "pexels_video", _WEAK_TAGS)]})
@@ -162,7 +186,7 @@ def test_prepare_assets_regression_weak_match_contradictory_blocked():
 
 def test_standard_layout_retains_placeholder_on_fallback(tmp_path):
     from video_agent.stages.assets import prepare_assets
-    
+
     scene_doc = {
         "total_duration_sec": 3,
         "scenes": [
@@ -175,7 +199,7 @@ def test_standard_layout_retains_placeholder_on_fallback(tmp_path):
             }
         ]
     }
-    
+
     palette = {
         "palette": {
             "background": "#F6F1E8",
@@ -185,15 +209,15 @@ def test_standard_layout_retains_placeholder_on_fallback(tmp_path):
             "text": "#26332F"
         }
     }
-    
+
     class GraphicFallbackStockClient:
         def search(self, provider, query, filters):
             return {}
         def normalize(self, provider, response):
             return []
-            
+
     job_dir = tmp_path / "jobs" / "job-std-fallback"
-    
+
     manifest = prepare_assets(
         job_dir=job_dir,
         style_dna=palette,
@@ -207,7 +231,7 @@ def test_standard_layout_retains_placeholder_on_fallback(tmp_path):
         stock_client=GraphicFallbackStockClient(),
         image_gen_fn=lambda p, o: None
     )
-    
+
     scene = manifest["scenes"][0]
     assert scene["background"] != ""
     assert scene["source"] == "generated_placeholder"
@@ -215,9 +239,18 @@ def test_standard_layout_retains_placeholder_on_fallback(tmp_path):
     assert scene_doc["scenes"][0]["asset_refs"]["background"] != ""
 
 
-def test_graphic_layout_clears_background_on_fallback(tmp_path):
+def test_graphic_layout_generates_chatgpt_image_with_full_payload(tmp_path):
+    from PIL import Image
+
     from video_agent.stages.assets import prepare_assets
-    
+
+    gen_calls = []
+
+    def _img_gen(prompt, out_path):
+        gen_calls.append((prompt, Path(out_path)))
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (1080, 1920), (30, 50, 45)).save(out_path)
+
     scene_doc = {
         "total_duration_sec": 3,
         "scenes": [
@@ -225,12 +258,20 @@ def test_graphic_layout_clears_background_on_fallback(tmp_path):
                 "id": "s01",
                 "layout": "graphic_label_callout",
                 "on_screen_text": "GIRA EL PAQUETE",
-                "visual_prompt": "some prompt",
+                "visual_prompt": "Spanish supermarket bread label education card",
+                "layout_payload": {
+                    "title": "MIRA LA ETIQUETA",
+                    "productLabel": "Pan integral",
+                    "callouts": [
+                        {"label": "Ingrediente 1", "value": "Harina integral"},
+                        {"label": "Fibra", "value": "3 g o más"},
+                    ],
+                },
                 "asset_refs": {}
             }
         ]
     }
-    
+
     palette = {
         "palette": {
             "background": "#F6F1E8",
@@ -240,15 +281,15 @@ def test_graphic_layout_clears_background_on_fallback(tmp_path):
             "text": "#26332F"
         }
     }
-    
+
     class GraphicFallbackStockClient:
         def search(self, provider, query, filters):
             return {}
         def normalize(self, provider, response):
             return []
-            
+
     job_dir = tmp_path / "jobs" / "job-graph-fallback"
-    
+
     manifest = prepare_assets(
         job_dir=job_dir,
         style_dna=palette,
@@ -260,19 +301,27 @@ def test_graphic_layout_clears_background_on_fallback(tmp_path):
             "asset_library_path": str(tmp_path / "asset_library"),
         },
         stock_client=GraphicFallbackStockClient(),
-        image_gen_fn=lambda p, o: None
+        image_gen_fn=_img_gen,
     )
-    
+
     scene = manifest["scenes"][0]
-    assert scene_doc["scenes"][0]["asset_refs"]["background"] == ""
-    assert scene_doc["scenes"][0]["background_mode"] == "paper"
+    assert len(gen_calls) == 1
+    prompt = gen_calls[0][0]
+    assert "MIRA LA ETIQUETA" in prompt
+    assert "Harina integral" in prompt
+    assert "Fibra" in prompt
+    assert scene_doc["scenes"][0]["asset_refs"]["background"] != ""
+    assert scene_doc["scenes"][0]["layout"] == "short_tip"
+    assert scene["provider"] == "ai_generated"
+    assert scene["background_source"] == "ChatGPT image"
 
 
 def test_placeholder_image_meets_aesthetic_targets(tmp_path):
-    from PIL import Image
     import numpy as np
+    from PIL import Image
+
     from video_agent.stages.assets import _write_placeholder_image
-    
+
     tmp_img_path = tmp_path / "test_placeholder_aesthetic.jpg"
     palette = {
         "background": "#F6F1E8",
@@ -282,30 +331,32 @@ def test_placeholder_image_meets_aesthetic_targets(tmp_path):
         "text": "#26332F"
     }
     scene = {"layout": "short_hook", "on_screen_text": "GIRA EL PAQUETE"}
-    
+
     _write_placeholder_image(tmp_img_path, scene, index=0, palette=palette, is_portrait=True)
-    
+
     img = Image.open(tmp_img_path)
     assert img.size == (1080, 1920), f"Image size {img.size} is not 1080x1920"
-    
+
     gray = img.convert("L")
     pixels = np.array(gray)
-    
+
     mean_lum = pixels.mean()
     black_ratio = (pixels < 25).sum() / pixels.size
     near_black_ratio = (pixels < 35).sum() / pixels.size
-    
+
     assert mean_lum >= 60, f"Mean luminance {mean_lum} is too dark (target >= 60)"
     assert black_ratio < 0.05, f"Black pixel ratio {black_ratio} is too high (target < 5%)"
     assert near_black_ratio < 0.10, f"Near-black pixel ratio {near_black_ratio} is too high (target < 10%)"
 
 
 def test_placeholder_video_frame_meets_aesthetic_targets(tmp_path):
-    from PIL import Image
-    import numpy as np
     import subprocess
+
+    import numpy as np
+    from PIL import Image
+
     from video_agent.stages.assets import _write_placeholder_video
-    
+
     tmp_vid_path = tmp_path / "test_placeholder_aesthetic.mp4"
     tmp_frame_path = tmp_path / "test_placeholder_aesthetic_frame.jpg"
     palette = {
@@ -316,25 +367,25 @@ def test_placeholder_video_frame_meets_aesthetic_targets(tmp_path):
         "text": "#26332F"
     }
     scene = {"layout": "short_hook", "on_screen_text": "GIRA EL PAQUETE"}
-    
+
     _write_placeholder_video(tmp_vid_path, scene, index=0, palette=palette, duration_sec=1.0, is_portrait=True)
-    
+
     cmd = [
         "ffmpeg", "-y", "-i", str(tmp_vid_path),
         "-vframes", "1", "-f", "image2", str(tmp_frame_path)
     ]
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    
+
     img = Image.open(tmp_frame_path)
     assert img.size == (1080, 1920), f"Video frame size {img.size} is not 1080x1920"
-    
+
     gray = img.convert("L")
     pixels = np.array(gray)
-    
+
     mean_lum = pixels.mean()
     black_ratio = (pixels < 25).sum() / pixels.size
     near_black_ratio = (pixels < 35).sum() / pixels.size
-    
+
     assert mean_lum >= 60, f"Mean luminance {mean_lum} is too dark (target >= 60)"
     assert black_ratio < 0.05, f"Black pixel ratio {black_ratio} is too high (target < 5%)"
     assert near_black_ratio < 0.10, f"Near-black pixel ratio {near_black_ratio} is too high (target < 10%)"
@@ -342,7 +393,7 @@ def test_placeholder_video_frame_meets_aesthetic_targets(tmp_path):
 
 def test_missing_orientation_metadata_defaults_to_portrait_for_shorts(tmp_path):
     from video_agent.stages.assets import prepare_assets
-    
+
     scene_doc = {
         "total_duration_sec": 3,
         "scenes": [
@@ -355,7 +406,7 @@ def test_missing_orientation_metadata_defaults_to_portrait_for_shorts(tmp_path):
             }
         ]
     }
-    
+
     palette = {
         "palette": {
             "background": "#F6F1E8",
@@ -365,15 +416,15 @@ def test_missing_orientation_metadata_defaults_to_portrait_for_shorts(tmp_path):
             "text": "#26332F"
         }
     }
-    
+
     class GraphicFallbackStockClient:
         def search(self, provider, query, filters):
             return {}
         def normalize(self, provider, response):
             return []
-            
+
     job_dir = tmp_path / "shorts" / "short-05"
-    
+
     manifest = prepare_assets(
         job_dir=job_dir,
         style_dna=palette,
@@ -387,10 +438,10 @@ def test_missing_orientation_metadata_defaults_to_portrait_for_shorts(tmp_path):
         stock_client=GraphicFallbackStockClient(),
         image_gen_fn=lambda p, o: None
     )
-    
+
     bg_path = Path(manifest["scenes"][0]["background"])
     assert bg_path.exists()
-    
+
     tmp_frame_path = tmp_path / "shorts" / "temp_frame.jpg"
     tmp_frame_path.parent.mkdir(parents=True, exist_ok=True)
     import subprocess
@@ -399,22 +450,26 @@ def test_missing_orientation_metadata_defaults_to_portrait_for_shorts(tmp_path):
         "-vframes", "1", "-f", "image2", str(tmp_frame_path)
     ]
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    
+
     from PIL import Image
     img = Image.open(tmp_frame_path)
     assert img.size == (1080, 1920), f"Short fallback size {img.size} is not 1080x1920"
 
 
 
-def test_graphic_scene_skips_media_acquisition_by_default(tmp_path):
-    """graphic_* scenes render on a paper card; no stock/AI background is fetched
-    unless background_mode == 'video_blur'. Guards wasted ChatGPT image gen."""
+def test_graphic_scene_uses_chatgpt_image_by_default(tmp_path):
+    """graphic_* scenes become generated-image scenes so Shorts do not render
+    rigid paper graphic cards."""
+    from PIL import Image
+
     from video_agent.stages.assets import prepare_assets
 
     gen_calls = []
 
     def _img_gen(prompt, out_path):
-        gen_calls.append(out_path)
+        gen_calls.append(prompt)
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (1080, 1920), (20, 30, 40)).save(out_path)
 
     scene_doc = {
         "total_duration_sec": 3,
@@ -439,9 +494,11 @@ def test_graphic_scene_skips_media_acquisition_by_default(tmp_path):
         stock_client=_EmptyStock(), image_gen_fn=_img_gen,
     )
 
-    assert gen_calls == []  # no AI image generated for the paper graphic
-    assert scene_doc["scenes"][0]["asset_refs"]["background"] == ""
-    assert manifest["scenes"][0]["background_source"] == "Graphic (card)"
+    assert len(gen_calls) == 1
+    assert "MICRO PAUSAS" in gen_calls[0]
+    assert scene_doc["scenes"][0]["asset_refs"]["background"] != ""
+    assert scene_doc["scenes"][0]["layout"] == "short_tip"
+    assert manifest["scenes"][0]["background_source"] == "ChatGPT image"
 
 
 def test_graphic_scene_with_video_blur_still_acquires(tmp_path):

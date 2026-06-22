@@ -17,7 +17,12 @@ from video_agent.shorts.visual_spans import _is_graphic_scene, _scene_duration, 
 
 SCHEMA_VERSION = 1
 PLANNER_VERSION = 1
-SUPPORTED_NON_LEGACY_MODES = ("continuous_clip", "two_clip", "clip_plus_graphic")
+SUPPORTED_NON_LEGACY_MODES = (
+    "continuous_clip",
+    "two_clip",
+    "clip_plus_graphic",
+    "generated_image_fallback",
+)
 ALLOWED_BOUNDARY_REASONS = {
     "required evidence changes",
     "required action changes",
@@ -33,6 +38,7 @@ _SIMPLICITY_RANK = {
     "continuous_clip": 0,
     "clip_plus_graphic": 1,
     "two_clip": 2,
+    "generated_image_fallback": 3,
 }
 
 
@@ -103,6 +109,15 @@ def _resolved_native(adapted: dict[str, Any] | None) -> bool:
     )
 
 
+def _resolved_generated_image(adapted: dict[str, Any] | None) -> bool:
+    if not adapted or not adapted.get("exists", True) or not _adapted_asset_ref(adapted):
+        return False
+    return str(adapted.get("source_media_kind") or "") in {
+        asset_schedule.IMAGE_BACKED_VIDEO,
+        asset_schedule.NATIVE_IMAGE,
+    }
+
+
 def _base_native_beat(
     *,
     beat_id: str,
@@ -122,6 +137,31 @@ def _base_native_beat(
         "render_media_kind": (adapted or {}).get("render_media_kind") or "video",
         "source_media_kind": (adapted or {}).get("source_media_kind")
         or asset_schedule.NATIVE_VIDEO,
+        "source_duration_sec": (adapted or {}).get("source_duration_sec"),
+        "boundary_reason": boundary_reason,
+        "inside_scene_boundary": False,
+    }
+
+
+def _base_generated_image_beat(
+    *,
+    beat_id: str,
+    scene_ids: list[str],
+    adapted: dict[str, Any] | None,
+    boundary_reason: str,
+) -> dict[str, Any]:
+    return {
+        "beat_id": beat_id,
+        "type": "generated_image",
+        "scene_ids": list(scene_ids),
+        "asset_selection_ref": f"{scene_ids[0]}-generated-image" if scene_ids else None,
+        "asset_ref": _adapted_asset_ref(adapted),
+        "asset_id": (adapted or {}).get("asset_id"),
+        "provider": (adapted or {}).get("provider"),
+        "provider_asset_id": (adapted or {}).get("provider_asset_id"),
+        "render_media_kind": (adapted or {}).get("render_media_kind") or "video",
+        "source_media_kind": (adapted or {}).get("source_media_kind")
+        or asset_schedule.IMAGE_BACKED_VIDEO,
         "source_duration_sec": (adapted or {}).get("source_duration_sec"),
         "boundary_reason": boundary_reason,
         "inside_scene_boundary": False,
@@ -226,17 +266,16 @@ def _clip_plus_graphic_candidate(
     beats: list[dict[str, Any]] = []
     for idx, (sid, scene) in enumerate(zip(member_ids, member_scenes, strict=True)):
         if _is_graphic_scene(scene):
+            adapted = adapted_scenes.get(sid)
+            if not _resolved_generated_image(adapted):
+                return None
             beats.append(
-                {
-                    "beat_id": f"vb{idx + 1:02d}",
-                    "type": "graphic",
-                    "scene_ids": [sid],
-                    "asset_selection_ref": None,
-                    "renderer": "existing_scene_graphic",
-                    "graphic_intent": scene.get("graphic_intent") or scene.get("title") or "",
-                    "boundary_reason": "graphic explanation adds clarity",
-                    "inside_scene_boundary": False,
-                }
+                _base_generated_image_beat(
+                    beat_id=f"vb{idx + 1:02d}",
+                    scene_ids=[sid],
+                    adapted=adapted,
+                    boundary_reason="graphic explanation becomes generated image",
+                )
             )
             continue
         adapted = adapted_scenes.get(sid)
@@ -261,6 +300,58 @@ def _clip_plus_graphic_candidate(
             "graphic_renderer": "existing_scene_graphic",
         },
     }
+
+
+def _generated_image_fallback_candidate(
+    *,
+    span_id: str,
+    member_ids: list[str],
+    adapted_scenes: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    beats: list[dict[str, Any]] = []
+    for idx, sid in enumerate(member_ids):
+        adapted = adapted_scenes.get(sid)
+        if not _resolved_generated_image(adapted):
+            return None
+        beats.append(
+            _base_generated_image_beat(
+                beat_id=f"vb{idx + 1:02d}",
+                scene_ids=[sid],
+                adapted=adapted,
+                boundary_reason="no validated Pexels finalist; use generated image fallback",
+            )
+        )
+    return {
+        "plan_id": f"{span_id}-vp04",
+        "mode": "generated_image_fallback",
+        "score": 72.0,
+        "simplicity_rank": _SIMPLICITY_RANK["generated_image_fallback"],
+        "beats": beats,
+        "candidate_debug": {
+            "fallback_reason": "all Pexels finalists rejected or unavailable",
+            "quality_policy": "generated image is preferred over off-topic footage",
+        },
+    }
+
+
+def _is_cta_scene(scene: dict[str, Any]) -> bool:
+    """A call-to-action scene (end card) — by layout or retention function."""
+    layout = str(scene.get("layout") or "")
+    return layout in {"short_cta", "cta"} or str(scene.get("retention_function") or "") == "cta"
+
+
+def _is_controlled_visual_scene(scene: dict[str, Any]) -> bool:
+    """Scenes that need a controlled clean AI image instead of unreliable stock:
+    hook (face/emotion first frame), CTA (on-brand end card), and short_tip
+    (single precise human-pose actions — sit/feet, breathe, write, message — where
+    stock topic-matches but misses the required action evidence). The montage
+    (short_checklist) and graphics keep their own renderers."""
+    layout = str(scene.get("layout") or "")
+    rf = str(scene.get("retention_function") or "")
+    return (
+        layout in {"short_cta", "cta", "short_hook", "hook", "short_tip"}
+        or rf in {"cta", "hook"}
+    )
 
 
 def _select_plan(
@@ -356,6 +447,25 @@ def build_visual_beat_plan(
             )
             if candidate:
                 candidates.append(candidate)
+        if "generated_image_fallback" in config["modes"]:
+            candidate = _generated_image_fallback_candidate(
+                span_id=span_id,
+                member_ids=member_ids,
+                adapted_scenes=adapted_scenes,
+            )
+            if candidate:
+                candidates.append(candidate)
+
+        # Hook + CTA scenes: prefer the clean generated-image fallback over stock.
+        # The hook needs a human/emotional first frame (stock gives empty rooms);
+        # CTA stock often carries foreign-language text / off-brand boards. A
+        # controlled AI background reads far cleaner for both.
+        if any(_is_controlled_visual_scene(s) for s in member_scenes):
+            _fb = next(
+                (c for c in candidates if c.get("mode") == "generated_image_fallback"), None
+            )
+            if _fb is not None:
+                candidates = [_fb]
 
         candidates.sort(key=lambda c: (int(c.get("simplicity_rank", 99)), str(c.get("mode"))))
         candidates = candidates[: int(config["max_non_legacy_plans"])]
@@ -365,6 +475,12 @@ def build_visual_beat_plan(
         if selected:
             distribution[str(selected["mode"])] += 1
         span_qa_verdict = _qa_verdict(span_qas.get(span_id))
+        selected_mode = str((selected or {}).get("mode") or "")
+        selected_verdict = (
+            "PASS"
+            if selected_mode == "generated_image_fallback"
+            else span_qa_verdict
+        )
         planned_spans.append(
             {
                 "visual_span_id": span_id,
@@ -377,10 +493,10 @@ def build_visual_beat_plan(
                 "selected_plan": selected,
                 "selection_reason": reason,
                 "qa": {
-                    "verdict": "FAIL" if not selected else span_qa_verdict,
+                    "verdict": "FAIL" if not selected else selected_verdict,
                     "errors": [] if selected else ["no_non_legacy_visual_plan"],
                     "warnings": []
-                    if span_qa_verdict == "PASS"
+                    if selected_verdict == "PASS"
                     else [f"span_asset_qa:{span_qa_verdict}"],
                 },
             }

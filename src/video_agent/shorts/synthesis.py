@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from video_agent.shorts import manifest, paths
+from video_agent.shorts import manifest, music_selector, paths
 from video_agent.shorts.idea_generator import resolve_long_job_artifact
 from video_agent.shorts.idea_store import (
     read_short_ideas,
@@ -128,7 +128,11 @@ def idea_to_short_plan(
         "hook_angle": idea.get("title") or idea.get("hook_text"),
         "viewer_pain": idea.get("viewer_pain"),
         "practical_payoff": idea.get("practical_payoff"),
-        "music_track": "shorts_nutrition_energy",
+        # Pillar-aware track from the channel's music_library (never a hardcoded
+        # cross-channel default). Empty pillar falls back to the library default.
+        "music_track": music_selector.select_music_track(
+            idea.get("pillar") or idea.get("topic") or "", channel_config
+        ),
         "cover_strategy": "idea_hook_cover",
         "voice_preset": {},
         "narration_seed": idea.get("narration_seed", ""),

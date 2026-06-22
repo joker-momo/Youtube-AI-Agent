@@ -20,7 +20,29 @@ from video_agent.shorts.validate_scenes import (
     try_micro_condense,
     deterministic_scene_fit_repair,
     build_scene_repair_plan,
+    strip_numbered_on_screen_text,
 )
+
+
+def test_strip_numbered_on_screen_text_removes_list_numbering():
+    scenes = [
+        {"id": "s1", "on_screen_text": "1. MÓVIL PARA RELAJARTE"},
+        {"id": "s2", "on_screen_text": "5. SIN OTRA OBLIGACIÓN"},
+        {"id": "s3", "on_screen_text": "2) ALGO"},
+        {"id": "s4", "on_screen_text": "3: OTRO"},
+        {"id": "s5", "on_screen_text": "HAZ UNA PARTE"},  # untouched
+    ]
+    changed = strip_numbered_on_screen_text(scenes)
+    assert changed is True
+    assert [s["on_screen_text"] for s in scenes] == [
+        "MÓVIL PARA RELAJARTE",
+        "SIN OTRA OBLIGACIÓN",
+        "ALGO",
+        "OTRO",
+        "HAZ UNA PARTE",
+    ]
+    # idempotent: a second pass changes nothing
+    assert strip_numbered_on_screen_text(scenes) is False
 
 
 def test_short_myth_cap_fits_a_natural_two_sentence_myth():

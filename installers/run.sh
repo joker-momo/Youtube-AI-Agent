@@ -47,6 +47,36 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Fast, always-safe rác prune (no log/pip/npm churn). Removes superseded shorts
+# archives, stale/_v2 renders, orphaned ai_temp_* image-gen files, empty tmp
+# dirs, and HF model variants not referenced by config. Runs on every --full
+# launch so disk never silently fills. Products (jobs/, asset_library/) are
+# untouched unless JOBS_KEEP is set.
+prune_rac() {
+  if [[ -d "${REPO_DIR}/jobs" ]]; then
+    find "${REPO_DIR}/jobs" -type d \( -name archive -o -name _archive \) -prune -exec rm -rf {} + 2>/dev/null || true
+    find "${REPO_DIR}/jobs" -type f \( -name "*stale*" -o -name "*_v2.mp4" -o -name "*_v2.jpg" -o -name "ai_temp_*" \) -delete 2>/dev/null || true
+    find "${REPO_DIR}/jobs" -type d -name tmp -empty -delete 2>/dev/null || true
+  fi
+  # Dead HuggingFace model variants (NOT referenced by channel.yaml config).
+  local hf_hub="${HF_HOME:-$HOME/.cache/huggingface}/hub"
+  if [[ -d "${hf_hub}" ]]; then
+    for dead in "models--mlx-community--Qwen2.5-VL-3B-Instruct-4bit" \
+                "models--google--siglip-base-patch16-224" \
+                "models--chopratejas--kompress-base" \
+                "models--answerdotai--ModernBERT-base"; do
+      rm -rf "${hf_hub:?}/${dead}" 2>/dev/null || true
+    done
+  fi
+  # OPT-IN product retention (NEVER deletes by default; products are sacred).
+  # JOBS_KEEP=N -> keep N newest job dirs, delete older. Unset = keep all.
+  if [[ -n "${JOBS_KEEP:-}" && -d "${REPO_DIR}/jobs" ]]; then
+    ls -dt "${REPO_DIR}"/jobs/*/ 2>/dev/null | tail -n +"$((JOBS_KEEP + 1))" | while read -r old; do
+      echo -e "${YELLOW}  retention: removing old job $(basename "${old}")${NC}"; rm -rf "${old}"
+    done
+  fi
+}
+
 cleanup_disk() {
   echo -e "${CYAN}Pruning caches...${NC}"
   # Python bytecode
@@ -60,14 +90,18 @@ cleanup_disk() {
   if [[ -d "${REPO_DIR}/browser_trace" ]]; then
     find "${REPO_DIR}/browser_trace" -type f -mtime +"${BROWSER_TRACE_RETENTION_DAYS:-3}" -delete 2>/dev/null || true
   fi
-  # Chromium leftover crash dumps in profile
+  # Chromium leftover crash dumps + regenerable caches in profile
   if [[ -d "${REPO_DIR}/browser_profiles/default" ]]; then
     find "${REPO_DIR}/browser_profiles/default" -type d \
-      \( -name "Crash Reports" -o -name "ShaderCache" -o -name "GrShaderCache" -o -name "GPUCache" \) \
+      \( -name "Crash Reports" -o -name "ShaderCache" -o -name "GrShaderCache" \
+         -o -name "GPUCache" -o -name "GraphiteDawnCache" -o -name "Cache" \
+         -o -name "Code Cache" -o -name "DawnGraphiteCache" -o -name "DawnWebGPUCache" \) \
       -exec rm -rf {} + 2>/dev/null || true
   fi
   # Remotion render temp + chrome-headless-shell tmpfiles
   rm -rf "${REPO_DIR}/.remotion/tmp" 2>/dev/null || true
+  # Always-safe job/model rác + opt-in product retention.
+  prune_rac
   # pip + npm cache
   if command -v npm >/dev/null 2>&1; then npm cache clean --force >/dev/null 2>&1 || true; fi
   if [[ -d ".venv" ]]; then .venv/bin/python -m pip cache purge >/dev/null 2>&1 || true; fi
@@ -107,6 +141,10 @@ stop_all() {
   pkill -f "uvicorn video_agent.web.app:app" >/dev/null 2>&1 || true
   pkill -f "uvicorn video_agent.browser_worker.app:app" >/dev/null 2>&1 || true
   pkill -f "video_agent.cli worker --db-path jobs/queue.db" >/dev/null 2>&1 || true
+  # Local model/render helpers can outlive the queue worker after interrupted
+  # Shorts runs. Match project-specific commands only; do not touch normal apps.
+  pkill -f "vlm_worker.py" >/dev/null 2>&1 || true
+  pkill -f "${REPO_DIR}/remotion" >/dev/null 2>&1 || true
   # Kill the CDP-controlled browser by user-data-dir match so we don't
   # touch the user's normal Brave/Chrome windows.
   pkill -f -- "--user-data-dir=${REPO_DIR}/browser_profiles/default" >/dev/null 2>&1 || true
@@ -176,9 +214,14 @@ start_proc() {
   local logfile="logs/${name}.log"
   local pidfile="${PIDFILE_DIR}/${name}.pid"
 
-  if [[ -f "${pidfile}" ]] && kill -0 "$(cat "${pidfile}")" 2>/dev/null; then
-    echo -e "${GREEN}${name} already running (pid $(cat "${pidfile}"))${NC}"
-    return 0
+  if [[ -f "${pidfile}" ]]; then
+    local old_pid
+    old_pid="$(cat "${pidfile}")"
+    if kill -0 "${old_pid}" 2>/dev/null; then
+      echo -e "${GREEN}${name} already running (pid ${old_pid})${NC}"
+      return 0
+    fi
+    rm -f "${pidfile}"
   fi
 
   echo -e "${CYAN}Starting ${name}...${NC}"
@@ -202,6 +245,9 @@ wait_for_url() {
   done
   echo -e " ${GREEN}ready${NC}"
 }
+
+# Auto-prune always-safe rác on every launch so disk never silently fills.
+prune_rac
 
 start_proc dashboard \
   uvicorn video_agent.web.app:app --host 127.0.0.1 --port 8000

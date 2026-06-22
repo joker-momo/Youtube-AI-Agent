@@ -380,6 +380,29 @@ def count_graphic_scenes(scenes: list[dict[str, Any]]) -> int:
     return sum(1 for s in scenes if str(s.get("layout") or "") in SUPPORTED_GRAPHIC_LAYOUTS)
 
 
+_NUMBERED_OST_RE = __import__("re").compile(r"^\s*\d+\s*[.):\-]\s*")
+
+
+def strip_numbered_on_screen_text(scenes: list[dict]) -> bool:
+    """Remove leading list numbering ("1. ", "2) ", "3: ") from on_screen_text.
+
+    Shorts list/mistake formats forbid the generic "N. [text]" overlay (it breaks
+    the polished visual rhythm); the LLM keeps emitting it and bounded regen does
+    not reliably fix it. Deterministically strip the numeric prefix so the blocker
+    never reaches Gemini QA — uppercase label content is preserved verbatim.
+    """
+    changed = False
+    for scene in scenes or []:
+        ost = scene.get("on_screen_text")
+        if not isinstance(ost, str):
+            continue
+        stripped = _NUMBERED_OST_RE.sub("", ost)
+        if stripped != ost:
+            scene["on_screen_text"] = stripped.strip()
+            changed = True
+    return changed
+
+
 def repair_weak_hook_motion(scenes: list[dict]) -> bool:
     if not scenes:
         return False

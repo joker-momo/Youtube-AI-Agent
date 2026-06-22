@@ -53,3 +53,11 @@ queue.db
 
 # Generated continuity render-proof fixture (deterministic, rebuilt on demand)
 remotion/public/test_fixtures/
+# Added by code-review-graph
+.code-review-graph/
+/.gemini
+/.qoder
+
+# Runtime junk
+logs_run_sh.out
+.trinity/

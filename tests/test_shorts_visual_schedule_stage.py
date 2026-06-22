@@ -88,6 +88,9 @@ def test_compiles_continuous_clip_and_persists_artifacts(tmp_path: Path) -> None
     assert len(sched["tracks"]) == 1
     assert sched["tracks"][0]["scene_ids"] == ["s01", "s02"]
     assert qa["continuous_clip_count"] == 1
+    assert qa["native_continuous_track_count"] == 1
+    assert qa["image_backed_track_count"] == 0
+    assert qa["graphic_fallback_track_count"] == 0
     assert len(qa["schedule_hash"]) == 64
     assert ctx.extras["visual_schedule_hash"] == qa["schedule_hash"]
     assert ("visual_schedule", "completed") in ctx.calls

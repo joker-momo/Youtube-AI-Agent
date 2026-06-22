@@ -165,6 +165,24 @@ class _SemanticRejectWinner:
         ]
 
 
+class _SemanticWeakWinnerPassRunner:
+    def analyze_span(self, **kw):
+        asset_id = kw.get("asset_id")
+        confidence = 0.2 if asset_id == "pexels_video-winner" else 2.0
+        return [
+            {
+                "requirement": "topic:visual_intent",
+                "status": "SUPPORTED",
+                "capability_source": "optional_semantic_model",
+                "model": "fake-vlm",
+                "model_version": "fake-vlm",
+                "asset_id": asset_id,
+                "confidence": confidence,
+                "reason": "semantic weak-support gate test",
+            }
+        ]
+
+
 def _ctx(tmp_path: Path, *, mode: str = "report_only", critical: bool = False) -> SimpleNamespace:
     json_dir = tmp_path / "json"
     json_dir.mkdir(parents=True, exist_ok=True)
@@ -281,6 +299,40 @@ def test_semantic_fail_rejects_winner_and_tries_runner(tmp_path: Path, monkeypat
     assert span_qa["final_candidate_id"] == "pexels_video-runner"
     assert span_qa["candidate_qa"][0]["qa"]["verdict"] == "FAIL"
     assert span_qa["candidate_qa"][0]["qa"]["rejection_reasons"] == ["semantic_mismatch"]
+    assert span_qa["candidate_qa"][1]["qa"]["verdict"] == "PASS"
+
+
+def test_enforced_critical_weak_semantic_support_tries_runner(
+    tmp_path: Path, monkeypatch
+) -> None:
+    downloader = _Downloader()
+    monkeypatch.setattr(
+        "video_agent.shorts.builder.stages.visual_local_qa.FinalistDownloader",
+        lambda *a, **k: downloader,
+    )
+    monkeypatch.setattr(
+        "video_agent.shorts.builder.stages.visual_local_qa.LocalVisualAnalyzer",
+        lambda *a, **k: _PassAnalyzer(),
+    )
+    monkeypatch.setattr(
+        "video_agent.shorts.builder.stages.visual_local_qa.build_semantic_analyzer",
+        lambda *a, **k: _SemanticWeakWinnerPassRunner(),
+    )
+    ctx = _ctx(tmp_path, mode="enforced", critical=True)
+    ctx.channel_config["shorts"]["visual_quality_flow"]["local_qa"]["semantic_adapter"] = "clip"
+
+    result = _stage_visual_local_qa(ctx)
+
+    assert result.returns is None
+    assert downloader.downloaded == ["pexels_video-winner", "pexels_video-runner"]
+    asset_qa = json.loads((ctx.json_dir / paths.SHORT_VISUAL_SPAN_ASSET_QA_FILE).read_text())
+    span_qa = asset_qa["spans"][0]
+    assert span_qa["final_selection_status"] == "replaced"
+    assert span_qa["final_candidate_id"] == "pexels_video-runner"
+    assert span_qa["candidate_qa"][0]["qa"]["verdict"] == "FAIL"
+    assert span_qa["candidate_qa"][0]["qa"]["rejection_reasons"] == [
+        "semantic_weak_required_support"
+    ]
     assert span_qa["candidate_qa"][1]["qa"]["verdict"] == "PASS"
 
 

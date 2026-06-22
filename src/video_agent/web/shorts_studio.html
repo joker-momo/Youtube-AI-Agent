@@ -1057,12 +1057,6 @@ let VNC_FIT_MODE = true;
 const VNC_IDLE_SENTINEL = '__idle__';
 // Cache for render progress — survives DOM rebuilds on each fetchTimeline poll
 let RENDER_PROGRESS_CACHE = { pct: 0, meta: '', eta: '' };
-let SHORTS_PROGRESS_CACHE = [
-  { pct: 0, meta: '', eta: '' },
-  { pct: 0, meta: '', eta: '' },
-  { pct: 0, meta: '', eta: '' },
-  { pct: 0, meta: '', eta: '' }
-];
 const STAGE_LABEL = {
   idea_research: 'Idea research',
   script: 'Script prompt',
@@ -1084,7 +1078,6 @@ const STAGE_LABEL = {
   shorts_script: 'Shorts Script',
   shorts_scenes: 'Shorts Scenes',
   shorts_tts: 'Shorts TTS',
-  shorts_render: 'Shorts Render',
 };
 
 function fmtSec(s) {
@@ -1790,63 +1783,6 @@ function stopWhisperProgressPolling() {
   if (WHISPER_POLL_TIMER) { clearInterval(WHISPER_POLL_TIMER); WHISPER_POLL_TIMER = null; }
 }
 
-function startShortsProgressPolling(jobId) {
-  // Legacy stage poll removed per spec v5 §2.1; Shorts Autopilot owns its own
-  // progress via GET /jobs/{id}/shorts (status summary). No-op kept so the
-  // older timeline-step branch doesn't throw.
-  return;
-  if (SHORTS_POLL_TIMER) return;
-  SHORTS_POLL_TIMER = setInterval(async () => {
-    try {
-      const r = await fetch('/jobs/' + encodeURIComponent(jobId) + '/shorts');
-      if (!r.ok) return;
-      const data = await r.json();
-      const list = data.shorts || [];
-
-      for (let i = 0; i < 4; i++) {
-        const p = list[i] || { percent: 0, frame: 0, total_frames: 0, fps: 0.0, eta: '' };
-        const parts = [];
-        if (p.frame && p.total_frames) parts.push(p.frame + '/' + p.total_frames + ' frames');
-        if (p.fps) parts.push(p.fps.toFixed(1) + ' fps');
-        if (p.eta) parts.push('ETA ' + p.eta);
-        const metaStr = parts.join(' · ');
-
-        SHORTS_PROGRESS_CACHE[i] = { pct: p.percent || 0, meta: metaStr, eta: p.eta || '' };
-
-        // Update DOM elements for this short
-        const bar = document.getElementById('short-progress-bar-' + i);
-        const pct = document.getElementById('short-progress-pct-' + i);
-        const meta = document.getElementById('short-progress-meta-' + i);
-        const eta = document.getElementById('short-progress-eta-' + i);
-        if (bar) bar.style.width = (p.percent || 0) + '%';
-        if (pct) pct.textContent = Math.round(p.percent || 0) + '%';
-        if (meta) meta.textContent = metaStr;
-        if (eta) eta.textContent = p.eta ? p.eta : 'Calculating...';
-      }
-
-      // Stop polling when shorts_render completes (step is no longer in_progress)
-      const lastTl = LAST_TIMELINE;
-      if (lastTl) {
-        const rs = (lastTl.stages || []).find(s => s.name === 'shorts_render');
-        if (rs && rs.status !== 'in_progress') {
-          clearInterval(SHORTS_POLL_TIMER);
-          SHORTS_POLL_TIMER = null;
-          SHORTS_PROGRESS_CACHE = [
-            { pct: 0, meta: '', eta: '' },
-            { pct: 0, meta: '', eta: '' },
-            { pct: 0, meta: '', eta: '' },
-            { pct: 0, meta: '', eta: '' }
-          ];
-        }
-      }
-    } catch(e) {}
-  }, 2000);
-}
-
-function stopShortsProgressPolling() {
-  if (SHORTS_POLL_TIMER) { clearInterval(SHORTS_POLL_TIMER); SHORTS_POLL_TIMER = null; }
-}
-
 function renderStep(jobId, s, idx, fallbackStartedAt = null) {
   const el = document.createElement('div');
   const shownStatus = displayStageStatus(s);
@@ -1876,7 +1812,6 @@ function renderStep(jobId, s, idx, fallbackStartedAt = null) {
   // Render-specific progress bar (shown when in_progress)
   // Read from RENDER_PROGRESS_CACHE — a global that survives DOM rebuilds.
   const _rpc = (s.name === 'render' && shownStatus === 'in_progress') ? RENDER_PROGRESS_CACHE : null;
-  const _spc = (s.name === 'shorts_render' && shownStatus === 'in_progress') ? SHORTS_PROGRESS_CACHE : null;
   const _wpc = (s.name === 'whisper_timestamps' && shownStatus === 'in_progress') ? WHISPER_PROGRESS_CACHE : null;
   
   let renderProgressHtml = '';
@@ -1896,28 +1831,6 @@ function renderStep(jobId, s, idx, fallbackStartedAt = null) {
         </div>
         <div id="render-progress-meta" style="margin-top:5px;font-size:11px;color:var(--muted-2)">${_rpc.meta}</div>
       </div>`;
-  } else if (_spc) {
-    renderProgressHtml = '<div style="margin:10px 0 4px;padding:0 2px;display:flex;flex-direction:column;gap:12px">';
-    for (let i = 0; i < 4; i++) {
-      const cache = _spc[i] || { pct: 0, meta: '', eta: '' };
-      renderProgressHtml += `
-        <div style="border: 1px solid var(--line-strong); padding: 8px; border-radius: 6px; background: var(--bg-soft)">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
-            <span style="font-size:12px;color:var(--muted);font-weight:600">Rendering Short ${i + 1}…</span>
-            <span id="short-progress-pct-${i}" style="font-size:13px;font-weight:700;color:var(--blue)">${Math.round(cache.pct)}%</span>
-          </div>
-          <div style="height:6px;border-radius:4px;background:var(--line-strong);overflow:hidden">
-            <div id="short-progress-bar-${i}" style="height:100%;width:${cache.pct}%;background:var(--blue);border-radius:4px;transition:width 1s linear"></div>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;font-size:12px">
-            <span style="color:var(--muted);font-weight:500">⏰ Time remaining:</span>
-            <span id="short-progress-eta-${i}" style="font-weight:700;color:#f5841f">${cache.eta ? cache.eta : 'Calculating...'}</span>
-          </div>
-          <div id="short-progress-meta-${i}" style="margin-top:5px;font-size:11px;color:var(--muted-2)">${cache.meta}</div>
-        </div>
-      `;
-    }
-    renderProgressHtml += '</div>';
   } else if (_wpc) {
     renderProgressHtml = `
       <div style="margin:10px 0 4px;padding:0 2px">
@@ -1930,6 +1843,15 @@ function renderStep(jobId, s, idx, fallbackStartedAt = null) {
         </div>
         <div id="whisper-progress-meta" style="margin-top:6px;font-size:11px;color:var(--muted-2)">${escapeHtml(_wpc.meta || '')}</div>
       </div>`;
+  }
+
+  // Live sub-progress for stages that emit per-unit counters (e.g. visual_local_qa
+  // writes current_span / span_index / candidate_index while judging finalists).
+  let stageProgressHtml = '';
+  if (shownStatus === 'in_progress' && s.span_total) {
+    const spanPart = `${escapeHtml(String(s.current_span || ''))} ${s.span_index || 0}/${s.span_total}`;
+    const candPart = s.candidate_total ? ` · cand ${s.candidate_index || 0}/${s.candidate_total}` : '';
+    stageProgressHtml = `<span class="pill in_progress" title="span / candidate progress">${spanPart}${candPart}</span>`;
   }
 
   const compactStepGlyph = (
@@ -1945,7 +1867,7 @@ function renderStep(jobId, s, idx, fallbackStartedAt = null) {
       <span class="step-num"><span class="step-order">${String(idx + 1).padStart(2, '0')}</span><span class="step-check">${compactStepGlyph}</span></span>
       <span class="step-label" title="${escapeHtml(stageTitle)}"><span class="name">${escapeHtml(label)}</span><span class="code">${escapeHtml(s.name)}</span></span>
       <span class="step-meta">
-        <span class="pill ${shownStatus}">${statusText(shownStatus)}</span>${durHtml}<span class="caret">›</span>
+        ${stageProgressHtml}<span class="pill ${shownStatus}">${statusText(shownStatus)}</span>${durHtml}<span class="caret">›</span>
       </span>
       <span class="stage-flow-link" aria-hidden="true"></span>
     </div>
@@ -1979,14 +1901,6 @@ function renderStep(jobId, s, idx, fallbackStartedAt = null) {
     OPEN_STAGES.add('render');
   } else if (s.name === 'render' && shownStatus !== 'in_progress') {
     stopRenderProgressPolling();
-  }
-
-  if (s.name === 'shorts_render' && shownStatus === 'in_progress') {
-    startShortsProgressPolling(jobId);
-    el.classList.add('open');
-    OPEN_STAGES.add('shorts_render');
-  } else if (s.name === 'shorts_render' && shownStatus !== 'in_progress') {
-    stopShortsProgressPolling();
   }
 
   if (s.name === 'whisper_timestamps' && shownStatus === 'in_progress') {
@@ -2065,6 +1979,7 @@ function bgSourceBadgeStyle(source) {
   if (s.includes('pexels video')) return 'background:#dbeafe;color:#1e40af';
   if (s.includes('pexels photo') || s.includes('pixabay')) return 'background:#cffafe;color:#155e63';
   if (s.includes('chatgpt')) return 'background:#dcfce7;color:#166534';
+  if (s.includes('graphic fallback')) return 'background:#ffedd5;color:#9a3412';
   if (s.includes('placeholder')) return 'background:#fee2e2;color:#991b1b';
   if (s.includes('graphic')) return 'background:#fef9c3;color:#854d0e';
   if (s.includes('local')) return 'background:#ede9fe;color:#5b21b6';
@@ -3758,6 +3673,73 @@ async function loadShortsIdeasTab(jobId) {
   }
 }
 
+function shortStageCompactLabel(label, name) {
+  const byName = {
+    retention_plan: 'Retention',
+    script: 'Script',
+    qa_script: 'QA Script',
+    spoken_humanization: 'Humanize',
+    scenes: 'Scenes',
+    visual_rhythm_plan: 'Rhythm',
+    qa_scenes: 'QA Scenes',
+    anti_ai_review: 'Anti-AI',
+    visual_spans: 'Spans',
+    visual_acquisition: 'Search',
+    background: 'Background',
+    audio: 'Audio',
+    visual_local_qa: 'Visual QA',
+    visual_beats: 'Beats',
+    visual_schedule: 'Schedule',
+    seo: 'SEO',
+    render: 'Render',
+    performance_memory: 'Memory',
+  };
+  if (byName[name]) return byName[name];
+  const byLabel = {
+    'Retention Plan': 'Retention',
+    'Short Script': 'Script',
+    'Spoken Humanization': 'Humanize',
+    'Short Scenes': 'Scenes',
+    'Visual Rhythm Plan': 'Rhythm',
+    'Anti-AI Review': 'Anti-AI',
+    'Visual Spans': 'Spans',
+    'Visual Acquisition': 'Search',
+    'Background Assets': 'Background',
+    'Audio TTS & Mix': 'Audio',
+    'Visual Local QA': 'Visual QA',
+    'Visual Beats': 'Beats',
+    'Visual Schedule': 'Schedule',
+    'Short SEO': 'SEO',
+    'Video & Cover Render': 'Render',
+    'Performance Memory': 'Memory',
+  };
+  return byLabel[label] || label || name || '';
+}
+
+function shortStageNameFromLabel(label) {
+  const byLabel = {
+    Retention: 'retention_plan',
+    Script: 'script',
+    'QA Script': 'qa_script',
+    Humanize: 'spoken_humanization',
+    Scenes: 'scenes',
+    Rhythm: 'visual_rhythm_plan',
+    'QA Scenes': 'qa_scenes',
+    'Anti-AI': 'anti_ai_review',
+    Spans: 'visual_spans',
+    Search: 'visual_acquisition',
+    Background: 'background',
+    Audio: 'audio',
+    'Visual QA': 'visual_local_qa',
+    Beats: 'visual_beats',
+    Schedule: 'visual_schedule',
+    SEO: 'seo',
+    Render: 'render',
+    Memory: 'performance_memory',
+  };
+  return byLabel[label] || '';
+}
+
 function renderShortStep(jobId, shortId, s, idx) {
   const shownStatus = s.status || 'pending';
   const label = s.label || s.name;
@@ -3784,6 +3766,15 @@ function renderShortStep(jobId, shortId, s, idx) {
         : '<span class="step-flow-dot" aria-hidden="true"></span>'
   );
 
+  // Live sub-progress for stages that emit per-unit counters (visual_local_qa
+  // writes current_span / span_index / candidate_index while judging finalists).
+  let stageProgressHtml = '';
+  if (shownStatus === 'in_progress' && s.span_total) {
+    const spanPart = `${escapeHtml(String(s.current_span || ''))} ${s.span_index || 0}/${s.span_total}`;
+    const candPart = s.candidate_total ? ` · cand ${s.candidate_index || 0}/${s.candidate_total}` : '';
+    stageProgressHtml = `<span class="pill in_progress" title="span / candidate progress">${spanPart}${candPart}</span>`;
+  }
+
   let inputs = [];
   let outputs = [];
   
@@ -3794,35 +3785,98 @@ function renderShortStep(jobId, shortId, s, idx) {
   const jsonPrefix = `shorts/${shortId}/json/`;
   const outPrefix = `shorts/${shortId}/outputs/`;
   const audioPrefix = `shorts/${shortId}/audio/`;
-  if (s.name === 'script') {
+  if (s.name === 'retention_plan') {
+    inputs = [{path: `short_ideas.json`, name: 'short_ideas.json'}];
+    outputs = [{path: `${jsonPrefix}retention_plan.json`, name: 'retention_plan.json'}];
+  } else if (s.name === 'script') {
     inputs = [{path: `short_ideas.json`, name: 'short_ideas.json'}];
     outputs = [{path: `${jsonPrefix}short_script.json`, name: 'short_script.json'}];
   } else if (s.name === 'qa_script') {
     inputs = [{path: `${jsonPrefix}short_script.json`, name: 'short_script.json'}];
     outputs = [{path: `${jsonPrefix}short_script_qa.json`, name: 'short_script_qa.json'}];
+  } else if (s.name === 'spoken_humanization') {
+    inputs = [{path: `${jsonPrefix}short_script.json`, name: 'short_script.json'}];
+    outputs = [{path: `${jsonPrefix}spoken_humanization.json`, name: 'spoken_humanization.json'}];
   } else if (s.name === 'scenes') {
     inputs = [{path: `${jsonPrefix}short_script.json`, name: 'short_script.json'}];
     outputs = [{path: `${jsonPrefix}short_scenes.json`, name: 'short_scenes.json'}];
+  } else if (s.name === 'visual_rhythm_plan') {
+    inputs = [{path: `${jsonPrefix}short_scenes.json`, name: 'short_scenes.json'}];
+    outputs = [{path: `${jsonPrefix}visual_rhythm_plan.json`, name: 'visual_rhythm_plan.json'}];
   } else if (s.name === 'qa_scenes') {
     inputs = [{path: `${jsonPrefix}short_scenes.json`, name: 'short_scenes.json'}];
     outputs = [{path: `${jsonPrefix}short_scenes_qa.json`, name: 'short_scenes_qa.json'}];
+  } else if (s.name === 'anti_ai_review') {
+    inputs = [{path: `${jsonPrefix}short_scenes.json`, name: 'short_scenes.json'}];
+    outputs = [{path: `${jsonPrefix}anti_ai_review.json`, name: 'anti_ai_review.json'}];
+  } else if (s.name === 'visual_spans') {
+    inputs = [{path: `${jsonPrefix}short_scenes.json`, name: 'short_scenes.json'}];
+    outputs = [
+      {path: `${jsonPrefix}visual_spans.json`, name: 'visual_spans.json'},
+      {path: `${jsonPrefix}visual_span_qa.json`, name: 'visual_span_qa.json'},
+    ];
+  } else if (s.name === 'visual_acquisition') {
+    inputs = [{path: `${jsonPrefix}visual_spans.json`, name: 'visual_spans.json'}];
+    outputs = [
+      {path: `${jsonPrefix}visual_acquisition_context.json`, name: 'visual_acquisition_context.json'},
+      {path: `${jsonPrefix}visual_span_candidates.json`, name: 'visual_span_candidates.json'},
+      {path: `${jsonPrefix}visual_span_asset_selection.json`, name: 'visual_span_asset_selection.json'},
+      {path: `${jsonPrefix}visual_span_metadata_qa.json`, name: 'visual_span_metadata_qa.json'},
+    ];
+  } else if (s.name === 'background') {
+    inputs = [{path: `${jsonPrefix}short_scenes.json`, name: 'short_scenes.json'}];
+    outputs = [
+      {path: `${jsonPrefix}assets_manifest.json`, name: 'assets_manifest.json'},
+      {path: `${jsonPrefix}background_report.json`, name: 'background_report.json'},
+    ];
   } else if (s.name === 'seo') {
     inputs = [{path: `${jsonPrefix}short_script.json`, name: 'short_script.json'}];
     outputs = [
       {path: `${jsonPrefix}short_seo.json`, name: 'short_seo.json'},
       {path: `${jsonPrefix}short_source_map.json`, name: 'short_source_map.json'}
     ];
-  }
- else if (s.name === 'audio') {
-
+  } else if (s.name === 'audio') {
     inputs = [{path: `${jsonPrefix}short_scenes.json`, name: 'short_scenes.json'}];
-    outputs = [{path: `${audioPrefix}short_mix.m4a`, name: 'short_mix.m4a'}];
+    outputs = [
+      {path: `${audioPrefix}short_mix.m4a`, name: 'short_mix.m4a'},
+      {path: `${jsonPrefix}audio_sync_summary.json`, name: 'audio_sync_summary.json'},
+    ];
+  } else if (s.name === 'visual_local_qa') {
+    inputs = [
+      {path: `${jsonPrefix}visual_span_asset_selection.json`, name: 'visual_span_asset_selection.json'},
+      {path: `${jsonPrefix}assets_manifest.json`, name: 'assets_manifest.json'},
+    ];
+    outputs = [
+      {path: `${jsonPrefix}visual_span_asset_qa.json`, name: 'visual_span_asset_qa.json'},
+      {path: `${jsonPrefix}trim_window_plan.json`, name: 'trim_window_plan.json'},
+    ];
+  } else if (s.name === 'visual_beats') {
+    inputs = [
+      {path: `${jsonPrefix}visual_span_asset_qa.json`, name: 'visual_span_asset_qa.json'},
+      {path: `${jsonPrefix}trim_window_plan.json`, name: 'trim_window_plan.json'},
+    ];
+    outputs = [
+      {path: `${jsonPrefix}visual_beat_plan.json`, name: 'visual_beat_plan.json'},
+      {path: `${jsonPrefix}visual_sequence_qa.json`, name: 'visual_sequence_qa.json'},
+    ];
+  } else if (s.name === 'visual_schedule') {
+    inputs = [
+      {path: `${jsonPrefix}visual_beat_plan.json`, name: 'visual_beat_plan.json'},
+      {path: `${jsonPrefix}short_scenes.json`, name: 'short_scenes.json'},
+    ];
+    outputs = [
+      {path: `${jsonPrefix}compiled_asset_schedule.json`, name: 'compiled_asset_schedule.json'},
+      {path: `${jsonPrefix}compiled_asset_schedule_qa.json`, name: 'compiled_asset_schedule_qa.json'},
+    ];
   } else if (s.name === 'render') {
     inputs = [{path: `${jsonPrefix}short_render_props.json`, name: 'short_render_props.json'}];
     outputs = [
       {path: `${outPrefix}short.mp4`, name: 'short.mp4'},
       {path: `${outPrefix}short_cover.jpg`, name: 'short_cover.jpg'}
     ];
+  } else if (s.name === 'performance_memory') {
+    inputs = [{path: `${outPrefix}short.mp4`, name: 'short.mp4'}];
+    outputs = [{path: `${jsonPrefix}performance_memory.json`, name: 'performance_memory.json'}];
   }
 
   const renderFileRow = (f) => {
@@ -3900,7 +3954,7 @@ function renderShortStep(jobId, shortId, s, idx) {
         <span class="step-num"><span class="step-order">${String(idx + 1).padStart(2, '0')}</span><span class="step-check">${compactStepGlyph}</span></span>
         <span class="step-label"><span class="name">${escapeHtml(label)}</span><span class="code">${escapeHtml(s.name)}</span></span>
         <span class="step-meta">
-          <span class="pill ${shownStatus}">${statusText(shownStatus)}</span>${durHtml}<span class="caret">›</span>
+          ${stageProgressHtml}<span class="pill ${shownStatus}">${statusText(shownStatus)}</span>${durHtml}<span class="caret">›</span>
         </span>
       </div>
       <div class="step-body">
@@ -3970,14 +4024,7 @@ function renderShortStepsTimeline(jobId, draft) {
     else if (s.cls === 'active') statusVal = 'in_progress';
     else if (s.cls === 'fail') statusVal = 'failed';
     
-    let nameVal = '';
-    if (s.label === 'Script' || s.label === 'Short Script') nameVal = 'script';
-    else if (s.label === 'QA Script') nameVal = 'qa_script';
-    else if (s.label === 'Scenes' || s.label === 'Short Scenes') nameVal = 'scenes';
-    else if (s.label === 'QA Scenes') nameVal = 'qa_scenes';
-    else if (s.label === 'SEO' || s.label === 'Short SEO') nameVal = 'seo';
-    else if (s.label === 'Audio' || s.label === 'Audio TTS & Mix') nameVal = 'audio';
-    else if (s.label === 'Render' || s.label === 'Video & Cover Render') nameVal = 'render';
+    const nameVal = shortStageNameFromLabel(s.label);
     
     return {
       name: nameVal,
@@ -4051,12 +4098,7 @@ function startShortsRenderProgressPolling(jobId, shortId) {
             else if (s.status === 'in_progress') cls = 'active';
             else if (s.status === 'failed') cls = 'fail';
             
-            let label = s.label || s.name;
-            if (label === 'Short Script') label = 'Script';
-            else if (label === 'Short Scenes') label = 'Scenes';
-            else if (label === 'Short SEO') label = 'SEO';
-            else if (label === 'Audio TTS & Mix') label = 'Audio';
-            else if (label === 'Video & Cover Render') label = 'Render';
+            const label = shortStageCompactLabel(s.label || s.name, s.name);
             
             return { label: label, cls: cls };
           });
@@ -4158,12 +4200,7 @@ function renderSingleCardHtml(jobId, d, idx, shortsSeoData, isOpen) {
       else if (s.status === 'in_progress') cls = 'active';
       else if (s.status === 'failed') cls = 'fail';
       
-      let label = s.label || s.name;
-      if (label === 'Short Script') label = 'Script';
-      else if (label === 'Short Scenes') label = 'Scenes';
-      else if (label === 'Short SEO') label = 'SEO';
-      else if (label === 'Audio TTS & Mix') label = 'Audio';
-      else if (label === 'Video & Cover Render') label = 'Render';
+      const label = shortStageCompactLabel(s.label || s.name, s.name);
       
       return { label: label, cls: cls };
     });
@@ -4516,16 +4553,25 @@ function inferRenderStages(draft) {
   const qa = draft.qa_verdict || '';
   const hasVideo = !!draft.video_path;
   const hasAudio = st === 'rendered' || hasVideo || (draft.stages && draft.stages.some(s => s.name === 'audio' && s.status === 'completed'));
-  const hasThumb = st === 'rendered' || hasVideo || (draft.stages && draft.stages.some(s => s.name === 'thumbnail' && (s.status === 'completed' || s.status === 'skipped')));
   const stages = [
+    { label: 'Retention', cls: 'done' },
     { label: 'Script', cls: 'done' },
     { label: 'QA Script', cls: qa ? 'done' : '' },
+    { label: 'Humanize', cls: qa ? 'done' : '' },
     { label: 'Scenes', cls: 'done' },
+    { label: 'Rhythm', cls: '' },
     { label: 'QA Scenes', cls: qa ? 'done' : '' },
-    { label: 'SEO', cls: 'done' },
-    { label: 'Thumbnail', cls: hasThumb ? 'done' : '' },
+    { label: 'Anti-AI', cls: qa ? 'done' : '' },
+    { label: 'Spans', cls: '' },
+    { label: 'Search', cls: '' },
+    { label: 'Background', cls: '' },
     { label: 'Audio', cls: hasAudio ? 'done' : '' },
+    { label: 'Visual QA', cls: '' },
+    { label: 'Beats', cls: '' },
+    { label: 'Schedule', cls: '' },
+    { label: 'SEO', cls: 'done' },
     { label: 'Render', cls: hasVideo ? 'done' : '' },
+    { label: 'Memory', cls: hasVideo ? 'done' : '' },
   ];
 
   if (st === 'failed') {

@@ -68,7 +68,7 @@ def test_job_queue_active_jobs_returns_pending_and_running(tmp_path: Path):
     }
 
 
-@pytest.mark.parametrize("html_name", ["dashboard.html", "shorts_studio.html"])
+@pytest.mark.parametrize("html_name", ["shorts_studio.html"])
 def test_rendered_shorts_copy_hashtags_with_commas(html_name: str):
     html = (Path(__file__).parents[1] / "src" / "video_agent" / "web" / html_name).read_text(encoding="utf-8")
 
@@ -90,6 +90,68 @@ def test_shorts_studio_displays_qa_scenes_attempts():
     assert "function renderQaScenesAttempts" in html
     assert "QA Scenes:" in html
     assert "qa_scenes_attempts" in html
+
+
+@pytest.mark.parametrize("html_name", ["shorts_studio.html"])
+def test_shorts_ui_fallback_pipeline_matches_current_short_stages(html_name: str):
+    html = (Path(__file__).parents[1] / "src" / "video_agent" / "web" / html_name).read_text(encoding="utf-8")
+    fallback_src = html.split("function inferRenderStages", 1)[1].split("function toggleRenderCard", 1)[0]
+
+    for label in (
+        "Retention",
+        "Script",
+        "QA Script",
+        "Humanize",
+        "Scenes",
+        "Rhythm",
+        "QA Scenes",
+        "Anti-AI",
+        "Spans",
+        "Search",
+        "Background",
+        "Audio",
+        "Visual QA",
+        "Beats",
+        "Schedule",
+        "SEO",
+        "Render",
+        "Memory",
+    ):
+        assert f"label: '{label}'" in fallback_src
+
+    assert "Thumbnail" not in fallback_src
+    assert "hasThumb" not in fallback_src
+
+
+@pytest.mark.parametrize("html_name", ["shorts_studio.html"])
+def test_shorts_ui_step_links_include_current_quality_artifacts(html_name: str):
+    html = (Path(__file__).parents[1] / "src" / "video_agent" / "web" / html_name).read_text(encoding="utf-8")
+    step_src = html.split("function renderShortStep", 1)[1].split("function renderShortReviewNotice", 1)[0]
+
+    for artifact in (
+        "retention_plan.json",
+        "spoken_humanization.json",
+        "visual_rhythm_plan.json",
+        "anti_ai_review.json",
+        "visual_spans.json",
+        "visual_acquisition_context.json",
+        "visual_span_asset_qa.json",
+        "visual_beat_plan.json",
+        "compiled_asset_schedule.json",
+        "performance_memory.json",
+    ):
+        assert artifact in step_src
+
+    assert "s.name === 'thumbnail'" not in step_src
+
+
+@pytest.mark.parametrize("html_name", ["dashboard.html", "shorts_studio.html"])
+def test_shorts_ui_does_not_render_legacy_shorts_render_stage(html_name: str):
+    html = (Path(__file__).parents[1] / "src" / "video_agent" / "web" / html_name).read_text(encoding="utf-8")
+
+    assert "shorts_render: 'Shorts Render'" not in html
+    assert "s.name === 'shorts_render'" not in html
+    assert "OPEN_STAGES.add('shorts_render')" not in html
 
 
 def test_shorts_studio_state_uses_busy_guard_for_queue_jobs(client: TestClient, tmp_path: Path):

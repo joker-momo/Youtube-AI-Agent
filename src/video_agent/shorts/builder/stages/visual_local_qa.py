@@ -92,6 +92,50 @@ _FORBIDDEN_FIELDS = (
     "forbidden_action_tags",
     "forbidden_evidence_tags",
 )
+_MIN_REQUIRED_SEMANTIC_SUPPORT_CONFIDENCE = 1.0
+
+
+def _numeric_confidence(record: dict[str, Any]) -> float | None:
+    value = record.get("confidence")
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_weak_required_support(record: dict[str, Any]) -> bool:
+    if record.get("status") != "SUPPORTED":
+        return False
+    req = str(record.get("requirement") or "")
+    if req != "topic:visual_intent" and not req.startswith("required_"):
+        return False
+    confidence = _numeric_confidence(record)
+    return (
+        confidence is not None
+        and confidence < _MIN_REQUIRED_SEMANTIC_SUPPORT_CONFIDENCE
+    )
+
+
+def _has_weak_required_support(records: list[dict[str, Any]]) -> bool:
+    return any(_is_weak_required_support(r) for r in records)
+
+
+def _reject_capability_reduced_candidate(
+    *,
+    mode: str,
+    local_qa: dict[str, Any],
+    span: dict[str, Any],
+    records: list[dict[str, Any]],
+) -> bool:
+    return (
+        mode == "enforced"
+        and bool(local_qa.get("critical_fail_closed", True))
+        and span.get("visual_importance") == "critical"
+        and _has_weak_required_support(records)
+        and not any(r.get("status") == "CAPABILITY_UNAVAILABLE" for r in records)
+    )
 
 
 def _placeholder_records(span: dict[str, Any], candidate_id: str | None) -> list[dict[str, Any]]:
@@ -157,7 +201,7 @@ def _semantic_records(
                 "capability_source": "unknown",
                 "asset_id": candidate_id,
                 "confidence": None,
-                "reason": f"semantic cascade error: {exc.__class__.__name__}",
+                "reason": f"semantic cascade error: {exc.__class__.__name__}: {exc}",
             }
         ]
     return records or _placeholder_records(span, candidate_id)
@@ -205,7 +249,13 @@ def _qa_verdict(records: list[dict[str, Any]], candidate_verdict: str) -> str:
             req.startswith("required_subject") or req == "topic:visual_intent"
         ):
             return "FAIL"
-    if any(r.get("status") in ("CAPABILITY_UNAVAILABLE", "UNKNOWN") for r in records):
+    # CAPABILITY_UNAVAILABLE = the model genuinely could not run (missing weights,
+    # crash) → we cannot verify → degrade. UNKNOWN = the model RAN but the margin
+    # was ambiguous (not contradicted): the footage is not proven wrong, so accept
+    # it rather than fail-closing the whole Short on a borderline SigLIP score.
+    if any(r.get("status") == "CAPABILITY_UNAVAILABLE" for r in records):
+        return "CAPABILITY_REDUCED"
+    if _has_weak_required_support(records):
         return "CAPABILITY_REDUCED"
     return "PASS"
 
@@ -251,7 +301,9 @@ def _stage_visual_local_qa(ctx: BuildContext) -> StageResult:
         seen_hashes: set[str] = set()
         max_runner_ups = int(local_qa.get("max_runner_ups", 2))
 
-        for span in acquisition.get("spans") or []:
+        spans_list = list(acquisition.get("spans") or [])
+        span_total = len(spans_list)
+        for span_index, span in enumerate(spans_list, start=1):
             span_id = span["visual_span_id"]
             selection = selection_by_span.get(span_id, {})
             required_frames = _span_required_frames(span, short_scenes, fps)
@@ -262,10 +314,24 @@ def _stage_visual_local_qa(ctx: BuildContext) -> StageResult:
             final_analysis: dict[str, Any] | None = None
             final_semantic_records: list[dict[str, Any]] = []
 
-            for cid in _finalist_ids(selection, max_runner_ups=max_runner_ups):
+            finalist_ids = list(_finalist_ids(selection, max_runner_ups=max_runner_ups))
+            candidate_total = len(finalist_ids)
+            for cand_index, cid in enumerate(finalist_ids, start=1):
                 candidate = candidates_by_span.get(span_id, {}).get(cid)
                 if not candidate:
                     continue
+                # Per-candidate progress so the dashboard reflects the slow
+                # download+analyze+semantic cascade in real time (not a silent gap).
+                ctx.update_stage(
+                    "visual_local_qa",
+                    "in_progress",
+                    current_span=span_id,
+                    span_index=span_index,
+                    span_total=span_total,
+                    candidate_index=cand_index,
+                    candidate_total=candidate_total,
+                    downloads=download_count,
+                )
                 downloaded: dict[str, Any] | None = None
                 analysis: dict[str, Any] | None = None
                 trim: dict[str, Any] | None = None
@@ -310,6 +376,14 @@ def _stage_visual_local_qa(ctx: BuildContext) -> StageResult:
                     if semantic_verdict == "FAIL":
                         rejection_reasons.append("semantic_mismatch")
                     verdict = semantic_verdict
+                    if verdict == "CAPABILITY_REDUCED" and _reject_capability_reduced_candidate(
+                        mode=mode,
+                        local_qa=local_qa,
+                        span=span,
+                        records=semantic_records,
+                    ):
+                        verdict = "FAIL"
+                        rejection_reasons.append("semantic_weak_required_support")
                 candidate_qas.append(
                     {
                         "candidate_id": cid,

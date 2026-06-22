@@ -189,6 +189,54 @@ def _stage_background(ctx: BuildContext) -> None:
         raise exc
 
 
+def _stage_fallback_image_gen(ctx: BuildContext) -> None:
+    """Lazy AI fallback: generate ChatGPT images for scenes that need a clean
+    controlled background — (a) spans whose Pexels video was rejected by
+    visual_local_qa, and (b) CTA end-card scenes, which always use a clean AI image
+    instead of off-brand stock (corkboards / foreign-language text). No-op when
+    nothing qualifies."""
+    asset_qa = ctx.extras.get("visual_span_asset_qa") or {}
+    short_scenes = ctx.extras.get("short_scenes") or {}
+    rejected_scene_ids: set[str] = set()
+    for span in asset_qa.get("spans") or []:
+        status = span.get("final_selection_status")
+        verdict = (span.get("qa") or {}).get("verdict")
+        if status == "rejected" or verdict == "FAIL" or not span.get("final_candidate_id"):
+            rejected_scene_ids.update(str(s) for s in (span.get("scene_ids") or []))
+    # Hook + CTA + short_tip scenes always get a clean AI background (beat planner
+    # then prefers it): the hook needs a human/emotional first frame, the CTA an
+    # on-brand end card, and short_tip scenes need a precise single human-pose
+    # action (sit/feet, breathe, write, message) that stock topic-matches but often
+    # fails to actually show. The montage (short_checklist) keeps real stock motion.
+    for scene in short_scenes.get("scenes") or []:
+        layout = str(scene.get("layout") or "")
+        rf = str(scene.get("retention_function") or "")
+        if layout in {"short_cta", "cta", "short_hook", "hook", "short_tip"} or rf in {
+            "cta",
+            "hook",
+        }:
+            rejected_scene_ids.add(str(scene.get("id")))
+    if not rejected_scene_ids:
+        return
+    ctx.update_stage("background", "in_progress", fallback_regen=sorted(rejected_scene_ids))
+    try:
+        from video_agent.shorts.audio import regen_fallback_backgrounds
+
+        regen_fallback_backgrounds(
+            ctx.short_dir, short_scenes, ctx.channel_config, rejected_scene_ids
+        )
+        manifest_path = ctx.json_dir / "assets_manifest.json"
+        if manifest_path.exists():
+            from video_agent.utils.json_io import read_json
+
+            ctx.extras["assets_manifest"] = read_json(manifest_path)
+        ctx.update_stage(
+            "background", "completed", fallback_regen_count=len(rejected_scene_ids)
+        )
+    except Exception as exc:  # noqa: BLE001 - lazy gen failure degrades to placeholder
+        ctx.update_stage("background", "completed", fallback_regen_error=str(exc))
+
+
 def _stage_audio(ctx: BuildContext) -> StageResult:
     """Stage: audio TTS + audio_fit check.
 

@@ -4,6 +4,7 @@ A Short folder is materialized into a self-contained mini-job (long-form-named
 aliases) so the existing Remotion render pipeline can render it vertically
 (1080x1920). The cover is a frame extracted from the rendered video.
 """
+
 from __future__ import annotations
 
 import json
@@ -12,6 +13,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from video_agent.contracts import repo_root
 from video_agent.shorts import paths
 from video_agent.storage.atomic import atomic_write_json
 
@@ -20,6 +22,27 @@ SHORT_RESOLUTION = "1080x1920"
 
 def _load(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+
+def _mirror_short_assets_to_public(short_dir: Path) -> None:
+    """Mirror prepared short assets into Remotion's public dir.
+
+    The legacy background stage already copies scene-level assets to
+    ``remotion/public/jobs/<short>/assets`` while preparing them. PR D local QA
+    downloads finalist span videos later, so ``assets/visual_spans`` can exist
+    only in the short folder unless we mirror it before render/rerender.
+    """
+    src_root = short_dir / "assets"
+    if not src_root.exists():
+        return
+    public_root = repo_root() / "remotion" / "public" / "jobs" / short_dir.name / "assets"
+    for src in src_root.rglob("*"):
+        if not src.is_file():
+            continue
+        rel = src.relative_to(src_root)
+        dst = public_root / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
 
 
 def materialize_short_job_aliases(short_dir: Path, channel_config: dict | None = None) -> None:
@@ -45,15 +68,18 @@ def materialize_short_job_aliases(short_dir: Path, channel_config: dict | None =
         sections = short_script.get("sections") or [
             {"title": short_script.get("hook", ""), "focus": short_script.get("narration", "")}
         ]
-        atomic_write_json(jd / "script.json", {
-            "channel_id": channel_id,
-            "job_id": job_id,
-            "hook": short_script.get("hook", ""),
-            "sections": sections,
-            "narration": short_script.get("narration", ""),
-            "cta": short_script.get("cta", ""),
-            "qa": {"verdict": "PASS"},
-        })
+        atomic_write_json(
+            jd / "script.json",
+            {
+                "channel_id": channel_id,
+                "job_id": job_id,
+                "hook": short_script.get("hook", ""),
+                "sections": sections,
+                "narration": short_script.get("narration", ""),
+                "cta": short_script.get("cta", ""),
+                "qa": {"verdict": "PASS"},
+            },
+        )
 
     if short_scenes:
         scenes = dict(short_scenes)
@@ -69,20 +95,28 @@ def materialize_short_job_aliases(short_dir: Path, channel_config: dict | None =
 
     if short_seo:
         title = short_seo.get("title", "")
-        atomic_write_json(jd / "seo.json", {
-            "job_id": job_id,
-            "title": title,
-            "description": short_seo.get("description", ""),
-            "tags": short_seo.get("tags") or short_seo.get("hashtags") or ["shorts"],
-            "language": short_seo.get("language", "es-ES"),
-            "ai_disclosure": bool(short_seo.get("ai_disclosure", True)),
-            "thumbnail_path": "outputs/short_cover.jpg",
-            "thumbnail_text": (title[:25] or "SHORT").upper(),
-            "suggested_pinned_comments": short_seo.get("pinned_comment", ""),
-        })
+        atomic_write_json(
+            jd / "seo.json",
+            {
+                "job_id": job_id,
+                "title": title,
+                "description": short_seo.get("description", ""),
+                "tags": short_seo.get("tags") or short_seo.get("hashtags") or ["shorts"],
+                "language": short_seo.get("language", "es-ES"),
+                "ai_disclosure": bool(short_seo.get("ai_disclosure", True)),
+                "thumbnail_path": "outputs/short_cover.jpg",
+                "thumbnail_text": (title[:25] or "SHORT").upper(),
+                "suggested_pinned_comments": short_seo.get("pinned_comment", ""),
+            },
+        )
 
     if short_render_props:
-        atomic_write_json(jd / "render_props.json", {**short_render_props, "_render_props_path": str(jd / "render_props.json")})
+        atomic_write_json(
+            jd / "render_props.json",
+            {**short_render_props, "_render_props_path": str(jd / "render_props.json")},
+        )
+
+    _mirror_short_assets_to_public(short_dir)
 
 
 def _is_portrait_image(image_path: Path) -> bool:
@@ -92,13 +126,20 @@ def _is_portrait_image(image_path: Path) -> bool:
     try:
         result = subprocess.run(
             [
-                "ffprobe", "-v", "error",
-                "-select_streams", "v:0",
-                "-show_entries", "stream=width,height",
-                "-of", "csv=p=0",
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height",
+                "-of",
+                "csv=p=0",
                 str(image_path),
             ],
-            check=True, capture_output=True, text=True,
+            check=True,
+            capture_output=True,
+            text=True,
         )
         parts = result.stdout.strip().split(",")
         if len(parts) >= 2:
@@ -114,10 +155,14 @@ def build_cover_extract_command(video_path: Path, out_path: Path, frame_sec: flo
     return [
         "ffmpeg",
         "-y",
-        "-ss", str(frame_sec),
-        "-i", str(video_path),
-        "-frames:v", "1",
-        "-q:v", "2",
+        "-ss",
+        str(frame_sec),
+        "-i",
+        str(video_path),
+        "-frames:v",
+        "1",
+        "-q:v",
+        "2",
         str(out_path),
     ]
 
@@ -176,21 +221,30 @@ def render_short_video(
 
 
 def build_remotion_short_cover_command(
-    entry: Path, render_props: Path, out_path: Path,
+    entry: Path,
+    render_props: Path,
+    out_path: Path,
 ) -> list[str]:
     """Pure command builder for the Remotion ShortCover still."""
     return [
-        "npx", "--prefix", str(entry.parent.parent),
-        "remotion", "still",
-        str(entry), "ShortCover", str(out_path),
-        "--props", str(render_props),
-        "--image-format", "jpeg",
+        "npx",
+        "--prefix",
+        str(entry.parent.parent),
+        "remotion",
+        "still",
+        str(entry),
+        "ShortCover",
+        str(out_path),
+        "--props",
+        str(render_props),
+        "--image-format",
+        "jpeg",
     ]
 
 
 def render_short_cover(short_dir: Path, channel_config: dict) -> Path:
     """ChatGPT-generated thumbnail is the primary cover (from Stage 5b).
-    
+
     Bypasses Remotion completely. If the ChatGPT thumbnail is missing,
     falls back to extracting a frame from the rendered video using ffmpeg.
     """
@@ -221,7 +275,8 @@ def render_short_cover(short_dir: Path, channel_config: dict) -> Path:
         try:
             subprocess.run(
                 build_cover_extract_command(video, out, frame_sec),
-                check=True, capture_output=True,
+                check=True,
+                capture_output=True,
             )
             _save_friendly_copy(short_dir, out, ext=".jpg")
         except Exception:
@@ -230,39 +285,39 @@ def render_short_cover(short_dir: Path, channel_config: dict) -> Path:
 
 
 def _save_friendly_copy(short_dir: Path, source_file: Path, ext: str) -> None:
+    import datetime
     import json
     import re
-    import unicodedata
-    import datetime
     import shutil
-    
+    import unicodedata
+
     idea_path = paths.resolve_short_json(short_dir, paths.SHORT_IDEA_FILE)
     if not idea_path.exists():
         return
-        
+
     try:
         idea_data = json.loads(idea_path.read_text(encoding="utf-8"))
     except Exception:
         return
-        
+
     idea_id = idea_data.get("idea_id") or "idea"
     title = idea_data.get("title") or ""
     if not title:
         title = idea_data.get("hook_text") or "short"
-        
+
     # Normalize/slugify title
-    title_slug = unicodedata.normalize('NFKD', title).encode('ascii', 'ignore').decode('utf-8')
+    title_slug = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode("utf-8")
     title_slug = title_slug.lower()
-    title_slug = re.sub(r'[^a-z0-9\s-]', '', title_slug)
-    title_slug = re.sub(r'[\s-]+', '-', title_slug).strip('-')
-    
+    title_slug = re.sub(r"[^a-z0-9\s-]", "", title_slug)
+    title_slug = re.sub(r"[\s-]+", "-", title_slug).strip("-")
+
     # Use localized timestamp
     now = datetime.datetime.now()
     timestamp = now.strftime("%Y%m%d_%H%M%S")
-    
+
     short_id = short_dir.name
     friendly_name = f"{short_id}_{idea_id}_{timestamp}_{title_slug}{ext}"
-    
+
     dest = short_dir.parent / friendly_name
     if source_file.exists():
         shutil.copy2(source_file, dest)

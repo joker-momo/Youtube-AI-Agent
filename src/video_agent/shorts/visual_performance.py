@@ -249,8 +249,21 @@ def build_visual_performance_features(
     modes = _selected_plan_modes(visual_beat_plan)
     track_modes = [str((track.get("selection_debug") or {}).get("mode") or "") for track in tracks]
     native_tracks = sum(1 for track in tracks if track.get("source_media_kind") == "native_video")
+    image_tracks = sum(
+        1
+        for track in tracks
+        if track.get("source_media_kind") in {"native_image", "image_backed_video"}
+    )
     placeholders = sum(
         1 for track in tracks if track.get("source_media_kind") == "generated_placeholder"
+    )
+    native_continuous_tracks = sum(
+        1
+        for track in tracks
+        if track.get("source_media_kind") == "native_video"
+        and str((track.get("selection_debug") or {}).get("mode") or "").endswith(
+            "continuous_clip"
+        )
     )
     quality = _quality_from_span_asset_qa(visual_span_asset_qa)
     trim_quality = _trim_quality(trim_window_plan)
@@ -293,6 +306,9 @@ def build_visual_performance_features(
         "visual_features": {
             "visual_span_count": len((visual_beat_plan or {}).get("spans") or []),
             "continuous_clip_count": sum(1 for mode in modes if mode == "continuous_clip"),
+            "native_continuous_track_count": native_continuous_tracks,
+            "image_backed_track_count": image_tracks,
+            "graphic_fallback_track_count": placeholders,
             "two_clip_plan_count": sum(1 for mode in modes if mode == "two_clip"),
             "clip_plus_graphic_count": sum(1 for mode in modes if mode == "clip_plus_graphic"),
             "graphic_beat_count": _graphic_beat_count(visual_beat_plan),

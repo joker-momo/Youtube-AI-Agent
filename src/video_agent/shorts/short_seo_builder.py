@@ -141,11 +141,17 @@ def build_short_seo(
             except Exception:  # pragma: no cover - tagging must never break SEO
                 pass
         parsed = _parse(_invoke(llm_fn, "seo", prompt))
-        pinned = parsed.get("pinned_comment") or (
-            pinned_template.replace("{long_video_url}", long_video_url) if pinned_template else ""
-        )
-        if trigger_question and "?" in trigger_question and not any(term in trigger_question.lower() for term in ("suscr", "urgente", "miedo", "cura")):
+        # Prefer the LLM's pinned_comment (richer, on-topic, already a question).
+        # The retention-plan trigger_question and the funnel template are only
+        # FALLBACKS — never overwrite a good LLM comment with the short generic
+        # trigger (that silently replaced full comments with "¿También te pasa?").
+        pinned = (parsed.get("pinned_comment") or "").strip()
+        if not pinned and trigger_question and "?" in trigger_question and not any(
+            term in trigger_question.lower() for term in ("suscr", "urgente", "miedo", "cura")
+        ):
             pinned = trigger_question
+        if not pinned and pinned_template:
+            pinned = pinned_template.replace("{long_video_url}", long_video_url)
         hashtags = _normalize_hashtags(parsed.get("hashtags"))
         if not hashtags:
             hashtags = list(_DEFAULT_FALLBACK_HASHTAGS)

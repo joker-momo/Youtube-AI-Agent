@@ -157,12 +157,12 @@ def test_two_clip_plan_has_editorial_boundaries_not_punctuation() -> None:
     assert all(beat["boundary_reason"] != "sentence_punctuation" for beat in selected["beats"])
 
 
-def test_clip_plus_graphic_uses_existing_graphic_infrastructure() -> None:
+def test_clip_plus_graphic_uses_generated_image_instead_of_graphic_renderer() -> None:
     plan = build_visual_beat_plan(
         short_id="short-04",
         scene_doc={"scenes": [_scene("s01", 2.0), _scene("s02", 2.0, graphic=True)]},
         visual_spans={"spans": [{"id": "vs01", "scene_ids": ["s01", "s02"]}]},
-        resolved_visuals={"scenes": {"s01": _resolved("s01")}},
+        resolved_visuals={"scenes": {"s01": _resolved("s01"), "s02": _resolved("s02", source_kind="image_backed_video")}},
         trim_window_plan={"spans": []},
         visual_span_asset_qa=_asset_qa("FAIL"),
         channel_config={"shorts": {"visual_quality_flow": {"beat_planner": {"enabled": True}}}},
@@ -172,6 +172,25 @@ def test_clip_plus_graphic_uses_existing_graphic_infrastructure() -> None:
     selected = plan["spans"][0]["selected_plan"]
     assert selected["mode"] == "clip_plus_graphic"
     graphic = selected["beats"][1]
-    assert graphic["type"] == "graphic"
-    assert graphic["renderer"] == "existing_scene_graphic"
-    assert graphic["asset_selection_ref"] is None
+    assert graphic["type"] == "generated_image"
+    assert graphic["asset_ref"] == "jobs/short-04/assets/s02.mp4"
+    assert graphic["source_media_kind"] == "image_backed_video"
+
+
+def test_no_valid_pexels_span_uses_generated_image_fallback_plan() -> None:
+    plan = build_visual_beat_plan(
+        short_id="short-04",
+        scene_doc={"scenes": [_scene("s01", 2.0)]},
+        visual_spans={"spans": [{"id": "vs01", "scene_ids": ["s01"]}]},
+        resolved_visuals={"scenes": {"s01": _resolved("s01", source_kind="image_backed_video")}},
+        trim_window_plan={"spans": []},
+        visual_span_asset_qa=_asset_qa("FAIL"),
+        channel_config={"shorts": {"visual_quality_flow": {"beat_planner": {"enabled": True}}}},
+        fps=30,
+    )
+
+    span = plan["spans"][0]
+    selected = span["selected_plan"]
+    assert selected["mode"] == "generated_image_fallback"
+    assert selected["beats"][0]["type"] == "generated_image"
+    assert span["qa"]["verdict"] == "PASS"

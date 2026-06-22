@@ -30,9 +30,9 @@ class _FakeAdapter:
         return self._records
 
 
-def _ev(req: str, status: str) -> dict[str, Any]:
+def _ev(req: str, status: str, *, confidence: float | None = None) -> dict[str, Any]:
     return {"requirement": req, "status": status, "capability_source": "optional_semantic_model",
-            "model": "fake", "model_version": "fake", "asset_id": "c1", "confidence": None, "reason": "x"}
+            "model": "fake", "model_version": "fake", "asset_id": "c1", "confidence": confidence, "reason": "x"}
 
 
 # --------------------------------------------------------------------------- #
@@ -146,7 +146,17 @@ def test_qa_verdict_forbidden_present_is_fail() -> None:
 
 
 def test_qa_verdict_all_supported_is_pass() -> None:
-    assert _qa_verdict([_ev("required_subject:adult_45_plus", "SUPPORTED")], "PASS") == "PASS"
+    assert _qa_verdict([_ev("required_subject:adult_45_plus", "SUPPORTED", confidence=2.0)], "PASS") == "PASS"
+
+
+def test_qa_verdict_weak_required_semantic_support_is_capability_reduced() -> None:
+    # A model that ran but only weakly supports the visual intent is not enough
+    # evidence to publish a critical span in enforced mode.
+    recs = [
+        _ev("topic:visual_intent", "SUPPORTED", confidence=0.18),
+        _ev("required_subject:age_band_45_plus", "SUPPORTED", confidence=2.4),
+    ]
+    assert _qa_verdict(recs, "PASS") == "CAPABILITY_REDUCED"
 
 
 def test_qa_verdict_unknown_is_capability_reduced() -> None:

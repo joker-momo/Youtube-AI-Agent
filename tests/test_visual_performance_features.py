@@ -134,6 +134,9 @@ def test_visual_performance_features_are_versioned_and_stable() -> None:
     assert features["feature_schema_version"] == "visual_performance_features.v1"
     assert features["visual_features"]["visual_span_count"] == 2
     assert features["visual_features"]["continuous_clip_count"] == 1
+    assert features["visual_features"]["native_continuous_track_count"] == 1
+    assert features["visual_features"]["image_backed_track_count"] == 0
+    assert features["visual_features"]["graphic_fallback_track_count"] == 1
     assert features["visual_features"]["graphic_beat_count"] == 1
     assert features["visual_features"]["legacy_fallback_count"] == 1
     assert features["visual_features"]["placeholder_count"] == 1

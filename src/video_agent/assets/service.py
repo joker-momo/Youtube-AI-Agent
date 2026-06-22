@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -264,6 +265,94 @@ def _force_elderly_demographic(query: str) -> str:
             q = f"{q} european latin american"
         return q.strip()
     return query
+
+
+def _compact_payload_text(value: Any) -> str:
+    """Flatten a layout payload into prompt text without losing its labels."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, list):
+        return "; ".join(filter(None, (_compact_payload_text(item) for item in value)))
+    if isinstance(value, dict):
+        parts: list[str] = []
+        for key, item in value.items():
+            text = _compact_payload_text(item)
+            if text:
+                parts.append(f"{key}: {text}")
+        return "; ".join(parts)
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except TypeError:
+        return str(value)
+
+
+def build_scene_image_prompt(scene: dict[str, Any], query: str) -> str:
+    """Build the ChatGPT image prompt for AI fallback scenes.
+
+    For former ``graphic_*`` scenes the generated image must carry the same
+    teaching content as the graphic payload, but as a richer editorial visual
+    instead of a rigid renderer card.
+    """
+    layout = str(scene.get("layout") or "")
+    payload = scene.get("layout_payload") or {}
+    title = (
+        str(payload.get("title") or "")
+        if isinstance(payload, dict)
+        else ""
+    ).strip()
+    on_screen = str(scene.get("on_screen_text") or title or "").strip()
+    caption = str(scene.get("caption") or "").strip()
+    narration = str(scene.get("narration") or "").strip()
+    visual_prompt = str(scene.get("visual_prompt") or query or "").strip()
+    payload_text = _compact_payload_text(payload)
+    is_graphic = layout.startswith("graphic_")
+    is_cta = layout in {"short_cta", "cta"} or str(scene.get("retention_function") or "") == "cta"
+    is_hook = layout in {"short_hook", "hook"} or str(scene.get("retention_function") or "") == "hook"
+
+    if is_hook:
+        # The 3-second hook decides the swipe. A clean, human, emotional first
+        # frame beats an empty-room stock clip. CLEAN background only (renderer
+        # overlays the hook headline) — no trigger words so the driver keeps its
+        # "no text overlays" guard.
+        return (
+            "A vertical medium close-up photograph of one calm adult aged 50 to 60 at home "
+            "(living room or kitchen), face clearly visible and centered, expression subtly "
+            "overwhelmed yet composed, gently holding a phone or a warm mug of tea, soft warm "
+            "natural light, shallow depth of field, photorealistic editorial photography.\n"
+            f"Scene mood: {caption or narration or visual_prompt}"
+        )
+
+    if is_graphic:
+        return (
+            "Create a premium vertical editorial image for a Spanish wellness Short for adults 45+. "
+            "Replace a flat infographic/card with a natural, polished visual that still includes all teaching content. "
+            "Use warm Mediterranean light, realistic textures, tasteful magazine-style composition, and large legible Spanish typography. "
+            "Do not use a plain beige card, template checklist, generic icons, stock-photo collage, watermark, or tiny text.\n"
+            f"Scene visual idea: {visual_prompt}\n"
+            f"Main headline to include exactly: {on_screen or title}\n"
+            f"Graphic payload content to include clearly: {payload_text}\n"
+            f"Narration context: {narration or caption}\n"
+            "Keep the text short, high contrast, inside mobile safe margins, and visually integrated with the scene."
+        )
+    if is_cta:
+        # CLEAN background only — the renderer overlays the CTA headline itself, so
+        # the image must contain NO burned-in wording (a generated image with the
+        # headline plus the renderer overlay produced two overlapping texts). Phrase
+        # it WITHOUT trigger words (text/title/overlay/word/logo/watermark) so the
+        # driver keeps its default "no text overlays, no watermark" guard.
+        return (
+            "A warm, inviting vertical wellness photograph for adults 45+. "
+            "A calm mature 45+ adult in a peaceful walking or at-home wellness moment, "
+            "soft natural golden light, gentle shallow depth of field, serene and hopeful mood, "
+            "with plenty of calm empty space in the upper third of the frame. "
+            "Photorealistic editorial photography.\n"
+            f"Scene mood: {caption or narration or visual_prompt}"
+        )
+    return visual_prompt or query
 
 
 
@@ -776,11 +865,12 @@ class StockAssetService:
         strategy = scene.get("asset_strategy", "stock_ok")
         visual_importance = scene.get("visual_importance", "normal")
         is_key = visual_importance == "critical" or self._is_key_scene(scene)
+        is_graphic_layout = str(scene.get("layout") or "").startswith("graphic_")
 
         # 5-tier cascade based on asset_strategy
 
         # Tier 1 & 2: Strict Stock Search (always attempted first if not graphic_fallback)
-        if strategy != "graphic_fallback":
+        if strategy != "graphic_fallback" and not is_graphic_layout:
             # Tier 1 — stock video, strict only.
             asset = _search(self.providers, require_strict=True)
             if asset is not None:
@@ -802,7 +892,13 @@ class StockAssetService:
         # pause). Weak stock (Tier 4b) is kept only as the degraded path for when
         # AI generation is unavailable or fails. Quality > cost (PRIME DIRECTIVE).
         enable_ai_fallback = str(os.environ.get("ENABLE_AI_IMAGE_FALLBACK", "true")).lower() == "true"
-        ai_triggered = strategy != "graphic_fallback"
+        # Lazy AI policy: when this scene is covered by a span that already has a
+        # provisional Pexels VIDEO finalist, skip the expensive ChatGPT tier here.
+        # The span video supersedes the per-scene background at render time; AI is
+        # only generated later (post visual_local_qa) for spans whose video was
+        # rejected. Avoids ~10 min of wasted image-gen per short.
+        skip_ai = bool(scene.get("_skip_ai_fallback"))
+        ai_triggered = (strategy != "graphic_fallback" or is_graphic_layout) and not skip_ai
         if ai_triggered and enable_ai_fallback and self.image_gen_fn is not None:
             # max retries logic is handled inside _ai_generate_scene_asset
             asset = self._ai_generate_scene_asset(scene, query, channel_id, job_id)
@@ -815,7 +911,7 @@ class StockAssetService:
         # higher tier (stock, AI) was skipped or failed, so for key scenes the
         # graphic is the last usable net — a key scene must never fall through
         # to a blank Tier-5 block merely because the AI tier was attempted.
-        if strategy == "graphic_fallback" or is_key:
+        if strategy == "graphic_fallback" or is_key or is_graphic_layout:
             return {
                 "provider": "graphic_fallback",
                 "asset_id": f"graphic_{job_id}_{scene['id']}",
@@ -963,7 +1059,7 @@ class StockAssetService:
         """Last-resort tier: render an AI image from the scene's visual_prompt."""
         import hashlib
 
-        prompt = str(scene.get("visual_prompt") or query or "").strip()
+        prompt = build_scene_image_prompt(scene, query).strip()
         if not prompt:
             return None
 
@@ -980,13 +1076,14 @@ class StockAssetService:
             try:
                 out_dir.mkdir(parents=True, exist_ok=True)
 
-                # Prepend the portrait image gen instruction
-                image_gen_instruction = (
-                    "Generate one photorealistic image at exactly 1080x1920 pixels "
-                    "(Full HD, 9:16 portrait orientation). Fill the entire 1080x1920 frame — "
-                    "no borders, no padding, no commentary, no watermark."
-                )
-                full_prompt = f"{image_gen_instruction}\n\n{prompt}"
+                # The browser-worker image driver (build_image_gen_prompt) is the
+                # single source of truth for the dimension/format instruction and
+                # runs contradiction checks (text/watermark/border) against the
+                # prompt. Pass the raw scene/CTA prompt so the instruction is added
+                # exactly once — a manual copy here duplicated it and bypassed the
+                # contradiction stripping (e.g. CTA wants readable text but the
+                # buried copy still said "no commentary").
+                full_prompt = prompt
 
                 # Browser-worker refuses to write outside the 'jobs/' directory.
                 # So we must tell it to write to a temp file inside the job dir, then move it.

@@ -357,6 +357,11 @@ def _scenes_generate_and_normalize(ctx, loop):
 
         short_scenes = loop.short_scenes
 
+        # Deterministic overlay cleanup before any validation/QA: strip "N." list
+        # numbering from on_screen_text (forbidden in polished Shorts; LLM keeps
+        # emitting it and bounded regen does not reliably fix it).
+        validate_scenes.strip_numbered_on_screen_text(short_scenes.get("scenes") or [])
+
         state.current_scenes_version += 1
         state.latest_scene_validation_ok = False
         state.latest_scene_validation_version = None

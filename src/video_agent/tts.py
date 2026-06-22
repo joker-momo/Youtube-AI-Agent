@@ -161,9 +161,16 @@ def synthesize_scene_track(
             else:
                 target_frames = max(1, int(float(scene["duration_sec"]) * sample_rate))
                 if len(audio) < target_frames:
+                    # Speech shorter than the planned block → pad with silence.
                     audio = np.pad(audio, (0, target_frames - len(audio)))
                 else:
-                    audio = audio[:target_frames]
+                    # Speech LONGER than the planned block → NEVER hard-truncate
+                    # (that clips the final word mid-syllable, esp. the CTA). Keep
+                    # the full audio and extend this scene's duration to contain it
+                    # so the visual block matches; downstream schedule/tail-repair
+                    # use the updated duration. Quality > exact planned timing.
+                    actual_sec = len(audio) / sample_rate
+                    scene["duration_sec"] = float(round(actual_sec, 2))
             chunks.append(audio)
 
     if dynamic_sync:

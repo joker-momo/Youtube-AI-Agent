@@ -60,6 +60,19 @@ def resolve_visual_quality_flow_config(channel_config: dict[str, Any]) -> dict[s
     scoring = dict(raw.get("scoring") or {})
     local_qa = dict(raw.get("local_qa") or {})
     trim_selector = dict(raw.get("trim_selector") or {})
+    resolved_local_qa = dict(local_qa)
+    resolved_local_qa.update(
+        {
+            "enabled": bool(local_qa.get("enabled", False)),
+            "max_runner_ups": int(local_qa.get("max_runner_ups", 2)),
+            "semantic_adapter": str(local_qa.get("semantic_adapter") or "none"),
+            "detector_adapter": str(local_qa.get("detector_adapter") or "none"),
+            "critical_fail_closed": bool(local_qa.get("critical_fail_closed", True)),
+            "report_only_never_blocks_render": bool(
+                local_qa.get("report_only_never_blocks_render", True)
+            ),
+        }
+    )
     return {
         "enabled": bool(raw.get("enabled", False)),
         "mode": mode,
@@ -81,16 +94,7 @@ def resolve_visual_quality_flow_config(channel_config: dict[str, Any]) -> dict[s
             "reject_unstable_motion": bool(trim_selector.get("reject_unstable_motion", True)),
             "dynamic_crop": bool(trim_selector.get("dynamic_crop", False)),
         },
-        "local_qa": {
-            "enabled": bool(local_qa.get("enabled", False)),
-            "max_runner_ups": int(local_qa.get("max_runner_ups", 2)),
-            "semantic_adapter": str(local_qa.get("semantic_adapter") or "none"),
-            "detector_adapter": str(local_qa.get("detector_adapter") or "none"),
-            "critical_fail_closed": bool(local_qa.get("critical_fail_closed", True)),
-            "report_only_never_blocks_render": bool(
-                local_qa.get("report_only_never_blocks_render", True)
-            ),
-        },
+        "local_qa": resolved_local_qa,
         "controlled_vocabulary": dict(raw.get("controlled_vocabulary") or {}),
     }
 
@@ -223,6 +227,23 @@ def build_visual_acquisition_context(
     forbidden_subject = norm("forbidden_subject_tags", "subjects")
     forbidden_action = norm("forbidden_action_tags", "actions")
     forbidden_evidence = norm("forbidden_evidence_tags", "evidence")
+
+    # Channel-wide visual exclusions (e.g. wheelchair / hospital / medical aids) —
+    # a wellness channel for capable 45+ adults must never pull disability/medical
+    # footage even when the literal query matches ("chair" → wheelchair). Injected
+    # raw (bypassing the subject vocab) so Grounding DINO grounds them as forbidden.
+    avoid_visuals = [
+        str(t).strip()
+        for t in (
+            ((channel_config.get("shorts") or {}).get("visual_quality_flow") or {}).get(
+                "avoid_visuals"
+            )
+            or []
+        )
+        if str(t).strip()
+    ]
+    if avoid_visuals:
+        forbidden_subject = list(dict.fromkeys(list(forbidden_subject) + avoid_visuals))
 
     visual_intent = str(
         visual_span.get("visual_intent")

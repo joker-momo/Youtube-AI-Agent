@@ -524,12 +524,17 @@ def compile_asset_schedule(
         member_scenes = [scene_by_id[m] for m in member_ids]
         if not member_scenes:
             continue
-        # Graphic spans omit the background track (full-screen graphic scene).
-        if all(_is_graphic_scene(s) for s in member_scenes):
+        selected_plan = visual_plans_by_span.get(str(span_id))
+        # Legacy all-graphic spans omit background tracks, but generated-image
+        # plans deliberately replace the graphic renderer with media tracks.
+        if all(_is_graphic_scene(s) for s in member_scenes) and not selected_plan:
             continue
 
-        selected_plan = visual_plans_by_span.get(str(span_id))
-        if selected_plan and selected_plan.get("mode") in {"two_clip", "clip_plus_graphic"}:
+        if selected_plan and selected_plan.get("mode") in {
+            "two_clip",
+            "clip_plus_graphic",
+            "generated_image_fallback",
+        }:
             for beat in selected_plan.get("beats") or []:
                 track = _visual_plan_track(
                     track_id=_next_track_id(),

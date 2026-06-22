@@ -293,6 +293,8 @@ def short_scene_prompt(channel_config: dict, short_plan: dict, short_script: dic
         "- First scene 1.5-3.0 seconds. Normal scenes 2.0-5.0 seconds. CTA scene 3.0-6.0 seconds.\n"
         "- Total 25-60 seconds.\n"
         "- on_screen_text 2-5 words; must NOT duplicate the caption exactly.\n"
+        "- on_screen_text MUST NOT start with list numbering ('1.', '2)', '3:'). "
+        "Use a short ALL-CAPS label, never a numbered list overlay.\n"
         "- visual_prompt MUST be English only and describe a vertical-friendly shot.\n"
         "- layouts allowed: short_hook, short_pain, short_tip, short_checklist, short_quote, short_cta.\n"
         "- No long paragraphs, no cluttered overlays.\n"

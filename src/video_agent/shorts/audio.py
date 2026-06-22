@@ -59,6 +59,11 @@ def synthesize_short_backgrounds(
     from video_agent.stages.assets import prepare_assets
 
     ctx = _short_asset_context(short_dir, channel_config)
+    # Lazy AI policy: scenes covered by a span that already has a provisional
+    # Pexels VIDEO finalist skip the ChatGPT tier now (span video supersedes the
+    # per-scene background at render). AI is only generated later, for spans whose
+    # video gets rejected by visual_local_qa. Saves ~10 min of wasted image-gen.
+    _mark_video_covered_scenes(short_dir, short_scenes)
     # Log AI image-gen prompts to the Short's prompt history (same JSONL the
     # ChatGPT/Gemini calls write to). short_dir is this Short's folder, so the
     # history file is json/llm_history.jsonl inside it.
@@ -71,6 +76,61 @@ def synthesize_short_backgrounds(
         render_tts=False,
         on_scene_resolved=on_scene_resolved,
         llm_history_path=llm_history_path,
+        **ctx,
+    )
+
+
+def _spans_with_provisional_video(short_dir: Path) -> set[str]:
+    """Scene ids covered by a span that already has a provisional Pexels VIDEO
+    finalist (read from acquisition artifacts written before the background stage)."""
+    from video_agent.utils.json_io import read_json
+
+    jd = short_dir / paths.SHORT_JSON_SUBDIR
+    try:
+        spans = (read_json(jd / "visual_spans.json") or {}).get("spans") or []
+        sel = (read_json(jd / "visual_span_asset_selection.json") or {}).get("spans") or []
+    except Exception:
+        return set()
+    has_video = {
+        s.get("visual_span_id")
+        for s in sel
+        if s.get("provisional_candidate_id")
+    }
+    covered: set[str] = set()
+    for sp in spans:
+        if (sp.get("id") or sp.get("visual_span_id")) in has_video:
+            covered.update(str(x) for x in (sp.get("scene_ids") or []))
+    return covered
+
+
+def _mark_video_covered_scenes(short_dir: Path, short_scenes: dict) -> None:
+    covered = _spans_with_provisional_video(short_dir)
+    for scene in short_scenes.get("scenes") or []:
+        scene["_skip_ai_fallback"] = scene.get("id") in covered
+
+
+def regen_fallback_backgrounds(
+    short_dir: Path, short_scenes: dict, channel_config: dict, scene_ids: set[str]
+) -> None:
+    """Lazy second pass: generate ChatGPT images ONLY for the given scenes (spans
+    whose Pexels video was rejected by visual_local_qa), merging into the existing
+    manifest/report. No-op when scene_ids is empty."""
+    if not scene_ids:
+        return
+    from video_agent.stages.assets import prepare_assets
+
+    ctx = _short_asset_context(short_dir, channel_config)
+    for scene in short_scenes.get("scenes") or []:
+        if scene.get("id") in scene_ids:
+            scene["_skip_ai_fallback"] = False
+    llm_history_path = short_dir / paths.SHORT_JSON_SUBDIR / paths.SHORT_LLM_HISTORY_FILE
+    prepare_assets(
+        job_dir=short_dir,
+        scene_doc=short_scenes,
+        render_backgrounds=True,
+        render_tts=False,
+        llm_history_path=llm_history_path,
+        only_scene_ids=set(scene_ids),
         **ctx,
     )
 

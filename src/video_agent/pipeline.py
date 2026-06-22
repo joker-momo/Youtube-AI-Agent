@@ -743,6 +743,23 @@ def _is_short_job_dir(job_dir: Path, channel_config: dict | None = None) -> bool
         return False
 
 
+def _short_handoff_present(job_dir: Path) -> bool:
+    """True when the builder's prepared-short handoff (short_render_props.json) is
+    on disk — the single artifact the prepared-render owner consumes."""
+    return (job_dir / "json" / "short_render_props.json").exists() or (
+        job_dir / "short_render_props.json"
+    ).exists()
+
+
+def _should_use_prepared_short(*, prepared_short: bool, is_short_job: bool, job_dir: Path) -> bool:
+    """A Short job dir with a prepared handoff must ALWAYS render through the
+    shared prepared-short owner, regardless of which entry point invoked us. The
+    explicit ``prepared_short`` flag forces it; otherwise we auto-detect so the
+    CLI (and any caller that forgets the flag) no longer silently falls into the
+    legacy prepare_assets path and renders the same dir differently."""
+    return bool(prepared_short) or (is_short_job and _short_handoff_present(job_dir))
+
+
 def _scene_duration_sum(scene_doc: dict) -> float:
     return round(sum(float(scene.get("duration_sec") or 0.0) for scene in (scene_doc.get("scenes") or [])), 1)
 
@@ -801,7 +818,12 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
                 scene["word_segments"] = ws["word_segments"]
 
     is_short_job = _is_short_job_dir(job_dir, channel_config)
-    if options.prepared_short:
+    use_prepared = _should_use_prepared_short(
+        prepared_short=options.prepared_short, is_short_job=is_short_job, job_dir=job_dir
+    )
+    if use_prepared:
+        if not options.prepared_short:
+            logger.log("OPERATOR_RENDER_PREPARED_AUTO", {"job_id": job_id})
         from video_agent.shorts import paths as short_paths
         from video_agent.shorts.builder.render_props import build_prepared_short_render_props
 

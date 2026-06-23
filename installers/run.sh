@@ -79,9 +79,14 @@ prune_rac() {
 
 cleanup_disk() {
   echo -e "${CYAN}Pruning caches...${NC}"
-  # Python bytecode
-  find "${REPO_DIR}" -type d -name "__pycache__" -prune -exec rm -rf {} + 2>/dev/null || true
-  find "${REPO_DIR}" -type f -name "*.pyc" -delete 2>/dev/null || true
+  # Python bytecode — project source only. Scanning the full multi-GB repo
+  # (.venv, node_modules, jobs, asset_library) is what made --shutdown crawl;
+  # .venv/dependency bytecode is regenerable noise not worth cleaning.
+  for _pysrc in src tests scripts; do
+    [[ -d "${REPO_DIR}/${_pysrc}" ]] || continue
+    find "${REPO_DIR}/${_pysrc}" -type d -name "__pycache__" -prune -exec rm -rf {} + 2>/dev/null || true
+    find "${REPO_DIR}/${_pysrc}" -type f -name "*.pyc" -delete 2>/dev/null || true
+  done
   # Logs (truncate, not delete, so file handles survive)
   if [[ -d "${REPO_DIR}/logs" ]]; then
     find "${REPO_DIR}/logs" -type f -name "*.log" -exec sh -c ': > "$1"' _ {} \; 2>/dev/null || true
@@ -105,8 +110,13 @@ cleanup_disk() {
   # pip + npm cache
   if command -v npm >/dev/null 2>&1; then npm cache clean --force >/dev/null 2>&1 || true; fi
   if [[ -d ".venv" ]]; then .venv/bin/python -m pip cache purge >/dev/null 2>&1 || true; fi
-  # macOS DS_Store + .Trashes inside repo
-  find "${REPO_DIR}" -name ".DS_Store" -delete 2>/dev/null || true
+  # macOS DS_Store — prune the giant regenerable/product trees so the scan does
+  # not crawl the full repo (same slowdown as the bytecode finds above).
+  find "${REPO_DIR}" \
+    \( -type d \( -name .venv -o -name node_modules -o -name .git \
+       -o -name jobs -o -name asset_library -o -name browser_profiles \
+       -o -name browser_trace \) -prune \) \
+    -o \( -type f -name ".DS_Store" -delete \) 2>/dev/null || true
   # Force flush filesystem buffers
   sync
   echo -e "${GREEN}✅ Cleanup done.${NC}"

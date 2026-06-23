@@ -13,6 +13,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from video_agent.assets.materialize import materialize_media
 from video_agent.contracts import repo_root
 from video_agent.shorts import paths
 from video_agent.storage.atomic import atomic_write_json
@@ -42,7 +43,7 @@ def _mirror_short_assets_to_public(short_dir: Path) -> None:
         rel = src.relative_to(src_root)
         dst = public_root / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dst)
+        materialize_media(src, dst)
 
 
 def materialize_short_job_aliases(short_dir: Path, channel_config: dict | None = None) -> None:
@@ -320,4 +321,4 @@ def _save_friendly_copy(short_dir: Path, source_file: Path, ext: str) -> None:
 
     dest = short_dir.parent / friendly_name
     if source_file.exists():
-        shutil.copy2(source_file, dest)
+        materialize_media(source_file, dest)

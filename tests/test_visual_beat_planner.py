@@ -160,6 +160,35 @@ def test_continuous_plan_selected_when_pr_d_trim_is_valid_and_candidate_count_is
     assert "visual_performance_features" not in plan
 
 
+def test_graphic_only_span_gets_graphic_plan_not_missing() -> None:
+    # A span whose sole member is a pure graphic scene (graphic card with no
+    # resolved generated image and no stock clip allowed) must still receive a
+    # selected_plan: a graphic beat the schedule renders full-screen via
+    # SceneTimeline. Without this, the span yields zero candidates and
+    # visual_sequence_qa hard-fails with missing_selected_plan, blocking render
+    # (regression family of bug-346; distinct cause: graphic-scene span).
+    plan = build_visual_beat_plan(
+        short_id="short-04",
+        scene_doc={"scenes": [_scene("s05", 4.5, graphic=True)]},
+        visual_spans={"spans": [{"id": "vs04", "scene_ids": ["s05"]}]},
+        resolved_visuals={"scenes": {}},  # no resolved generated image for s05
+        trim_window_plan={"spans": []},
+        visual_span_asset_qa=None,
+        channel_config={
+            "shorts": {"visual_quality_flow": {"beat_planner": {"enabled": True}}}
+        },
+        fps=30,
+    )
+    span = plan["spans"][0]
+    selected = span["selected_plan"]
+    assert selected is not None, "graphic-only span must get a selected_plan"
+    assert selected["mode"] == "graphic"
+    assert selected["beats"], "graphic plan must carry at least one beat"
+    assert all(b["type"] == "graphic" for b in selected["beats"])
+    assert span["qa"]["verdict"] == "PASS"
+    assert span["qa"]["errors"] == []
+
+
 def test_simplicity_margin_prefers_continuous_over_small_two_clip_gain() -> None:
     plan = build_visual_beat_plan(
         short_id="short-04",

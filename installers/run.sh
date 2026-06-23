@@ -207,6 +207,10 @@ if [[ -f ".env" ]]; then
 fi
 
 export PYTHONPATH="${REPO_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}"
+# HF tokenizers (Grounding DINO / SigLIP) deadlock on their rayon pool after a
+# fork when this is unset — encode_batch hangs the worker forever (~0 CPU). The
+# Python side also setdefaults this; export here so every launched process is safe.
+export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
 export JOBS_DIR="${REPO_DIR}/jobs"
 export WORKER_ASSETS_ROOT="${REPO_DIR}/jobs"
 export BROWSER_TRACE_DIR="${REPO_DIR}/browser_trace"

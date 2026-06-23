@@ -23,11 +23,20 @@ CONTRADICTED, UNKNOWN, CAPABILITY_UNAVAILABLE.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
+
+# HuggingFace tokenizers (Grounding DINO / SigLIP processors) deadlock on their
+# rayon thread-pool when the worker process has forked while TOKENIZERS_PARALLELISM
+# is unset: encode_batch blocks forever on a semaphore (~0 CPU, no progress). The
+# VLM subprocess already sets this; the main worker (which runs SigLIP + DINO
+# in-process) did not. Disable parallel tokenization process-wide before any
+# transformers/tokenizers import. setdefault so an explicit override still wins.
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from PIL.Image import Image
@@ -319,7 +328,6 @@ class _VlmWorkerClient:
             return self._ready
         if self._broken:
             return False
-        import os
         import sys
 
         worker = str(Path(__file__).resolve().parent / "vlm_worker.py")

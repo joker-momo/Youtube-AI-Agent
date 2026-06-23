@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from pathlib import Path
 import math
 import os
-import shutil
 import subprocess
 import json
 
@@ -34,6 +33,7 @@ from video_agent.utils.logging import EventLogger
 from video_agent.utils.paths import create_job_dir
 from video_agent.utils.validation import validate_json
 from video_agent.runtime.providers import AUDIO_SUBPROCESS_ENV, SubprocessAudioTaskProvider
+from video_agent.assets.materialize import materialize_media
 from video_agent.storage.atomic import atomic_write_text
 
 _AUDIO_SUBPROCESS_ENV = AUDIO_SUBPROCESS_ENV
@@ -185,15 +185,15 @@ def _prepare_branding(channel_config: dict) -> dict:
         dest_dir.mkdir(parents=True, exist_ok=True)
         if logo_source:
             dest = dest_dir / logo_source.name
-            shutil.copy2(logo_source, dest)
+            materialize_media(logo_source, dest)
             logo_public = f"branding/{channel_id}/{logo_source.name}"
         if intro_video_source:
             dest = dest_dir / intro_video_source.name
-            shutil.copy2(intro_video_source, dest)
+            materialize_media(intro_video_source, dest)
             intro_video_public = f"branding/{channel_id}/{intro_video_source.name}"
         if outro_video_source:
             dest = dest_dir / outro_video_source.name
-            shutil.copy2(outro_video_source, dest)
+            materialize_media(outro_video_source, dest)
             outro_video_public = f"branding/{channel_id}/{outro_video_source.name}"
     return {
         "logo_path": logo_public,

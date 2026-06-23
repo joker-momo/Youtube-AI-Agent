@@ -885,6 +885,18 @@ class StockAssetService:
                 asset["asset_selection"]["asset_match_status"] = "strong_match"
                 return asset
 
+            # Tier 2b — strict fallback providers. A fallback provider is just an
+            # alternate source (e.g. Pexels photos when the primary Pexels *video*
+            # key is missing); a STRONG, attributed match from it is real on-topic
+            # footage and must beat the slow AI tier, exactly like the primary
+            # strict tiers. Only OFF-topic fallback stock stays below AI (Tier 4b).
+            if self.fallback_providers:
+                asset = _search(self.fallback_providers, require_strict=True, is_fallback=True)
+                if asset is not None:
+                    asset["asset_tier"] = "pexels_photo"
+                    asset["asset_selection"]["asset_match_status"] = "strong_match"
+                    return asset
+
         # Tier 3 — AI-generated image fallback.
         # Triggered for ANY non-graphic scene once strict stock has failed: an
         # on-brand AI image always beats an off-topic weak-match stock clip
@@ -1233,9 +1245,16 @@ class StockAssetService:
             matched = set(item.get("matched_terms") or [])
             prompt = query.lower()
 
-            # Demographic strict enforcement
+            # Demographic strict enforcement — gate on the SCENE's original
+            # visual_prompt, NOT the enriched ``query``. ``_force_elderly_demographic``
+            # appends "elderly european senior" to every wellness/photo query, so
+            # keying off ``query`` would demand an "elderly"/"senior" *tag* on every
+            # candidate — which real stock rarely carries — and reject good on-topic
+            # footage down into the slow AI tier. We only require demographic
+            # evidence when the scene itself asks for a specific age group.
+            scene_prompt = str(scene.get("visual_prompt") or "").lower()
             demo_terms = {"senior", "elderly", "mature", "older", "50s", "60s", "aging", "grandfather", "grandmother", "grandparent", "55+"}
-            if any(term in prompt for term in demo_terms):
+            if any(term in scene_prompt for term in demo_terms):
                 has_demo = any(d in matched for d in demo_terms)
                 if not has_demo:
                     item["failed_required_terms"] = "Missing demographic terms (senior/elderly) for a demographic-specific query"
@@ -1267,7 +1286,16 @@ class StockAssetService:
                     item["failed_required_terms"] = "Missing object/action/context for label reading/turning"
                     return False
 
-            return ("strong_scene_term_match" in reasons or len(matched) >= 2)
+            # A single on-topic scene term clears the strict gate: it has already
+            # survived STOPWORD filtering and the score floor above, so it is a
+            # genuine topical match (e.g. a "sleep" photo for a "calm sleep
+            # wellness bedroom" scene). Real, attributed stock that matches the
+            # scene topic is higher quality — and far cheaper — than a slow AI
+            # generation, so it must win at the strict tier instead of being
+            # demoted to the weak tier that the AI fallback overrides. Off-topic
+            # candidates (zero matched scene terms, e.g. an airplane clip for a
+            # sleep scene) still fail here and correctly route to AI.
+            return ("strong_scene_term_match" in reasons or len(matched) >= 1)
 
         unused_ranked_candidates = [
             item for item in ranked_candidates

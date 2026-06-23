@@ -404,7 +404,11 @@ def test_prepare_assets_uses_fallback_providers_when_primary_fails(tmp_path):
     )
 
     scene = manifest["scenes"][0]
-    assert stock_client.searched_providers == ["pexels_video", "none", "pexels_video", "pexels"]
+    # primary video (key missing) -> photo provider "none" (empty) -> strict
+    # fallback search of pexels finds the strong calm+sleep match, which now wins
+    # at the strict tier *before* AI (Tier 2b), so the redundant weak re-search of
+    # pexels_video no longer runs.
+    assert stock_client.searched_providers == ["pexels_video", "none", "pexels"]
     assert scene["source"] == "asset_library"
     assert scene["provider"] == "pexels"
     assert scene["provider_asset_id"] == "pexels-fallback"

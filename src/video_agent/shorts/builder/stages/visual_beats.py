@@ -58,14 +58,47 @@ def _stage_visual_beats(ctx: BuildContext) -> StageResult:
         verdict = (sequence_qa.get("qa") or {}).get("verdict")
         if mode == "enforced" and verdict == "FAIL":
             errors = (sequence_qa.get("qa") or {}).get("errors") or []
+            failure_reason = (
+                f"invalid_visual_sequence: {'; '.join(errors[:3])}"
+                if errors
+                else "invalid_visual_sequence"
+            )
             ctx.update_stage("visual_beats", "failed", verdict="FAIL", errors=errors[:3])
-            ctx.status["status"] = "failed"
+            # Surface the failing stage on short_status so the UI shows a reason
+            # instead of a stale earlier-stage 'passed' summary (no silent failure).
+            for stage in ctx.status.get("stages") or []:
+                if stage.get("status") == "pending":
+                    stage["status"] = "skipped"
+            ctx.status.update(
+                {
+                    "status": "failed",
+                    "rendered": False,
+                    "qa_verdict": "FAIL",
+                    "failure_stage": "visual_beats",
+                    "failure_reason": failure_reason,
+                }
+            )
+            # Replace the stale (earlier-stage) qa_decision_summary with this
+            # stage's hard-block verdict so the surfaced reason is consistent.
+            decision_summary = {
+                "stage": "visual_beats",
+                "attempts_used": 1,
+                "max_attempts": 1,
+                "decision": "failed_hard_blocker",
+                "renderable": False,
+                "remaining_blockers": [{"detail": e} for e in errors[:3]],
+                "remaining_warnings": [],
+                "continued_to_render": False,
+            }
+            atomic_write_json(
+                ctx.json_dir / paths.SHORT_QA_DECISION_SUMMARY_FILE, decision_summary
+            )
             write_short_status(ctx.long_job_dir, short_id, ctx.status)
             return StageResult(
                 returns={
                     "status": "failed",
                     "failure_stage": "visual_beats",
-                    "failure_reason": f"invalid_visual_sequence: {errors[:3]}",
+                    "failure_reason": failure_reason,
                 }
             )
 

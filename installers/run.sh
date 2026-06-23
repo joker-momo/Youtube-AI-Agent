@@ -271,7 +271,7 @@ start_proc browser-worker \
   uvicorn video_agent.browser_worker.app:app --host 127.0.0.1 --port 8001
 
 start_proc worker \
-  python -m video_agent.cli worker --db-path jobs/queue.db
+  "${REPO_DIR}/.venv/bin/python" -m video_agent.cli worker --db-path jobs/queue.db
 
 wait_for_url "dashboard" "http://127.0.0.1:8000/health" 60 || true
 wait_for_url "browser-worker" "http://127.0.0.1:8001/health" 60 || true

@@ -11,6 +11,7 @@ from typing import Any
 
 from PIL import Image, ImageDraw
 
+from video_agent.assets.materialize import materialize_media
 from video_agent.assets.service import StockAssetService
 from video_agent.assets.visual_diversity.integration import (
     finalize_visual_diversity_report,
@@ -647,7 +648,7 @@ def prepare_assets(
         if local_image:
             if local_image.suffix.lower() == ".mp4":
                 if local_image.resolve() != image_path.resolve():
-                    shutil.copy2(local_image, image_path)
+                    materialize_media(local_image, image_path)
             else:
                 _write_video_from_image(local_image, image_path, scene_dur, is_portrait=is_portrait)
                 if _write_preview_still(local_image, preview_still):
@@ -667,7 +668,7 @@ def prepare_assets(
                 library_path = Path(stock_asset.get("url", "")) # Should not happen
 
             if library_path.suffix.lower() == ".mp4":
-                shutil.copy2(library_path, image_path)
+                materialize_media(library_path, image_path)
             else:
                 _write_video_from_image(library_path, image_path, scene_dur, is_portrait=is_portrait)
                 if _write_preview_still(library_path, preview_still):
@@ -710,7 +711,7 @@ def prepare_assets(
                 extra_manifest = {"stock_errors": stock_service.last_errors}
             record_scene_selection(diversity_run, scene=scene, selected_asset=None, is_placeholder=True)
         public_image_path = public_assets_dir / image_path.name
-        shutil.copy2(image_path, public_image_path)
+        materialize_media(image_path, public_image_path)
         public_ref = f"jobs/{job_dir.name}/assets/{image_path.name}"
         scene["asset_refs"]["background"] = public_ref
 

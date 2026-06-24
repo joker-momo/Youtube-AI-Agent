@@ -39,6 +39,23 @@ def _audio_fit_within_deterministic_budget(script: dict, idea: dict | None) -> b
     return total_words <= max_words and global_words <= max_words
 
 
+def _count_not_locked(idea: dict | None, script: dict | None) -> bool:
+    """True when the idea's item count is NOT a locked promise.
+
+    The authority is ``idea_contract.must_preserve_count``. When it is false
+    (implicit / unlocked count), regrouping or collapsing the listed points —
+    e.g. delivering 4 logical blocks for a title that says '5 ajustes' because 5
+    distinct items cannot be enumerated within the audio budget — is an allowed
+    adaptation. An LLM judge's "numeric promise broken" complaint must then NOT
+    drive a non-converging regen loop. Only a locked count keeps it repairable.
+    """
+    contract = (script or {}).get("idea_contract") or {}
+    for src in (contract, idea or {}):
+        if isinstance(src, dict) and src.get("must_preserve_count"):
+            return False
+    return True
+
+
 def _cta_deterministically_compliant(script: dict, idea: dict | None) -> bool:
     """True when the deterministic CTA checks pass: the spoken CTA beat carries
     the channel direction AND the cta field is within the 8-word limit.
@@ -296,6 +313,30 @@ def normalize_qa_issue(
         is_hard = False
         reason = "repairable_point_grouping"
 
+    # Numeric-promise complaint when the count is NOT locked. A judge often hard-
+    # blocks "title promises N but the script delivers M" even though
+    # idea_contract.must_preserve_count is false — i.e. collapsing/regrouping items
+    # is an allowed adaptation (the idea is too dense to enumerate all N within the
+    # calm audio budget). Scoped to count-promise phrasing so plain timing-grouping
+    # complaints stay repairable. Forced soft so it cannot drive a non-converging
+    # regen loop. A LOCKED count keeps the repairable behaviour above.
+    count_not_locked_grouping = False
+    if issue_type_lower == "idea_fidelity" and _count_not_locked(idea, script) and any(
+        k in detail_lower
+        for k in (
+            "promesa numérica",
+            "promesa numerica",
+            "rompiendo la promesa",
+            "conteo",
+            "colapsando",
+            "número de ítems",
+            "numero de items",
+        )
+    ):
+        count_not_locked_grouping = True
+        is_hard = False
+        reason = "count_not_locked_grouping_soft"
+
     if issue_type_lower in ("style", "structure") and any(
         k in detail_lower
         for k in ("word count", "words", "speaking time", "audio-fit", "rushed", "pacing")
@@ -444,7 +485,12 @@ def normalize_qa_issue(
     # Audio-fit within the deterministic budget: the hard gate already passed, so
     # the LLM's audio-fit opinion is advisory only. Force soft so it never blocks
     # or triggers an unwinnable regen loop.
-    if audio_fit_within_budget or cta_deterministically_ok or graphic_duration_within_max:
+    if (
+        audio_fit_within_budget
+        or cta_deterministically_ok
+        or graphic_duration_within_max
+        or count_not_locked_grouping
+    ):
         is_soft = True
 
     if is_soft:

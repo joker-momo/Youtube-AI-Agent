@@ -40,6 +40,49 @@ def test_repairable_point_grouping():
     assert normalized.reason == "repairable_point_grouping"
 
 
+def test_count_promise_soft_when_count_not_locked():
+    # Judge complains the title promises '5 ajustes' but the script collapses to
+    # 4 items. With an UNLOCKED count (must_preserve_count false) this is an
+    # allowed adaptation, so it must be a soft warning, not a regen-looping
+    # blocker (bug-360).
+    issue = {
+        "type": "idea_fidelity",
+        "severity": "major",
+        "detail": (
+            "El título promete '5 ajustes' pero el guion agrupa, colapsando el "
+            "punto 3 y 4, rompiendo la promesa numérica implícita del gancho."
+        ),
+    }
+    normalized = qa.normalize_qa_issue(
+        issue,
+        idea={},
+        script={"idea_contract": {"must_preserve_count": False}},
+        scenes={},
+    )
+    assert normalized.issue_class == qa.IssueClass.SOFT_WARNING
+    assert normalized.reason == "count_not_locked_grouping_soft"
+
+
+def test_count_promise_repairable_when_count_locked():
+    # Same complaint but with a LOCKED count must stay a repairable blocker so the
+    # promised count is actually restored.
+    issue = {
+        "type": "idea_fidelity",
+        "severity": "major",
+        "detail": (
+            "El guion agrupa y colapsa puntos, rompiendo la promesa numérica de "
+            "'5 ajustes'."
+        ),
+    }
+    normalized = qa.normalize_qa_issue(
+        issue,
+        idea={},
+        script={"idea_contract": {"must_preserve_count": True}},
+        scenes={},
+    )
+    assert normalized.issue_class == qa.IssueClass.REPAIRABLE_BLOCKER
+
+
 def test_repairable_audio_fit():
     issue = {
         "type": "style",

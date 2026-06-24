@@ -3980,7 +3980,7 @@ function renderShortStep(jobId, shortId, s, idx) {
 // the generic "QA failed after max regeneration attempts" message. A
 // continued-with-WARN result is publishable; only a hard blocker shows the
 // retry/regenerate prompt, and then with the explicit blocker text.
-function renderShortReviewNotice(d) {
+function renderShortReviewNotice(jobId, d) {
   const decision = (d.qa_decision && d.qa_decision.decision) || '';
   const verdict = (d.qa_verdict || '').toUpperCase();
   const isWarn = decision === 'continued_with_warn'
@@ -4014,6 +4014,9 @@ function renderShortReviewNotice(d) {
   return `
     <div class="short-needs-review-notice">
       QA stopped on a hard blocker. Review the generated script or scenes and try Regenerate.${detail}${blockerList}
+      <div style="margin-top:8px">
+        <button class="action-btn primary" onclick="regenShort('${escapeHtml(jobId)}','${escapeHtml(d.short_id || '')}')">Regenerate</button>
+      </div>
     </div>`;
 }
 
@@ -4388,7 +4391,7 @@ function renderSingleCardHtml(jobId, d, idx, shortsSeoData, isOpen) {
           ${stages.map(s => `<div class="render-stage ${s.cls}" title="${s.label}"></div>`).join('')}
         </div>
         ${renderShortStepsTimeline(jobId, d)}
-        ${st === 'needs_review' ? renderShortReviewNotice(d) : ''}
+        ${st === 'needs_review' ? renderShortReviewNotice(jobId, d) : ''}
       `}
       
       ${renderBackgroundLive(d.background_live || (d.stages || []).find(s => s.name === 'background'))}

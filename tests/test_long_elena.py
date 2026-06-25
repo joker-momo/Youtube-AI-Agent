@@ -73,11 +73,20 @@ def test_no_two_consecutive_cues_share_asset():
         assert cues[i]["variant"] != cues[i - 1]["variant"]
 
 
-def test_appearance_duration_within_5_to_10s():
+def test_appearance_duration_per_treatment():
+    # circle (subtitle/neutral) 6-10s; large (hook/emphasis) 5-8s.
     scenes = [_scene(f"scene-{i:02d}", "subtitle", 20.0, elena={"mode": "talking"}) for i in range(1, 8)]
     res = build_elena_cues(_doc(*scenes), {}, 30, job_id="job-x")
     for c in res["cues"]:
-        assert 5 * 30 <= c["duration_frames"] <= 10 * 30
+        if c["treatment"] == "circle":
+            assert 6 * 30 <= c["duration_frames"] <= 10 * 30
+        else:
+            assert 5 * 30 <= c["duration_frames"] <= 8 * 30
+
+    hooks = [_scene(f"h{i}", "hook", 20.0, elena={"mode": "talking"}) for i in range(1, 6)]
+    rh = build_elena_cues(_doc(*hooks), {}, 30, job_id="job-x")
+    larges = [c for c in rh["cues"] if c["treatment"] == "large"]
+    assert larges and all(5 * 30 <= c["duration_frames"] <= 8 * 30 for c in larges)
 
 
 def test_short_scene_below_5s_gets_no_cue():

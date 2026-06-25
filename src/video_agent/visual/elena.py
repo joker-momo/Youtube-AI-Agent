@@ -39,8 +39,8 @@ ELENA_ASSETS = {
 _EMPHASIS_LAYOUTS = frozenset({"hook"})
 
 _MIN_GAP_SEC = 15.0
-_MIN_APPEARANCE_SEC = 5.0
-_MAX_APPEARANCE_SEC = 10.0
+# Per-treatment appearance length (infographic): circle 6-10s, large 5-8s.
+_APPEARANCE_BOUNDS_SEC = {"circle": (6.0, 10.0), "large": (5.0, 8.0)}
 
 
 def _frames(duration_sec: Any, fps: int) -> int:
@@ -131,16 +131,19 @@ def build_elena_cues(
         # Spacing: never within 15s of the previous talking appearance.
         if from_frame - last_talk_end < min_gap:
             continue
-        # Appearance must be at least the minimum length.
-        if scene_frames < _MIN_APPEARANCE_SEC * fps:
-            continue
 
-        duration_frames = min(scene_frames, int(_MAX_APPEARANCE_SEC * fps))
         treatment, variant = _treatment_for(scene, ann)
         # Never reuse the same asset on two consecutive appearances.
         if variant == last_variant:
             variant = "talk-neutral" if variant == "talk-emphasis" else "talk-emphasis"
             treatment = "circle" if variant == "talk-neutral" else "large"
+
+        # Appearance length is per-treatment (circle 6-10s, large 5-8s); skip a
+        # scene that is too short to host the minimum for its treatment.
+        lo_sec, hi_sec = _APPEARANCE_BOUNDS_SEC[treatment]
+        if scene_frames < lo_sec * fps:
+            continue
+        duration_frames = min(scene_frames, int(hi_sec * fps))
 
         cues.append(
             {

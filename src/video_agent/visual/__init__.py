@@ -23,6 +23,10 @@ from video_agent.visual.elena import (
     ELENA_ASSETS,
     build_elena_cues,
 )
+from video_agent.visual.span_acquire import (
+    acquire_span_source_clips,
+    build_span_acquisition_context,
+)
 from video_agent.visual.spans import (
     SCHEMA_VERSION,
     assign_span_ids_to_scenes,
@@ -38,6 +42,8 @@ __all__ = [
     "compile_asset_schedule",
     "ELENA_ASSETS",
     "build_elena_cues",
+    "acquire_span_source_clips",
+    "build_span_acquisition_context",
     "DEFAULT_SPAN_CONFIG",
     "resolve_visual_span_config",
     "build_visual_spans",

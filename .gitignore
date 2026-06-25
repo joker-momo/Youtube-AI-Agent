@@ -61,3 +61,11 @@ remotion/public/test_fixtures/
 # Runtime junk
 logs_run_sh.out
 .trinity/
+/.agents
+/.codex
+/configs
+
+# Long-form Elena presenter clips (binary, provided per-channel, not tracked)
+configs/*/assets/elena/
+remotion/public/assets/elena/
+remotion/public/test_fixtures/

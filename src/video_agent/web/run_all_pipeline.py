@@ -20,6 +20,7 @@ from video_agent.orchestrator.stages import (
     StageInputMissingError,
     auto_assets_chatgpt_stage,
     auto_idea_research_stage,
+    run_graphic_images_stage,
     auto_qa_with_rework,
     auto_scenes_stage,
     auto_script_stage,
@@ -549,6 +550,7 @@ async def _execute_run_all_locked(
         if any(
             s in remaining
             for s in (
+                "graphic_images",
                 "thumbnail_image",
                 "assets_chatgpt",
                 "whisper_timestamps",
@@ -557,6 +559,14 @@ async def _execute_run_all_locked(
             )
         ):
             await _close_model_sessions()
+        if "graphic_images" in remaining:
+            _check_stop_requested()
+            # Generate ChatGPT images for graphic-layout scenes (checklist/warning/
+            # quote/cta). Per-scene failures are non-fatal.
+            await _record(
+                "graphic_images",
+                await run_graphic_images_stage(job_dir, channel_path, client.generate_image),
+            )
         if "thumbnail_image" in remaining:
             _check_stop_requested()
             await _record_gate_and_stop(

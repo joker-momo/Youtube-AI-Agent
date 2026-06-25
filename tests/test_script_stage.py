@@ -163,7 +163,9 @@ def _fake_pass_assets_chatgpt(job_dir: Path) -> None:
 
 
 def _fake_pass_thumbnail_image(job_dir: Path) -> None:
-    """Mark thumbnail_image as completed and advance to whisper stage."""
+    """Advance the long-form graphic_images sidecar (if pending) then thumbnail_image.
+    (_fake_pass_stage is a no-op when the named stage is not current.)"""
+    _fake_pass_stage(job_dir, "graphic_images")
     _fake_pass_stage(job_dir, "thumbnail_image")
 
 

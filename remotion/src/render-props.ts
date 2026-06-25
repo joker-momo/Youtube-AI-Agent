@@ -130,6 +130,9 @@ export type Scene = {
   // renderer ignores these until the compiled VisualTimeline lands (PR B).
   visual_span_id?: string;
   visual_span_intent?: string;
+  // Long-form graphic scenes (checklist/warning/quote/cta): a ChatGPT-generated
+  // image replaces the Remotion card when image_ref is set (spec long-form v2 §3.1).
+  graphic?: {needed?: boolean; prompt?: string; image_ref?: string};
 };
 
 export type RenderProps = {

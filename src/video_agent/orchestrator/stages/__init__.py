@@ -118,6 +118,9 @@ from video_agent.orchestrator.stages.visual_spans import (
 from video_agent.orchestrator.stages.visual_schedule import (
     run_visual_schedule_stage,
 )
+from video_agent.orchestrator.stages.graphic_images import (
+    run_graphic_images_stage,
+)
 
 # ---------------------------------------------------------------------------
 # render_review

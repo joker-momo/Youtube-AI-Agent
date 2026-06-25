@@ -452,9 +452,14 @@ const SceneView: React.FC<{
     <AbsoluteFill style={{...fullFrame, opacity}}>
       <FontLoader />
 
-      {/* Full-bleed background — video clip or photo.
-          Suppressed when the compiled visual timeline owns the background layer. */}
-      {hideBackground ? null : scene.asset_refs.background.endsWith('.mp4') ? (
+      {/* Full-bleed background — graphic ChatGPT image (graphic scenes), else
+          video clip or photo. Suppressed when the compiled timeline owns the layer. */}
+      {hideBackground ? null : scene.graphic?.image_ref ? (
+        <Img
+          src={mediaSrc(scene.graphic.image_ref)}
+          style={{position: 'absolute', width: '100%', height: '100%', objectFit: 'cover'}}
+        />
+      ) : scene.asset_refs.background.endsWith('.mp4') ? (
         // OffthreadVideo is preferred over Video for server-side rendering (faster, frame-accurate).
         // loop: short Pexels clips (3-30s) repeat to fill the full scene duration.
         // No pan/zoom transform — the video itself has natural motion.

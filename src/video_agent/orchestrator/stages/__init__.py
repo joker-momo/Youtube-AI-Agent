@@ -110,6 +110,13 @@ from video_agent.orchestrator.stages.audio import (
 )
 
 # ---------------------------------------------------------------------------
+# visual_spans (long-form, report-only)
+# ---------------------------------------------------------------------------
+from video_agent.orchestrator.stages.visual_spans import (
+    run_visual_spans_stage,
+)
+
+# ---------------------------------------------------------------------------
 # render_review
 # ---------------------------------------------------------------------------
 from video_agent.orchestrator.stages.render_review import (

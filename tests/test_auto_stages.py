@@ -28,6 +28,7 @@ from video_agent.orchestrator.stages import (
     promote_script_stage,
     run_scenes_stage,
     run_script_stage,
+    run_visual_spans_stage,
 )
 from video_agent.web.app import (
     app,
@@ -628,7 +629,8 @@ def test_auto_scenes_qa_can_run_sharded_when_enabled(
     assert merged["verdict"] == "PASS"
     assert [row["batch_index"] for row in merged["batch_results"]] == [1, 2]
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
-    assert state["current_stage"] == "seo"
+    # visual_spans (long-form report-only sidecar) now runs between scenes_qa and seo.
+    assert state["current_stage"] == "visual_spans"
 
 
 def test_auto_scenes_qa_sharded_reuses_existing_batches_and_logs_progress(
@@ -734,6 +736,9 @@ def test_auto_seo_runs_after_scenes_promoted(
         raw_response=json.dumps(valid_scenes_payload, ensure_ascii=False),
     )
     _fake_pass_qa(job_dir, "scenes")
+    # visual_spans (long-form report-only sidecar) now sits between scenes_qa and
+    # seo; run it so the job advances to the seo stage.
+    run_visual_spans_stage(job_dir, channel_path)
     fake = FakeBrowserClient(
         queue=[json.dumps(valid_seo_payload, ensure_ascii=False)]
     )
@@ -1120,6 +1125,7 @@ def test_http_run_all_success(
         "script_qa",
         "scenes_promote",
         "scenes_qa",
+        "visual_spans",
         "seo_promote",
         "seo_qa",
         "thumbnail_image",
@@ -1345,6 +1351,7 @@ def test_http_run_all_resumes_from_current_pending_stage(
     assert stages == [
         "scenes_promote",
         "scenes_qa",
+        "visual_spans",
         "seo_promote",
         "seo_qa",
         "thumbnail_image",

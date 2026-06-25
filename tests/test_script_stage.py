@@ -207,6 +207,9 @@ def _prepare_promoted_scenes(
         raw_response=json.dumps(valid_scenes_payload, ensure_ascii=False),
     )
     _fake_pass_qa(job_dir, "scenes")
+    # Long-form visual_spans (report-only sidecar) now runs between scenes_qa and
+    # seo; advance past it so downstream seo/render/review setups land on seo.
+    _fake_pass_stage(job_dir, "visual_spans")
 
 
 def test_run_script_stage_writes_prompt(tmp_path: Path, channel_path: Path, idea_payload: dict):
@@ -770,6 +773,7 @@ def test_post_run_seo_via_http(
         json={"raw_response": json.dumps(valid_scenes_payload, ensure_ascii=False)},
     )
     _fake_pass_qa(tmp_path / "job-s1", "scenes")
+    _fake_pass_stage(tmp_path / "job-s1", "visual_spans")
 
     response = client.post("/jobs/job-s1/stages/seo/run")
 
@@ -804,6 +808,7 @@ def test_post_promote_seo_via_http(
         json={"raw_response": json.dumps(valid_scenes_payload, ensure_ascii=False)},
     )
     _fake_pass_qa(tmp_path / "job-s1", "scenes")
+    _fake_pass_stage(tmp_path / "job-s1", "visual_spans")
     client.post("/jobs/job-s1/stages/seo/run")
 
     response = client.post(
@@ -842,6 +847,7 @@ def test_post_promote_seo_invalid_raw_returns_409(
         json={"raw_response": json.dumps(valid_scenes_payload, ensure_ascii=False)},
     )
     _fake_pass_qa(tmp_path / "job-s1", "scenes")
+    _fake_pass_stage(tmp_path / "job-s1", "visual_spans")
     client.post("/jobs/job-s1/stages/seo/run")
     stale_payload = {**valid_seo_payload, "job_id": "old-job"}
 
@@ -878,6 +884,7 @@ def test_post_run_render_via_http(
         json={"raw_response": json.dumps(valid_scenes_payload, ensure_ascii=False)},
     )
     _fake_pass_qa(tmp_path / "job-s1", "scenes")
+    _fake_pass_stage(tmp_path / "job-s1", "visual_spans")
     client.post("/jobs/job-s1/stages/seo/run")
     client.post(
         "/jobs/job-s1/stages/seo/promote",
@@ -936,6 +943,7 @@ def test_post_run_review_via_http(
         json={"raw_response": json.dumps(valid_scenes_payload, ensure_ascii=False)},
     )
     _fake_pass_qa(tmp_path / "job-s1", "scenes")
+    _fake_pass_stage(tmp_path / "job-s1", "visual_spans")
     client.post("/jobs/job-s1/stages/seo/run")
     client.post(
         "/jobs/job-s1/stages/seo/promote",

@@ -324,6 +324,7 @@ def test_long_form_default_stages_unchanged():
         "scenes",
         "scenes_promote",
         "scenes_qa",
+        "visual_spans",
         "seo",
         "seo_promote",
         "seo_qa",

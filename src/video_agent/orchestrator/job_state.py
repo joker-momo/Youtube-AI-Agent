@@ -16,6 +16,8 @@ DEFAULT_STAGES: tuple[str, ...] = (
     "scenes",
     "scenes_promote",
     "scenes_qa",
+    # Long-form visual-span planning (report-only sidecar; never alters render).
+    "visual_spans",
     "seo",
     "seo_promote",
     "seo_qa",

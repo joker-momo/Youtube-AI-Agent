@@ -27,6 +27,7 @@ from video_agent.orchestrator.stages import (
     auto_thumbnail_image_stage,
     run_render_stage,
     run_review_stage,
+    run_visual_spans_stage,
     run_whisper_timestamps_stage,
 )
 from video_agent.notifications.telegram import (
@@ -522,6 +523,13 @@ async def _execute_run_all_locked(
                 await auto_qa_with_rework(
                     "scenes", job_dir, channel_path, chatgpt_fn, qa_fn
                 ),
+            )
+        if "visual_spans" in remaining:
+            _check_stop_requested()
+            # Report-only long-form visual-span planning; never touches render.
+            await _record(
+                "visual_spans",
+                run_visual_spans_stage(job_dir, channel_path),
             )
         if "seo" in remaining or "seo_promote" in remaining:
             _check_stop_requested()

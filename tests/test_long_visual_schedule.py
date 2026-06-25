@@ -147,6 +147,70 @@ def test_tracks_cover_full_timeline_without_gap_or_overlap():
     assert cursor == sched["total_duration_in_frames"]
 
 
+# --------------------------------------------------------------------------- #
+# Phase 3 — per-span continuous source clip (quality-safe, fail-closed)
+# --------------------------------------------------------------------------- #
+def test_shared_long_enough_source_yields_one_continuous_track():
+    doc = _doc(_scene("scene-01", "subtitle", 12.0), _scene("scene-02", "subtitle", 12.0))
+    spans = build_visual_spans(doc, {}, job_id="j1")
+    # Both scenes came from the same full source clip, long enough for the span (24s).
+    source_clips = {
+        "scene-01": {"path": "lib/pexels_X.mp4", "duration_sec": 30.0},
+        "scene-02": {"path": "lib/pexels_X.mp4", "duration_sec": 30.0},
+    }
+    sched = compile_asset_schedule(scene_doc=doc, visual_spans=spans, fps=30, source_clips=source_clips)
+    assert len(sched["tracks"]) == 1
+    t = sched["tracks"][0]
+    assert t["asset_ref"] == "lib/pexels_X.mp4"
+    assert t["scene_ids"] == ["scene-01", "scene-02"]
+    assert t["duration_in_frames"] == _f(12.0) * 2
+
+
+def test_different_sources_fail_closed_to_per_scene_tracks():
+    doc = _doc(_scene("scene-01", "subtitle", 12.0), _scene("scene-02", "subtitle", 12.0))
+    spans = build_visual_spans(doc, {}, job_id="j1")
+    source_clips = {
+        "scene-01": {"path": "lib/pexels_A.mp4", "duration_sec": 30.0},
+        "scene-02": {"path": "lib/pexels_B.mp4", "duration_sec": 30.0},
+    }
+    sched = compile_asset_schedule(scene_doc=doc, visual_spans=spans, fps=30, source_clips=source_clips)
+    # fail-closed: one track per scene (no off-topic clip reuse)
+    assert len(sched["tracks"]) == 2
+    assert [t["scene_ids"] for t in sched["tracks"]] == [["scene-01"], ["scene-02"]]
+    assert sched["tracks"][0]["asset_ref"] == "assets/scene-01.mp4"  # prepared per-scene clip
+
+
+def test_shared_source_too_short_fail_closed():
+    doc = _doc(_scene("scene-01", "subtitle", 12.0), _scene("scene-02", "subtitle", 12.0))
+    spans = build_visual_spans(doc, {}, job_id="j1")
+    # same source but only 15s < 24s span -> cannot cover continuously -> fail-closed
+    source_clips = {
+        "scene-01": {"path": "lib/pexels_X.mp4", "duration_sec": 15.0},
+        "scene-02": {"path": "lib/pexels_X.mp4", "duration_sec": 15.0},
+    }
+    sched = compile_asset_schedule(scene_doc=doc, visual_spans=spans, fps=30, source_clips=source_clips)
+    assert len(sched["tracks"]) == 2
+
+
+def test_tracks_still_tile_timeline_after_fail_closed():
+    doc = _doc(
+        _scene("scene-01", "subtitle", 12.0),
+        _scene("scene-02", "subtitle", 12.0),
+        _scene("scene-03", "checklist", 10.0),
+    )
+    spans = build_visual_spans(doc, {}, job_id="j1")
+    source_clips = {
+        "scene-01": {"path": "lib/A.mp4", "duration_sec": 30.0},
+        "scene-02": {"path": "lib/B.mp4", "duration_sec": 30.0},
+    }
+    sched = compile_asset_schedule(scene_doc=doc, visual_spans=spans, fps=30, source_clips=source_clips)
+    cursor = 0
+    for t in sorted(sched["tracks"], key=lambda x: x["from_frame"]):
+        assert t["from_frame"] == cursor
+        cursor = t["end_frame_exclusive"]
+    assert cursor == sched["total_duration_in_frames"]
+
+
 def test_required_track_fields_present():
     doc = _doc(_scene("scene-01", "subtitle", 12.0))
     t = _compile(doc)["tracks"][0]

@@ -1132,6 +1132,7 @@ def test_http_run_all_success(
         "thumbnail_image",
         "whisper_timestamps",
         "visual_schedule",
+        "elena_plan",
         "render",
         "review",
     ]
@@ -1360,6 +1361,7 @@ def test_http_run_all_resumes_from_current_pending_stage(
         "thumbnail_image",
         "whisper_timestamps",
         "visual_schedule",
+        "elena_plan",
         "render",
         "review",
     ]

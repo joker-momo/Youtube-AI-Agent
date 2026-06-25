@@ -19,6 +19,10 @@ from video_agent.visual.schedule import (
     SCHEDULE_SCHEMA_VERSION,
     compile_asset_schedule,
 )
+from video_agent.visual.elena import (
+    ELENA_ASSETS,
+    build_elena_cues,
+)
 from video_agent.visual.spans import (
     SCHEMA_VERSION,
     assign_span_ids_to_scenes,
@@ -32,6 +36,8 @@ __all__ = [
     "SCHEMA_VERSION",
     "SCHEDULE_SCHEMA_VERSION",
     "compile_asset_schedule",
+    "ELENA_ASSETS",
+    "build_elena_cues",
     "DEFAULT_SPAN_CONFIG",
     "resolve_visual_span_config",
     "build_visual_spans",

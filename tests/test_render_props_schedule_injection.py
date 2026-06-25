@@ -53,3 +53,27 @@ def test_enforced_but_no_schedule_file_is_noop(tmp_path):
         rp, tmp_path, {"visual": {"span_planning": {"mode": "enforced"}}}
     )
     assert "visual_schedule" not in rp
+
+
+def test_elena_cues_injected_when_enforced(tmp_path):
+    (tmp_path / "json").mkdir(parents=True)
+    (tmp_path / "json" / "elena_cues.json").write_text(
+        json.dumps({"schema_version": 1, "fps": 30, "total_frames": 10, "cues": []})
+    )
+    rp: dict = {}
+    _attach_enforced_visual_schedule(
+        rp, tmp_path, {"visual": {"span_planning": {"mode": "enforced"}}}
+    )
+    assert rp["elena_cues"]["schema_version"] == 1
+
+
+def test_elena_cues_not_injected_in_report_only(tmp_path):
+    (tmp_path / "json").mkdir(parents=True)
+    (tmp_path / "json" / "elena_cues.json").write_text(
+        json.dumps({"schema_version": 1, "fps": 30, "total_frames": 10, "cues": []})
+    )
+    rp: dict = {}
+    _attach_enforced_visual_schedule(
+        rp, tmp_path, {"visual": {"span_planning": {"mode": "report_only"}}}
+    )
+    assert "elena_cues" not in rp

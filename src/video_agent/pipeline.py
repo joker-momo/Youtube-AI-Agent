@@ -537,15 +537,14 @@ def _attach_enforced_visual_schedule(
 
     if resolve_visual_span_config(channel_config or {}).get("mode") != "enforced":
         return
-    for candidate in (
-        job_dir / "json" / "compiled_asset_schedule.json",
-        job_dir / "compiled_asset_schedule.json",
+    for name, key in (
+        ("compiled_asset_schedule.json", "visual_schedule"),
+        ("elena_cues.json", "elena_cues"),
     ):
-        if candidate.exists():
-            render_props["visual_schedule"] = json.loads(
-                candidate.read_text(encoding="utf-8")
-            )
-            return
+        for candidate in (job_dir / "json" / name, job_dir / name):
+            if candidate.exists():
+                render_props[key] = json.loads(candidate.read_text(encoding="utf-8"))
+                break
 
 
 def run_pipeline(options: PipelineOptions) -> PipelineResult:

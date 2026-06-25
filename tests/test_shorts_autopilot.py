@@ -332,6 +332,7 @@ def test_long_form_default_stages_unchanged():
         "thumbnail_image",
         "whisper_timestamps",
         "visual_schedule",
+        "elena_plan",
         "render",
         "review",
     )

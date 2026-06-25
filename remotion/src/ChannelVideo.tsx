@@ -3,6 +3,7 @@ import {AbsoluteFill, Audio, Img, interpolate, OffthreadVideo, Sequence, useCurr
 import {LayoutPayload, SceneLayout, SubtitleConfig, WordSegment} from './render-props';
 import {mediaSrc, RenderProps, Scene} from './render-props';
 import {ChannelVisualTimeline} from './ChannelVisualTimeline';
+import {ChannelElenaPresenter} from './ChannelElenaPresenter';
 import {fitHeadline, fullFrame} from './styles';
 
 const FADE_IN = 18;          // 0.6 s fade-in per scene
@@ -571,6 +572,9 @@ export const ChannelVideo: React.FC<RenderProps> = (props) => {
   // background layer (one continuous clip per span). Absent → legacy per-scene
   // background, frame-identical to before.
   const visualSchedule = props.visual_schedule ?? null;
+  // Elena presenter overlay (bottom-right, clear of the subtitle band). Cues are
+  // scene-layer 0-based, so the overlay is shifted by introFrames like the scenes.
+  const elenaCues = props.elena_cues ?? null;
   return (
     <AbsoluteFill style={{backgroundColor: '#0C100D'}}>
       {props.audio.narration ? (
@@ -626,6 +630,12 @@ export const ChannelVideo: React.FC<RenderProps> = (props) => {
           </Sequence>
         );
       })}
+      {/* Elena presenter — above B-roll/graphic, bottom-right, clear of subtitles. */}
+      {elenaCues ? (
+        <Sequence from={introFrames}>
+          <ChannelElenaPresenter elena={elenaCues} />
+        </Sequence>
+      ) : null}
       {logoPath && outroFrames > 0 ? (
         outroVideoPath ? (
           <Sequence from={start} durationInFrames={outroFrames}>

@@ -107,6 +107,28 @@ export type CompiledAssetSchedule = {
   tracks: CompiledVisualTrack[];
 };
 
+// Elena presenter cues (long-form v2 §6). "idle" removed → talking + hidden only;
+// the video is always muted at render; 24fps asset in a 30fps comp plays by
+// timestamp (no time-stretch).
+export type ElenaCue = {
+  start_frame: number;
+  duration_frames: number;
+  mode: 'talking' | 'hidden';
+  treatment?: 'circle' | 'large';
+  variant?: 'talk-neutral' | 'talk-emphasis';
+  position: 'bottom-right';
+  asset_ref?: string;
+  source_trim_frames?: number;
+  reason?: string;
+};
+
+export type ElenaCuesDoc = {
+  schema_version: 1;
+  fps: number;
+  total_frames: number;
+  cues: ElenaCue[];
+};
+
 export type Scene = {
   id: string;
   duration_sec: number;
@@ -173,6 +195,7 @@ export type RenderProps = {
     show_channel_name_overlay?: boolean;
   };
   visual_schedule?: CompiledAssetSchedule | null;
+  elena_cues?: ElenaCuesDoc | null;
 };
 
 export const mediaSrc = (path: string): string => {

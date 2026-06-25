@@ -30,6 +30,8 @@ DEFAULT_STAGES: tuple[str, ...] = (
     # Long-form compiled asset schedule (report-only sidecar; consumed by render
     # only when injected into render_props, gated by visual.span_planning.mode).
     "visual_schedule",
+    # Long-form Elena presenter cue plan (report-only sidecar; same gating).
+    "elena_plan",
     "render",
     "review",
 )

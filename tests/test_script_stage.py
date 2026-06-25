@@ -174,6 +174,7 @@ def _fake_pass_whisper_timestamps(job_dir: Path) -> None:
     advancing to render (visual_schedule now sits between whisper and render)."""
     _fake_pass_stage(job_dir, "whisper_timestamps")
     _fake_pass_stage(job_dir, "visual_schedule")
+    _fake_pass_stage(job_dir, "elena_plan")
 
 
 def _prepare_promoted_script(

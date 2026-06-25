@@ -26,6 +26,7 @@ from video_agent.orchestrator.stages import (
     auto_script_stage,
     auto_seo_stage,
     auto_thumbnail_image_stage,
+    run_elena_plan_stage,
     run_render_stage,
     run_review_stage,
     run_visual_schedule_stage,
@@ -593,6 +594,13 @@ async def _execute_run_all_locked(
             await _record(
                 "visual_schedule",
                 run_visual_schedule_stage(job_dir, channel_path),
+            )
+        if "elena_plan" in remaining:
+            _check_stop_requested()
+            # Compile the Elena presenter cue plan (report-only sidecar).
+            await _record(
+                "elena_plan",
+                run_elena_plan_stage(job_dir, channel_path),
             )
         if "render" in remaining:
             _check_stop_requested()

@@ -121,6 +121,9 @@ from video_agent.orchestrator.stages.visual_schedule import (
 from video_agent.orchestrator.stages.graphic_images import (
     run_graphic_images_stage,
 )
+from video_agent.orchestrator.stages.elena_plan import (
+    run_elena_plan_stage,
+)
 
 # ---------------------------------------------------------------------------
 # render_review

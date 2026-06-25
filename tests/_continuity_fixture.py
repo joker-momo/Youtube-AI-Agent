@@ -68,9 +68,19 @@ def decode_marker(pixels, width: int, height: int) -> int | None:
     return value
 
 
-def generate_fixture(out_path: Path, *, frames: int = SOURCE_FRAMES) -> Path:
+def generate_fixture(
+    out_path: Path,
+    *,
+    frames: int = SOURCE_FRAMES,
+    width: int = WIDTH,
+    height: int = HEIGHT,
+) -> Path:
     """Render the marker MP4 to ``out_path`` (lossless all-intra). Idempotent:
-    skips if the file already exists. Returns ``out_path``."""
+    skips if the file already exists. Returns ``out_path``.
+
+    ``width``/``height`` default to the portrait (Shorts) frame; pass a landscape
+    size (e.g. 1920x1080) for the long-form composition so ``objectFit: cover``
+    does not crop the top-left marker ROI."""
     from PIL import Image, ImageDraw  # local import: optional dep
 
     if out_path.exists():
@@ -84,7 +94,7 @@ def generate_fixture(out_path: Path, *, frames: int = SOURCE_FRAMES) -> Path:
     tmp.mkdir(parents=True, exist_ok=True)
     try:
         for n in range(frames):
-            img = Image.new("RGB", (WIDTH, HEIGHT), (60, 60, 70))  # distinct "video" bg
+            img = Image.new("RGB", (width, height), (60, 60, 70))  # distinct "video" bg
             draw = ImageDraw.Draw(img)
             for i, val in enumerate(encode_frame_value(n)):
                 x0, y0, x1, y1 = _cell_bounds(i)

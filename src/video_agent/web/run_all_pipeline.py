@@ -27,6 +27,7 @@ from video_agent.orchestrator.stages import (
     auto_thumbnail_image_stage,
     run_render_stage,
     run_review_stage,
+    run_visual_schedule_stage,
     run_visual_spans_stage,
     run_whisper_timestamps_stage,
 )
@@ -575,6 +576,14 @@ async def _execute_run_all_locked(
         if "whisper_timestamps" in remaining:
             _check_stop_requested()
             await _record("whisper_timestamps", run_whisper_timestamps_stage(job_dir))
+        if "visual_schedule" in remaining:
+            _check_stop_requested()
+            # Compile the schema-v2 asset schedule; render consumes it only when
+            # injected into render_props (gated by visual.span_planning.mode).
+            await _record(
+                "visual_schedule",
+                run_visual_schedule_stage(job_dir, channel_path),
+            )
         if "render" in remaining:
             _check_stop_requested()
             # Full pipeline ends with notify_job_done_with_files; skip per-render notify to avoid duplicates.

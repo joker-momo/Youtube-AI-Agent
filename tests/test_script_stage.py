@@ -168,8 +168,10 @@ def _fake_pass_thumbnail_image(job_dir: Path) -> None:
 
 
 def _fake_pass_whisper_timestamps(job_dir: Path) -> None:
-    """Mark whisper_timestamps as completed and advance to render."""
+    """Mark whisper_timestamps + the long-form visual_schedule sidecar completed,
+    advancing to render (visual_schedule now sits between whisper and render)."""
     _fake_pass_stage(job_dir, "whisper_timestamps")
+    _fake_pass_stage(job_dir, "visual_schedule")
 
 
 def _prepare_promoted_script(

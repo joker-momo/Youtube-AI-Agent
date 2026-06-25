@@ -1,0 +1,93 @@
+"""Long-form ``visual_schedule`` pipeline stage (Phase 2).
+
+Runs after ``whisper_timestamps`` (when scene durations are frame-accurate). Reads
+``scenes.json`` + ``visual_spans.json`` and compiles
+``compiled_asset_schedule.json`` (schema v2, the renderer's single source of truth
+for the background layer) via the pure ``video_agent.visual.compile_asset_schedule``.
+
+Writing the artifact is always safe: the renderer only consumes it once it is
+injected into ``render_props.json`` (gated separately by the long-form
+``visual.span_planning.mode``), so a report-only job keeps rendering the legacy
+per-scene background. Independent of ``video_agent.shorts``.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from video_agent.contracts import ARTIFACT_SCENES
+from video_agent.orchestrator.job_state import load_job
+from video_agent.orchestrator.stages._shared import (
+    StageInputMissingError,
+    _complete_stage,
+    _resolve_artifact,
+    _start_stage,
+)
+from video_agent.storage.atomic import atomic_write_json
+from video_agent.utils.json_io import read_json, read_yaml
+from video_agent.visual import compile_asset_schedule
+
+__all__ = ["run_visual_schedule_stage"]
+
+_STAGE = "visual_schedule"
+_OUTPUT_NAME = "compiled_asset_schedule.json"
+_SPANS_NAME = "visual_spans.json"
+_DEFAULT_FPS = 30
+
+
+def _resolve_fps(channel_path: Path | None) -> int:
+    """Read ``render.fps`` from the channel config (best-effort, default 30)."""
+    if channel_path is None:
+        return _DEFAULT_FPS
+    path = Path(channel_path)
+    if not path.exists():
+        return _DEFAULT_FPS
+    try:
+        cfg: dict[str, Any] = read_yaml(path) or {}
+        fps = ((cfg.get("render") or {}).get("fps")) or _DEFAULT_FPS
+        return int(fps)
+    except Exception:
+        return _DEFAULT_FPS
+
+
+def run_visual_schedule_stage(job_dir: Path, channel_path: Path | None = None) -> Path:
+    """Compile the schema-v2 asset schedule and write ``compiled_asset_schedule.json``.
+
+    Returns the output path. Raises :class:`StageInputMissingError` if run out of
+    order or if ``scenes.json`` / ``visual_spans.json`` are missing.
+    """
+    state = load_job(job_dir)
+    if state.current_stage != _STAGE:
+        raise StageInputMissingError(
+            f"Cannot run {_STAGE} stage from current_stage={state.current_stage!r}"
+        )
+
+    scenes_path = _resolve_artifact(job_dir, ARTIFACT_SCENES, "scenes.json")
+    if not scenes_path.exists():
+        raise StageInputMissingError(
+            f"{_STAGE}: scenes.json not found (looked at {scenes_path})"
+        )
+    spans_path = scenes_path.parent / _SPANS_NAME
+    if not spans_path.exists():
+        raise StageInputMissingError(
+            f"{_STAGE}: visual_spans.json not found (looked at {spans_path}); "
+            "run the visual_spans stage first"
+        )
+
+    _start_stage(job_dir, _STAGE)
+    scene_doc = read_json(scenes_path) or {}
+    visual_spans = read_json(spans_path) or {}
+    fps = _resolve_fps(channel_path)
+
+    schedule = compile_asset_schedule(
+        scene_doc=scene_doc,
+        visual_spans=visual_spans,
+        fps=fps,
+        timing_source="tts_final",
+    )
+
+    out_path = scenes_path.parent / _OUTPUT_NAME
+    atomic_write_json(out_path, schedule)
+    _complete_stage(job_dir, _STAGE, out_path)
+    return out_path

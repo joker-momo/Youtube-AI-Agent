@@ -2,6 +2,7 @@ import React from 'react';
 import {AbsoluteFill, Audio, Img, interpolate, OffthreadVideo, Sequence, useCurrentFrame, useVideoConfig} from 'remotion';
 import {LayoutPayload, SceneLayout, SubtitleConfig, WordSegment} from './render-props';
 import {mediaSrc, RenderProps, Scene} from './render-props';
+import {ChannelVisualTimeline} from './ChannelVisualTimeline';
 import {fitHeadline, fullFrame} from './styles';
 
 const FADE_IN = 18;          // 0.6 s fade-in per scene
@@ -377,7 +378,10 @@ const SceneView: React.FC<{
   subtitles: Required<SubtitleConfig>;
   isFirst?: boolean;
   isLast?: boolean;
-}> = ({scene, totalFrames, sceneIndex, totalScenes, palette, channelName, showChannelNameOverlay = false, logoPath, subtitles, isFirst = false, isLast = false}) => {
+  // When the compiled visual schedule owns the background layer, the per-scene
+  // background is suppressed here so the continuous span clip shows through.
+  hideBackground?: boolean;
+}> = ({scene, totalFrames, sceneIndex, totalScenes, palette, channelName, showChannelNameOverlay = false, logoPath, subtitles, isFirst = false, isLast = false, hideBackground = false}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
   const progress = frame / Math.max(totalFrames - 1, 1);
@@ -431,8 +435,10 @@ const SceneView: React.FC<{
   const headlineAlpha = interpolate(frame, [4, FADE_IN + 8], [0, 1], {extrapolateRight: 'clamp'});
   const captionAlpha  = interpolate(frame, [FADE_IN, FADE_IN + 14], [0, 1], {extrapolateRight: 'clamp'});
 
-  // Scene-to-scene fade: fade-out black overlay appears in final FADE_OUT frames
-  const fadeOutAlpha = !isLast
+  // Scene-to-scene fade: fade-out black overlay appears in final FADE_OUT frames.
+  // Suppressed when the compiled timeline owns the background, so a continuous
+  // span clip is never interrupted by a black flash at an internal scene boundary.
+  const fadeOutAlpha = (!isLast && !hideBackground)
     ? interpolate(frame, [totalFrames - FADE_OUT, totalFrames - 1], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'})
     : 0;
 
@@ -446,8 +452,9 @@ const SceneView: React.FC<{
     <AbsoluteFill style={{...fullFrame, opacity}}>
       <FontLoader />
 
-      {/* Full-bleed background — video clip or photo */}
-      {scene.asset_refs.background.endsWith('.mp4') ? (
+      {/* Full-bleed background — video clip or photo.
+          Suppressed when the compiled visual timeline owns the background layer. */}
+      {hideBackground ? null : scene.asset_refs.background.endsWith('.mp4') ? (
         // OffthreadVideo is preferred over Video for server-side rendering (faster, frame-accurate).
         // loop: short Pexels clips (3-30s) repeat to fill the full scene duration.
         // No pan/zoom transform — the video itself has natural motion.
@@ -555,6 +562,10 @@ export const ChannelVideo: React.FC<RenderProps> = (props) => {
   let start = introFrames;
   const totalSceneFrames = props.scenes.reduce((acc, s) => acc + Math.round(s.duration_sec * fps), 0);
   const outroFrom = start + totalSceneFrames;
+  // When a compiled asset schedule is present, the visual timeline owns the
+  // background layer (one continuous clip per span). Absent → legacy per-scene
+  // background, frame-identical to before.
+  const visualSchedule = props.visual_schedule ?? null;
   return (
     <AbsoluteFill style={{backgroundColor: '#0C100D'}}>
       {props.audio.narration ? (
@@ -579,6 +590,14 @@ export const ChannelVideo: React.FC<RenderProps> = (props) => {
           />
         </Sequence>
       ) : null}
+      {/* Background layer: continuous span clips. Rendered before the scene
+          sequences so it sits behind their gradients/text. Scene-layer is shifted
+          by introFrames, matching where the per-scene sequences start. */}
+      {visualSchedule ? (
+        <Sequence from={introFrames}>
+          <ChannelVisualTimeline schedule={visualSchedule} />
+        </Sequence>
+      ) : null}
       {props.scenes.map((scene, i) => {
         const totalFrames = Math.round(scene.duration_sec * fps);
         const from = start;
@@ -597,6 +616,7 @@ export const ChannelVideo: React.FC<RenderProps> = (props) => {
               subtitles={subtitles}
               isFirst={i === 0}
               isLast={i === props.scenes.length - 1}
+              hideBackground={visualSchedule != null}
             />
           </Sequence>
         );

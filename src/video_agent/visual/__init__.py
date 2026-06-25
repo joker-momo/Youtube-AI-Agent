@@ -15,6 +15,10 @@ from video_agent.visual.config import (
     DEFAULT_SPAN_CONFIG,
     resolve_visual_span_config,
 )
+from video_agent.visual.schedule import (
+    SCHEDULE_SCHEMA_VERSION,
+    compile_asset_schedule,
+)
 from video_agent.visual.spans import (
     SCHEMA_VERSION,
     assign_span_ids_to_scenes,
@@ -26,6 +30,8 @@ from video_agent.visual.spans import (
 
 __all__ = [
     "SCHEMA_VERSION",
+    "SCHEDULE_SCHEMA_VERSION",
+    "compile_asset_schedule",
     "DEFAULT_SPAN_CONFIG",
     "resolve_visual_span_config",
     "build_visual_spans",

@@ -523,6 +523,31 @@ def _write_report(
     return report_path
 
 
+def _attach_enforced_visual_schedule(
+    render_props: dict, job_dir: Path, channel_config: dict
+) -> None:
+    """Inject the compiled asset schedule into ``render_props`` only when long-form
+    span planning is ``enforced``.
+
+    In ``report_only`` / ``disabled`` (the default) the schedule is omitted, so the
+    renderer keeps the legacy per-scene background — frame-identical to before this
+    feature. Independent of the Shorts render path.
+    """
+    from video_agent.visual import resolve_visual_span_config
+
+    if resolve_visual_span_config(channel_config or {}).get("mode") != "enforced":
+        return
+    for candidate in (
+        job_dir / "json" / "compiled_asset_schedule.json",
+        job_dir / "compiled_asset_schedule.json",
+    ):
+        if candidate.exists():
+            render_props["visual_schedule"] = json.loads(
+                candidate.read_text(encoding="utf-8")
+            )
+            return
+
+
 def run_pipeline(options: PipelineOptions) -> PipelineResult:
     root = repo_root()
     channel_config = read_yaml(options.channel_path)
@@ -574,6 +599,7 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
         "seo": seo,
         "branding": branding,
     }
+    _attach_enforced_visual_schedule(render_props, job_dir, channel_config)
     write_json(job_dir / ARTIFACT_RENDER_PROPS, render_props)
     validate_json(render_props, root / "schemas/render-props.schema.json")
     visual_review = _write_visual_review(job_dir, job_id, assets, scene_doc)
@@ -945,6 +971,7 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
         "seo": seo,
         "branding": branding,
     }
+    _attach_enforced_visual_schedule(render_props, job_dir, channel_config)
     write_json(job_dir / ARTIFACT_RENDER_PROPS, render_props)
     validate_json(render_props, root / "schemas/render-props.schema.json")
     visual_review = _write_visual_review(job_dir, job_id, assets, scene_doc)

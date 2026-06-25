@@ -330,6 +330,7 @@ def test_long_form_default_stages_unchanged():
         "seo_qa",
         "thumbnail_image",
         "whisper_timestamps",
+        "visual_schedule",
         "render",
         "review",
     )

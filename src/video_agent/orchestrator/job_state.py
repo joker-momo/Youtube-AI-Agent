@@ -25,6 +25,9 @@ DEFAULT_STAGES: tuple[str, ...] = (
     # assets_chatgpt removed — default pipeline uses stock video (pexels_video provider).
     # Run assets_chatgpt manually via ▶ Run button if ChatGPT images needed.
     "whisper_timestamps",
+    # Long-form compiled asset schedule (report-only sidecar; consumed by render
+    # only when injected into render_props, gated by visual.span_planning.mode).
+    "visual_schedule",
     "render",
     "review",
 )

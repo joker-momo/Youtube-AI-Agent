@@ -1130,6 +1130,7 @@ def test_http_run_all_success(
         "seo_qa",
         "thumbnail_image",
         "whisper_timestamps",
+        "visual_schedule",
         "render",
         "review",
     ]
@@ -1356,6 +1357,7 @@ def test_http_run_all_resumes_from_current_pending_stage(
         "seo_qa",
         "thumbnail_image",
         "whisper_timestamps",
+        "visual_schedule",
         "render",
         "review",
     ]
@@ -1373,6 +1375,16 @@ def test_http_run_all_opens_writing_session_when_resuming_at_seo_qa_rework(
     _set_current_stage(job_dir, "seo_qa")
     bad_seo = dict(valid_seo_payload, language="es-MX")
     (job_dir / "seo.json").write_text(json.dumps(bad_seo, ensure_ascii=False), encoding="utf-8")
+    # Minimal scene + span artifacts so the real visual_schedule stage (which runs
+    # before render) has inputs to compile from.
+    (job_dir / "scenes.json").write_text(json.dumps({
+        "scenes": [{"id": "scene-01", "layout": "subtitle", "duration_sec": 10,
+                    "asset_refs": {"background": "assets/scene-01.mp4"}}],
+    }), encoding="utf-8")
+    (job_dir / "visual_spans.json").write_text(json.dumps({
+        "spans": [{"id": "vs01", "scene_ids": ["scene-01"],
+                   "planned_mode": "continuous_clip"}],
+    }), encoding="utf-8")
 
     qa_pass = json.dumps(
         {

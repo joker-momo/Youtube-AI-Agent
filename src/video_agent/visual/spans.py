@@ -112,6 +112,55 @@ def _classify_span(members: list[dict[str, Any]]) -> tuple[str, str]:
 
 
 # --------------------------------------------------------------------------- #
+# Invariant self-audit (regression guard — gives ``enforced`` real teeth)
+# --------------------------------------------------------------------------- #
+def verify_span_invariants(
+    spans: list[dict[str, Any]],
+    scenes: list[dict[str, Any]],
+    cfg: dict[str, Any],
+) -> list[str]:
+    """Re-check a finalized span list against the Phase-1 grouping invariants.
+
+    Defensive guard: it audits the *output* independently of how it was produced,
+    so a future regression in the grouping engine surfaces as a QA error instead
+    of a silently malformed schedule. Returns a list of error tokens (empty ==
+    clean). Wired into the QA ``errors`` list; in ``enforced`` mode any token
+    flips the verdict to FAIL.
+    """
+    cfg = {**DEFAULT_SPAN_CONFIG, **(cfg or {})}
+    max_scenes = int(cfg["max_scenes_per_span"])
+    max_span_sec = float(cfg["max_span_sec"])
+    by_id = {_scene_id(s, i): s for i, s in enumerate(scenes)}
+    index_of = {_scene_id(s, i): i for i, s in enumerate(scenes)}
+
+    errors: list[str] = []
+    for span in spans:
+        sid_list = list(span.get("scene_ids") or [])
+        members = [by_id[s] for s in sid_list if s in by_id]
+        label = span.get("id") or "?"
+
+        if len(sid_list) > max_scenes:
+            errors.append(f"invariant_max_scenes:{label}")
+        if len(members) > 1 and (
+            sum(_scene_duration(m) for m in members) > max_span_sec + 1e-9
+        ):
+            errors.append(f"invariant_max_span_sec:{label}")
+
+        idxs = [index_of[s] for s in sid_list if s in index_of]
+        if idxs and idxs != list(range(idxs[0], idxs[0] + len(idxs))):
+            errors.append(f"invariant_non_contiguous:{label}")
+
+        if len(members) > 1:
+            if any(_is_graphic(m) for m in members):
+                errors.append(f"invariant_graphic_isolation:{label}")
+            if any(_is_hook(m) for m in members):
+                errors.append(f"invariant_hook_isolation:{label}")
+            if not all(_is_groupable(m, cfg) for m in members):
+                errors.append(f"invariant_non_groupable_merge:{label}")
+    return errors
+
+
+# --------------------------------------------------------------------------- #
 # Forward-pass grouping engine
 # --------------------------------------------------------------------------- #
 def validate_and_repair_visual_spans(
@@ -256,6 +305,7 @@ def validate_and_repair_visual_spans(
     expected = [_scene_id(s, i) for i, s in enumerate(scenes)]
     if covered != expected:
         errors.append("incomplete_or_reordered_coverage")
+    errors.extend(verify_span_invariants(spans, scenes, cfg))
     verdict = "FAIL" if (errors and enforced) else "PASS"
     qa = {"verdict": verdict, "errors": errors, "warnings": list(global_warnings)}
 

@@ -13,6 +13,7 @@ from video_agent.visual import (
     resolve_visual_span_config,
     validate_and_repair_visual_spans,
 )
+from video_agent.visual.spans import verify_span_invariants
 
 
 def _scene(sid: str, layout: str = "subtitle", dur: float = 12.0, **extra):
@@ -177,3 +178,66 @@ def test_enforced_mode_passes_on_clean_coverage():
     doc = _doc(_scene("scene-01"), _scene("scene-02"))
     res = validate_and_repair_visual_spans(doc, _cfg(mode="enforced"))
     assert res["qa"]["verdict"] == "PASS"
+
+
+# --------------------------------------------------------------------------- #
+# Invariant self-audit (gives `enforced` real teeth — regression guard)
+# --------------------------------------------------------------------------- #
+def test_verify_invariants_clean_grouping_has_no_errors():
+    doc = _doc(_scene("scene-01"), _scene("scene-02"), _scene("scene-03", "checklist"))
+    cfg = _cfg()
+    res = validate_and_repair_visual_spans(doc, cfg)
+    errs = verify_span_invariants(res["spans"], doc["scenes"], cfg)
+    assert errs == []
+
+
+def test_verify_invariants_flags_scene_cap_violation():
+    scenes = [_scene(f"scene-{i:02d}") for i in range(1, 5)]  # 4 subtitle scenes
+    bad_span = {
+        "id": "vs01",
+        "scene_ids": [s["id"] for s in scenes],  # 4 > max_scenes_per_span=3
+        "start_scene_index": 0,
+        "end_scene_index": 3,
+        "planned_mode": "continuous_clip",
+    }
+    errs = verify_span_invariants([bad_span], scenes, _cfg(max_scenes_per_span=3))
+    assert any("max_scenes" in e for e in errs)
+
+
+def test_verify_invariants_flags_span_seconds_violation():
+    scenes = [_scene("scene-01", dur=30), _scene("scene-02", dur=30)]  # 60 > 40
+    bad_span = {
+        "id": "vs01",
+        "scene_ids": ["scene-01", "scene-02"],
+        "start_scene_index": 0,
+        "end_scene_index": 1,
+        "planned_mode": "continuous_clip",
+    }
+    errs = verify_span_invariants([bad_span], scenes, _cfg(max_span_sec=40.0))
+    assert any("max_span_sec" in e for e in errs)
+
+
+def test_verify_invariants_flags_graphic_merged_with_subtitle():
+    scenes = [_scene("scene-01", "subtitle"), _scene("scene-02", "checklist")]
+    bad_span = {
+        "id": "vs01",
+        "scene_ids": ["scene-01", "scene-02"],  # graphic must be isolated
+        "start_scene_index": 0,
+        "end_scene_index": 1,
+        "planned_mode": "continuous_clip",
+    }
+    errs = verify_span_invariants([bad_span], scenes, _cfg())
+    assert any("isolation" in e or "graphic" in e for e in errs)
+
+
+def test_verify_invariants_flags_non_contiguous_span():
+    scenes = [_scene("scene-01"), _scene("scene-02"), _scene("scene-03")]
+    bad_span = {
+        "id": "vs01",
+        "scene_ids": ["scene-01", "scene-03"],  # skips scene-02
+        "start_scene_index": 0,
+        "end_scene_index": 2,
+        "planned_mode": "continuous_clip",
+    }
+    errs = verify_span_invariants([bad_span], scenes, _cfg())
+    assert any("contiguous" in e for e in errs)

@@ -523,7 +523,8 @@ def test_run_render_stage_uses_operator_render_without_qa_gate(
     assert calls[0].render is True
     assert calls[0].require_operator_qa is False
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
-    assert state["current_stage"] == "review"
+    # render now advances to the long-form render_continuity_qa sidecar before review.
+    assert state["current_stage"] == "render_continuity_qa"
     render_stage = next(s for s in state["stages"] if s["name"] == "render")
     assert render_stage["status"] == "completed"
 
@@ -549,6 +550,7 @@ def test_run_review_stage_writes_review_and_completes_job(
     _fake_pass_whisper_timestamps(job_dir)
     state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
     next(s for s in state["stages"] if s["name"] == "render")["status"] = "completed"
+    next(s for s in state["stages"] if s["name"] == "render_continuity_qa")["status"] = "completed"
     state["current_stage"] = "review"
     (job_dir / "job.json").write_text(json.dumps(state), encoding="utf-8")
 
@@ -921,7 +923,7 @@ def test_post_run_render_via_http(
     assert body["output"] == "video.mp4"
     render_stage = next(s for s in body["state"]["stages"] if s["name"] == "render")
     assert render_stage["status"] == "completed"
-    assert body["state"]["current_stage"] == "review"
+    assert body["state"]["current_stage"] == "render_continuity_qa"
 
 
 def test_post_run_review_via_http(
@@ -971,6 +973,8 @@ def test_post_run_review_via_http(
     monkeypatch.setattr("video_agent.orchestrator.stages.render_operator_job", fake_render_operator_job)
     monkeypatch.setattr("video_agent.orchestrator.stages.write_operator_review", fake_write_operator_review)
     client.post("/jobs/job-s1/stages/render/run")
+    # render now advances to render_continuity_qa before review.
+    _fake_pass_stage(tmp_path / "job-s1", "render_continuity_qa")
 
     response = client.post("/jobs/job-s1/stages/review/run")
 

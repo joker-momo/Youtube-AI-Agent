@@ -33,6 +33,8 @@ DEFAULT_STAGES: tuple[str, ...] = (
     # Long-form Elena presenter cue plan (report-only sidecar; same gating).
     "elena_plan",
     "render",
+    # Long-form span-continuity QA on the rendered video (PASS-skips with no schedule).
+    "render_continuity_qa",
     "review",
 )
 

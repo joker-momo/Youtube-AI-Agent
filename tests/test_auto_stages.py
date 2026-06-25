@@ -1134,6 +1134,7 @@ def test_http_run_all_success(
         "visual_schedule",
         "elena_plan",
         "render",
+        "render_continuity_qa",
         "review",
     ]
     assert all(s["status"] == "completed" for s in body["state"]["stages"])
@@ -1363,6 +1364,7 @@ def test_http_run_all_resumes_from_current_pending_stage(
         "visual_schedule",
         "elena_plan",
         "render",
+        "render_continuity_qa",
         "review",
     ]
     assert len(fake.calls) == 6

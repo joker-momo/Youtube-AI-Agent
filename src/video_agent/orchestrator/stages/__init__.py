@@ -124,6 +124,9 @@ from video_agent.orchestrator.stages.graphic_images import (
 from video_agent.orchestrator.stages.elena_plan import (
     run_elena_plan_stage,
 )
+from video_agent.orchestrator.stages.render_continuity_qa import (
+    run_render_continuity_qa_stage,
+)
 
 # ---------------------------------------------------------------------------
 # render_review

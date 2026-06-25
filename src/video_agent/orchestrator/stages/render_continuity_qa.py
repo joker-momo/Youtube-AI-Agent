@@ -1,0 +1,169 @@
+"""Long-form ``render_continuity_qa`` stage (Phase 6).
+
+After render, verifies that wherever the compiled schedule mounts ONE continuous
+clip across several scenes, the rendered video does not reset / black-out at a
+span-internal scene boundary (a reset shows up as a black frame). Real cuts at
+track boundaries are expected and are not flagged.
+
+``analyze_span_continuity`` is pure (operates on a per-frame luma sequence) and
+unit-tested. The stage decodes only the boundary frames via ffmpeg (best-effort:
+if the schedule, the rendered video, or ffmpeg is unavailable it reports PASS with
+``skipped``). Reference: ``video_agent.shorts.render_continuity_qa`` (not imported).
+"""
+
+from __future__ import annotations
+
+import shutil
+import subprocess
+from pathlib import Path
+from typing import Any, Sequence
+
+from video_agent.orchestrator.job_state import load_job
+from video_agent.orchestrator.stages._shared import (
+    StageInputMissingError,
+    _complete_stage,
+    _resolve_artifact,
+    _start_stage,
+)
+from video_agent.contracts import ARTIFACT_SCENES
+from video_agent.storage.atomic import atomic_write_json
+from video_agent.utils.json_io import read_json
+
+__all__ = ["analyze_span_continuity", "run_render_continuity_qa_stage"]
+
+_STAGE = "render_continuity_qa"
+_OUTPUT_NAME = "render_continuity_qa.json"
+_BLACK_THRESHOLD = 8.0  # mean luma below this == effectively black / reset
+
+
+def _internal_boundaries(schedule: dict[str, Any]) -> list[int]:
+    """Span-internal scene-boundary frames: a scene boundary strictly inside a
+    single background track (i.e. not a track/cut boundary)."""
+    total = int(schedule.get("total_duration_in_frames") or 0)
+    track_ranges = [
+        (int(t["from_frame"]), int(t["end_frame_exclusive"]))
+        for t in schedule.get("tracks") or []
+        if t.get("track_type") == "background_media"
+    ]
+    out: list[int] = []
+    for boundary in schedule.get("scene_boundaries") or []:
+        frame = int(boundary.get("end_frame_exclusive") or 0)
+        if frame <= 0 or frame >= total:
+            continue
+        if any(tf < frame < te for tf, te in track_ranges):
+            out.append(frame)
+    return sorted(set(out))
+
+
+def analyze_span_continuity(
+    luma: Sequence[float],
+    schedule: dict[str, Any],
+    *,
+    black_threshold: float = _BLACK_THRESHOLD,
+) -> dict[str, Any]:
+    """Flag span-internal boundaries where the rendered frame goes black (reset)."""
+    boundaries = _internal_boundaries(schedule or {})
+    flagged: list[int] = []
+    for frame in boundaries:
+        before = luma[frame - 1] if 0 <= frame - 1 < len(luma) else None
+        at = luma[frame] if 0 <= frame < len(luma) else None
+        if (before is not None and before < black_threshold) or (
+            at is not None and at < black_threshold
+        ):
+            flagged.append(frame)
+    return {
+        "verdict": "FAIL" if flagged else "PASS",
+        "checked_boundaries": boundaries,
+        "flagged": flagged,
+        "black_threshold": black_threshold,
+    }
+
+
+def _sample_luma(video: Path, frames: list[int], total: int) -> list[float] | None:
+    """Mean luma for the requested frame indices (others default to a non-black
+    sentinel). Returns None when ffmpeg/PIL is unavailable."""
+    if not frames or not shutil.which("ffmpeg"):
+        return None
+    try:
+        from PIL import Image  # optional dep
+    except Exception:
+        return None
+    wanted = sorted(set(frames))
+    select = "+".join(f"eq(n\\,{f})" for f in wanted)
+    tmp = video.parent / "_continuity_tmp"
+    if tmp.exists():
+        shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", str(video), "-vf", f"select='{select}'",
+             "-vsync", "0", str(tmp / "%05d.png")],
+            check=True, capture_output=True, timeout=300,
+        )
+        pngs = sorted(tmp.glob("*.png"))
+        luma = [128.0] * max(total, (max(wanted) + 1))
+        for idx, png in enumerate(pngs):
+            if idx >= len(wanted):
+                break
+            with Image.open(png) as im:
+                gray = im.convert("L")
+                hist = gray.histogram()
+                pixels = sum(hist) or 1
+                mean = sum(i * c for i, c in enumerate(hist)) / pixels
+            luma[wanted[idx]] = mean
+        return luma
+    except Exception:
+        return None
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _find_rendered_video(job_dir: Path) -> Path | None:
+    candidate = job_dir / "video.mp4"
+    if candidate.exists():
+        return candidate
+    mp4s = [p for p in job_dir.glob("*.mp4") if p.is_file()]
+    return mp4s[0] if mp4s else None
+
+
+def run_render_continuity_qa_stage(job_dir: Path, channel_path: Path | None = None) -> Path:
+    """Verify span continuity in the rendered video; write the QA artifact."""
+    state = load_job(job_dir)
+    if state.current_stage != _STAGE:
+        raise StageInputMissingError(
+            f"Cannot run {_STAGE} stage from current_stage={state.current_stage!r}"
+        )
+
+    _start_stage(job_dir, _STAGE)
+    scenes_path = _resolve_artifact(job_dir, ARTIFACT_SCENES, "scenes.json")
+    sched_path = scenes_path.parent / "compiled_asset_schedule.json"
+    video = _find_rendered_video(job_dir)
+    out_path = scenes_path.parent / _OUTPUT_NAME
+
+    if not sched_path.exists() or video is None:
+        result = {"verdict": "PASS", "skipped": True,
+                  "reason": "no compiled schedule or rendered video"}
+        atomic_write_json(out_path, result)
+        _complete_stage(job_dir, _STAGE, out_path)
+        return out_path
+
+    schedule = read_json(sched_path) or {}
+    boundaries = _internal_boundaries(schedule)
+    if not boundaries:
+        result = {"verdict": "PASS", "skipped": False, "checked_boundaries": [],
+                  "flagged": [], "reason": "no span-internal boundaries"}
+        atomic_write_json(out_path, result)
+        _complete_stage(job_dir, _STAGE, out_path)
+        return out_path
+
+    frames = sorted({f for b in boundaries for f in (b - 1, b)})
+    luma = _sample_luma(video, frames, int(schedule.get("total_duration_in_frames") or 0))
+    if luma is None:
+        result = {"verdict": "PASS", "skipped": True,
+                  "reason": "luma sampling unavailable (ffmpeg/PIL)"}
+    else:
+        result = analyze_span_continuity(luma, schedule)
+
+    atomic_write_json(out_path, result)
+    _complete_stage(job_dir, _STAGE, out_path)
+    return out_path

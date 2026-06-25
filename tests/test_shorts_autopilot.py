@@ -334,6 +334,7 @@ def test_long_form_default_stages_unchanged():
         "visual_schedule",
         "elena_plan",
         "render",
+        "render_continuity_qa",
         "review",
     )
     for s in DEFAULT_STAGES:

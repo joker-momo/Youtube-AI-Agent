@@ -23,7 +23,7 @@ from video_agent.orchestrator.stages._shared import (
 )
 from video_agent.storage.atomic import atomic_write_json
 from video_agent.utils.json_io import read_json, read_yaml
-from video_agent.visual import build_visual_spans
+from video_agent.visual import assign_span_ids_to_scenes, build_visual_spans
 
 __all__ = ["run_visual_spans_stage"]
 
@@ -78,5 +78,12 @@ def run_visual_spans_stage(job_dir: Path, channel_path: Path | None = None) -> P
     # the json/ layout mid-pipeline (which would change downstream output paths).
     out_path = scenes_path.parent / _OUTPUT_NAME
     atomic_write_json(out_path, visual_spans)
+
+    # Reflect the authoritative grouping back onto scenes.json by adding only the
+    # visual_span_id field (all other scene fields are left untouched), so later
+    # stages and the renderer can resolve a scene's span without re-grouping.
+    assign_span_ids_to_scenes(scene_doc, visual_spans)
+    atomic_write_json(scenes_path, scene_doc)
+
     _complete_stage(job_dir, _STAGE, out_path)
     return out_path

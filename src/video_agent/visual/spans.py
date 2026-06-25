@@ -102,11 +102,10 @@ def _classify_span(members: list[dict[str, Any]]) -> tuple[str, str]:
     if all(_is_graphic(s) for s in members):
         return "graphic_image", "graphic isolated (ChatGPT image)"
     if len(members) == 1:
-        only = members[0]
-        if _is_hook(only):
+        # Note: cta is in GRAPHIC_LAYOUTS, so a lone cta is already classified as
+        # graphic_image above; only hook stays a single continuous Pexels clip.
+        if _is_hook(members[0]):
             return "continuous_clip", "hook isolated"
-        if _is_cta(only):
-            return "continuous_clip", "cta isolated"
         return "continuous_clip", "single scene"
     return "continuous_clip", "grouped contiguous subtitle scenes"
 

@@ -207,6 +207,16 @@ upload:
   default_privacy: "manual_upload_only"
 budget:
   max_cost_per_video_usd: 0
+# Long-form visual-span planning (independent of shorts.visual_timeline above).
+# Phase 1: report_only — groups contiguous subtitle scenes onto one continuous
+# background clip; never alters render until the Gate-1b grouping review passes.
+visual:
+  span_planning:
+    enabled: true
+    mode: report_only
+    max_scenes_per_span: 3
+    max_span_sec: 40
+    groupable_layouts: [subtitle]
 shorts:
   enabled: true
   # Visual span / compiled visual timeline (spec v4.0.3). Enforced mode makes

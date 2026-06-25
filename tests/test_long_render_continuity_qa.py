@@ -66,3 +66,27 @@ def test_no_schedule_is_pass():
     res = analyze_span_continuity([128.0] * 10, {"tracks": [], "scene_boundaries": [], "total_duration_in_frames": 10})
     assert res["verdict"] == "PASS"
     assert res["checked_boundaries"] == []
+
+
+# --------------------------------------------------------------------------- #
+# Stage-level (long-form run_render_continuity_qa_stage)
+# --------------------------------------------------------------------------- #
+def test_stage_pass_skips_without_schedule_or_video(tmp_path):
+    import json
+
+    from video_agent.orchestrator.orchestrator import create_job
+    from video_agent.orchestrator.stages.render_continuity_qa import (
+        run_render_continuity_qa_stage,
+    )
+
+    job_dir = tmp_path / "job"
+    (job_dir / "json").mkdir(parents=True)
+    (job_dir / "json" / "scenes.json").write_text(json.dumps({"scenes": []}))
+    create_job(job_dir, "j1", "vida-plena-45", "json/idea.json", stages=["render_continuity_qa"])
+
+    out = run_render_continuity_qa_stage(job_dir, None)
+    assert out == job_dir / "json" / "render_continuity_qa.json"
+    doc = json.loads(out.read_text())
+    # No compiled schedule + no rendered video -> PASS-skip (never blocks the pipeline).
+    assert doc["verdict"] == "PASS"
+    assert doc["skipped"] is True

@@ -33,6 +33,11 @@ __all__ = ["run_visual_schedule_stage"]
 _STAGE = "visual_schedule"
 _OUTPUT_NAME = "compiled_asset_schedule.json"
 _SPANS_NAME = "visual_spans.json"
+# Optional per-span acquired clips (scene_id -> {path, duration_sec}), produced by
+# the live acquisition step (video_agent.visual.acquire_span_source_clips). When
+# present a span renders one continuous acquired clip; absent → Phase-2 behaviour
+# (first member scene's prepared clip).
+_SOURCE_CLIPS_NAME = "span_source_clips.json"
 _DEFAULT_FPS = 30
 
 
@@ -80,11 +85,16 @@ def run_visual_schedule_stage(job_dir: Path, channel_path: Path | None = None) -
     visual_spans = read_json(spans_path) or {}
     fps = _resolve_fps(channel_path)
 
+    # Use real per-span acquired clips when the live acquisition step produced them.
+    source_clips_path = scenes_path.parent / _SOURCE_CLIPS_NAME
+    source_clips = read_json(source_clips_path) if source_clips_path.exists() else None
+
     schedule = compile_asset_schedule(
         scene_doc=scene_doc,
         visual_spans=visual_spans,
         fps=fps,
         timing_source="tts_final",
+        source_clips=source_clips or None,
     )
 
     out_path = scenes_path.parent / _OUTPUT_NAME

@@ -5,10 +5,14 @@ The heavy provider/quality steps are injected, so these run without Pexels/SigLI
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from video_agent.visual import build_visual_spans
 from video_agent.visual.span_acquire import (
     acquire_span_source_clips,
     build_span_acquisition_context,
+    build_span_select_and_download,
+    mirror_clip_to_public,
 )
 
 
@@ -78,6 +82,71 @@ def test_no_candidates_omits_span():
         budget=_Budget(),
     )
     assert sc == {}
+
+
+# --------------------------------------------------------------------------- #
+# Live adapter (fake service — reuses the cascade via get_scene_asset)
+# --------------------------------------------------------------------------- #
+class _FakeService:
+    def __init__(self, status, source_path):
+        self._status = status
+        self._source = source_path
+
+    def get_scene_asset(self, scene, channel_id, job_id):
+        if self._status is None:
+            return None
+        return {
+            "asset_selection": {"asset_match_status": self._status},
+            "source_path": self._source,
+            "source_duration_sec": 18.0,
+        }
+
+
+def test_adapter_accepts_strong_match_and_mirrors(tmp_path):
+    src = tmp_path / "pexels_orig.mp4"
+    src.write_bytes(b"video")
+    public = tmp_path / "public"
+    fn = build_span_select_and_download(
+        _FakeService("strong_match", str(src)), channel_id="vida-plena-45",
+        job_id="j1", public_root=public,
+    )
+    out = fn({"span_id": "vs06", "visual_prompt": "p", "planned_duration_sec": 24.0}, [])
+    assert out["path"] == "jobs/j1/assets/visual_spans/vs06.mp4"
+    assert out["duration_sec"] == 18.0
+    assert (public / "jobs/j1/assets/visual_spans/vs06.mp4").exists()  # mirrored
+
+
+def test_adapter_rejects_weak_match(tmp_path):
+    src = tmp_path / "x.mp4"; src.write_bytes(b"v")
+    fn = build_span_select_and_download(
+        _FakeService("weak_match", str(src)), channel_id="c", job_id="j1", public_root=tmp_path / "pub",
+    )
+    assert fn({"span_id": "vs1", "visual_prompt": "p", "planned_duration_sec": 24.0}, []) is None
+
+
+def test_adapter_rejects_no_asset(tmp_path):
+    fn = build_span_select_and_download(
+        _FakeService(None, None), channel_id="c", job_id="j1", public_root=tmp_path / "pub",
+    )
+    assert fn({"span_id": "vs1", "visual_prompt": "p", "planned_duration_sec": 24.0}, []) is None
+
+
+def test_end_to_end_with_adapter_and_no_candidate_gate(tmp_path):
+    src = tmp_path / "orig.mp4"; src.write_bytes(b"v"); public = tmp_path / "pub"
+    doc = _doc(_scene("s1"), _scene("s2"))
+    spans = build_visual_spans(doc, {}, job_id="j1")
+    fn = build_span_select_and_download(
+        _FakeService("strong_match", str(src)), channel_id="c", job_id="j1", public_root=public,
+    )
+    sc = acquire_span_source_clips(spans, doc, select_and_download_fn=fn)  # no candidate_fn
+    assert sc["s1"]["path"] == sc["s2"]["path"] == "jobs/j1/assets/visual_spans/vs01.mp4"
+
+
+def test_mirror_returns_render_relative_path(tmp_path):
+    src = tmp_path / "a.mp4"; src.write_bytes(b"v")
+    rel = mirror_clip_to_public(str(src), "vs03", job_id="job-z", public_root=tmp_path / "pub")
+    assert rel == "jobs/job-z/assets/visual_spans/vs03.mp4"
+    assert (tmp_path / "pub" / rel).exists()
 
 
 def test_single_scene_and_graphic_spans_are_skipped():

@@ -56,3 +56,16 @@ def test_stage_does_not_touch_render_props(tmp_path):
     job_dir = _make_job(tmp_path)
     run_visual_schedule_stage(job_dir, None)
     assert not (job_dir / "json" / "render_props.json").exists()
+
+
+def test_stage_uses_span_source_clips_when_present(tmp_path):
+    job_dir = _make_job(tmp_path)
+    # The 2-scene subtitle span (scene-02, scene-03) acquired one continuous clip.
+    (job_dir / "json" / "span_source_clips.json").write_text(json.dumps({
+        "scene-02": {"path": "jobs/j1/assets/visual_spans/vs02.mp4", "duration_sec": 60.0},
+        "scene-03": {"path": "jobs/j1/assets/visual_spans/vs02.mp4", "duration_sec": 60.0},
+    }))
+    out = run_visual_schedule_stage(job_dir, None)
+    sched = json.loads(out.read_text())
+    track = next(t for t in sched["tracks"] if t["scene_ids"] == ["scene-02", "scene-03"])
+    assert track["asset_ref"] == "jobs/j1/assets/visual_spans/vs02.mp4"  # acquired span clip

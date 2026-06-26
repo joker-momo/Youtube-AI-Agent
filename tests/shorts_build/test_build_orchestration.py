@@ -120,11 +120,11 @@ def test_build_short_keeps_audio_and_video_in_sync_at_planned_durations(tmp_path
         "scenes": [
             {"id": "s01", "duration_sec": 2.2, "on_screen_text": "NO ES EL PAN", "caption": "SON 5 HÁBITOS", "layout": "short_hook", "visual_prompt": "Realistic bread on Spanish kitchen table", "narration": "No es el pan."},
             {"id": "s02", "duration_sec": 3.6, "on_screen_text": "DE PIE", "caption": "Sin plato", "layout": "short_pain", "visual_prompt": "Realistic person eating bread standing in kitchen", "narration": "Uno: comerlo de pie."},
-            {"id": "s03", "duration_sec": 3.6, "on_screen_text": "SUMAR SIN DECIDIR", "caption": "Con arroz o pasta", "layout": "short_pain", "visual_prompt": "Realistic bread next to rice on Spanish table", "narration": "Dos: sumarlo sin decidir."},
+            {"id": "s03", "duration_sec": 3.6, "on_screen_text": "SUMAR SIN DECIDIR", "caption": "Con arroz o pasta", "layout": "graphic_comparison", "visual_prompt": "Graphic comparison card: bread alone vs bread added to rice or pasta", "narration": "Dos: sumarlo sin decidir.", "layout_payload": {"title": "DECIDE PRIMERO", "left": {"heading": "MEJOR", "text": "Elige una porción"}, "right": {"heading": "CUIDADO", "text": "Pan encima de arroz"}}},
             {"id": "s04", "duration_sec": 3.6, "on_screen_text": "BARRA A LA VISTA", "caption": "Demasiado a mano", "layout": "short_pain", "visual_prompt": "Realistic bread bar left on dining table", "narration": "Tres: dejar la barra a la vista."},
             {"id": "s05", "duration_sec": 3.6, "on_screen_text": "CANSANCIO", "caption": "Otro trozo", "layout": "short_pain", "visual_prompt": "Realistic tired adult cutting another bread slice", "narration": "Cuatro: cortar por cansancio."},
             {"id": "s06", "duration_sec": 3.6, "on_screen_text": "CENA IMPROVISADA", "caption": "A bocados", "layout": "short_pain", "visual_prompt": "Realistic bread and cheese dinner bites on plate", "narration": "Cinco: cenar improvisando."},
-            {"id": "s07", "duration_sec": 4.8, "on_screen_text": "MEJOR ASÍ", "caption": "Porción visible", "layout": "graphic_checklist", "visual_prompt": "Realistic small plate with bread portion", "narration": "Mejor: porción visible, plato pequeño, comida completa.", "layout_payload": {"title": "MEJOR ASÍ", "items": ["Porción visible", "Plato pequeño", "Comida completa"]}},
+            {"id": "s07", "duration_sec": 4.8, "on_screen_text": "MEJOR ASÍ", "caption": "Porción visible", "layout": "graphic_checklist", "visual_prompt": "Graphic checklist card: visible bread portion, small plate, complete meal", "narration": "Mejor: porción visible, plato pequeño, comida completa.", "layout_payload": {"title": "MEJOR ASÍ", "items": ["Porción visible", "Plato pequeño", "Comida completa"]}},
             {"id": "s08", "duration_sec": 2.6, "on_screen_text": "GUÁRDALO", "caption": "PARA TU PRÓXIMA CENA", "layout": "short_cta", "visual_prompt": "Realistic warm kitchen close-up", "narration": "Guárdalo."},
         ],
         "qa": {"verdict": "PENDING_SCENES_QA"},
@@ -656,13 +656,17 @@ def test_script_escalation_after_repeated_scene_failures(tmp_path: Path):
             return json.dumps(_GOOD_SCRIPT)
         if kind == "scenes":
             scene_calls["n"] += 1
-            # Hook duration 1.0s, but narration has 15 words -> requires 7.0s (exceeds 3.0s cap)
+            # Body scene duration 1.0s, but narration has 15 words -> requires
+            # ~7.0s (exceeds the layout cap). Keep the hook faithful so the
+            # hook-restoration normalizer does not mask the fit failure under test.
             bad_scenes = {
                 "channel_id": f"vida-plena-45-{scene_calls['n']}",
                 "short_id": "short-escalate",
-                "total_duration_sec": 1.0,
+                "total_duration_sec": 5.5,
                 "scenes": [
-                    {"id": "s1", "duration_sec": 1.0, "layout": "short_hook", "narration": "Abre fuerte y mira esta increible etiqueta ahora mismo con mucho cuidado y atencion.", "on_screen_text": f"x{scene_calls['n']}", "caption": "c"}
+                    {"id": "s1", "duration_sec": 2.5, "layout": "short_hook", "narration": "¿Duermes pero te levantas cansado?", "on_screen_text": f"x{scene_calls['n']}", "caption": "c"},
+                    {"id": "s2", "duration_sec": 1.0, "layout": "short_tip", "narration": "Abre fuerte y mira esta increible etiqueta ahora mismo con mucho cuidado y atencion.", "on_screen_text": "TIP", "caption": "c"},
+                    {"id": "s3", "duration_sec": 2.0, "layout": "short_cta", "narration": "Vídeo completo.", "on_screen_text": "CANAL", "caption": "c"},
                 ]
             }
             return json.dumps(bad_scenes)
@@ -946,5 +950,3 @@ def _three_graphic_scenes():
         {"id": "s06", "duration_sec": 4.5, "layout": "graphic_comparison", "on_screen_text": "FIBRA Y AZUCAR", "caption": "c", "visual_prompt": "vertical two labels", "narration": "Compara fibra y azúcar.", "layout_payload": {"title": "EN EL SÚPER", "left": {"heading": "MEJOR", "text": "Más fibra"}, "right": {"heading": "CUIDADO", "text": "Más azúcar"}}},
         {"id": "s07", "duration_sec": 2.5, "layout": "short_cta", "on_screen_text": "GUARDA ESTA LISTA", "caption": "c", "visual_prompt": "pan en cesta de la compra, vertical", "narration": "Guarda esta lista."},
     ]
-
-

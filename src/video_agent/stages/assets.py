@@ -339,7 +339,9 @@ def _background_source_label(scene_asset: dict[str, Any]) -> str:
     if source == "generated_placeholder":
         return "Placeholder"
     if provider == "ai_generated" or tier in {"ai_image", "ai_generated"}:
-        return "ChatGPT image"
+        if str(scene_asset.get("generated_image_source_layout") or "").startswith("graphic_"):
+            return "ChatGPT infographic"
+        return "ChatGPT lifestyle image"
     if "video" in tier:  # pexels_video
         return "Pexels video"
     if "pexels" in provider or "pexels" in tier:
@@ -735,6 +737,8 @@ def prepare_assets(
             "source": source,
             "source_path": source_path,
         }
+        if scene.get("generated_image_source_layout"):
+            scene_asset["generated_image_source_layout"] = scene.get("generated_image_source_layout")
         scene_asset.update(extra_manifest)
         scene_asset["background_source"] = _background_source_label(scene_asset)
         scene_asset["media_kind"] = media_kind

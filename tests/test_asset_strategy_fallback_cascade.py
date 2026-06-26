@@ -62,6 +62,35 @@ def test_fallback_cascade_ai_image_preferred():
     assert svc._ai_generate_scene_asset.called
 
 
+def test_ai_image_preferred_ignores_cached_graphic_fallback():
+    svc = _mock_service()
+    scene = {
+        "id": "s1",
+        "layout": "short_tip",
+        "asset_strategy": "ai_image_preferred",
+        "visual_importance": "normal",
+    }
+    cached_graphic_fallback = {
+        "provider": "graphic_fallback",
+        "provider_asset_id": "old-fallback",
+        "asset_id": "old-fallback",
+        "media_type": "generated",
+        "file_path": "old.mp4",
+        "width": 1080,
+        "height": 1920,
+        "tags": ["bread", "label", "portion"],
+    }
+    svc.library.search_by_query.return_value = [cached_graphic_fallback]
+    svc.library.is_file_valid.return_value = True
+    svc._search_and_download.return_value = None
+
+    asset = svc.get_scene_asset(scene, "channel", "job")
+
+    assert asset["provider"] == "ai_generated"
+    assert asset["asset_tier"] == "ai_image"
+    assert svc._ai_generate_scene_asset.called
+
+
 def test_fallback_cascade_graphic_fallback():
     svc = _mock_service()
     scene = {

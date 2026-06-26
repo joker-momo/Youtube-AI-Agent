@@ -160,6 +160,44 @@ def _source_support_by_item(short_script: dict) -> dict[int, list[str]]:
     return by_item
 
 
+def _script_hook_text(short_script: dict) -> str:
+    return str((short_script or {}).get("hook") or (short_script or {}).get("hook_text") or "").strip()
+
+
+def _first_hook_beat_narration(short_script: dict) -> str:
+    hook = _script_hook_text(short_script)
+    for beat in list((short_script or {}).get("beats") or []):
+        if not isinstance(beat, dict):
+            continue
+        narration = str(beat.get("narration") or "").strip()
+        if not narration:
+            continue
+        purpose = str(beat.get("purpose") or "").strip().lower()
+        if purpose == "hook" or (hook and hook.lower() in narration.lower()):
+            return narration
+    return hook
+
+
+def _restore_first_hook_scene_narration(sc: dict[str, Any], index: int, short_script: dict) -> None:
+    if index != 0:
+        return
+    if str(sc.get("layout") or "").strip() != "short_hook":
+        return
+    hook = _script_hook_text(short_script)
+    if not hook:
+        return
+    current = str(sc.get("narration") or "").strip()
+    if hook.lower() in current.lower():
+        return
+    desired = _first_hook_beat_narration(short_script)
+    if not desired:
+        return
+    sc["narration"] = desired
+    warnings = list(sc.get("planner_warnings") or [])
+    warnings.append("first_hook_narration_restored_from_script")
+    sc["planner_warnings"] = warnings
+
+
 _STALE_FOOD_PAYLOAD_ITEMS = {
     "porción visible",
     "porcion visible",
@@ -259,6 +297,7 @@ def normalize_short_scenes(scenes_doc: dict, short_script: dict) -> dict:
         sc.setdefault("caption", sc.get("on_screen_text", ""))
         sc.setdefault("visual_prompt", sc.get("caption", ""))
         sc["layout"] = _map_layout(sc.get("layout"))
+        _restore_first_hook_scene_narration(sc, i, short_script or {})
         # Graphic scenes carry a "graphic" visual_type so downstream tooling
         # can distinguish them; stock scenes keep the placeholder type.
         sc.setdefault(

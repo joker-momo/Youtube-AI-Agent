@@ -42,11 +42,23 @@ def _missing_graphic_candidate(scene: dict[str, Any]) -> bool:
     )
     comparison_terms = ("mejor", "cuidado", "opción a", "opcion a", "opción b", "opcion b")
     structured_terms = ("1/2", "1/4", "50%", "25%", "paso 1", "paso 2")
+    portion_terms = (
+        "porción",
+        "porcion",
+        "palma",
+        "tamaño de tu palma",
+        "plato",
+        "hidratos",
+        "rebanada",
+    )
+    enumerated_terms = ("uno:", "dos:", "tres:", "cuatro:", "cinco:")
     return (
         sum(1 for term in label_terms if term in text) >= 2
         or any(term in text for term in comparison_terms)
         and (" vs " in text or "opción" in text or "opcion" in text)
         or any(term in text for term in structured_terms)
+        or sum(1 for term in portion_terms if term in text) >= 2
+        or any(term in text for term in enumerated_terms)
     )
 
 

@@ -313,7 +313,7 @@ def test_graphic_layout_generates_chatgpt_image_with_full_payload(tmp_path):
     assert scene_doc["scenes"][0]["asset_refs"]["background"] != ""
     assert scene_doc["scenes"][0]["layout"] == "short_tip"
     assert scene["provider"] == "ai_generated"
-    assert scene["background_source"] == "ChatGPT image"
+    assert scene["background_source"] == "ChatGPT infographic"
 
 
 def test_graphic_layout_has_no_graphic_fallback_when_chatgpt_is_unavailable():
@@ -509,7 +509,16 @@ def test_graphic_scene_uses_chatgpt_image_by_default(tmp_path):
     assert "MICRO PAUSAS" in gen_calls[0]
     assert scene_doc["scenes"][0]["asset_refs"]["background"] != ""
     assert scene_doc["scenes"][0]["layout"] == "short_tip"
-    assert manifest["scenes"][0]["background_source"] == "ChatGPT image"
+    assert manifest["scenes"][0]["background_source"] == "ChatGPT infographic"
+
+
+def test_chatgpt_lifestyle_image_label_for_non_graphic_ai():
+    from video_agent.stages.assets import _background_source_label
+
+    assert _background_source_label({
+        "provider": "ai_generated",
+        "asset_tier": "ai_image",
+    }) == "ChatGPT lifestyle image"
 
 
 def test_graphic_scene_with_video_blur_still_acquires(tmp_path):

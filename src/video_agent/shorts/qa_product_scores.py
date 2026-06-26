@@ -156,11 +156,14 @@ def normalize_gemini_scenes_qa(
         "better as graphic",
         "candidate for graphic",
         "convert to graphic",
-        "missing graphic",
         "graphic_label_callout",
         "graphic_comparison",
         "graphic_checklist",
     ]
+
+    def is_missing_graphic_requirement(text: str, issue_type: str = "") -> bool:
+        t = f"{issue_type} {text}".lower()
+        return "missing_graphic_required" in t or "missing graphic" in t
 
     def is_graphic_pref(text: str) -> bool:
         t = text.lower()
@@ -173,6 +176,10 @@ def normalize_gemini_scenes_qa(
     new_issues = []
     for issue in issues:
         detail = str(issue.get("detail") or "")
+        issue_type = str(issue.get("type") or "")
+        if is_missing_graphic_requirement(detail, issue_type):
+            new_issues.append(issue)
+            continue
         if is_graphic_count_complaint(detail) and not graphic_count_is_real:
             warnings.append(
                 f"Downgraded graphic-count issue (deterministic graphic_count={graphic_count}): {detail}"
@@ -185,7 +192,9 @@ def normalize_gemini_scenes_qa(
     # Filter out graphic preference required changes
     new_required_changes = []
     for rc in required_changes:
-        if is_graphic_count_complaint(rc) and not graphic_count_is_real:
+        if is_missing_graphic_requirement(str(rc)):
+            new_required_changes.append(rc)
+        elif is_graphic_count_complaint(rc) and not graphic_count_is_real:
             warnings.append(
                 f"Downgraded graphic-count change (deterministic graphic_count={graphic_count}): {rc}"
             )

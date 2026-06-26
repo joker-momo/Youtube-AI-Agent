@@ -558,9 +558,14 @@ def _near_valid_five_error_scene_plan(cta_duration: float = 2.8) -> tuple[dict, 
             "visual_prompt": "Realistic Spanish kitchen footage, person eating bread standing without a plate",
         },
         {
-            **_scene("s03", [2], layout="short_pain", duration=3.5),
+            **_scene("s03", [2], layout="graphic_comparison", duration=3.5),
             "narration": "Dos: sumarlo encima de arroz o pasta.",
-            "visual_prompt": "Realistic Spain dining table footage, plate with bread next to rice",
+            "visual_prompt": "Graphic comparison card: bread alone vs bread added to rice or pasta",
+            "layout_payload": {
+                "title": "DECIDE PRIMERO",
+                "left": {"heading": "MEJOR", "text": "Elige una porción"},
+                "right": {"heading": "CUIDADO", "text": "Pan encima de arroz"},
+            },
         },
         {
             **_scene("s04", [3], layout="short_pain", duration=3.5),
@@ -1015,6 +1020,5 @@ def test_ensure_script_idea_fields_overwrites_stale_hook():
     assert res["original_idea"]["hook_text"] == "New Correct Hook"
     assert res["original_idea"]["idea_id"] == "idea_123"
     assert res["idea_id"] == "idea_123"
-
 
 

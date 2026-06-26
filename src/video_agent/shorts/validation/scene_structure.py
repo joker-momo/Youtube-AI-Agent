@@ -515,6 +515,45 @@ def validate_scene_structure(
                 )
             )
 
+    needs_checklist_graphic = (
+        script is not None
+        and _looks_like_checklist_or_explainer(script, scenes)
+        and graphic_count == 0
+    )
+    if needs_checklist_graphic:
+        issues.append(
+            SceneValidationIssue(
+                type="missing_graphic_required",
+                scene_id=None,
+                severity="repairable_error",
+                detail=(
+                    "Checklist/explainer Short has no graphic scene. Structured list, "
+                    "portion, plate, or component beats need at least one ChatGPT-generated infographic."
+                ),
+                repair_hint=(
+                    "Convert the highest-value list/proof/payoff beat to a graphic_* layout: "
+                    "use graphic_checklist for action lists, graphic_plate_ratio for plate/portion/"
+                    "component ratios, graphic_label_callout for label facts, or graphic_comparison "
+                    "for two-choice comparisons. Keep hook and CTA as realistic short_* scenes."
+                ),
+            )
+        )
+
+    if missing_graphic_candidates and graphic_count < MAX_GRAPHIC_SCENES_PER_SHORT:
+        issues.append(
+            SceneValidationIssue(
+                type="missing_graphic_required",
+                scene_id=None,
+                severity="repairable_error",
+                detail="A short_* scene contains compact visual structure that should be a ChatGPT-generated graphic.",
+                repair_hint=(
+                    "Convert the best structured scene to graphic_checklist, graphic_plate_ratio, "
+                    "graphic_label_callout, or graphic_comparison. Do not render this structure as "
+                    "generic lifestyle footage only."
+                ),
+            )
+        )
+
     if missing_graphic_candidates and graphic_count >= MAX_GRAPHIC_SCENES_PER_SHORT:
         issues.append(
             SceneValidationIssue(

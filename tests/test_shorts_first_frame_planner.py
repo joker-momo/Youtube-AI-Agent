@@ -49,6 +49,31 @@ def test_plan_first_frame_does_not_treat_pantallas_as_bread_topic():
     assert plan["roi_target"] == "face reaction"
 
 
+def test_plan_first_frame_does_not_treat_bread_portion_as_label_topic():
+    from video_agent.shorts.first_frame_planner import plan_first_frame
+
+    plan = plan_first_frame(
+        {
+            "title": "La porción de pan sin contar gramos",
+            "hook_text": "TU MANO AYUDA",
+            "hook_angle": "La porción de pan sin contar gramos",
+            "viewer_pain": "No saber cuánto pan comer y acabar repitiendo por costumbre.",
+        },
+        {
+            "id": "s01",
+            "layout": "short_hook",
+            "narration": "TU MANO AYUDA.",
+            "on_screen_text": "TU MANO AYUDA",
+            "visual_prompt": "close-up of an open palm beside a bread slice for portion size comparison",
+        },
+    )
+
+    assert plan["strategy"] == "object_contrast"
+    assert plan["overlay_text"] == "TU MANO AYUDA"
+    assert plan["roi_target"] == "specific object"
+    assert "ingredient label" not in plan["must_show"]
+
+
 def test_plan_first_frame_ignores_negative_supermarket_constraints_for_wellness_topic():
     from video_agent.shorts.first_frame_planner import plan_first_frame
 

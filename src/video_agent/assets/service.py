@@ -702,6 +702,10 @@ class StockAssetService:
 
         valid_candidates: list[dict[str, Any]] = []
         for asset in candidates:
+            provider = str(asset.get("provider") or "").lower()
+            tier = str(asset.get("asset_tier") or "").lower()
+            if provider == "graphic_fallback" or tier == "graphic_fallback":
+                continue
             key = (asset["provider"], str(asset["provider_asset_id"]))
             if key in self.used_provider_ids:
                 continue
@@ -835,11 +839,17 @@ class StockAssetService:
         # Determine preferred media type from provider list
         prefers_video = any("video" in p for p in self.providers)
         media_type_hint = "video" if prefers_video else "photo"
+        strategy = scene.get("asset_strategy", "stock_ok")
+        visual_importance = scene.get("visual_importance", "normal")
+        is_graphic_layout = str(scene.get("layout") or "").startswith("graphic_")
 
         # --- Library cache hit: skip API + download entirely ---
         # BYPASS cache when demographic keywords are present — the library token-overlap
         # search cannot enforce demographic constraints, so we must hit the API fresh.
-        if not self._query_requires_fresh_search(query):
+        # Also bypass cache for graphic_* planning intents: they require an
+        # explicit ChatGPT-generated infographic, not a stale stock/placeholder
+        # asset that merely matches query tokens.
+        if not is_graphic_layout and not self._query_requires_fresh_search(query):
             cached = self._try_library_cache(query, media_type_hint, channel_id, job_id, scene, candidate_budget)
             if cached is not None:
                 return cached
@@ -862,10 +872,7 @@ class StockAssetService:
                 candidate_budget=candidate_budget,
             )
 
-        strategy = scene.get("asset_strategy", "stock_ok")
-        visual_importance = scene.get("visual_importance", "normal")
         is_key = visual_importance == "critical" or self._is_key_scene(scene)
-        is_graphic_layout = str(scene.get("layout") or "").startswith("graphic_")
 
         # 5-tier cascade based on asset_strategy
 

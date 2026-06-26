@@ -407,6 +407,28 @@ def test_missing_graphic_is_warning_only_when_two_graphics_exist():
     assert not any(issue.type == "missing_graphic_warning" and issue.severity != "warning" for issue in issues)
 
 
+def test_checklist_requires_at_least_one_graphic_candidate():
+    from video_agent.shorts.validate_scenes import validate_scene_structure
+
+    scenes = [
+        {"id": "s01", "layout": "short_hook", "duration_sec": 2.4, "on_screen_text": "TU MANO AYUDA", "narration": "Tu mano ayuda."},
+        {"id": "s02", "layout": "short_tip", "duration_sec": 4.0, "on_screen_text": "MIRA TU DÍA", "narration": "Uno: depende de apetito, actividad, sueño, objetivos y resto del plato."},
+        {"id": "s03", "layout": "short_tip", "duration_sec": 4.0, "on_screen_text": "DESAYUNO FLEXIBLE", "narration": "Dos: una o dos rebanadas según tamaño y acompañamiento."},
+        {"id": "s04", "layout": "short_tip", "duration_sec": 4.0, "on_screen_text": "TAMAÑO PALMA", "narration": "Tres: una rebanada del tamaño de tu palma puede ser referencia inicial."},
+        {"id": "s05", "layout": "short_cta", "duration_sec": 2.4, "on_screen_text": "GUÁRDALO", "narration": "Guárdalo."},
+    ]
+
+    issues = validate_scene_structure(
+        scenes,
+        scenes_doc={"total_duration_sec": 16.8, "scenes": scenes},
+        script={"short_format": "checklist", "narration": " ".join(s["narration"] for s in scenes)},
+    )
+
+    blocking = [i for i in issues if i.severity in ("blocking_error", "repairable_error")]
+    assert any(i.type == "missing_graphic_required" for i in blocking), issues
+    assert any("graphic_checklist" in (i.repair_hint or "") for i in blocking)
+
+
 def test_audio_fit_blocks_when_narration_audio_exceeds_video_duration():
     from video_agent.shorts.validate_scenes import validate_audio_fit
 
@@ -646,6 +668,44 @@ def test_normalize_short_scenes_keeps_existing_narration():
     assert out["scenes"][0]["id"] == "s1"
 
 
+def test_normalize_short_scenes_restores_first_hook_beat_when_llm_drops_hook():
+    from video_agent.shorts import short_scene_builder
+
+    scenes_doc = {
+        "scenes": [
+            {
+                "scene_id": "s01",
+                "layout": "short_hook",
+                "narration": "¿Repites pan por costumbre?",
+                "on_screen_text": "TU MANO AYUDA",
+                "duration_sec": 2.6,
+            },
+            {
+                "scene_id": "s02",
+                "layout": "short_tip",
+                "narration": "Depende de tu apetito.",
+                "duration_sec": 4.0,
+            },
+        ]
+    }
+    script = {
+        "hook": "TU MANO AYUDA",
+        "narration": "TU MANO AYUDA. ¿Repites pan por costumbre? Depende de tu apetito.",
+        "beats": [
+            {
+                "time_sec": "0-3",
+                "purpose": "hook",
+                "narration": "TU MANO AYUDA. ¿Repites pan por costumbre?",
+            }
+        ],
+    }
+
+    out = short_scene_builder.normalize_short_scenes(scenes_doc, script)
+
+    assert out["scenes"][0]["narration"] == "TU MANO AYUDA. ¿Repites pan por costumbre?"
+    assert out["scenes"][1]["narration"] == "Depende de tu apetito."
+
+
 def test_normalize_short_scenes_does_not_turn_empty_llm_output_into_cta_only():
     from video_agent.shorts import short_scene_builder
 
@@ -748,27 +808,57 @@ def test_qa_response_normalization_graphic_preference():
     assert any("layout_optimization_downgraded_to_warning" in w for w in normalized["warnings"])
 
 
-def test_missing_graphic_warning_only():
+def test_qa_response_keeps_missing_graphic_as_required_change():
+    from video_agent.shorts.qa import normalize_gemini_scenes_qa
+
+    parsed_input = {
+        "verdict": "FAIL",
+        "issues": [
+            {
+                "type": "missing_graphic_required",
+                "scene_id": "s03",
+                "severity": "major",
+                "detail": "Missing graphic: checklist scene should become graphic_checklist.",
+            }
+        ],
+        "required_changes": ["Missing graphic: convert s03 to graphic_checklist."],
+        "warnings": [],
+        "product_scores": {
+            "audience_fit_45_plus": 9,
+            "hook_strength": 9,
+            "visual_specificity": 9,
+            "clarity": 9,
+            "retention_pacing": 9,
+            "natural_spanish": 9,
+            "saveability": 8.5,
+        },
+    }
+
+    normalized = normalize_gemini_scenes_qa(parsed_input)
+
+    assert normalized["verdict"] == "FAIL"
+    assert any(issue.get("type") == "missing_graphic_required" for issue in normalized["issues"])
+    assert normalized["required_changes"] == ["Missing graphic: convert s03 to graphic_checklist."]
+
+
+def test_checklist_missing_graphic_is_repairable_error():
     from video_agent.shorts.validate_scenes import validate_scene_structure
     scenes = [
         {"id": "s01", "layout": "short_hook", "duration_sec": 2.5, "on_screen_text": "MARRÓN NO BASTA", "visual_prompt": "vertical bread package label", "narration": "El pan marrón no basta."},
-        {"id": "s02", "layout": "graphic_checklist", "duration_sec": 4.0, "on_screen_text": "BUSCA INTEGRAL", "visual_prompt": "vertical label graphic", "narration": "Busca harina integral.", "layout_payload": {"title": "BUSCA INTEGRAL", "items": ["Harina integral", "Buena fibra"]}},
-        {"id": "s03", "layout": "graphic_label_callout", "duration_sec": 4.5, "on_screen_text": "MIRA ETIQUETA", "visual_prompt": "vertical nutrition label close-up", "narration": "Mira la etiqueta.", "layout_payload": {"title": "MIRA ETIQUETA", "productLabel": "Pan", "callouts": [{"label": "Fibra", "value": "6 g"}, {"label": "Azúcar", "value": "3 g"}]}},
-        {"id": "s04", "layout": "short_tip", "duration_sec": 4.0, "on_screen_text": "POR 100 G", "visual_prompt": "vertical hands comparing labels", "narration": "Compara fibra y azúcares por 100 g antes de elegir."},
-        {"id": "s05", "layout": "short_cta", "duration_sec": 2.4, "on_screen_text": "GUARDA ESTA LISTA", "visual_prompt": "vertical shopping basket", "narration": "Guarda esta lista."},
+        {"id": "s02", "layout": "short_tip", "duration_sec": 4.0, "on_screen_text": "POR 100 G", "visual_prompt": "vertical hands comparing labels", "narration": "Compara fibra y azúcares por 100 g antes de elegir."},
+        {"id": "s03", "layout": "short_cta", "duration_sec": 2.4, "on_screen_text": "GUARDA ESTA LISTA", "visual_prompt": "vertical shopping basket", "narration": "Guarda esta lista."},
     ]
     
     issues = validate_scene_structure(
         scenes, 
-        scenes_doc={"total_duration_sec": 17.4, "scenes": scenes},
-        script={"narration": " ".join(s["narration"] for s in scenes)}
+        scenes_doc={"total_duration_sec": 8.9, "scenes": scenes},
+        script={"short_format": "checklist", "narration": " ".join(s["narration"] for s in scenes)}
     )
     
-    warnings = [i for i in issues if i.severity == "warning"]
     blocking = [i for i in issues if i.severity in ("blocking_error", "repairable_error")]
     
-    assert any(i.type == "missing_graphic_warning" for i in warnings)
-    assert not any("graphic" in i.type for i in blocking)
+    assert any(i.type == "missing_graphic_required" for i in blocking)
+    assert any("graphic_label_callout" in (i.repair_hint or "") for i in blocking)
 
 
 def test_total_duration_sec_normalization():
@@ -812,11 +902,11 @@ def test_five_error_accepted_duration_ranges_do_not_fail_scenes_qa(tmp_path: Pat
     scenes = [
         {"id": "s01", "layout": "short_hook", "duration_sec": 2.8, "on_screen_text": "NO ES EL PAN", "caption": "Mira cómo lo usas", "visual_prompt": "Realistic bread on Spanish kitchen table", "narration": "No es el pan."},
         {"id": "s02", "layout": "short_pain", "duration_sec": 3.6, "on_screen_text": "DE PIE", "caption": "Sin plato", "visual_prompt": "Realistic person eating bread standing in kitchen", "narration": "Uno: comerlo de pie."},
-        {"id": "s03", "layout": "short_pain", "duration_sec": 3.6, "on_screen_text": "SUMAR SIN DECIDIR", "caption": "Con arroz o pasta", "visual_prompt": "Realistic bread next to rice on Spanish table", "narration": "Dos: sumarlo sin decidir."},
+        {"id": "s03", "layout": "graphic_comparison", "duration_sec": 3.6, "on_screen_text": "SUMAR SIN DECIDIR", "caption": "Con arroz o pasta", "visual_prompt": "Graphic comparison card: bread alone vs bread added to rice or pasta", "narration": "Dos: sumarlo sin decidir.", "layout_payload": {"title": "DECIDE PRIMERO", "left": {"heading": "MEJOR", "text": "Elige una porción"}, "right": {"heading": "CUIDADO", "text": "Pan encima de arroz"}}},
         {"id": "s04", "layout": "short_pain", "duration_sec": 3.6, "on_screen_text": "BARRA A LA VISTA", "caption": "Demasiado a mano", "visual_prompt": "Realistic bread bar left on dining table", "narration": "Tres: dejar la barra a la vista."},
         {"id": "s05", "layout": "short_pain", "duration_sec": 3.6, "on_screen_text": "CANSANCIO", "caption": "Otro trozo", "visual_prompt": "Realistic tired adult cutting another bread slice", "narration": "Cuatro: cortar por cansancio."},
         {"id": "s06", "layout": "short_pain", "duration_sec": 3.6, "on_screen_text": "CENA IMPROVISADA", "caption": "A bocados", "visual_prompt": "Realistic bread and cheese dinner bites on plate", "narration": "Cinco: cenar improvisando."},
-        {"id": "s07", "layout": "short_checklist", "duration_sec": 4.8, "on_screen_text": "MEJOR ASÍ", "caption": "Porción visible", "visual_prompt": "Realistic small plate with bread portion", "narration": "Mejor: porción visible, plato pequeño, comida completa.", "layout_payload": {"items": ["Porción visible", "Plato pequeño", "Comida completa"]}},
+        {"id": "s07", "layout": "graphic_checklist", "duration_sec": 4.8, "on_screen_text": "MEJOR ASÍ", "caption": "Porción visible", "visual_prompt": "Graphic checklist card: visible bread portion, small plate, complete meal", "narration": "Mejor: porción visible, plato pequeño, comida completa.", "layout_payload": {"title": "MEJOR ASÍ", "items": ["Porción visible", "Plato pequeño", "Comida completa"]}},
         {"id": "s08", "layout": "short_cta", "duration_sec": 2.6, "on_screen_text": "GUÁRDALO", "caption": "PARA TU PRÓXIMA CENA", "visual_prompt": "Realistic warm kitchen close-up", "narration": "Guárdalo."},
     ]
     scenes_doc = {"short_id": short_id, "total_duration_sec": 28.2, "scenes": scenes}

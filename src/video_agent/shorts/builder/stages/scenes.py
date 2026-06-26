@@ -82,6 +82,7 @@ class _SceneLoopState:
     total_regeneration_attempts: int = 0
     # Internal loop bookkeeping.
     scene_fit_failures: int = 0
+    fit_failure_counted_this_attempt: bool = False
     provider_error_attempts: int = 0
     attempt_1_failed_layout_schema: bool = False
     prev_scene_hash: str | None = None
@@ -579,7 +580,17 @@ def _scenes_generate_and_normalize(ctx, loop):
     short_scenes = loop.short_scenes
     scenes = short_scenes.get("scenes") or []
     for scene in scenes:
-        validate_scenes.repair_scene_duration_if_possible(scene)
+        duration_repair = validate_scenes.repair_scene_duration_if_possible(scene)
+        if (
+            duration_repair == "must_split_or_compress"
+            and not loop.fit_failure_counted_this_attempt
+        ):
+            # This is the earliest signal that the scene narration cannot fit
+            # its layout cap. Later deterministic repairs may rewrite the
+            # candidate into a different structural failure, but repeated
+            # original fit failures should still trigger script compression.
+            loop.scene_fit_failures += 1
+            loop.fit_failure_counted_this_attempt = True
 
     # Deterministic repair: weak hook motion (spec §10.1)
     if validate_scenes.repair_weak_hook_motion(scenes):
@@ -625,6 +636,13 @@ def _scenes_generate_and_normalize(ctx, loop):
         if i.severity in ("blocking_error", "repairable_error")
         and i.type in HARD_SCENE_VALIDATION_TYPES
     ]
+    if any(i.type == "scene_narration_fit" for i in hard_errors):
+        # Count the original LLM scene fit failure before deterministic repair.
+        # Repair may split/condense the scene and remove the fit issue while
+        # still leaving an invalid scene plan; repeated originals should still
+        # escalate to script compression instead of burning scene retries.
+        loop.scene_fit_failures += 1
+        loop.fit_failure_counted_this_attempt = True
     # Run deterministic fit-repair whenever ANY duration/narration-fit
     # hard error exists — even alongside other hard errors (e.g.
     # missing_item_coverage). Repairing the fixable fit issues here keeps
@@ -762,7 +780,9 @@ def _scenes_run_structure_validation(ctx, loop):
         for issue in structure_issues
     )
     if has_fit_failure:
-        loop.scene_fit_failures += 1
+        if not loop.fit_failure_counted_this_attempt:
+            loop.scene_fit_failures += 1
+            loop.fit_failure_counted_this_attempt = True
 
     structure_blocked = validate_scenes.has_blocking_or_repairable(
         structure_issues
@@ -1519,6 +1539,7 @@ def _stage_scenes(ctx: BuildContext) -> StageResult:
         loop.best_scene_candidate_qa = best_scene_candidate_qa
 
         loop.scenes_attempts += 1
+        loop.fit_failure_counted_this_attempt = False
         loop.total_regeneration_attempts = (script_attempts - 1) + (loop.scenes_attempts - 1)
         # Mirror loop state into the locals used by the not-yet-extracted
         # blocks below.

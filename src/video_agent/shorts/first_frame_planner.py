@@ -40,11 +40,22 @@ def _is_nutrition_label(short_plan: dict[str, Any], scene: dict[str, Any] | None
     }
     label_terms = {
         "ingrediente",
+        "ingredientes",
         "ingredient",
+        "ingredients",
         "label",
         "etiqueta",
+        "etiquetas",
+        "envase",
+        "package",
+        "paquete",
+        "nutricional",
+        "nutritional",
+        "color",
+        "marron",
+        "marrón",
     }
-    if tokens & object_terms:
+    if (tokens & object_terms) and (tokens & label_terms):
         return True
     if "nutrition" in tokens and tokens & label_terms:
         return True
@@ -124,7 +135,11 @@ def plan_first_frame(
 def _overlay_text(short_plan: dict[str, Any], scene: dict[str, Any]) -> str:
     hook = str((short_plan or {}).get("hook_text") or "").strip()
     if _is_nutrition_label(short_plan, scene):
-        if "color" in hook.lower() or "marr" in hook.lower() or "pan" in _topic_tokens(short_plan, scene):
+        label_claim_text = " ".join(
+            str((short_plan or {}).get(key) or "")
+            for key in ("title", "hook_text", "hook_angle", "curiosity_gap")
+        ).lower()
+        if "color" in label_claim_text or "marr" in label_claim_text:
             return "MARRON NO ES INTEGRAL"
     text = str(scene.get("on_screen_text") or hook or (short_plan or {}).get("title") or "").strip()
     words = text.split()

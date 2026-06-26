@@ -48,6 +48,16 @@
   for a Short. Built by `src/video_agent/shorts/short_seo_builder.py`.
 - **Spain-first prompts** — the Shorts prompts are strict JSON-only and
   Spain-first by spec. `src/video_agent/shorts/prompts.py`.
+- **Structured graphic intent** — a planning-only `graphic_*` scene (checklist,
+  comparison, label callout, etc.) whose payload becomes a ChatGPT image brief.
+  The asset stage must acquire `provider=ai_generated`, persist the scene as an
+  image-backed `short_tip`, and fail if generation is unavailable. Remotion has
+  no native graphic-card fallback.
+- **Short music flow** — `music_selector.py` maps the Short pillar/topic to one
+  of four canonical `music_library` tracks under `assets/music/`.
+  `audio.py` produces dry narration; `audio_mixer.py` is the sole music mixer
+  and writes `audio/short_mix.m4a`, `music_selection.json`, and the canonical
+  `assets_manifest.audio` render reference.
 
 ## Visual timeline (spec v3.2.3)
 
@@ -66,7 +76,8 @@
   review, before background). Default mode **report_only** (no render change).
 - **Visual beat** — optional subdivision inside one span (deferred; PR B/Phase 4).
 - **Visual mode** — `continuous_clip`, `legacy_scene_assets`, `multi_clip`,
-  `clip_plus_graphic`, `graphic_led` (only the first two + graphics in Phase 2).
+  `clip_plus_graphic`, `generated_image_fallback`. A graphic intent is rendered
+  only through an acquired generated-image media track.
 - **Structured evidence conflict** — a *hard* span split happens only when
   structured tag sets (`required_/forbidden_ evidence|subject|action`) intersect
   or explicit mode flags collide; free-form text is warning-only.

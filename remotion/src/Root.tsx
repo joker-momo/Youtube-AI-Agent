@@ -5,16 +5,9 @@ import {Thumbnail} from './Thumbnail';
 import {ShortVideo} from './ShortVideo';
 import {ShortCover} from './ShortCover';
 import {defaultRenderProps, RenderProps} from './render-props';
-import graphicMvpShortPropsJson from '../test-props/graphic-mvp-short.json';
-import graphicKitPhase15PropsJson from '../test-props/graphic-kit-phase15-short.json';
-import graphicThemePreviewPropsJson from '../test-props/graphic-theme-preview-short.json';
 // Side-effect import: registers webfonts via delayRender so Shorts
 // compositions render with the correct typeface from frame 0.
 import './shorts/loadFonts';
-
-const graphicMvpShortProps = graphicMvpShortPropsJson as unknown as RenderProps;
-const graphicKitPhase15Props = graphicKitPhase15PropsJson as unknown as RenderProps;
-const graphicThemePreviewProps = graphicThemePreviewPropsJson as unknown as RenderProps;
 
 const calculateVideoMetadata = ({props}: {props: RenderProps}) => {
   const fps = props.render?.fps ?? defaultRenderProps.render.fps;
@@ -76,45 +69,6 @@ export const Root: React.FC = () => {
         width={1080}
         height={1920}
         defaultProps={defaultRenderProps}
-      />
-      {/* Spec v7 §15 — preview for the Shorts graphic MVP (stock + 3 graphics).
-          Reuses the repo's render-props-based metadata; duration comes from
-          test-props render.duration_sec, not a hardcoded frame count. */}
-      <Composition
-        id="GraphicMvpPreview"
-        component={ShortVideo}
-        durationInFrames={Math.round(
-          graphicMvpShortProps.render.duration_sec * graphicMvpShortProps.render.fps,
-        )}
-        fps={graphicMvpShortProps.render.fps}
-        width={1080}
-        height={1920}
-        defaultProps={graphicMvpShortProps}
-        calculateMetadata={calculateVideoMetadata}
-      />
-      <Composition
-        id="GraphicKitPhase15Preview"
-        component={ShortVideo}
-        durationInFrames={Math.round(
-          graphicKitPhase15Props.render.duration_sec * graphicKitPhase15Props.render.fps,
-        )}
-        fps={graphicKitPhase15Props.render.fps}
-        width={1080}
-        height={1920}
-        defaultProps={graphicKitPhase15Props}
-        calculateMetadata={calculateVideoMetadata}
-      />
-      <Composition
-        id="GraphicThemePreview"
-        component={ShortVideo}
-        durationInFrames={Math.round(
-          graphicThemePreviewProps.render.duration_sec * graphicThemePreviewProps.render.fps,
-        )}
-        fps={graphicThemePreviewProps.render.fps}
-        width={1080}
-        height={1920}
-        defaultProps={graphicThemePreviewProps}
-        calculateMetadata={calculateVideoMetadata}
       />
     </>
   );

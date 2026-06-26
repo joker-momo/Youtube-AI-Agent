@@ -1,45 +1,32 @@
-# Music Licenses
+# Music Library
 
-These tracks were obtained by the channel owner from the YouTube Studio Audio
-Library for use in this channel's YouTube content. Metadata is kept for
-traceability; it does not block render (the channel owner confirmed the source).
+These four owner-provided tracks are the complete canonical background-music
+library. Shorts select them by topic through `music_selector.py`; long-form uses
+Ether as its configured default. No duplicate copy is kept under
+`asset_library/source/bgm`.
 
-## Blue Skies - Silent Partner
-- File: assets/music/blue_skies_silent_partner.mp3
-- Artist: Silent Partner
+## Find Your Way — Anno Domini Beats
+
+- File: `assets/music/find_your_way_anno_domini_beats.mp3`
 - Source: YouTube Studio Audio Library
-- Download date:
-- License: YouTube Studio Audio Library
-- Attribution required:
-- Allowed use: YouTube video background music
-- Notes:
+- Shorts topics: movement, exercise, routine
 
-## Nimbus - Eveningland
-- File: assets/music/nimbus_eveningland.mp3
-- Artist: Eveningland
-- Source: YouTube Studio Audio Library
-- Download date:
-- License: YouTube Studio Audio Library
-- Attribution required:
-- Allowed use: YouTube video background music
-- Notes:
+## Fresh Fallen Snow — Chris Haugen
 
-## No.6 In My Dreams - Esther Abrami
-- File: assets/music/no6_in_my_dreams_esther_abrami.mp3
-- Artist: Esther Abrami
+- File: `assets/music/fresh_fallen_snow_chris_haugen.mp3`
 - Source: YouTube Studio Audio Library
-- Download date:
-- License: YouTube Studio Audio Library
-- Attribution required:
-- Allowed use: YouTube video background music
-- Notes:
+- Shorts topics: food, daily_habits, movement_light
 
-## Sunset Dream - Cheel
-- File: assets/music/sunset_dream_cheel.mp3
-- Artist: Cheel
+## Floating Home — Brian Bolger
+
+- File: `assets/music/floating_home_brian_bolger.mp3`
 - Source: YouTube Studio Audio Library
-- Download date:
-- License: YouTube Studio Audio Library
-- Attribution required:
-- Allowed use: YouTube video background music
-- Notes:
+- Shorts topics: sleep, stress, calm, mental_load, energy, menopause
+- Shorts fallback: unknown or missing pillar/topic
+
+## Ether — Silent Partner
+
+- File: `assets/music/ether_silent_partner.mp3`
+- Source: YouTube Studio Audio Library
+- Shorts topics: sleep_deep, reflective, night
+- Long-form default

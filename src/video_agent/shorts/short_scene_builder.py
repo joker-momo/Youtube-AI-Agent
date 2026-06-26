@@ -92,8 +92,9 @@ SHORT_LAYOUTS = (
     "short_myth", "short_quote", "short_cta",
 )
 
-# MVP graphic layouts (spec v7 §4). Routed by Remotion's GraphicSceneRenderer.
-# Must be preserved verbatim through normalization — never remapped to short_*.
+# Structured graphic intents (spec v7 §4). These remain planning/prompt
+# vocabulary until the asset stage creates the required ChatGPT image, then the
+# scene is persisted as a standard image-backed short_tip layout.
 SUPPORTED_GRAPHIC_LAYOUTS = (
     "graphic_plate_ratio",
     "graphic_checklist",
@@ -125,8 +126,7 @@ def _map_layout(layout: str) -> str:
     raw = str(layout or "").strip().lower()
     if raw in SHORT_LAYOUTS:
         return raw
-    # Preserve supported graphic layouts verbatim — they are routed by the
-    # Remotion GraphicSceneRenderer, not the short_* registry.
+    # Preserve supported graphic intents until ChatGPT image acquisition.
     if raw in SUPPORTED_GRAPHIC_LAYOUTS:
         return raw
     if raw in _LEGACY_TO_SHORT:

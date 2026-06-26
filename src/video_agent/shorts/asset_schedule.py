@@ -12,7 +12,6 @@ Phase 2 scope (this module):
   provider acquisition.
 - ``legacy_scene_assets``: one track per scene using its existing asset (the
   compatibility / fallback mode).
-- graphic scenes: omit the background track (rendered full-screen by SceneTimeline).
 
 Everything here is pure except an optional ffprobe duration probe for native
 candidates missing ``source_duration_sec`` (§16.1).
@@ -433,7 +432,9 @@ def _visual_plan_track(
     fps: int,
 ) -> dict[str, Any] | None:
     if str(beat.get("type") or "") == "graphic":
-        return None
+        raise RuntimeError(
+            f"Visual beat {beat.get('beat_id')} uses removed trackless graphic rendering"
+        )
     scene_ids = [str(sid) for sid in (beat.get("scene_ids") or []) if str(sid) in scene_by_id]
     if not scene_ids:
         return None
@@ -501,6 +502,16 @@ def compile_asset_schedule(
     """Compile the schema-v2 schedule from final scene timing + spans + adapted
     manifest. Deterministic; no provider acquisition (§17)."""
     scenes = list((scene_doc or {}).get("scenes") or [])
+    leaked = [
+        f"{_scene_id(scene, idx)}:{scene.get('layout')}"
+        for idx, scene in enumerate(scenes)
+        if _is_graphic_scene(scene)
+    ]
+    if leaked:
+        raise RuntimeError(
+            f"Unconverted scenes {', '.join(leaked)} require ChatGPT image-backed "
+            "layouts before asset schedule compilation"
+        )
     boundaries = build_scene_frame_timeline(scenes, fps)
     by_id = {b["scene_id"]: b for b in boundaries}
     scene_by_id = {_scene_id(s, i): s for i, s in enumerate(scenes)}
@@ -525,10 +536,6 @@ def compile_asset_schedule(
         if not member_scenes:
             continue
         selected_plan = visual_plans_by_span.get(str(span_id))
-        # Legacy all-graphic spans omit background tracks, but generated-image
-        # plans deliberately replace the graphic renderer with media tracks.
-        if all(_is_graphic_scene(s) for s in member_scenes) and not selected_plan:
-            continue
 
         if selected_plan and selected_plan.get("mode") in {
             "two_clip",
@@ -623,11 +630,9 @@ def compile_asset_schedule(
                 }
             )
         else:
-            # Fallback: one legacy track per non-graphic member scene.
+            # Fallback: one legacy media track per member scene.
             for m in member_ids:
                 scene = scene_by_id[m]
-                if _is_graphic_scene(scene):
-                    continue
                 tracks.append(
                     _legacy_track(
                         _next_track_id(), span_id, scene, by_id[m], adapted_scenes.get(m), fps
@@ -745,7 +750,7 @@ def validate_compiled_asset_schedule(
             errors.append(f"total_frames_mismatch:{total}!={cursor}")
 
     # Track invariants.
-    nongraphic_frames_covered: dict[int, int] = {}
+    frames_covered: dict[int, int] = {}
     for tr in schedule.get("tracks") or []:
         tid = tr.get("track_id")
         if tr.get("end_frame_exclusive") != tr.get("from_frame", 0) + tr.get(
@@ -807,19 +812,16 @@ def validate_compiled_asset_schedule(
             src = tr.get("source_duration_sec")
             if isinstance(src, (int, float)) and src + 1e-6 < span_secs:
                 errors.append(f"source_duration_insufficient:{tid}")
-        # record covered frames for non-graphic overlap/gap checks
+        # Record covered frames for overlap/gap checks.
         for f in range(tr.get("from_frame", 0), tr.get("end_frame_exclusive", 0)):
-            nongraphic_frames_covered[f] = nongraphic_frames_covered.get(f, 0) + 1
+            frames_covered[f] = frames_covered.get(f, 0) + 1
 
-    # Every non-graphic frame covered by exactly one background track; graphic
-    # frames may be uncovered.
+    # Every frame must be covered by exactly one background-media track.
     for b in boundaries:
-        if b.get("is_graphic"):
-            continue
         for f in range(b["from_frame"], b["end_frame_exclusive"]):
-            count = nongraphic_frames_covered.get(f, 0)
+            count = frames_covered.get(f, 0)
             if count == 0:
-                errors.append(f"uncovered_nongraphic_frame:{f}")
+                errors.append(f"uncovered_frame:{f}")
                 break
             if count > 1:
                 errors.append(f"overlapping_track_frame:{f}")

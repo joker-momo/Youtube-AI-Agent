@@ -109,6 +109,11 @@ def test_music_selector_maps_pillar_to_track():
     assert music_selector.select_music_track("food", cfg) == "shorts_daily_habit"
     assert music_selector.select_music_track("sleep", cfg) == "shorts_sleep_stress"
     assert music_selector.select_music_track("stress", cfg) == "shorts_sleep_stress"
+    assert music_selector.select_music_track("energy", cfg) == "shorts_sleep_stress"
+    assert music_selector.select_music_track("menopause", cfg) == "shorts_sleep_stress"
+    assert music_selector.select_music_track("sleep_deep", cfg) == "shorts_deep_calm"
+    assert music_selector.select_music_track("reflective", cfg) == "shorts_deep_calm"
+    assert music_selector.select_music_track("night", cfg) == "shorts_deep_calm"
     assert music_selector.select_music_track("unknown_pillar", cfg) == "shorts_sleep_stress"
 
 

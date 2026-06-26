@@ -1,9 +1,8 @@
-"""Pre-render validation for Shorts graphic scenes (spec v7 §18).
+"""Pre-acquisition validation for Shorts structured graphic intents (spec v7 §18).
 
-Runs after ``build_short_scenes`` + ``run_short_scenes_qa`` and before render
-props are written / Remotion is invoked. Catches unsupported graphic layouts and
-malformed payloads early, with clear errors, so bad scenes never reach the
-renderer. Mirrors the Zod checks in ``remotion/src/graphics/graphic-payloads.ts``.
+Runs after ``build_short_scenes`` + ``run_short_scenes_qa`` and before ChatGPT
+image generation. Catches unsupported graphic layouts and malformed prompt
+payloads early, so the asset stage receives a complete image brief.
 """
 from __future__ import annotations
 
@@ -110,5 +109,4 @@ def estimate_spanish_narration_sec(text: str, wps: float = DEFAULT_SPANISH_WPS) 
 
 def max_spoken_words_for_duration(target_video_sec: float, wps: float = DEFAULT_SPANISH_WPS) -> int:
     return int(math.floor(float(target_video_sec or 35.0) * float(wps or DEFAULT_SPANISH_WPS) * 0.88))
-
 

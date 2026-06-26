@@ -48,7 +48,12 @@ def test_first_scene_has_no_zero_opacity_fade_guard():
 # ── Fix B: on_screen_text must win over layout_payload.title everywhere ──────
 
 SHORT_LAYOUTS = REPO / "remotion/src/shorts/ShortLayouts.tsx"
-GRAPHIC = REPO / "remotion/src/graphics/GraphicSceneRenderer.tsx"
+GRAPHICS_DIR = REPO / "remotion/src/graphics"
+LEGACY_GRAPHIC_PROPS = (
+    REPO / "remotion/test-props/graphic-mvp-short.json",
+    REPO / "remotion/test-props/graphic-kit-phase15-short.json",
+    REPO / "remotion/test-props/graphic-theme-preview-short.json",
+)
 
 _PRIMARY_LAYOUTS = [
     "ShortHookLayout", "ShortPainLayout", "ShortTipLayout",
@@ -86,14 +91,22 @@ def test_short_cta_uses_on_screen_text_priority():
         assert default not in cta, f"CTA must not hardcode {default} over on_screen_text"
 
 
-def test_graphic_renderer_uses_on_screen_text_priority():
-    src = _read(GRAPHIC)
-    assert "on_screen_text" in src, "graphic renderer must consider on_screen_text"
-    on_idx = src.find("on_screen_text")
-    # on_screen_text referenced before the payload title is handed to visualPayload
-    vp_idx = src.find("visualPayload")
-    assert on_idx != -1 and on_idx < vp_idx, \
-        "on_screen_text must override before visualPayload title is built"
+def test_legacy_remotion_graphics_are_removed():
+    src = _read(SHORT_VIDEO)
+    root = _read(ROOT)
+    assert not GRAPHICS_DIR.exists()
+    assert not any(path.exists() for path in LEGACY_GRAPHIC_PROPS)
+    assert "GraphicSceneRenderer" not in src
+    assert "./graphics/" not in src
+    assert "GraphicMvpPreview" not in root
+    assert "GraphicKitPhase15Preview" not in root
+    assert "GraphicThemePreview" not in root
+
+
+def test_short_video_rejects_unconverted_graphic_layouts():
+    src = _read(SHORT_VIDEO)
+    assert "startsWith('graphic_')" in src
+    assert "must be converted to a ChatGPT image-backed layout" in src
 
 
 def test_layout_payload_title_fallback_source_contract():

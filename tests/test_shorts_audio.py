@@ -2,18 +2,22 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 
 def _cfg(tmp_path: Path) -> dict:
     mdir = tmp_path / "assets" / "music"
     mdir.mkdir(parents=True)
-    (mdir / "nimbus_eveningland.mp3").write_bytes(b"m")
+    (mdir / "floating_home_brian_bolger.mp3").write_bytes(b"m")
     return {
         "music_library": {
             "tracks": {
                 "shorts_sleep_stress": {
-                    "file": "assets/music/nimbus_eveningland.mp3",
-                    "default_volume_db_below_voice": 22,
+                    "file": "assets/music/floating_home_brian_bolger.mp3",
+                    "default_volume_db_below_voice": 15,
+                    "title": "Floating Home",
+                    "artist": "Brian Bolger",
+                    "source": "YouTube Studio Audio Library",
                 }
             }
         },
@@ -32,7 +36,7 @@ def test_resolve_music_file(tmp_path: Path):
     from video_agent.shorts import audio_mixer
     cfg = _cfg(tmp_path)
     p = audio_mixer.resolve_music_file("shorts_sleep_stress", cfg, repo_root=tmp_path)
-    assert p == tmp_path / "assets" / "music" / "nimbus_eveningland.mp3"
+    assert p == tmp_path / "assets" / "music" / "floating_home_brian_bolger.mp3"
     assert p.exists()
 
 
@@ -45,8 +49,8 @@ def test_resolve_music_file_missing_track_returns_none(tmp_path: Path):
 def test_track_volume_db_prefers_track_then_global(tmp_path: Path):
     from video_agent.shorts import audio_mixer
     cfg = _cfg(tmp_path)
-    # track-level 22 wins over global 20
-    assert audio_mixer.track_volume_db_below_voice("shorts_sleep_stress", cfg) == 22
+    # track-level 15 wins over global 20
+    assert audio_mixer.track_volume_db_below_voice("shorts_sleep_stress", cfg) == 15
     # unknown track → global 20
     assert audio_mixer.track_volume_db_below_voice("nope", cfg) == 20
 
@@ -69,8 +73,10 @@ def test_build_mix_command_has_inputs_volume_fade_and_duration(tmp_path: Path):
     assert "32" in s
     # fades present
     assert "afade=t=in" in s and "afade=t=out" in s
-    # mixed
-    assert "amix" in s or "amerge" in s
+    assert "sidechaincompress" in s
+    assert "loudnorm=" in s
+    assert "alimiter=" in s
+    assert "amix" in s
 
 
 def test_build_mix_command_voice_not_attenuated(tmp_path: Path):
@@ -90,9 +96,79 @@ def test_real_channel_music_tracks_resolve_to_existing_files():
     from video_agent.utils.json_io import read_yaml
     from video_agent.shorts import audio_mixer
     cfg = read_yaml(repo_root() / "configs/vida-plena-45/channel.yaml")
-    for track in ("shorts_movement", "shorts_daily_habit", "shorts_sleep_stress", "shorts_deep_calm"):
+    expected = {
+        "shorts_movement": ("Find Your Way", "assets/music/find_your_way_anno_domini_beats.mp3"),
+        "shorts_daily_habit": ("Fresh Fallen Snow", "assets/music/fresh_fallen_snow_chris_haugen.mp3"),
+        "shorts_sleep_stress": ("Floating Home", "assets/music/floating_home_brian_bolger.mp3"),
+        "shorts_deep_calm": ("Ether", "assets/music/ether_silent_partner.mp3"),
+    }
+    tracks = cfg["music_library"]["tracks"]
+    assert set(tracks) == set(expected)
+    for track, (title, file_path) in expected.items():
+        assert tracks[track]["title"] == title
+        assert tracks[track]["file"] == file_path
         p = audio_mixer.resolve_music_file(track, cfg)
         assert p is not None and p.exists(), track
+
+
+def test_all_channel_variants_share_the_four_track_library():
+    from video_agent.contracts import repo_root
+    from video_agent.utils.json_io import read_yaml
+
+    root = repo_root()
+    configs = [
+        root / "configs/vida-plena-45/channel.yaml",
+        root / "configs/vida-plena-45-t-pexels/channel.yaml",
+        root / "configs/vida-plena-45-t-pixabay/channel.yaml",
+        root / "configs/vida-plena-45-t-coverr/channel.yaml",
+    ]
+    expected = {
+        "shorts_movement",
+        "shorts_daily_habit",
+        "shorts_sleep_stress",
+        "shorts_deep_calm",
+    }
+    for config_path in configs:
+        cfg = read_yaml(config_path)
+        assert set(cfg["music_library"]["tracks"]) == expected
+        assert "music" not in cfg["shorts"]["tts"]
+    assert not (root / "asset_library/source/bgm").exists()
+
+
+def test_mix_short_audio_updates_canonical_manifest_and_selection(tmp_path, monkeypatch):
+    from video_agent.shorts import audio_mixer
+
+    cfg = _cfg(tmp_path)
+    short_dir = tmp_path / "short-01"
+    narration = short_dir / "audio" / "short_narration.wav"
+    narration.parent.mkdir(parents=True)
+    narration.write_bytes(b"voice")
+    json_dir = short_dir / "json"
+    json_dir.mkdir()
+    (json_dir / "assets_manifest.json").write_text(
+        json.dumps({"audio": {"narration": "stale", "music": "stale"}, "scenes": []})
+    )
+
+    def fake_run(cmd, **kwargs):
+        Path(cmd[-1]).write_bytes(b"mixed")
+
+    monkeypatch.setattr(audio_mixer.subprocess, "run", fake_run)
+
+    out = audio_mixer.mix_short_audio(
+        short_dir, narration, "shorts_sleep_stress", cfg, 30.0
+    )
+
+    assert out == short_dir / "audio" / "short_mix.m4a"
+    manifest = json.loads((json_dir / "assets_manifest.json").read_text())
+    assert (
+        manifest["audio"]["narration"]
+        == "jobs/short-01/audio/short_mix.m4a"
+    )
+    assert manifest["audio"]["music"] is None
+    assert manifest["audio"]["music_selection"]["track_key"] == "shorts_sleep_stress"
+    selection = json.loads((json_dir / "music_selection.json").read_text())
+    assert selection["title"] == "Floating Home"
+    assert selection["output"] == "audio/short_mix.m4a"
 
 
 def test_synthesize_short_narration_forces_dynamic_sync_off(tmp_path: Path, monkeypatch):
@@ -114,9 +190,20 @@ def test_synthesize_short_narration_forces_dynamic_sync_off(tmp_path: Path, monk
 
     short_dir = tmp_path / "short"
     short_dir.mkdir()
-    cfg = {"shorts": {"tts": {"provider": "kokoro", "voice_id": "ef_dora", "speed": 1.07}}}
+    cfg = {
+        "shorts": {
+            "tts": {
+                "provider": "kokoro",
+                "voice_id": "ef_dora",
+                "speed": 1.07,
+                "music": {"preferred_track": "legacy.mp3"},
+            }
+        }
+    }
     audio.synthesize_short_narration(short_dir, {"scenes": []}, cfg)
 
     assert captured["tts_config"].get("dynamic_sync") is False
+    assert "music" not in captured["tts_config"]
     # must not mutate the caller's config object
     assert "dynamic_sync" not in cfg["shorts"]["tts"]
+    assert cfg["shorts"]["tts"]["music"]["preferred_track"] == "legacy.mp3"

@@ -919,11 +919,14 @@ class StockAssetService:
                 asset["asset_selection"]["asset_match_status"] = "ai_generated"
                 return asset
 
-        # Tier 4a — Graphic/text-led fallback. Reaching this point means every
-        # higher tier (stock, AI) was skipped or failed, so for key scenes the
-        # graphic is the last usable net — a key scene must never fall through
-        # to a blank Tier-5 block merely because the AI tier was attempted.
-        if strategy == "graphic_fallback" or is_key or is_graphic_layout:
+        # Structured graphic intents require a real ChatGPT image. Returning the
+        # legacy graphic_fallback here would let Shorts silently reach a
+        # placeholder/Remotion-card path after generation failed.
+        if is_graphic_layout:
+            return None
+
+        # Tier 4a — Text-led fallback for non-graphic key scenes.
+        if strategy == "graphic_fallback" or is_key:
             return {
                 "provider": "graphic_fallback",
                 "asset_id": f"graphic_{job_id}_{scene['id']}",

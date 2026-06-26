@@ -26,24 +26,27 @@ def _load(path: Path) -> dict:
 
 
 def _mirror_short_assets_to_public(short_dir: Path) -> None:
-    """Mirror prepared short assets into Remotion's public dir.
+    """Mirror prepared short media into Remotion's public job directory.
 
     The legacy background stage already copies scene-level assets to
     ``remotion/public/jobs/<short>/assets`` while preparing them. PR D local QA
     downloads finalist span videos later, so ``assets/visual_spans`` can exist
-    only in the short folder unless we mirror it before render/rerender.
+    only in the short folder unless we mirror it before render/rerender. The
+    canonical Shorts audio mix lives under ``audio/`` and must be mirrored too.
     """
-    src_root = short_dir / "assets"
-    if not src_root.exists():
-        return
-    public_root = repo_root() / "remotion" / "public" / "jobs" / short_dir.name / "assets"
-    for src in src_root.rglob("*"):
-        if not src.is_file():
+    public_job = repo_root() / "remotion" / "public" / "jobs" / short_dir.name
+    for dirname in ("assets", "audio"):
+        src_root = short_dir / dirname
+        if not src_root.exists():
             continue
-        rel = src.relative_to(src_root)
-        dst = public_root / rel
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        materialize_media(src, dst)
+        public_root = public_job / dirname
+        for src in src_root.rglob("*"):
+            if not src.is_file():
+                continue
+            rel = src.relative_to(src_root)
+            dst = public_root / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            materialize_media(src, dst)
 
 
 def materialize_short_job_aliases(short_dir: Path, channel_config: dict | None = None) -> None:

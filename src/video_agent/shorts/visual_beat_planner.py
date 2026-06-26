@@ -39,7 +39,6 @@ _SIMPLICITY_RANK = {
     "clip_plus_graphic": 1,
     "two_clip": 2,
     "generated_image_fallback": 3,
-    "graphic": 4,
 }
 
 # Editorial prior per mode. Evidence deltas (semantic, motion, crop, complexity,
@@ -51,7 +50,6 @@ _MODE_BASE = {
     "two_clip": 80.0,
     "clip_plus_graphic": 82.0,  # designed infographic adds clarity
     "generated_image_fallback": 66.0,  # no real footage
-    "graphic": 64.0,  # pure graphic card (no media track); last-resort net
 }
 _SEMANTIC_DELTA = {"PASS": 4.0, "CAPABILITY_REDUCED": -4.0, "FAIL": -20.0}
 _MOTION_DELTA = {
@@ -373,7 +371,7 @@ def _clip_plus_graphic_candidate(
         "candidate_debug": {
             "complexity_penalty": 1,
             "score_breakdown": breakdown,
-            "graphic_renderer": "existing_scene_graphic",
+            "graphic_media": "generated_image",
         },
     }
 
@@ -416,55 +414,6 @@ def _generated_image_fallback_candidate(
     }
 
 
-def _base_graphic_beat(*, beat_id: str, scene_ids: list[str]) -> dict[str, Any]:
-    """A graphic-card beat. Carries NO media asset: ``asset_schedule`` emits no
-    background track for ``type == "graphic"`` beats, so the scene's own graphic
-    renderer (SceneTimeline) draws it full-screen."""
-    return {
-        "beat_id": beat_id,
-        "type": "graphic",
-        "scene_ids": list(scene_ids),
-        "boundary_reason": "graphic explanation adds clarity",
-        "inside_scene_boundary": False,
-    }
-
-
-def _graphic_candidate(
-    *,
-    span_id: str,
-    member_ids: list[str],
-    member_scenes: list[dict[str, Any]],
-    span_qa: dict[str, Any] | None = None,
-) -> dict[str, Any] | None:
-    """Last-resort plan for a span whose members are ALL pure graphic scenes.
-
-    Such spans carry no clip (clip modes reject graphic scenes) and often no
-    resolved generated image, so every other candidate returns None. Rather than
-    leaving the span planless — which hard-fails visual_sequence_qa with
-    ``missing_selected_plan`` and blocks the whole render — emit graphic beats so
-    the scene renders as its intended graphic card.
-    """
-    if not member_scenes or not all(_is_graphic_scene(scene) for scene in member_scenes):
-        return None
-    beats = [
-        _base_graphic_beat(beat_id=f"vb{idx + 1:02d}", scene_ids=[sid])
-        for idx, sid in enumerate(member_ids)
-    ]
-    score, breakdown = _evidence_score("graphic", trim=None, span_qa=span_qa, beats=beats)
-    return {
-        "plan_id": f"{span_id}-vp05",
-        "mode": "graphic",
-        "score": score,
-        "simplicity_rank": _SIMPLICITY_RANK["graphic"],
-        "beats": beats,
-        "candidate_debug": {
-            "fallback_reason": "graphic-only span; no clip or generated image available",
-            "score_breakdown": breakdown,
-            "graphic_renderer": "existing_scene_graphic",
-        },
-    }
-
-
 def _is_cta_scene(scene: dict[str, Any]) -> bool:
     """A call-to-action scene (end card) — by layout or retention function."""
     layout = str(scene.get("layout") or "")
@@ -476,7 +425,7 @@ def _is_controlled_visual_scene(scene: dict[str, Any]) -> bool:
     hook (face/emotion first frame), CTA (on-brand end card), and short_tip
     (single precise human-pose actions — sit/feet, breathe, write, message — where
     stock topic-matches but misses the required action evidence). The montage
-    (short_checklist) and graphics keep their own renderers."""
+    (short_checklist) keeps its own standard overlay."""
     layout = str(scene.get("layout") or "")
     rf = str(scene.get("retention_function") or "")
     return (
@@ -604,20 +553,6 @@ def build_visual_beat_plan(
             if _fb is not None:
                 candidates = [_fb]
 
-        # Last-resort net: a span whose members are all pure graphic scenes has no
-        # clip- or image-based candidate, but must still get a plan (graphic beat
-        # rendered full-screen) or visual_sequence_qa hard-fails the short with
-        # missing_selected_plan. Runs OUTSIDE config["modes"] gating by design.
-        if not candidates:
-            graphic = _graphic_candidate(
-                span_id=span_id,
-                member_ids=member_ids,
-                member_scenes=member_scenes,
-                span_qa=span_qas.get(span_id),
-            )
-            if graphic:
-                candidates.append(graphic)
-
         candidates.sort(key=lambda c: (int(c.get("simplicity_rank", 99)), str(c.get("mode"))))
         candidates = candidates[: int(config["max_non_legacy_plans"])]
         selected, reason = _select_plan(
@@ -629,7 +564,7 @@ def build_visual_beat_plan(
         selected_mode = str((selected or {}).get("mode") or "")
         selected_verdict = (
             "PASS"
-            if selected_mode in ("generated_image_fallback", "graphic")
+            if selected_mode == "generated_image_fallback"
             else span_qa_verdict
         )
         planned_spans.append(

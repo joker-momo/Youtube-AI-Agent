@@ -12,6 +12,31 @@ from pathlib import Path
 from typing import Any, Callable
 
 from video_agent.shorts import paths
+from video_agent.storage.atomic import atomic_write_json
+
+
+def assert_no_unconverted_graphic_scenes(short_scenes: dict) -> None:
+    """Fail closed if planning-only graphic layouts reach a renderable artifact."""
+    leaked = [
+        f"{scene.get('id', '<unknown>')}:{scene.get('layout')}"
+        for scene in short_scenes.get("scenes") or []
+        if str(scene.get("layout") or "").startswith("graphic_")
+    ]
+    if leaked:
+        raise RuntimeError(
+            "Graphic scenes must be converted to ChatGPT image-backed layouts "
+            f"before render: {', '.join(leaked)}"
+        )
+
+
+def _persist_prepared_short_scenes(short_dir: Path, short_scenes: dict) -> None:
+    for scene in short_scenes.get("scenes") or []:
+        scene.pop("_skip_ai_fallback", None)
+    assert_no_unconverted_graphic_scenes(short_scenes)
+    atomic_write_json(
+        short_dir / paths.SHORT_JSON_SUBDIR / paths.SHORT_SCENES_FILE,
+        short_scenes,
+    )
 
 
 def _short_asset_context(short_dir: Path, channel_config: dict) -> dict[str, Any]:
@@ -38,6 +63,9 @@ def _short_asset_context(short_dir: Path, channel_config: dict) -> dict[str, Any
     # shrink scene durations to the raw speech length. Force it here, copy-on-
     # write so the caller's config is untouched.
     tts_config = {**(tts_config or {}), "dynamic_sync": False}
+    # Shorts music has one owner: audio_mixer.mix_short_audio. Keep this stage
+    # narration-only so music is never selected or mixed twice.
+    tts_config.pop("music", None)
     channel_id = (channel_config.get("channel") or {}).get("id", "unknown-channel")
     return {
         "style_dna": style_dna,
@@ -78,6 +106,7 @@ def synthesize_short_backgrounds(
         llm_history_path=llm_history_path,
         **ctx,
     )
+    _persist_prepared_short_scenes(short_dir, short_scenes)
 
 
 def _spans_with_provisional_video(short_dir: Path) -> set[str]:
@@ -106,7 +135,8 @@ def _spans_with_provisional_video(short_dir: Path) -> set[str]:
 def _mark_video_covered_scenes(short_dir: Path, short_scenes: dict) -> None:
     covered = _spans_with_provisional_video(short_dir)
     for scene in short_scenes.get("scenes") or []:
-        scene["_skip_ai_fallback"] = scene.get("id") in covered
+        is_graphic = str(scene.get("layout") or "").startswith("graphic_")
+        scene["_skip_ai_fallback"] = not is_graphic and scene.get("id") in covered
 
 
 def regen_fallback_backgrounds(
@@ -133,6 +163,7 @@ def regen_fallback_backgrounds(
         only_scene_ids=set(scene_ids),
         **ctx,
     )
+    _persist_prepared_short_scenes(short_dir, short_scenes)
 
 
 def synthesize_short_narration(short_dir: Path, short_scenes: dict, channel_config: dict) -> Path:

@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from video_agent.shorts import paths
 from video_agent.shorts.builder.stages.visual_beats import _stage_visual_beats
+from video_agent.shorts.visual_sequence_qa import build_visual_sequence_qa
 
 
 def _ctx(
@@ -141,3 +142,30 @@ def test_visual_beats_disabled_skips_without_artifacts(tmp_path: Path) -> None:
     assert result.returns is None
     assert not (ctx.json_dir / paths.SHORT_VISUAL_BEAT_PLAN_FILE).exists()
     assert ("visual_beats", "skipped") in ctx.calls
+
+
+def test_trackless_graphic_beat_is_rejected() -> None:
+    qa = build_visual_sequence_qa(
+        short_id="short-04",
+        visual_beat_plan={
+            "spans": [
+                {
+                    "visual_span_id": "vs01",
+                    "selected_plan": {
+                        "mode": "graphic",
+                        "beats": [
+                            {
+                                "beat_id": "vb01",
+                                "type": "graphic",
+                                "scene_ids": ["s01"],
+                            }
+                        ],
+                    },
+                    "qa": {"verdict": "PASS", "warnings": []},
+                }
+            ]
+        },
+    )
+
+    assert qa["qa"]["verdict"] == "FAIL"
+    assert "vs01:unsupported_trackless_graphic_beat:vb01" in qa["qa"]["errors"]

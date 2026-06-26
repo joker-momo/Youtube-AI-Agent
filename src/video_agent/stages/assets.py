@@ -26,6 +26,11 @@ from video_agent.utils.json_io import write_json
 
 SUPPORTED_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp")
 
+
+class RequiredGeneratedImageError(RuntimeError):
+    """Raised when a planning-only graphic scene has no ChatGPT image."""
+
+
 def _project_name_from_out_path(out_path: str | Path) -> str:
     """Readable ChatGPT project name like ``<job_id>_<scene_id>`` derived from the
     image's out_path (``jobs/<job_id>/assets/ai_temp_<scene>_<hash>.png``) so the
@@ -246,22 +251,13 @@ def _write_placeholder_video(
 
 
 def _choose_bgm_track(job_dir: Path, music_cfg: dict[str, Any]) -> Path | None:
-    bgm_dir = repo_root() / "asset_library" / "source" / "bgm"
-    if not bgm_dir.exists():
+    configured_file = str(music_cfg.get("file") or "").strip()
+    if not configured_file:
         return None
-    candidates = sorted(
-        p
-        for p in bgm_dir.iterdir()
-        if p.is_file() and p.suffix.lower() in {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
-    )
-    if not candidates:
-        return None
-    preferred = str(music_cfg.get("preferred_track") or "").strip()
-    if preferred:
-        for c in candidates:
-            if c.name == preferred:
-                return c
-    return candidates[0]
+    configured = Path(configured_file)
+    if not configured.is_absolute():
+        configured = repo_root() / configured
+    return configured.resolve() if configured.is_file() else None
 
 
 def _mix_bgm_with_narration(
@@ -635,8 +631,20 @@ def prepare_assets(
         scene_dur = float(scene.get("duration_sec") or 30)
         _layout = str(scene.get("layout") or "")
         was_graphic_layout = _layout.startswith("graphic_")
+        if was_graphic_layout:
+            # graphic_* is planning vocabulary only. A provisional stock video
+            # must never suppress the required ChatGPT image acquisition.
+            scene["_skip_ai_fallback"] = False
         if not local_image and stock_service:
             stock_asset = stock_service.get_scene_asset(scene, channel_id, job_dir.name)
+        if was_graphic_layout and (
+            not stock_asset or stock_asset.get("provider") != "ai_generated"
+        ):
+            provider = stock_asset.get("provider") if stock_asset else "none"
+            raise RequiredGeneratedImageError(
+                f"Scene {scene['id']} layout {_layout} requires a ChatGPT-generated "
+                f"image; acquired provider={provider}."
+            )
         # Force all scene backgrounds to video so Remotion always renders OffthreadVideo.
         asset_suffix = ".mp4"
         image_path = assets_dir / f"{scene['id']}{asset_suffix}"
@@ -719,6 +727,7 @@ def prepare_assets(
             scene["generated_image_source_layout"] = _layout
             scene["layout"] = "short_tip"
             scene["background_mode"] = "generated_image"
+            scene.pop("_skip_ai_fallback", None)
         scene_asset = {
             "scene_id": scene["id"],
             "background": str(image_path.resolve()),

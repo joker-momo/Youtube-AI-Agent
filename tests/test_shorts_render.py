@@ -86,6 +86,30 @@ def test_materialize_short_job_aliases_mirrors_visual_span_assets(tmp_path: Path
     assert mirrored.read_bytes() == b"fake video"
 
 
+def test_materialize_short_job_aliases_mirrors_canonical_audio(tmp_path: Path, monkeypatch):
+    from video_agent.shorts import renderer
+
+    repo = tmp_path / "repo"
+    sd = tmp_path / "short-01"
+    mix = sd / "audio" / "short_mix.m4a"
+    mix.parent.mkdir(parents=True)
+    mix.write_bytes(b"mixed audio")
+    monkeypatch.setattr(renderer, "repo_root", lambda: repo)
+
+    renderer.materialize_short_job_aliases(sd, {"channel": {"id": "vida-plena-45"}})
+
+    mirrored = (
+        repo
+        / "remotion"
+        / "public"
+        / "jobs"
+        / "short-01"
+        / "audio"
+        / "short_mix.m4a"
+    )
+    assert mirrored.read_bytes() == b"mixed audio"
+
+
 def test_build_cover_extract_command_uses_frame_sec(tmp_path: Path):
     from video_agent.shorts import renderer
 

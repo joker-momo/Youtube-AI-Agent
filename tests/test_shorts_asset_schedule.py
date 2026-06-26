@@ -137,7 +137,7 @@ def test_image_backed_not_selected_as_native_continuous() -> None:
     assert schedule["qa"]["verdict"] == "PASS"
 
 
-def test_graphic_scene_omits_background_track() -> None:
+def test_unconverted_graphic_scene_is_rejected() -> None:
     scenes = [_scene("s01", 2.0), _scene("s02", 2.0, graphic=True), _scene("s03", 2.0)]
     doc = {"scenes": scenes}
     spans = {"spans": [
@@ -146,13 +146,11 @@ def test_graphic_scene_omits_background_track() -> None:
         {"id": "vs03", "scene_ids": ["s03"], "planned_mode": "continuous_clip"},
     ]}
     resolved = {"scenes": {"s01": _image_backed("s01"), "s03": _image_backed("s03")}}
-    schedule = compile_asset_schedule(
-        short_id="x", scene_doc=doc, visual_spans=spans, resolved_visuals=resolved,
-        fps=FPS, timing_source="tts_final", scene_version=1,
-    )
-    covered = {sid for t in schedule["tracks"] for sid in t["scene_ids"]}
-    assert covered == {"s01", "s03"}  # graphic s02 has no background track
-    assert schedule["qa"]["verdict"] == "PASS"  # graphic gap allowed
+    with pytest.raises(RuntimeError, match=r"s02.*graphic_definition.*ChatGPT"):
+        compile_asset_schedule(
+            short_id="x", scene_doc=doc, visual_spans=spans, resolved_visuals=resolved,
+            fps=FPS, timing_source="tts_final", scene_version=1,
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -212,12 +210,12 @@ def _valid_schedule() -> tuple[dict[str, Any], dict[str, Any]]:
     return schedule, doc
 
 
-def test_non_graphic_gap_rejected() -> None:
+def test_any_background_gap_rejected() -> None:
     schedule, doc = _valid_schedule()
     schedule["tracks"] = []  # drop coverage
     qa = validate_compiled_asset_schedule(schedule, doc)
     assert qa["verdict"] == "FAIL"
-    assert any("uncovered_nongraphic_frame" in e for e in qa["errors"])
+    assert any("uncovered_frame" in e for e in qa["errors"])
 
 
 def test_overlap_rejected() -> None:

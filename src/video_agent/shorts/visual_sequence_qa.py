@@ -15,10 +15,6 @@ def _selected_plan(span: dict[str, Any]) -> dict[str, Any] | None:
     return plan if isinstance(plan, dict) else None
 
 
-def _beat_requires_media_track(beat: dict[str, Any]) -> bool:
-    return str(beat.get("type") or "") != "graphic"
-
-
 def build_visual_sequence_qa(
     *,
     short_id: str,
@@ -62,7 +58,7 @@ def build_visual_sequence_qa(
         beats = list(selected.get("beats") or [])
         distribution[mode] += 1
         span_beat_count = len(beats)
-        span_track_count = sum(1 for beat in beats if _beat_requires_media_track(beat))
+        span_track_count = len(beats)
         span_graphic_count = sum(1 for beat in beats if str(beat.get("type") or "") == "graphic")
         beat_count += span_beat_count
         track_count += span_track_count
@@ -70,6 +66,10 @@ def build_visual_sequence_qa(
         cut_count_changes += max(0, span_beat_count - 1)
 
         for beat in beats:
+            if str(beat.get("type") or "") == "graphic":
+                span_errors.append(
+                    f"unsupported_trackless_graphic_beat:{beat.get('beat_id')}"
+                )
             if beat.get("inside_scene_boundary") is True and not beat.get("timing_anchor_ref"):
                 span_errors.append(f"inside_scene_boundary_without_anchor:{beat.get('beat_id')}")
             if beat.get("boundary_reason") == "sentence_punctuation":

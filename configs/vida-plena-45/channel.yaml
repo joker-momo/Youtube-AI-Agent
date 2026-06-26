@@ -166,8 +166,8 @@ visuals:
     max_candidate_metadata_score_total: 24
     quality_weight: 0.45
 music:
-  source: "asset_library"
-  preferred_track: "No.6 In My Dreams - Esther Abrami.mp3"
+  source: "assets/music"
+  file: "assets/music/ether_silent_partner.mp3"
   voice_gain_db: -4.5
   level_db: -24
   duck_db: 8
@@ -417,21 +417,19 @@ shorts:
       pause_sentence_ms: 360
       pause_paragraph_ms: 500
       speed_jitter_pct: 3.0
-    # Background music for the Shorts narration mix (read by the TTS/mix pass in
-    # stages/assets._synthesize_narration_and_mix). Without this the mix fell back
-    # to the first file in asset_library/source/bgm (Blue Skies) at a too-quiet
-    # -24 dB. Calm CC0 piano (Pixabay) + a louder, present level for 45+ wellness.
-    music:
-      preferred_track: "Piano Calm - Pixabay.mp3"
-      level_db: -16
-      duck_db: 8
-      voice_gain_db: -4.5
   music:
     enabled: true
-    source: "youtube_studio_audio_library"
+    source: "music_library"
     auto_select: true
     volume_db_below_voice: 20
     ducking_enabled: true
+    voice_gain_db: -4.5
+    duck_db: 8
+    target_lufs: -13.6
+    target_tp_dbtp: -1.0
+    target_lra: 4.8
+    sample_rate: 44100
+    bitrate: "192k"
     fade_in_ms: 120
     fade_out_ms: 450
     require_license_metadata: true
@@ -453,49 +451,33 @@ shorts:
 music_library:
   tracks:
     shorts_movement:
-      file: "assets/music/blue_skies_silent_partner.mp3"
-      title: "Blue Skies"
-      artist: "Silent Partner"
+      file: "assets/music/find_your_way_anno_domini_beats.mp3"
+      title: "Find Your Way"
+      artist: "Anno Domini Beats"
       source: "YouTube Studio Audio Library"
       mood: "soft_upbeat"
       use_for: ["movement", "exercise", "routine"]
       default_volume_db_below_voice: 20
     shorts_daily_habit:
-      file: "assets/music/sunset_dream_cheel.mp3"
-      title: "Sunset Dream"
-      artist: "Cheel"
+      file: "assets/music/fresh_fallen_snow_chris_haugen.mp3"
+      title: "Fresh Fallen Snow"
+      artist: "Chris Haugen"
       source: "YouTube Studio Audio Library"
       mood: "warm_lifestyle"
-      use_for: ["food", "daily_habits", "routine", "movement_light"]
+      use_for: ["food", "daily_habits", "movement_light"]
       default_volume_db_below_voice: 22
     shorts_sleep_stress:
-      file: "assets/music/piano_calm_pixabay.mp3"
-      title: "Piano Calm"
-      artist: "Music for Video (Pixabay)"
-      source: "Pixabay (CC0, no attribution)"
+      file: "assets/music/floating_home_brian_bolger.mp3"
+      title: "Floating Home"
+      artist: "Brian Bolger"
+      source: "YouTube Studio Audio Library"
       mood: "calm_wellness"
       use_for: ["sleep", "stress", "calm", "mental_load", "energy", "menopause"]
       default_volume_db_below_voice: 15
-    shorts_calm_piano:
-      file: "assets/music/please_calm_my_mind_pixabay.mp3"
-      title: "Please Calm My Mind"
-      artist: "Music for Video (Pixabay)"
-      source: "Pixabay (CC0, no attribution)"
-      mood: "calm_wellness"
-      use_for: ["sleep", "stress", "calm", "mental_load"]
-      default_volume_db_below_voice: 15
-    shorts_calm_relax:
-      file: "assets/music/relaxing_sleep_pixabay.mp3"
-      title: "Relaxing Sleep"
-      artist: "Pixabay"
-      source: "Pixabay (CC0, no attribution)"
-      mood: "reflective_sleep"
-      use_for: ["sleep", "stress", "calm", "sleep_deep", "night"]
-      default_volume_db_below_voice: 15
     shorts_deep_calm:
-      file: "assets/music/no6_in_my_dreams_esther_abrami.mp3"
-      title: "No.6 In My Dreams"
-      artist: "Esther Abrami"
+      file: "assets/music/ether_silent_partner.mp3"
+      title: "Ether"
+      artist: "Silent Partner"
       source: "YouTube Studio Audio Library"
       mood: "reflective_sleep"
       use_for: ["sleep_deep", "reflective", "night"]

@@ -1,4 +1,4 @@
-"""Automatic background-music selection for Shorts (local YouTube Studio tracks)."""
+"""Single policy owner for Shorts background-music selection."""
 from __future__ import annotations
 
 # Pillar / topic → music-library track key. See spec §15.1.

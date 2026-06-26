@@ -18,7 +18,6 @@ import {ShortBackground} from './shorts/ShortBackground';
 import {ShortReadabilityOverlay} from './shorts/ShortReadabilityOverlay';
 import {VisualTimeline} from './shorts/VisualTimeline';
 import {pickShortLayout} from './shorts/ShortLayouts';
-import {GraphicSceneRenderer, isGraphicScene} from './graphics/GraphicSceneRenderer';
 
 function pickOverlayKey(scene: Scene): 'default' | 'dark' | 'bright' {
   const text = `${scene.visual_prompt || ''} ${scene.narration || ''}`.toLowerCase();
@@ -37,9 +36,21 @@ function resolveAudio(p: string | null): string | undefined {
   }
 }
 
+function assertNoLegacyGraphicScenes(scenes: Scene[]): void {
+  const leaked = scenes
+    .filter((scene) => String(scene.layout || '').startsWith('graphic_'))
+    .map((scene) => `${scene.id}:${scene.layout}`);
+  if (leaked.length > 0) {
+    throw new Error(
+      `Graphic scenes must be converted to a ChatGPT image-backed layout before render: ${leaked.join(', ')}`,
+    );
+  }
+}
+
 export const ShortVideo: React.FC<RenderProps> = (props) => {
   const {fps} = useVideoConfig();
   const scenes = props.scenes || [];
+  assertNoLegacyGraphicScenes(scenes);
   const schedule = props.visual_schedule;
   let cursor = 0;
 
@@ -63,19 +74,6 @@ export const ShortVideo: React.FC<RenderProps> = (props) => {
           const boundary = sceneBoundaries.get(sceneId);
           if (!boundary) {
             throw new Error(`Missing visual schedule boundary for scene ${sceneId}`);
-          }
-
-          if (isGraphicScene(scene)) {
-            return (
-              <Sequence
-                key={sceneId}
-                from={boundary.from_frame}
-                durationInFrames={boundary.duration_in_frames}
-                name={sceneId}
-              >
-                <GraphicSceneRenderer scene={scene} durationInFrames={boundary.duration_in_frames} fps={fps} />
-              </Sequence>
-            );
           }
 
           const Layout = pickShortLayout(scene.layout);
@@ -112,18 +110,6 @@ export const ShortVideo: React.FC<RenderProps> = (props) => {
         const from = cursor;
         cursor += durFrames;
         const bg = (scene as any).asset_refs?.background as string | undefined;
-
-        // Graphic scenes (layout: "graphic_*") route to the graphic renderer,
-        // which validates the payload and throws for unsupported layouts.
-        // This branch MUST come before pickShortLayout, whose unknown-layout
-        // fallback would otherwise silently render a graphic scene as stock.
-        if (isGraphicScene(scene)) {
-          return (
-            <Sequence key={scene.id || i} from={from} durationInFrames={durFrames} name={scene.id || `scene-${i + 1}`}>
-              <GraphicSceneRenderer scene={scene} durationInFrames={durFrames} fps={fps} />
-            </Sequence>
-          );
-        }
 
         const Layout = pickShortLayout(scene.layout);
         return (

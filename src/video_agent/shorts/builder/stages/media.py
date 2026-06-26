@@ -254,6 +254,9 @@ def _stage_background(ctx: BuildContext) -> None:
             )
 
         ctx.background_fn(sd, short_scenes, ctx.channel_config, on_scene_resolved=_on_scene_bg)
+        from video_agent.shorts.audio import assert_no_unconverted_graphic_scenes
+
+        assert_no_unconverted_graphic_scenes(short_scenes)
         # Load the resolved assets manifest into context for the schedule stage
         # (spec §20). Keep background_fn backward compatible — it need not return it.
         manifest_path = ctx.json_dir / "assets_manifest.json"

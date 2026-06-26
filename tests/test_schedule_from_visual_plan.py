@@ -100,13 +100,19 @@ def test_two_clip_visual_plan_compiles_to_two_non_overlapping_tracks() -> None:
     )
 
 
-def test_clip_plus_graphic_visual_plan_reuses_scene_graphic_gap() -> None:
-    scenes = [_scene("s01", 2.0), _scene("s02", 2.0, graphic=True)]
+def test_clip_plus_graphic_visual_plan_uses_generated_image_track() -> None:
+    scenes = [_scene("s01", 2.0), _scene("s02", 2.0)]
+    scenes[1]["generated_image_source_layout"] = "graphic_definition"
+    generated = {
+        **_resolved("s02"),
+        "provider": "ai_generated",
+        "source_media_kind": "image_backed_video",
+    }
     schedule = compile_asset_schedule(
         short_id="short-04",
         scene_doc={"scenes": scenes},
         visual_spans={"spans": [{"id": "vs01", "scene_ids": ["s01", "s02"]}]},
-        resolved_visuals={"scenes": {"s01": _resolved("s01")}},
+        resolved_visuals={"scenes": {"s01": _resolved("s01"), "s02": generated}},
         fps=FPS,
         timing_source="tts_final",
         scene_version=3,
@@ -122,10 +128,10 @@ def test_clip_plus_graphic_visual_plan_reuses_scene_graphic_gap() -> None:
                 },
                 {
                     "beat_id": "vb02",
-                    "type": "graphic",
+                    "type": "generated_image",
                     "scene_ids": ["s02"],
-                    "renderer": "existing_scene_graphic",
-                    "asset_selection_ref": None,
+                    "asset_ref": "jobs/short-04/assets/s02.mp4",
+                    "source_media_kind": "image_backed_video",
                     "boundary_reason": "graphic explanation adds clarity",
                 },
             ],
@@ -133,9 +139,13 @@ def test_clip_plus_graphic_visual_plan_reuses_scene_graphic_gap() -> None:
     )
 
     assert schedule["qa"]["verdict"] == "PASS", schedule["qa"]["errors"]
-    assert len(schedule["tracks"]) == 1
-    assert schedule["tracks"][0]["scene_ids"] == ["s01"]
-    assert schedule["tracks"][0]["selection_debug"]["mode"] == "visual_plan:clip_plus_graphic"
+    assert len(schedule["tracks"]) == 2
+    assert [track["scene_ids"] for track in schedule["tracks"]] == [["s01"], ["s02"]]
+    assert schedule["tracks"][1]["source_media_kind"] == "image_backed_video"
+    assert all(
+        track["selection_debug"]["mode"] == "visual_plan:clip_plus_graphic"
+        for track in schedule["tracks"]
+    )
 
 
 def test_legacy_fallback_remains_valid_without_visual_beat_plan() -> None:

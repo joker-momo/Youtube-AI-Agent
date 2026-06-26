@@ -118,6 +118,10 @@ COMPOSER_SELECTORS = (
     "textarea[name='prompt-textarea']",
     "[contenteditable='true'][role='textbox']",
 )
+IMAGE_MODE_PILL_SELECTOR = (
+    "[data-system-hint-type='picture_v2'], "
+    "[data-inline-selection-pill][data-keyword='Create image']"
+)
 SEND_BUTTON_SELECTORS = (
     "[data-testid='send-button']",
     "[data-testid='fruitjuice-send-button']",
@@ -465,14 +469,107 @@ class ChatGPTImageDriver:
         """Robustly fill the ChatGPT composer (contenteditable or textarea) with React updates."""
         if not hasattr(self.page, "evaluate"):
             return
-            
+
+        # "Create an image" is a starter action in the current UI. It inserts a
+        # non-editable system-hint pill plus a canned sample prompt. A normal
+        # locator.fill() replaces the entire ProseMirror document and removes
+        # that pill, silently dropping explicit image mode. Select only the
+        # editable content after the pill, then type the real prompt through
+        # native keyboard events so the image-mode contract survives.
+        has_image_mode_pill = False
+        try:
+            has_image_mode_pill = (
+                await composer.locator(IMAGE_MODE_PILL_SELECTOR).count() > 0
+            )
+        except Exception:
+            pass
+
+        if has_image_mode_pill:
+            image_mode_text = " ".join(
+                line.strip() for line in text.splitlines() if line.strip()
+            )
+            prepared = await self.page.evaluate(
+                """({selectors, pillSelector}) => {
+                    let el = null;
+                    for (const sel of selectors) {
+                        const candidate = document.querySelector(sel);
+                        if (candidate && candidate.offsetParent !== null) {
+                            el = candidate;
+                            break;
+                        }
+                    }
+                    if (!el) return false;
+                    const pill = el.querySelector(pillSelector);
+                    if (!pill) return false;
+
+                    // Put the native caret immediately after the non-editable
+                    // pill. Keyboard selection below lets ProseMirror own the
+                    // document update; direct DOM deletion desynchronizes its
+                    // internal state and causes the pill/prompt to disappear.
+                    const editableRange = document.createRange();
+                    editableRange.setStartAfter(pill);
+                    editableRange.collapse(true);
+                    const selection = window.getSelection();
+                    selection.removeAllRanges();
+                    selection.addRange(editableRange);
+                    return true;
+                }""",
+                {
+                    "selectors": COMPOSER_SELECTORS,
+                    "pillSelector": IMAGE_MODE_PILL_SELECTOR,
+                },
+            )
+            if not prepared:
+                raise BrowserDriverError(
+                    "ChatGPT Create image mode was selected, but its prompt pill "
+                    "could not be preserved."
+                )
+            await composer.press("Shift+Meta+ArrowDown")
+            await composer.type(" " + image_mode_text, delay=0)
+            await human_pause(self.page, min_ms=300, max_ms=700)
+            preserved = await self.page.evaluate(
+                """({selectors, pillSelector, val}) => {
+                    for (const sel of selectors) {
+                        const el = document.querySelector(sel);
+                        if (!el || el.offsetParent === null) continue;
+                        return Boolean(el.querySelector(pillSelector))
+                            && (el.innerText || el.value || '').includes(val);
+                    }
+                    return false;
+                }""",
+                {
+                    "selectors": COMPOSER_SELECTORS,
+                    "pillSelector": IMAGE_MODE_PILL_SELECTOR,
+                    "val": image_mode_text,
+                },
+            )
+            if not preserved:
+                raise BrowserDriverError(
+                    "ChatGPT prompt changed after preserving Create image mode."
+                )
+            return
+
+        filled = False
         try:
             if composer is not None:
                 await composer.fill(text)
                 await human_pause(self.page, min_ms=300, max_ms=700)
+                filled = await self.page.evaluate(
+                    """({val, selectors}) => {
+                        for (const sel of selectors) {
+                            const el = document.querySelector(sel);
+                            if (!el || el.offsetParent === null) continue;
+                            return (el.innerText || el.value || '').trim() === val.trim();
+                        }
+                        return false;
+                    }""",
+                    {"val": text, "selectors": COMPOSER_SELECTORS},
+                )
         except Exception:
             pass
-            
+        if filled:
+            return
+
         # Ensure React state is fully sync'd by evaluating in-page JS.
         # This handles both contenteditable divs (standard) and textarea fallbacks.
         await self.page.evaluate(
@@ -529,12 +626,16 @@ class ChatGPTImageDriver:
         return False
 
     async def _select_create_image_mode_and_aspect_ratio(self, aspect_ratio: str = "16:9") -> None:
-        """Select ChatGPT's image tool and aspect ratio before prompting.
+        """Activate ChatGPT's image experience before replacing its starter prompt.
 
-        ChatGPT's current UI no longer reliably infers image generation from
-        text alone. If these controls move again, fail with a diagnostic
-        screenshot instead of silently sending a text-only prompt.
+        The current UI exposes "Create an image" as a starter button, not a
+        persistent mode toggle. Clicking it inserts ChatGPT's canned landscape
+        prompt and activates the image composer. Do not pause to probe the old
+        aspect-ratio controls: they no longer exist, and the delay leaves the
+        canned prompt visible before we replace it with the real scene prompt.
+        Orientation is enforced by :func:`build_image_gen_prompt`.
         """
+        _ = aspect_ratio
         clicked_image_mode = await self._click_first_visible(
             CREATE_IMAGE_MODE_SELECTORS
         ) or await self._click_text_exact(("Create image", "Create an image"))
@@ -551,36 +652,6 @@ class ChatGPTImageDriver:
             shot = await save_trace_screenshot(self.page, prefix="chatgpt-image-no-create-image-mode")
             raise BrowserDriverError(
                 "ChatGPT image UI changed: 'Create image' control not found.",
-                screenshot_path=shot,
-            )
-
-        if aspect_ratio == "9:16":
-            ratio_selectors = ASPECT_RATIO_9_16_SELECTORS
-            exact_texts = ("9:16", "Portrait")
-            error_prefix = "chatgpt-image-no-9-16-aspect"
-            error_msg = "ChatGPT image UI changed: 9:16 aspect ratio control not found."
-        else:
-            ratio_selectors = ASPECT_RATIO_16_9_SELECTORS
-            exact_texts = ("16:9", "Landscape")
-            error_prefix = "chatgpt-image-no-16-9-aspect"
-            error_msg = "ChatGPT image UI changed: 16:9 aspect ratio control not found."
-
-        clicked_aspect_ratio = await self._click_first_visible(
-            ratio_selectors
-        ) or await self._click_text_exact(exact_texts)
-        if not clicked_aspect_ratio:
-            opened_aspect_menu = await self._click_first_visible(ASPECT_RATIO_TRIGGER_SELECTORS)
-            if opened_aspect_menu:
-                clicked_aspect_ratio = await self._click_first_visible(
-                    ratio_selectors, timeout_ms=3_000
-                ) or await self._click_text_exact(
-                    exact_texts, timeout_ms=3_000
-                )
-
-        if not clicked_aspect_ratio:
-            shot = await save_trace_screenshot(self.page, prefix=error_prefix)
-            raise BrowserDriverError(
-                error_msg,
                 screenshot_path=shot,
             )
 

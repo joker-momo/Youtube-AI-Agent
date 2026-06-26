@@ -157,6 +157,74 @@ def test_generate_images_selects_create_image_mode_for_each_prompt(monkeypatch, 
     assert events[-1] == "delete-chat"
 
 
+def test_image_mode_does_not_pause_to_probe_removed_aspect_ratio_controls(monkeypatch):
+    driver = ChatGPTImageDriver(page=object())
+    selector_calls = []
+
+    async def click_first_visible(selectors, *, timeout_ms=1_500):
+        selector_calls.append(selectors)
+        return True
+
+    async def click_text_exact(labels, *, timeout_ms=1_500):
+        return False
+
+    monkeypatch.setattr(driver, "_click_first_visible", click_first_visible)
+    monkeypatch.setattr(driver, "_click_text_exact", click_text_exact)
+
+    asyncio.run(driver._select_create_image_mode_and_aspect_ratio("9:16"))
+
+    assert selector_calls == [chatgpt_image.CREATE_IMAGE_MODE_SELECTORS]
+
+
+def test_fill_composer_preserves_create_image_pill(monkeypatch):
+    class FakePill:
+        async def count(self):
+            return 1
+
+    class FakeComposer:
+        def __init__(self):
+            self.fill_calls = []
+            self.press_calls = []
+            self.type_calls = []
+
+        def locator(self, selector):
+            assert selector == chatgpt_image.IMAGE_MODE_PILL_SELECTOR
+            return FakePill()
+
+        async def fill(self, text):
+            self.fill_calls.append(text)
+
+        async def press(self, key):
+            self.press_calls.append(key)
+
+        async def type(self, text, delay=0):
+            self.type_calls.append((text, delay))
+
+    class FakePage:
+        def __init__(self):
+            self.evaluate_calls = []
+
+        async def evaluate(self, script, arg=None):
+            self.evaluate_calls.append((script, arg))
+            return True
+
+    async def fake_pause(*args, **kwargs):
+        return None
+
+    page = FakePage()
+    composer = FakeComposer()
+    driver = ChatGPTImageDriver(page=page)
+    monkeypatch.setattr(chatgpt_image, "human_pause", fake_pause)
+
+    asyncio.run(driver._fill_composer_robust(composer, "real\n\nscene prompt"))
+
+    assert composer.fill_calls == []
+    assert composer.press_calls == ["Shift+Meta+ArrowDown"]
+    assert composer.type_calls == [(" real scene prompt", 0)]
+    assert page.evaluate_calls
+    assert "picture_v2" in page.evaluate_calls[0][1]["pillSelector"]
+
+
 def test_build_image_gen_prompt_contradictions():
     # 1. Text overlays / Typography indicators should strip "no text overlays"
     p1 = "a dark bedroom with typography overlay"

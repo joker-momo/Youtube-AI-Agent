@@ -1,9 +1,11 @@
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from video_agent.assets.service import _candidate_score
 from video_agent.stages.assets import prepare_assets
+from video_agent.stages.assets import _choose_bgm_track
 
 
 STYLE_DNA = {
@@ -15,6 +17,16 @@ STYLE_DNA = {
         "text": "#26332F",
     }
 }
+
+
+def test_choose_bgm_track_prefers_explicit_canonical_file(tmp_path):
+    track = tmp_path / "ether_silent_partner.mp3"
+    track.write_bytes(b"music")
+
+    assert _choose_bgm_track(
+        tmp_path / "job",
+        {"file": str(track)},
+    ) == track
 
 
 def scene_doc() -> dict:
@@ -530,3 +542,95 @@ def test_prepare_assets_falls_back_to_placeholder_when_stock_provider_fails(tmp_
 
     assert Path(manifest["scenes"][0]["background"]).exists()
     assert manifest["scenes"][0]["source"] == "generated_placeholder"
+
+
+def test_graphic_scene_fails_when_chatgpt_image_is_not_generated(tmp_path, monkeypatch):
+    doc = {
+        "total_duration_sec": 4.0,
+        "scenes": [
+            {
+                "id": "s01",
+                "layout": "graphic_checklist",
+                "duration_sec": 4.0,
+                "on_screen_text": "REVISA ESTO",
+                "visual_prompt": "premium vertical editorial checklist",
+                "layout_payload": {"title": "REVISA ESTO", "items": ["Uno", "Dos"]},
+                "asset_refs": {},
+            }
+        ],
+    }
+
+    monkeypatch.setattr(
+        "video_agent.stages.assets.StockAssetService.get_scene_asset",
+        lambda self, scene, channel_id, job_id: {
+            "provider": "graphic_fallback",
+            "asset_tier": "graphic_fallback",
+            "asset_selection": {"asset_match_status": "graphic_fallback"},
+        },
+    )
+
+    with pytest.raises(RuntimeError, match=r"s01.*graphic_checklist.*ChatGPT"):
+        prepare_assets(
+            tmp_path / "shorts" / "short-01",
+            STYLE_DNA,
+            doc,
+            visual_config={
+                "strategy": "auto",
+                "orientation": "portrait",
+                "query_cache_path": str(tmp_path / "query-cache.db"),
+                "asset_library_path": str(tmp_path / "asset-library"),
+            },
+            render_tts=False,
+        )
+
+
+def test_graphic_scene_with_chatgpt_image_becomes_media_layout(tmp_path, monkeypatch):
+    generated = tmp_path / "generated.png"
+    Image.new("RGB", (1080, 1920), (120, 90, 70)).save(generated)
+    doc = {
+        "total_duration_sec": 4.0,
+        "scenes": [
+            {
+                "id": "s01",
+                "layout": "graphic_comparison",
+                "duration_sec": 4.0,
+                "on_screen_text": "COMPARA",
+                "visual_prompt": "premium vertical editorial comparison",
+                "layout_payload": {
+                    "title": "COMPARA",
+                    "left": {"heading": "MEJOR", "text": "Integral"},
+                    "right": {"heading": "REVISA", "text": "Multicereal"},
+                },
+                "asset_refs": {},
+            }
+        ],
+    }
+
+    monkeypatch.setattr(
+        "video_agent.stages.assets.StockAssetService.get_scene_asset",
+        lambda self, scene, channel_id, job_id: {
+            "provider": "ai_generated",
+            "local_path": str(generated),
+            "asset_tier": "ai_image",
+            "asset_selection": {"asset_match_status": "ai_generated"},
+        },
+    )
+
+    prepare_assets(
+        tmp_path / "shorts" / "short-01",
+        STYLE_DNA,
+        doc,
+        visual_config={
+            "strategy": "auto",
+            "orientation": "portrait",
+            "query_cache_path": str(tmp_path / "query-cache.db"),
+            "asset_library_path": str(tmp_path / "asset-library"),
+        },
+        render_tts=False,
+    )
+
+    scene = doc["scenes"][0]
+    assert scene["layout"] == "short_tip"
+    assert scene["generated_image_source_layout"] == "graphic_comparison"
+    assert scene["background_mode"] == "generated_image"
+    assert scene["asset_refs"]["background"].endswith("/assets/s01.mp4")

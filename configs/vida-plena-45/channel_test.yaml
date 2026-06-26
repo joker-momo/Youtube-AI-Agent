@@ -69,10 +69,10 @@ models:
 music:
   bitrate: 128k
   duck_db: 8
+  file: assets/music/ether_silent_partner.mp3
   level_db: -24
-  preferred_track: No.6 In My Dreams - Esther Abrami.mp3
   sample_rate: 44100
-  source: asset_library
+  source: assets/music
   stereo: true
   target_lra: 4.8
   target_lufs: -13.6

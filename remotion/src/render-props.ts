@@ -1,5 +1,4 @@
 import {staticFile} from 'remotion';
-import type {GraphicAnyPayload} from './graphics/graphic-payloads';
 
 export type WordSegment = {text: string; start: number; end: number};
 
@@ -15,20 +14,10 @@ export type SubtitleConfig = {
   background_opacity?: number;
 };
 
-export type GraphicLayout =
-  | 'graphic_plate_ratio'
-  | 'graphic_checklist'
-  | 'graphic_step_list'
-  | 'graphic_label_callout'
-  | 'graphic_comparison'
-  | 'graphic_routine_split';
-
 export type SceneLayout =
   | 'hook' | 'subtitle' | 'checklist' | 'warning' | 'quote' | 'cta'
   | 'short_hook' | 'short_pain' | 'short_tip' | 'short_checklist'
-  | 'short_myth' | 'short_quote' | 'short_cta'
-  // MVP graphic layouts (spec v7 §3.2) — appended, existing values unchanged.
-  | GraphicLayout;
+  | 'short_myth' | 'short_quote' | 'short_cta';
 
 export type LayoutPayload = {
   title?: string;
@@ -142,8 +131,7 @@ export type Scene = {
   audio_offset_sec?: number;
   word_segments?: WordSegment[];
   layout?: SceneLayout;
-  // Stock layouts use LayoutPayload; graphic_* layouts carry a graphic payload.
-  layout_payload?: LayoutPayload | GraphicAnyPayload;
+  layout_payload?: LayoutPayload | Record<string, unknown>;
   layout_reason?: string;
   planner_warnings?: string[];
   first_frame_plan?: FirstFramePlan;

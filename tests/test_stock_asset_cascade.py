@@ -316,6 +316,17 @@ def test_graphic_layout_generates_chatgpt_image_with_full_payload(tmp_path):
     assert scene["background_source"] == "ChatGPT image"
 
 
+def test_graphic_layout_has_no_graphic_fallback_when_chatgpt_is_unavailable():
+    scene = {
+        **_scene(),
+        "layout": "graphic_checklist",
+        "layout_payload": {"title": "REVISA ESTO", "items": ["Uno", "Dos"]},
+    }
+    svc = _service({"pexels_video": [], "pexels": []}, image_gen_fn=None)
+
+    assert svc.get_scene_asset(scene, channel_id="ch", job_id="job") is None
+
+
 def test_placeholder_image_meets_aesthetic_targets(tmp_path):
     import numpy as np
     from PIL import Image

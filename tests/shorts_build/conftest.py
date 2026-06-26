@@ -82,6 +82,10 @@ def _stub_io(calls):
         scenes = short_scenes.get("scenes") or []
         for i, sc in enumerate(scenes):
             sc.setdefault("asset_refs", {})["background"] = f"jobs/x/assets/{sc['id']}.mp4"
+            if str(sc.get("layout") or "").startswith("graphic_"):
+                sc["generated_image_source_layout"] = sc["layout"]
+                sc["layout"] = "short_tip"
+                sc["background_mode"] = "generated_image"
             if on_scene_resolved:
                 on_scene_resolved({"index": i, "total": len(scenes), "scene_id": sc["id"], "phase": "resolved", "background_source": "Pexels video"})
     def tts_fn(short_dir, short_scenes, channel_config):

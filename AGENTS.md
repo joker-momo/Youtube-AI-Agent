@@ -90,6 +90,12 @@ For implementation, refactor, debugging, spec, QA, or git-workflow tasks:
   appropriate to the touched surface.
 - Before claiming completion, use verification evidence rather than confidence.
 
+### Simplicity First
+
+- Prefer the simplest change that fully satisfies the request.
+- Avoid new abstractions/frameworks unless they remove real complexity now.
+- Every changed line should trace back to the user request, a failing test, or a documented project invariant.
+
 ### Agent-Skills Toolbox Router
 
 Use exactly one or a small number of `agent-skills` checklists only when the task

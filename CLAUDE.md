@@ -74,6 +74,12 @@ For implementation, refactor, debugging, spec, QA, or git-workflow tasks:
   appropriate to the touched surface.
 - Before claiming completion, cite concrete verification evidence.
 
+## Simplicity First
+
+- Prefer the simplest change that fully satisfies the request.
+- Avoid new abstractions/frameworks unless they remove real complexity now.
+- Every changed line should trace back to the user request, a failing test, or a documented project invariant.
+
 ## Agent-Skills Router
 
 When a capability exists in both Superpowers and `agent-skills`, Superpowers wins. Do not invoke the Addy `agent-skills` twin for shadowed areas:

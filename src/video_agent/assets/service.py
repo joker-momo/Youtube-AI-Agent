@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from video_agent.assets.library import AssetLibrary
+from video_agent.assets.media_ops import extract_asset_frame  # extracted (P1)
 from video_agent.assets.providers import DEFAULT_HEADERS, StockPhotoClient
 from video_agent.assets.query_cache import QueryCache
 from video_agent.contracts import repo_root
@@ -25,35 +26,7 @@ from video_agent.shorts.visual_candidate_scoring import (
     select_provisional_span_candidate as _select_provisional_span_candidate,
 )
 
-_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
-
-
-def extract_asset_frame(asset_path: str | Path, out_path: str | Path, *, at_sec: float = 0.5) -> Path | None:
-    """Extract a representative still frame from an asset for Vision QA.
-
-    Images are copied as-is; videos get one frame at ``at_sec`` via ffmpeg.
-    Returns the frame path, or None when extraction fails (QA then skips —
-    a broken probe must never block asset selection).
-    """
-    import subprocess
-
-    src = Path(asset_path)
-    dst = Path(out_path)
-    if not src.exists():
-        return None
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    if src.suffix.lower() in _IMAGE_SUFFIXES:
-        shutil.copy2(src, dst)
-        return dst
-    cmd = [
-        "ffmpeg", "-y", "-ss", f"{max(0.0, at_sec):.2f}", "-i", str(src),
-        "-frames:v", "1", "-q:v", "2", str(dst),
-    ]
-    try:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception:
-        return None
-    return dst if dst.exists() else None
+# extract_asset_frame + _IMAGE_SUFFIXES moved to assets/media_ops.py (P1).
 
 
 def _evidence_terms(evidence: dict[str, Any], *keys: str) -> list[str]:

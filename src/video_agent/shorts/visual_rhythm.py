@@ -6,10 +6,14 @@ from pathlib import Path
 from typing import Any
 
 from video_agent.shorts import paths
+from video_agent.shorts.asset_schedule import VALID_MOTIONS
 from video_agent.shorts.quality_hash import stable_hash
 from video_agent.storage.atomic import atomic_write_json
 
-_MOTIONS = ["push_in", "crop_shift", "object_reveal", "text_pop", "slow_zoom", "cutaway", "graphic_burst"]
+# Rotation pool — every entry MUST be a renderer-valid key (see
+# asset_schedule.VALID_MOTIONS). "cutaway"/"graphic_burst" were removed because
+# Remotion's shortMotion switch does not understand them and would weak-zoom.
+_MOTIONS = ["push_in", "crop_shift", "object_reveal", "text_pop", "slow_zoom", "pan_left", "pan_right"]
 _HOOK_MOTIONS = {"push_in", "object_reveal", "face_cut", "text_pop"}
 
 
@@ -56,8 +60,12 @@ def build_visual_rhythm_plan(
     previous = None
     for index, scene in enumerate(scenes):
         sid = _scene_id(scene, index)
-        existing = str(scene.get("motion") or "none")
-        motion = existing if existing not in {"", "none", "static"} else _MOTIONS[index % len(_MOTIONS)]
+        existing = str(scene.get("motion") or "none").strip().lower()
+        # Keep ChatGPT's choice ONLY when it is already a renderer-valid motion
+        # key with real movement. Empty/none/static OR any non-enum string (e.g. a
+        # long descriptive sentence) falls back to the deterministic rotation.
+        keep = existing in VALID_MOTIONS and existing not in {"none", "static"}
+        motion = existing if keep else _MOTIONS[index % len(_MOTIONS)]
         if index == 0 and motion not in _HOOK_MOTIONS:
             motion = "push_in"
         risk = _risk(scene, previous)

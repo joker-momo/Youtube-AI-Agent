@@ -556,7 +556,7 @@ def short_scene_prompt_v6(
         '      "caption": "string",\n'
         '      "on_screen_text": "string",\n'
         '      "visual_prompt": "English visual generation prompt, vertical 9:16",\n'
-        '      "motion": "string",\n'
+        '      "motion": "push_in | slow_push | slow_zoom | object_reveal | face_cut | text_pop | crop_shift | pan_left | pan_right | none",\n'
         '      "retention_function": "hook | tension | proof | payoff | identity | cta",\n'
         '      "rhythm_tag": "push | reveal | contrast | pause | payoff | comment",\n'
         '      "pattern_interrupt": "string",\n'
@@ -627,10 +627,22 @@ def short_scene_prompt_v6(
         "- Prefer continuity when it adds calm, realistic pacing — but never to keep a stale or\n"
         "  semantically weak shot on screen. Leave visual_span_id empty if unsure (it defaults to a\n"
         "  one-scene span). A local validator re-checks and repairs grouping; it is authoritative.\n\n"
+        "MOTION (Ken Burns) — pick EXACTLY ONE enum key per scene from this list.\n"
+        "Do NOT write a sentence or description; output only the key. Choose by intent:\n"
+        "- push_in: slow zoom IN toward the subject. Default for building tension / emphasis.\n"
+        "- slow_push: gentler, slower push_in. Calm narration or reflective beats.\n"
+        "- slow_zoom: generic slow zoom in. Neutral filler movement on a still.\n"
+        "- object_reveal: starts zoomed IN then pulls OUT to reveal context/the whole object.\n"
+        "- face_cut: stronger zoom onto a person's face. Emotional reaction / close-up moment.\n"
+        "- text_pop: tiny zoom; use when the scene is driven by on_screen_text appearing.\n"
+        "- crop_shift: horizontal drift (pan) across the frame. Show breadth of a scene.\n"
+        "- pan_left: camera drifts left. Reveal something to the left / sense of movement.\n"
+        "- pan_right: camera drifts right. Reveal something to the right / sense of movement.\n"
+        "- none: no motion (static hold). Use sparingly — only graphic/text-card scenes.\n"
         "RETENTION / RHYTHM REQUIREMENTS:\n"
         "- Align each scene with a retention beat when possible.\n"
         "- Add optional retention_function, rhythm_tag, and pattern_interrupt fields per scene.\n"
-        "- Avoid slide-deck feel; vary motion naturally.\n"
+        "- Avoid slide-deck feel: vary the motion key across scenes; do not repeat the same key back-to-back.\n"
         "- Use realistic Spanish supermarket/kitchen/home scenes as the base for lifestyle and health topics.\n"
         "- Keep text overlays short and readable.\n\n"
         "SCENE FLOW COHESION RULES:\n"

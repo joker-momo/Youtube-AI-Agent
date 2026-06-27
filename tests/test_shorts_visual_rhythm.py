@@ -58,3 +58,51 @@ def test_apply_visual_rhythm_preserves_core_scene_fields():
     assert updated["scenes"][0]["rhythm_tag"]
     assert updated["scenes"][0]["pattern_interrupt"] == "zoom"
 
+
+def test_visual_rhythm_pool_keys_are_renderer_valid():
+    """Every rotation-pool motion must be a key Remotion understands."""
+    from video_agent.shorts.asset_schedule import VALID_MOTIONS
+    from video_agent.shorts.visual_rhythm import _MOTIONS
+
+    assert set(_MOTIONS) <= VALID_MOTIONS
+
+
+def test_visual_rhythm_replaces_non_enum_sentence(tmp_path: Path):
+    """A long descriptive motion string must be snapped to a real enum key,
+    not leaked through to the renderer (which would weak-zoom)."""
+    from video_agent.shorts.asset_schedule import VALID_MOTIONS
+    from video_agent.shorts.visual_rhythm import build_visual_rhythm_plan
+
+    scenes = _scenes()
+    scenes["scenes"][1]["motion"] = "Camera settles into a top-down view of two plates"
+
+    plan = build_visual_rhythm_plan(
+        _job(tmp_path),
+        "short-01",
+        scenes,
+        {"retention_beats": [{"function": "hook"}, {"function": "proof"}]},
+        {"shorts": {}},
+    )
+
+    for item in plan["scene_rhythm"]:
+        assert item["motion"] in VALID_MOTIONS
+
+
+def test_motion_plan_clamps_descriptive_string():
+    """asset_schedule._motion_plan defends the renderer contract directly."""
+    from video_agent.shorts import asset_schedule
+    from video_agent.shorts.asset_schedule import VALID_MOTIONS, clamp_motion
+
+    # Long sentence -> safe fallback, never the raw sentence.
+    assert clamp_motion("Quick three-beat action sequence") == "none"
+    # Case / whitespace normalized; valid key preserved.
+    assert clamp_motion("  Push_In  ") == "push_in"
+
+    sentence_scene = {"motion": "Two plates slide into frame from the left"}
+    plan = asset_schedule._motion_plan(asset_schedule.NATIVE_IMAGE, sentence_scene)
+    assert plan["name"] in VALID_MOTIONS
+    assert plan["name"] == "none"
+
+    valid_scene = {"motion": "crop_shift"}
+    assert asset_schedule._motion_plan(asset_schedule.NATIVE_IMAGE, valid_scene)["name"] == "crop_shift"
+

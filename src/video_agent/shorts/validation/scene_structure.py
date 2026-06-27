@@ -347,7 +347,7 @@ def validate_scene_structure(
                     scene_id=sid,
                     severity="warning",
                     detail="More than 3 consecutive scenes are static or missing motion.",
-                    repair_hint="Vary motion with crop_shift, push_in, object_reveal, text_pop, or cutaway.",
+                    repair_hint="Vary motion with crop_shift, push_in, object_reveal, text_pop, or pan_left.",
                 )
             )
 

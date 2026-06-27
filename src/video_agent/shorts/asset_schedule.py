@@ -44,6 +44,58 @@ IMAGE_BACKED_VIDEO = "image_backed_video"
 NATIVE_IMAGE = "native_image"
 GENERATED_PLACEHOLDER = "generated_placeholder"
 
+# Canonical Ken Burns motion keys understood by Remotion's
+# ShortMediaLayer.shortMotion switch. ANY name outside this set falls into the
+# renderer's weak-zoom `default` branch (1.0 -> 1.08), so motion strings coming
+# from ChatGPT scenes or visual_rhythm MUST be clamped to one of these before the
+# schedule is compiled. This frozenset is the single source of truth for the
+# renderer motion contract.
+VALID_MOTIONS = frozenset(
+    {
+        "push_in",
+        "slow_push",
+        "slow_zoom",
+        "object_reveal",
+        "face_cut",
+        "text_pop",
+        "crop_shift",
+        "pan_right",
+        "pan_left",
+        "none",
+        "static",
+    }
+)
+
+
+def clamp_motion(value: object, *, fallback: str = "none") -> str:
+    """Snap an arbitrary motion value to a renderer-valid key.
+
+    ChatGPT often returns long descriptive sentences ("Camera settles into a
+    top-down view...") instead of an enum key; those would render as the weak
+    default zoom. Clamp normalizes case/whitespace and falls back to ``fallback``
+    when the value is not a recognized motion.
+    """
+    name = str(value or "none").strip().lower()
+    return name if name in VALID_MOTIONS else fallback
+
+
+def _is_unconverted_graphic_scene(scene: dict[str, Any]) -> bool:
+    """Return true only for graphic intent that has not been converted to a
+    ChatGPT/image-backed renderable scene.
+
+    Background acquisition converts ``layout=graphic_*`` scenes to ordinary
+    ``short_tip`` scenes and records the original layout in
+    ``generated_image_source_layout``. Some downstream planning metadata still
+    keeps ``visual_type=graphic`` so continuity planners can reason about the
+    original intent. That marker alone must not block schedule compilation once
+    the image-backed conversion happened.
+    """
+    layout = str(scene.get("layout") or "").strip().lower()
+    if layout.startswith("graphic_"):
+        return True
+    visual_type = str(scene.get("visual_type") or "").strip().lower()
+    return visual_type == "graphic" and not scene.get("generated_image_source_layout")
+
 
 # --------------------------------------------------------------------------- #
 # §14.2 / §16 — scene frame timeline
@@ -301,7 +353,9 @@ def _motion_plan(source_media_kind: str | None, scene: dict[str, Any]) -> dict[s
     # their planned Ken Burns motion.
     if source_media_kind == NATIVE_VIDEO:
         return {"name": "none", "apply_to_native_video": False}
-    name = str(scene.get("motion") or "none")
+    # Clamp to a renderer-valid enum key. Long descriptive motion strings from
+    # ChatGPT would otherwise hit Remotion's weak-zoom default branch.
+    name = clamp_motion(scene.get("motion"))
     return {"name": name, "apply_to_native_video": False}
 
 

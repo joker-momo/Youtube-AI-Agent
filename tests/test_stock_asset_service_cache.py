@@ -41,7 +41,7 @@ def _service_with_library(candidates: list[dict]) -> StockAssetService:
         stock_client=SimpleNamespace(),
         download_client=SimpleNamespace(),
     )
-    svc.library = _StubLibrary(candidates)  # type: ignore[assignment]
+    svc.core.library = _StubLibrary(candidates)  # type: ignore[assignment]
     return svc
 
 
@@ -69,7 +69,7 @@ def test_library_cache_rejects_low_score_candidates():
     candidate = _candidate("airplane-1", tags=["airplane", "takeoff", "runway"])
     svc = _service_with_library([candidate])
 
-    result = svc._try_library_cache(
+    result = svc.core._try_library_cache(
         "bedroom night routine evening home",
         media_type="video",
         channel_id="ch1",
@@ -90,7 +90,7 @@ def test_library_cache_rejects_single_generic_tag_overlap():
     )
     svc = _service_with_library([candidate])
 
-    result = svc._try_library_cache(
+    result = svc.core._try_library_cache(
         "bedroom night routine evening home wellness",
         media_type="video",
         channel_id="ch1",
@@ -108,7 +108,7 @@ def test_library_cache_returns_high_score_candidate_with_real_overlap():
     )
     svc = _service_with_library([candidate])
 
-    result = svc._try_library_cache(
+    result = svc.core._try_library_cache(
         "bedroom night routine evening home",
         media_type="video",
         channel_id="ch1",
@@ -120,7 +120,7 @@ def test_library_cache_returns_high_score_candidate_with_real_overlap():
     assert result["asset_id"] == "bedroom-1"
     sel = result["asset_selection"]
     assert sel["source"] == "library_cache"
-    assert sel["score"] >= svc._MIN_LIBRARY_CACHE_SCORE
+    assert sel["score"] >= svc.core._MIN_LIBRARY_CACHE_SCORE
     assert "library_cache_hit" in sel["reasons"]
     assert sel["matched_terms"]
 
@@ -133,7 +133,7 @@ def test_library_cache_picks_best_score_among_candidates():
     )
     svc = _service_with_library([weak, strong])
 
-    result = svc._try_library_cache(
+    result = svc.core._try_library_cache(
         "bedroom night routine evening home",
         media_type="video",
         channel_id="ch1",
@@ -148,9 +148,9 @@ def test_library_cache_picks_best_score_among_candidates():
 def test_library_cache_returns_none_when_all_candidates_used():
     candidate = _candidate("used-1", tags=["bedroom", "night", "routine"])
     svc = _service_with_library([candidate])
-    svc.used_provider_ids.add(("pexels", "used-1"))
+    svc.core.used_provider_ids.add(("pexels", "used-1"))
 
-    result = svc._try_library_cache(
+    result = svc.core._try_library_cache(
         "bedroom night routine",
         media_type="video",
         channel_id="ch1",

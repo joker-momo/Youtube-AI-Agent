@@ -2,17 +2,12 @@ from __future__ import annotations
 
 import json
 import os
-import re
-import shutil
-import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 
-from video_agent.assets.library import AssetLibrary
 from video_agent.assets.media_ops import extract_asset_frame  # extracted (P1)
 from video_agent.assets.providers import StockPhotoClient
-from video_agent.assets.stock_core import (  # extracted (P2/T3a)
+from video_agent.assets.stock_core import (  # extracted (P2/T3a, T3b)
     _evidence_terms,
     _term_hits,
     metadata_evidence_qa,
@@ -41,8 +36,8 @@ from video_agent.assets.stock_core import (  # extracted (P2/T3a)
     _candidate_haystack,
     _asset_quality_dimensions,
     _editorial_query,
+    StockSearchCore,  # extracted (T3b) — stateful search machinery
 )
-from video_agent.assets.query_cache import QueryCache
 from video_agent.contracts import repo_root
 from video_agent.shorts.visual_acquisition import compile_span_search_queries
 from video_agent.shorts.visual_candidate_scoring import (
@@ -363,176 +358,17 @@ class StockAssetService:
         # Optional LLMHistoryRecorder: when set, every AI image-gen prompt sent to
         # ChatGPT is logged to the Short's prompt history (success + failure).
         self.image_gen_recorder = image_gen_recorder
-        self.vision_qa_fn = vision_qa_fn
-        # Retry memory: every Vision-QA rejection (scene, asset, missing evidence,
-        # forbidden violations) — consumed by reports and later attempts.
-        self.vision_rejections: list[dict[str, Any]] = []
-        self.cache = QueryCache(
-            _resolve_project_path(visual_config.get("query_cache_path"), "caches/query_cache.db")
+        # Shared, stateful search machinery (T3b). Owns the query cache, asset
+        # library, stock/download clients, dedup sets, error/QA-rejection memory
+        # and the candidate budget. Held by composition: every reference to a
+        # moved method/state goes through ``self.core``.
+        self.core = StockSearchCore(
+            visual_config,
+            service=self,
+            stock_client=stock_client,
+            download_client=download_client,
+            vision_qa_fn=vision_qa_fn,
         )
-        self.library = AssetLibrary(
-            _resolve_project_path(visual_config.get("asset_library_path"), "asset_library")
-        )
-        self.stock_client = stock_client or StockPhotoClient()
-        self.download_client = download_client or UrlDownloadClient()
-        self.used_provider_ids: set[tuple[str, str]] = set()
-        self.used_asset_ids: set[tuple[str, str]] = set()  # (provider, asset_id)
-        self.last_errors: list[dict[str, str]] = []
-        self.asset_selection_config = _asset_selection_config(visual_config)
-
-    # Library-cache results without real semantic overlap have no place in the
-    # final video (e.g. Vietnam Airlines clip returned for a "rutina nocturna"
-    # prompt). Resolution / aspect-ratio bonuses alone are not enough — we also
-    # require at least one tag term to match the query. When nothing clears the
-    # bar we fall back to a fresh API search so the renderer never bakes a
-    # placeholder into the output.
-    _MIN_LIBRARY_CACHE_SCORE = 40
-    _REQUIRE_LIBRARY_CACHE_TAG_MATCH = True
-
-    def _new_candidate_budget(self) -> dict[str, int]:
-        limit = int(self.asset_selection_config.get("max_candidate_metadata_score_total") or 24)
-        return {"limit": max(0, limit), "scored_total": 0}
-
-    @staticmethod
-    def _candidate_budget_remaining(candidate_budget: dict[str, int] | None) -> int:
-        if candidate_budget is None:
-            return 10**9
-        return max(0, int(candidate_budget.get("limit", 0)) - int(candidate_budget.get("scored_total", 0)))
-
-    @staticmethod
-    def _record_candidates_scored(candidate_budget: dict[str, int] | None, count: int) -> None:
-        if candidate_budget is not None:
-            candidate_budget["scored_total"] = int(candidate_budget.get("scored_total", 0)) + max(0, count)
-
-    @staticmethod
-    def _candidate_budget_debug(candidate_budget: dict[str, int] | None) -> dict[str, int]:
-        if candidate_budget is None:
-            return {"limit": 0, "scored_total": 0, "remaining": 0}
-        return {
-            "limit": int(candidate_budget.get("limit", 0)),
-            "scored_total": int(candidate_budget.get("scored_total", 0)),
-            "remaining": max(0, int(candidate_budget.get("limit", 0)) - int(candidate_budget.get("scored_total", 0))),
-        }
-
-    def _try_library_cache(
-        self,
-        query: str,
-        media_type: str | None,
-        channel_id: str,
-        job_id: str,
-        scene: dict[str, Any],
-        candidate_budget: dict[str, int] | None = None,
-    ) -> dict[str, Any] | None:
-        """Return a cached library asset matching the query, scored against it.
-
-        Only returns when at least one candidate scores above
-        ``_MIN_LIBRARY_CACHE_SCORE``. Lower-scoring cache hits are rejected so the
-        caller falls back to a fresh provider search. The previous behavior was to
-        return the first token-overlap match with score=0, which produced
-        wildly off-topic backgrounds (airplane takeoff for a sleep-rest scene).
-        """
-        used_asset_ids = {aid for _, aid in self.used_asset_ids}
-        library_cap = int(self.asset_selection_config.get("max_library_cache_candidates") or 10)
-        cap = min(library_cap, self._candidate_budget_remaining(candidate_budget))
-        if cap <= 0:
-            return None
-        candidates = self.library.search_by_query(
-            query, media_type=media_type, exclude_asset_ids=used_asset_ids, limit=library_cap
-        )
-
-        valid_candidates: list[dict[str, Any]] = []
-        for asset in candidates:
-            provider = str(asset.get("provider") or "").lower()
-            tier = str(asset.get("asset_tier") or "").lower()
-            if provider == "graphic_fallback" or tier == "graphic_fallback":
-                continue
-            key = (asset["provider"], str(asset["provider_asset_id"]))
-            if key in self.used_provider_ids:
-                continue
-            if not self.library.is_file_valid(asset):
-                continue
-            valid_candidates.append(asset)
-            if len(valid_candidates) >= cap:
-                break
-
-        if not valid_candidates:
-            return None
-
-        ranked_cache = self._rank_candidates(
-            query,
-            valid_candidates,
-            provider_order=1,
-            scene=scene,
-            candidate_budget=candidate_budget,
-        )
-        ranked_cache.sort(key=lambda item: (-item["score"], item["provider_order"], item["provider_candidate_rank"]))
-        best = ranked_cache[0]
-        best_score = best["score"]
-        best_asset = best["candidate"]
-        if best_score < self._MIN_LIBRARY_CACHE_SCORE:
-            return None
-        matched_terms = best.get("matched_terms") or []
-        reasons = set(best.get("reasons") or [])
-        # Require strong overlap (>=2 matched scene terms or the explicit
-        # strong_scene_term_match reason). Resolution / aspect-ratio bonuses
-        # alone push generic clips above the score threshold even when their
-        # tags only share one filler word with the query.
-        if self._REQUIRE_LIBRARY_CACHE_TAG_MATCH and not (
-            "strong_scene_term_match" in reasons or len(matched_terms) >= 2
-        ):
-            return None
-
-        self.used_provider_ids.add(
-            (best_asset["provider"], str(best_asset["provider_asset_id"]))
-        )
-        self.used_asset_ids.add((best_asset["provider"], best_asset["asset_id"]))
-        self.library.record_usage(
-            best_asset["asset_id"],
-            channel_id=channel_id,
-            job_id=job_id,
-            scene_id=scene["id"],
-            scene_intent=scene.get("motion"),
-        )
-        best_asset["asset_selection"] = {
-            "query": query,
-            "source": "library_cache",
-            "candidate_rank": 1,
-            "searched_providers": [],
-            "candidate_count": len(ranked_cache),
-            "score": best_score,
-            "base_raw_score": best.get("base_raw_score"),
-            "base_norm": best.get("base_norm"),
-            "quality_norm": best.get("quality_norm"),
-            "final_norm": best.get("final_norm"),
-            "quality_dimensions": best.get("quality_dimensions"),
-            "quality_scoring_enabled": bool(self.asset_selection_config.get("enable_quality_scoring", True)),
-            "candidate_budget": self._candidate_budget_debug(candidate_budget),
-            "reasons": ["library_cache_hit", *(best.get("reasons") or [])],
-            "matched_terms": best.get("matched_terms") or [],
-            "candidate_tags": list(best_asset.get("tags", [])),
-        }
-        return best_asset
-
-    # Demographic keywords that require a fresh API search (skip library cache to avoid
-    # returning old videos of young people that were cached before this constraint existed).
-    _DEMOGRAPHIC_KEYWORDS = {
-        "elderly", "senior", "european", "latin", "hispanic", "caucasian",
-        "grandmother", "grandfather", "grandparent",
-        # pipeline-specific visual_prompt patterns that will be rewritten
-        "wellness", "adults", "realistic", "lifestyle", "photo",
-    }
-
-    def _query_requires_fresh_search(self, query: str) -> bool:
-        """Return True when the query contains demographic enforcement keywords.
-
-        The library cache uses token-overlap matching and cannot discriminate between
-        'young woman in bed' and 'elderly European woman in bed' — it will always return
-        the first token-match regardless of demographic constraints.  To guarantee we
-        fetch fresh stock footage that actually shows elderly / European / Latin-American
-        subjects, we bypass the library cache entirely for such queries.
-        """
-        tokens = set(re.findall(r"[a-z]+", query.lower()))
-        return bool(tokens & self._DEMOGRAPHIC_KEYWORDS)
 
     def _is_key_scene(self, scene: dict[str, Any]) -> bool:
         layout = scene.get("layout") or ""
@@ -574,7 +410,7 @@ class StockAssetService:
         scene_dur = int(scene.get("duration_sec") or 30)
         filters = _stock_filters(self.visual_config, scene_duration_sec=scene_dur)
         ttl_hours = int(self.visual_config.get("query_cache_ttl_hours", 24))
-        candidate_budget = self._new_candidate_budget()
+        candidate_budget = self.core._new_candidate_budget()
 
         # Determine preferred media type from provider list
         prefers_video = any("video" in p for p in self.providers)
@@ -593,18 +429,18 @@ class StockAssetService:
         if (
             not is_graphic_layout
             and not generated_strategy
-            and not self._query_requires_fresh_search(query)
+            and not self.core._query_requires_fresh_search(query)
         ):
-            cached = self._try_library_cache(query, media_type_hint, channel_id, job_id, scene, candidate_budget)
+            cached = self.core._try_library_cache(query, media_type_hint, channel_id, job_id, scene, candidate_budget)
             if cached is not None:
                 return cached
 
-        self.last_errors = []
+        self.core.last_errors = []
 
         def _search(providers: list[str], *, require_strict: bool, is_fallback: bool = False):
             if not providers:
                 return None
-            return self._search_and_download(
+            return self.core._search_and_download(
                 providers=providers,
                 query=query,
                 filters=filters,
@@ -753,10 +589,10 @@ class StockAssetService:
         records_by_identity: dict[tuple[str, str], dict[str, Any]] = {}
         for query_class, query in flat_queries:
             for provider_name in providers:
-                response = self.cache.get(provider_name, query, filters)
+                response = self.core.cache.get(provider_name, query, filters)
                 if response is None:
                     try:
-                        response = self.stock_client.search(provider_name, query, filters)
+                        response = self.core.stock_client.search(provider_name, query, filters)
                     except Exception as exc:  # noqa: BLE001 - report-only metadata search degrades safely.
                         err = {
                             "provider": provider_name,
@@ -764,11 +600,11 @@ class StockAssetService:
                             "message": str(exc),
                             "stage": "visual_span_metadata_search",
                         }
-                        if err not in self.last_errors:
-                            self.last_errors.append(err)
+                        if err not in self.core.last_errors:
+                            self.core.last_errors.append(err)
                         continue
-                    self.cache.set(provider_name, query, filters, response, ttl_hours=ttl_hours)
-                for candidate in self.stock_client.normalize(provider_name, response):
+                    self.core.cache.set(provider_name, query, filters, response, ttl_hours=ttl_hours)
+                for candidate in self.core.stock_client.normalize(provider_name, response):
                     identity = metadata_identity(candidate)
                     if identity in records_by_identity:
                         merge_query_origin(records_by_identity[identity], query=query, query_class=query_class)
@@ -836,7 +672,7 @@ class StockAssetService:
         model_name = "dall-e-3"
         prompt_hash = hashlib.sha256(f"{prompt}_{aspect_ratio}_{style_version}_{model_name}".encode()).hexdigest()[:16]
 
-        out_dir = Path(self.library.root) / "ai_generated"
+        out_dir = Path(self.core.library.root) / "ai_generated"
         out_path = out_dir / f"{job_id}_{scene['id']}_{prompt_hash}.png"
 
         # Cache check
@@ -880,7 +716,7 @@ class StockAssetService:
                         if attempt == 1:
                             raise e
             except Exception as exc:  # pragma: no cover - defensive
-                self.last_errors.append(
+                self.core.last_errors.append(
                     {"provider": "ai_generated", "error_type": exc.__class__.__name__, "message": str(exc), "stage": "ai_gen"}
                 )
                 return None
@@ -897,7 +733,7 @@ class StockAssetService:
 
         asset_id = f"ai_{job_id}_{scene['id']}"
         try:
-            self.library.record_usage(
+            self.core.library.record_usage(
                 asset_id, channel_id=channel_id, job_id=job_id,
                 scene_id=scene["id"], scene_intent=scene.get("motion"),
             )
@@ -921,304 +757,3 @@ class StockAssetService:
                 "matched_terms": [],
             },
         }
-
-    def _search_and_download(
-        self,
-        *,
-        providers: list[str],
-        query: str,
-        filters: dict[str, Any],
-        ttl_hours: int,
-        scene: dict[str, Any],
-        channel_id: str,
-        job_id: str,
-        is_fallback: bool = False,
-        require_strict: bool = False,
-        candidate_budget: dict[str, int] | None = None,
-    ) -> dict[str, Any] | None:
-        ranked_candidates: list[dict[str, Any]] = []
-        for provider_order, provider in enumerate(providers, start=1):
-            try:
-                if self._candidate_budget_remaining(candidate_budget) <= 0:
-                    break
-                exclude_ids = {asset_id for prov, asset_id in self.used_provider_ids if prov == provider}
-                response = self.cache.get(provider, query, filters)
-                if response is not None:
-                    normalized = self.stock_client.normalize(provider, response)
-                    unused_normalized = [
-                        c for c in normalized
-                        if str(c.get("provider_asset_id")) not in exclude_ids
-                    ]
-                    if not unused_normalized:
-                        response = None
-
-                if response is None:
-                    try:
-                        response = self.stock_client.search(provider, query, filters, exclude_ids=exclude_ids)
-                    except TypeError as e:
-                        if "unexpected keyword argument 'exclude_ids'" in str(e):
-                            response = self.stock_client.search(provider, query, filters)
-                        else:
-                            raise
-                    self.cache.set(provider, query, filters, response, ttl_hours=ttl_hours)
-                provider_cap = int(self.asset_selection_config.get("max_asset_candidates_per_provider") or 12)
-                normalized = self.stock_client.normalize(provider, response)
-                cap = min(provider_cap, self._candidate_budget_remaining(candidate_budget))
-                candidates = self._rank_candidates(
-                    query,
-                    normalized[:cap],
-                    provider_order=provider_order,
-                    scene=scene,
-                    candidate_budget=candidate_budget,
-                )
-                ranked_candidates.extend(candidates)
-            except Exception as exc:
-                err = {
-                    "provider": provider,
-                    "error_type": exc.__class__.__name__,
-                    "message": str(exc),
-                    "stage": "fallback" if is_fallback else "primary",
-                }
-                if err not in self.last_errors:
-                    self.last_errors.append(err)
-                # Surface provider failures to stderr so debugging stale
-                # ``last_errors`` payloads is easier when the manifest already
-                # captures them.
-                print(
-                    f"[stock] provider {provider!r} failed ({exc.__class__.__name__}): {exc}",
-                    file=sys.stderr,
-                )
-                continue
-        ranked_candidates = sorted(
-            ranked_candidates,
-            key=lambda item: (-item["score"], item["provider_order"], item["provider_candidate_rank"]),
-        )
-
-        def _passes_strict_gate(item: dict[str, Any]) -> bool:
-            if item["score"] < self._MIN_LIBRARY_CACHE_SCORE:
-                return False
-            reasons = set(item.get("reasons") or [])
-            matched = set(item.get("matched_terms") or [])
-            prompt = query.lower()
-
-            # Demographic strict enforcement — gate on the SCENE's original
-            # visual_prompt, NOT the enriched ``query``. ``_force_elderly_demographic``
-            # appends "elderly european senior" to every wellness/photo query, so
-            # keying off ``query`` would demand an "elderly"/"senior" *tag* on every
-            # candidate — which real stock rarely carries — and reject good on-topic
-            # footage down into the slow AI tier. We only require demographic
-            # evidence when the scene itself asks for a specific age group.
-            scene_prompt = str(scene.get("visual_prompt") or "").lower()
-            demo_terms = {"senior", "elderly", "mature", "older", "50s", "60s", "aging", "grandfather", "grandmother", "grandparent", "55+"}
-            if any(term in scene_prompt for term in demo_terms):
-                has_demo = any(d in matched for d in demo_terms)
-                if not has_demo:
-                    item["failed_required_terms"] = "Missing demographic terms (senior/elderly) for a demographic-specific query"
-                    return False
-
-            # Check label reading strict context
-            key_terms = {"package", "label", "ingredients", "fibra", "harina", "compare", "turn", "rotate", "flip", "back label", "back"}
-            if any(term in prompt for term in key_terms):
-                objects = {"bread", "package", "label", "ingredient"}
-                contexts = {"supermarket", "grocery", "store", "aisle", "shelf", "shopping", "basket", "market", "checkout", "kitchen", "table"}
-
-                turning_terms = {"turn", "rotate", "flip", "back", "turning", "rotating", "flipping"}
-                reading_terms = {"read", "show", "reading", "showing", "check", "checking", "inspect", "inspecting"}
-
-                has_obj = any(o in matched for o in objects)
-                has_ctx = any(c in matched for c in contexts)
-
-                has_turning_evidence = any(a in matched for a in turning_terms)
-                has_reading_evidence = any(a in matched for a in reading_terms)
-
-                requires_turning = any(term in prompt for term in turning_terms) or "back label" in prompt
-
-                if requires_turning:
-                    has_act = has_turning_evidence
-                else:
-                    has_act = has_turning_evidence or has_reading_evidence
-
-                if not (has_obj and has_act and has_ctx):
-                    item["failed_required_terms"] = "Missing object/action/context for label reading/turning"
-                    return False
-
-            # A single on-topic scene term clears the strict gate: it has already
-            # survived STOPWORD filtering and the score floor above, so it is a
-            # genuine topical match (e.g. a "sleep" photo for a "calm sleep
-            # wellness bedroom" scene). Real, attributed stock that matches the
-            # scene topic is higher quality — and far cheaper — than a slow AI
-            # generation, so it must win at the strict tier instead of being
-            # demoted to the weak tier that the AI fallback overrides. Off-topic
-            # candidates (zero matched scene terms, e.g. an airplane clip for a
-            # sleep scene) still fail here and correctly route to AI.
-            return ("strong_scene_term_match" in reasons or len(matched) >= 1)
-
-        unused_ranked_candidates = [
-            item for item in ranked_candidates
-            if (item["candidate"]["provider"], str(item["candidate"]["provider_asset_id"])) not in self.used_provider_ids
-        ]
-        any_strict = any(_passes_strict_gate(item) for item in unused_ranked_candidates)
-        # Two-tier selection: prefer candidates that satisfy the strict semantic
-        # gate (score + tag overlap). If none qualify (low-resolution mock data,
-        # niche queries with sparse Pexels coverage, etc.) fall back to the
-        # unfiltered ranking so we never bake a generated_placeholder when at
-        # least *some* footage is available.
-        for rank, ranked_candidate in enumerate(ranked_candidates, start=1):
-            candidate = ranked_candidate["candidate"]
-            key = (candidate["provider"], str(candidate["provider_asset_id"]))
-            if key in self.used_provider_ids:
-                continue
-            is_strict = _passes_strict_gate(ranked_candidate)
-            if require_strict and not is_strict:
-                continue
-            if any_strict and not is_strict:
-                continue
-            if not require_strict and not is_strict:
-                if self._is_contradictory(scene, ranked_candidate):
-                    # Skip contradictory weak candidates
-                    continue
-            try:
-                asset = self._ensure_asset(candidate, query)
-            except Exception:
-                continue
-
-            # --- Post-Asset QA for critical scenes ---
-            # Injected vision_qa_fn (real pixel-level vision) takes precedence;
-            # otherwise the built-in deterministic metadata gate enforces the
-            # scene's required_visual_evidence against the asset's tags/alt so
-            # frail/medical/off-pose stock never lands on a critical scene.
-            if scene.get("visual_importance", "normal") == "critical":
-                if self.vision_qa_fn is not None and asset.get("local_path"):
-                    qa_result = self.vision_qa_fn(scene, asset["local_path"])
-                else:
-                    qa_result = metadata_evidence_qa(scene, candidate)
-                if qa_result and qa_result.get("verdict") == "FAIL":
-                        # Record failure reasons to asset_selection payload for transparency
-                        asset_selection = asset.get("asset_selection") or {}
-                        asset_selection["qa_failed"] = True
-                        asset_selection["qa_missing_evidence"] = qa_result.get("missing_evidence", [])
-                        asset_selection["qa_forbidden_violations"] = qa_result.get("forbidden_violations", [])
-                        asset_selection["qa_reason"] = qa_result.get("reason", "")
-                        # Retry memory: never offer this asset again in this run,
-                        # and keep the structured rejection for later attempts.
-                        self.used_provider_ids.add(key)
-                        self.vision_rejections.append({
-                            "scene_id": scene.get("id"),
-                            "provider": asset.get("provider"),
-                            "provider_asset_id": str(candidate.get("provider_asset_id")),
-                            "missing_evidence": qa_result.get("missing_evidence", []),
-                            "forbidden_violations": qa_result.get("forbidden_violations", []),
-                            "reason": qa_result.get("reason", ""),
-                        })
-                        self.last_errors.append({
-                            "provider": asset.get("provider"),
-                            "error_type": "VisionQAFailure",
-                            "message": f"QA Failed: {qa_result.get('reason')}",
-                            "stage": "post_asset_qa"
-                        })
-                        continue
-
-            self.used_provider_ids.add(key)
-            self.used_asset_ids.add((asset["provider"], asset["asset_id"]))
-            self.library.record_usage(
-                asset["asset_id"],
-                channel_id=channel_id,
-                job_id=job_id,
-                scene_id=scene["id"],
-                scene_intent=scene.get("motion"),
-            )
-            asset["asset_selection"] = {
-                "query": query,
-                "source": "provider_search",
-                "candidate_rank": rank,
-                "provider_rank": ranked_candidate["provider_order"],
-                "provider_candidate_rank": ranked_candidate["provider_candidate_rank"],
-                "searched_providers": providers,
-                "candidate_count": len(ranked_candidates),
-                "score": ranked_candidate["score"],
-                "base_raw_score": ranked_candidate.get("base_raw_score"),
-                "base_norm": ranked_candidate.get("base_norm"),
-                "quality_norm": ranked_candidate.get("quality_norm"),
-                "final_norm": ranked_candidate.get("final_norm"),
-                "quality_dimensions": ranked_candidate.get("quality_dimensions"),
-                "quality_scoring_enabled": bool(self.asset_selection_config.get("enable_quality_scoring", True)),
-                "candidate_budget": self._candidate_budget_debug(candidate_budget),
-                "reasons": ranked_candidate.get("reasons") or [],
-                "matched_terms": ranked_candidate.get("matched_terms") or [],
-                "fallback": is_fallback,
-                "weak_match": not is_strict,
-                "failed_required_terms": ranked_candidate.get("failed_required_terms"),
-                "fallback_reason": ranked_candidate.get("fallback_reason"),
-                "candidate_tags": list(candidate.get("tags", [])),
-            }
-            return asset
-        return None
-
-    def _rank_candidates(
-        self,
-        query: str,
-        candidates: list[dict[str, Any]],
-        provider_order: int,
-        *,
-        scene: dict[str, Any] | None = None,
-        candidate_budget: dict[str, int] | None = None,
-    ) -> list[dict[str, Any]]:
-        ranked = []
-        base_scorings = [_candidate_score(query, candidate) for candidate in candidates]
-        self._record_candidates_scored(candidate_budget, len(base_scorings))
-        base_norms = _normalize_candidate_scores([float(scoring["score"]) for scoring in base_scorings])
-        quality_dimensions = [_asset_quality_dimensions(scene, candidate) for candidate in candidates]
-        quality_norms = [_quality_norm(float(dim["quality_raw"]) / 100.0) for dim in quality_dimensions]
-        quality_weight = float(self.asset_selection_config.get("quality_weight") or 0.45)
-        quality_weight = _quality_norm(quality_weight)
-        enable_quality = bool(self.asset_selection_config.get("enable_quality_scoring", True))
-        for candidate_index, (candidate, scoring, base_norm, quality_norm, quality_dim) in enumerate(
-            zip(
-                candidates,
-                base_scorings,
-                base_norms,
-                quality_norms,
-                quality_dimensions,
-                strict=True,
-            ),
-            start=1,
-        ):
-            if enable_quality:
-                final_norm = (base_norm * (1.0 - quality_weight)) + (quality_norm * quality_weight)
-                score = int(round(final_norm * 100))
-            else:
-                final_norm = base_norm
-                score = scoring["score"]
-            ranked.append(
-                {
-                    "candidate": candidate,
-                    "provider_order": provider_order,
-                    "provider_candidate_rank": candidate_index,
-                    "base_raw_score": scoring["score"],
-                    "base_norm": base_norm,
-                    "quality_norm": quality_norm,
-                    "final_norm": final_norm,
-                    "quality_dimensions": quality_dim,
-                    "score": score,
-                    "reasons": scoring.get("reasons") or [],
-                    "matched_terms": scoring.get("matched_terms") or [],
-                    "penalized_terms": scoring.get("penalized_terms") or [],
-                }
-            )
-        return ranked
-
-    def _ensure_asset(self, candidate: dict[str, Any], query: str) -> dict[str, Any]:
-        # Use normalized provider id (strip _video suffix for library lookup)
-        lookup_provider = candidate["provider"].replace("_video", "")
-        existing = self.library.get_by_provider_id(lookup_provider, str(candidate["provider_asset_id"]))
-        if existing and self.library.is_file_valid(existing):
-            return existing
-
-        is_video = candidate.get("media_type") == "video"
-        ext = ".mp4" if is_video else ".jpg"
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir) / f"download{ext}"
-            self.download_client.download(candidate["download_url"], temp_path)
-            if is_video:
-                return self.library.store_video(candidate, temp_path, original_query=query)
-            return self.library.store_photo(candidate, temp_path, original_query=query)

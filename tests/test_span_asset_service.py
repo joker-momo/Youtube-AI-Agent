@@ -54,7 +54,7 @@ def _service(candidates: list[dict]) -> tuple[StockAssetService, _Stock]:
             download=lambda *a, **k: pytest.fail("PR C must not download")
         ),
     )
-    svc.cache = SimpleNamespace(get=lambda *a, **k: None, set=lambda *a, **k: None)
+    svc.core.cache = SimpleNamespace(get=lambda *a, **k: None, set=lambda *a, **k: None)
     return svc, stock
 
 

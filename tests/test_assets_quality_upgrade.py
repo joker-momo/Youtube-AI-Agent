@@ -41,15 +41,15 @@ def _service(by_provider, *, visual_config=None, library_candidates=None):
         stock_client=_Stock(by_provider),
         download_client=SimpleNamespace(),
     )
-    svc.cache = SimpleNamespace(get=lambda *a, **k: None, set=lambda *a, **k: None)
-    svc.library = SimpleNamespace(
+    svc.core.cache = SimpleNamespace(get=lambda *a, **k: None, set=lambda *a, **k: None)
+    svc.core.library = SimpleNamespace(
         root=Path("/tmp/stub_lib_quality"),
         record_usage=lambda *a, **k: None,
         get_by_provider_id=lambda *a, **k: None,
         is_file_valid=lambda a: True,
         search_by_query=lambda *a, **k: list(library_candidates or []),
     )
-    svc._ensure_asset = lambda candidate, query: {  # type: ignore[assignment]
+    svc.core._ensure_asset = lambda candidate, query: {  # type: ignore[assignment]
         **candidate,
         "provider": candidate["provider"],
         "asset_id": candidate["provider_asset_id"],
@@ -148,15 +148,15 @@ def test_asset_query_includes_first_frame_and_required_evidence_terms():
         stock_client=stock,
         download_client=SimpleNamespace(),
     )
-    svc.cache = SimpleNamespace(get=lambda *a, **k: None, set=lambda *a, **k: None)
-    svc.library = SimpleNamespace(
+    svc.core.cache = SimpleNamespace(get=lambda *a, **k: None, set=lambda *a, **k: None)
+    svc.core.library = SimpleNamespace(
         root=Path("/tmp/stub_lib_query"),
         record_usage=lambda *a, **k: None,
         get_by_provider_id=lambda *a, **k: None,
         is_file_valid=lambda a: True,
         search_by_query=lambda *a, **k: [],
     )
-    svc._ensure_asset = lambda candidate, query: {  # type: ignore[assignment]
+    svc.core._ensure_asset = lambda candidate, query: {  # type: ignore[assignment]
         **candidate,
         "provider": candidate["provider"],
         "asset_id": candidate["provider_asset_id"],

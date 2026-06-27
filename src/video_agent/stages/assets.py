@@ -219,7 +219,7 @@ def prepare_assets(
         elif stock_asset and stock_asset.get("provider") != "graphic_fallback":
             # ai_generated or standard stock API asset
             if "file_path" in stock_asset:
-                library_path = stock_service.library.root / stock_asset["file_path"]
+                library_path = stock_service.core.library.root / stock_asset["file_path"]
             elif "local_path" in stock_asset:
                 library_path = Path(stock_asset["local_path"])
             else:
@@ -266,7 +266,7 @@ def prepare_assets(
                     "asset_selection": stock_asset.get("asset_selection"),
                 }
             elif stock_service:
-                extra_manifest = {"stock_errors": stock_service.last_errors}
+                extra_manifest = {"stock_errors": stock_service.core.last_errors}
             record_scene_selection(diversity_run, scene=scene, selected_asset=None, is_placeholder=True)
         public_image_path = public_assets_dir / image_path.name
         materialize_media(image_path, public_image_path)
@@ -323,7 +323,7 @@ def prepare_assets(
         write_json(job_dir / ARTIFACT_SCENES, scene_doc)
         _write_background_report(
             job_dir / "json", scene_assets, scene_doc,
-            vision_rejections=(stock_service.vision_rejections if stock_service else None),
+            vision_rejections=(stock_service.core.vision_rejections if stock_service else None),
             merge=only_scene_ids is not None,
         )
 

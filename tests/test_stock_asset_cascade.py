@@ -46,15 +46,15 @@ def _service(by_provider, *, image_gen_fn=None):
         image_gen_fn=image_gen_fn,
     )
     import uuid
-    svc.cache = SimpleNamespace(get=lambda *a, **k: None, set=lambda *a, **k: None)
-    svc.library = SimpleNamespace(
+    svc.core.cache = SimpleNamespace(get=lambda *a, **k: None, set=lambda *a, **k: None)
+    svc.core.library = SimpleNamespace(
         root=Path(f"/tmp/stub_lib_{uuid.uuid4().hex}"),
         record_usage=lambda *a, **k: None,
         get_by_provider_id=lambda *a, **k: None,
         is_file_valid=lambda a: True,
         search_by_query=lambda *a, **k: [],
     )
-    svc._ensure_asset = lambda candidate, query: {  # type: ignore[assignment]
+    svc.core._ensure_asset = lambda candidate, query: {  # type: ignore[assignment]
         **candidate,
         "provider": candidate["provider"],
         "asset_id": candidate["provider_asset_id"],
@@ -146,7 +146,7 @@ def test_skip_ai_fallback_flag_defers_chatgpt_for_video_covered_scene():
 def test_ai_image_preferred_skips_stock_search_and_goes_directly_to_chatgpt(tmp_path):
     calls = {"image": 0}
     svc = _service({"pexels_video": [_cand("vid-ok", "pexels_video", _STRICT_TAGS)]})
-    svc.library.root = tmp_path / "asset_library"
+    svc.core.library.root = tmp_path / "asset_library"
 
     def fake_gen(prompt, out_path):
         calls["image"] += 1

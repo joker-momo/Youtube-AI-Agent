@@ -12,11 +12,11 @@ def _mock_service():
         },
         image_gen_fn=MagicMock(return_value=True),
     )
-    svc.library = MagicMock()
-    svc.library.root = "/tmp"
-    svc.library.has_asset.return_value = False
+    svc.core.library = MagicMock()
+    svc.core.library.root = "/tmp"
+    svc.core.library.has_asset.return_value = False
 
-    svc._search_and_download = MagicMock(return_value=None)
+    svc.core._search_and_download = MagicMock(return_value=None)
     svc._ai_generate_scene_asset = MagicMock(
         return_value={
             "provider": "ai_generated",
@@ -38,7 +38,7 @@ def test_fallback_cascade_stock_ok_non_key():
     }
 
     # 1. Test when weak pexels succeeds
-    svc._search_and_download.return_value = {"provider": "pexels", "asset_selection": {}}
+    svc.core._search_and_download.return_value = {"provider": "pexels", "asset_selection": {}}
 
     asset = svc.get_scene_asset(scene, "channel", "job")
     assert asset["provider"] == "pexels"
@@ -54,7 +54,7 @@ def test_fallback_cascade_ai_image_preferred():
         "visual_importance": "normal",
     }
 
-    svc._search_and_download.return_value = None
+    svc.core._search_and_download.return_value = None
     asset = svc.get_scene_asset(scene, "channel", "job")
 
     assert asset is not None
@@ -80,9 +80,9 @@ def test_ai_image_preferred_ignores_cached_graphic_fallback():
         "height": 1920,
         "tags": ["bread", "label", "portion"],
     }
-    svc.library.search_by_query.return_value = [cached_graphic_fallback]
-    svc.library.is_file_valid.return_value = True
-    svc._search_and_download.return_value = None
+    svc.core.library.search_by_query.return_value = [cached_graphic_fallback]
+    svc.core.library.is_file_valid.return_value = True
+    svc.core._search_and_download.return_value = None
 
     asset = svc.get_scene_asset(scene, "channel", "job")
 
@@ -106,7 +106,7 @@ def test_graphic_fallback_strategy_uses_chatgpt_image_not_placeholder():
     assert asset["asset_tier"] == "ai_image"
     assert asset["provider"] == "ai_generated"
     assert svc._ai_generate_scene_asset.called
-    assert not svc._search_and_download.called
+    assert not svc.core._search_and_download.called
 
 
 def test_fallback_cascade_key_scene_ai_fallback():
@@ -118,7 +118,7 @@ def test_fallback_cascade_key_scene_ai_fallback():
         "visual_importance": "critical",
     }
 
-    svc._search_and_download.return_value = None
+    svc.core._search_and_download.return_value = None
     asset = svc.get_scene_asset(scene, "channel", "job")
 
     assert asset is not None
@@ -143,7 +143,7 @@ def test_non_key_prefers_ai_over_weak_stock():
             return None
         return {"provider": "pexels", "asset_selection": {}}
 
-    svc._search_and_download.side_effect = search_side_effect
+    svc.core._search_and_download.side_effect = search_side_effect
     asset = svc.get_scene_asset(scene, "channel", "job")
 
     assert asset is not None
@@ -168,7 +168,7 @@ def test_non_key_falls_back_to_weak_stock_when_ai_unavailable():
             return None
         return {"provider": "pexels", "asset_selection": {}}
 
-    svc._search_and_download.side_effect = search_side_effect
+    svc.core._search_and_download.side_effect = search_side_effect
     asset = svc.get_scene_asset(scene, "channel", "job")
 
     assert asset is not None

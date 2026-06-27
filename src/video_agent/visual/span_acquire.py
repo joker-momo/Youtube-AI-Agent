@@ -10,7 +10,7 @@ span and drives the flow, but delegates the two heavy, environment-dependent
 steps to injected callables so it stays testable without the live provider/models:
 
 * ``candidate_fn`` — metadata-only span search, e.g.
-  ``StockAssetService.get_visual_span_candidates`` (no download).
+  ``ShortSpanAssetService.get_visual_span_candidates`` (no download).
 * ``select_and_download_fn(context, candidates) -> {"path", "duration_sec"} | None``
   — runs the quality cascade on the candidates, downloads + mirrors the winner
   render-ready, and returns its render-relative path. Returns ``None`` when no
@@ -79,7 +79,7 @@ def acquire_span_source_clips(
     images). Spans with no passing clip are omitted → schedule fails closed.
 
     ``candidate_fn`` is an optional metadata pre-search gate (e.g.
-    ``StockAssetService.get_visual_span_candidates``): when supplied and it returns
+    ``ShortSpanAssetService.get_visual_span_candidates``): when supplied and it returns
     no candidates, the span is skipped before the (costlier) select/download.
     """
     scenes_by_id = {

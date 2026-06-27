@@ -1,10 +1,11 @@
 from unittest.mock import MagicMock
 
 from video_agent.assets.service import StockAssetService
+from video_agent.shorts.assets.scene_resolver import ShortSceneResolver
 
 
-def _mock_service():
-    svc = StockAssetService(
+def _mock_service(cls=StockAssetService):
+    svc = cls(
         visual_config={
             "providers": ["pexels"],
             "photo_providers": ["pexels_photo"],
@@ -28,6 +29,12 @@ def _mock_service():
     return svc
 
 
+def _mock_resolver():
+    # graphic_*/ChatGPT-AI tiers live in ShortSceneResolver after P4 decoupling;
+    # the long StockAssetService is stock-only. AI-strategy tests use the resolver.
+    return _mock_service(cls=ShortSceneResolver)
+
+
 def test_fallback_cascade_stock_ok_non_key():
     svc = _mock_service()
     scene = {
@@ -46,7 +53,7 @@ def test_fallback_cascade_stock_ok_non_key():
 
 
 def test_fallback_cascade_ai_image_preferred():
-    svc = _mock_service()
+    svc = _mock_resolver()
     scene = {
         "id": "s1",
         "layout": "short_tip",
@@ -63,7 +70,7 @@ def test_fallback_cascade_ai_image_preferred():
 
 
 def test_ai_image_preferred_ignores_cached_graphic_fallback():
-    svc = _mock_service()
+    svc = _mock_resolver()
     scene = {
         "id": "s1",
         "layout": "short_tip",
@@ -92,7 +99,7 @@ def test_ai_image_preferred_ignores_cached_graphic_fallback():
 
 
 def test_graphic_fallback_strategy_uses_chatgpt_image_not_placeholder():
-    svc = _mock_service()
+    svc = _mock_resolver()
     scene = {
         "id": "s1",
         "layout": "short_tip",
@@ -110,7 +117,7 @@ def test_graphic_fallback_strategy_uses_chatgpt_image_not_placeholder():
 
 
 def test_fallback_cascade_key_scene_ai_fallback():
-    svc = _mock_service()
+    svc = _mock_resolver()
     scene = {
         "id": "s1",
         "layout": "short_hook",
@@ -130,7 +137,7 @@ def test_non_key_prefers_ai_over_weak_stock():
     """Regression: a non-key stock_ok scene whose strict stock search fails but
     a weak stock match exists must get an AI image, not the off-topic weak clip.
     AI is only bypassed for weak stock when image generation is unavailable."""
-    svc = _mock_service()
+    svc = _mock_resolver()
     scene = {
         "id": "s1",
         "layout": "short_pain",

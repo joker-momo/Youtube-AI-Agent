@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from video_agent.assets.service import StockAssetService
+from video_agent.shorts.assets.scene_resolver import ShortSceneResolver
 
 
 class _FakeStock:
@@ -38,8 +39,8 @@ def _cand(asset_id, provider, tags, media_type="video"):
     }
 
 
-def _service(by_provider, *, image_gen_fn=None):
-    svc = StockAssetService(
+def _service(by_provider, *, image_gen_fn=None, cls=StockAssetService):
+    svc = cls(
         visual_config={"providers": ["pexels_video"], "strategy": "auto"},
         stock_client=_FakeStock(by_provider),
         download_client=SimpleNamespace(),
@@ -60,6 +61,13 @@ def _service(by_provider, *, image_gen_fn=None):
         "asset_id": candidate["provider_asset_id"],
     }
     return svc
+
+
+def _resolver(by_provider, *, image_gen_fn=None):
+    # The graphic_*/ChatGPT-AI cascade tiers live in ShortSceneResolver after the
+    # P4 decoupling; the long StockAssetService is stock-only. AI/graphic-tier
+    # tests build the resolver (it shares the same StockSearchCore + signature).
+    return _service(by_provider, image_gen_fn=image_gen_fn, cls=ShortSceneResolver)
 
 
 # A bread-label scene whose action ("turning package to read label") stock video
@@ -105,7 +113,7 @@ def test_descends_to_ai_gen_when_no_strict_stock():
         Path(out_path).parent.mkdir(parents=True, exist_ok=True)
         Path(out_path).write_bytes(b"fake-image" * 200)
 
-    svc = _service(
+    svc = _resolver(
         {
             "pexels_video": [_cand("vid-weak", "pexels_video", _WEAK_TAGS)],
             "pexels": [_cand("photo-weak", "pexels", _WEAK_TAGS, media_type="photo")],
@@ -129,7 +137,7 @@ def test_skip_ai_fallback_flag_defers_chatgpt_for_video_covered_scene():
     def fake_gen(prompt, out_path):
         calls["n"] += 1
 
-    svc = _service(
+    svc = _resolver(
         {
             "pexels_video": [_cand("vid-weak", "pexels_video", _WEAK_TAGS)],
             "pexels": [_cand("photo-weak", "pexels", _WEAK_TAGS, media_type="photo")],
@@ -145,7 +153,7 @@ def test_skip_ai_fallback_flag_defers_chatgpt_for_video_covered_scene():
 
 def test_ai_image_preferred_skips_stock_search_and_goes_directly_to_chatgpt(tmp_path):
     calls = {"image": 0}
-    svc = _service({"pexels_video": [_cand("vid-ok", "pexels_video", _STRICT_TAGS)]})
+    svc = _resolver({"pexels_video": [_cand("vid-ok", "pexels_video", _STRICT_TAGS)]})
     svc.core.library.root = tmp_path / "asset_library"
 
     def fake_gen(prompt, out_path):
@@ -165,7 +173,7 @@ def test_ai_image_preferred_skips_stock_search_and_goes_directly_to_chatgpt(tmp_
 
 def test_weak_stock_fallback_when_no_ai_and_no_strict():
     # No photo provider data, no image_gen -> key scene should graphic_fallback
-    svc = _service({"pexels_video": [_cand("vid-weak", "pexels_video", _WEAK_TAGS)]})
+    svc = _resolver({"pexels_video": [_cand("vid-weak", "pexels_video", _WEAK_TAGS)]})
     asset = svc.get_scene_asset(_scene(), channel_id="ch", job_id="job")
     assert asset is not None
     assert asset["asset_tier"] == "graphic_fallback"
@@ -176,7 +184,7 @@ def test_prepare_assets_regression_weak_match_blocked_on_hook_fallback():
     # Pexels returns slicing bread,
     # expected weak_match rejected for short_hook,
     # fallback to ai_generated or graphic_fallback.
-    svc = _service({"pexels_video": [_cand("vid-weak", "pexels_video", ["slice", "cutting"])]})
+    svc = _resolver({"pexels_video": [_cand("vid-weak", "pexels_video", ["slice", "cutting"])]})
     key_scene = {
         "id": "s02",
         "motion": "push_in",
@@ -205,7 +213,8 @@ def test_prepare_assets_regression_weak_match_contradictory_blocked():
 
 
 def test_standard_layout_retains_placeholder_on_fallback(tmp_path):
-    from video_agent.stages.assets import prepare_assets
+    # short_hook scene + graphic_fallback tier are short behavior (P4 decoupling).
+    from video_agent.shorts.assets.prepare import prepare_assets
 
     scene_doc = {
         "total_duration_sec": 3,
@@ -338,7 +347,7 @@ def test_graphic_layout_generates_chatgpt_image_with_full_payload(tmp_path):
 
 
 def test_graphic_comparison_image_prompt_is_structured_and_exact():
-    from video_agent.assets.service import build_scene_image_prompt
+    from video_agent.shorts.assets.image_prompt import build_scene_image_prompt
 
     prompt = build_scene_image_prompt(
         {
@@ -370,7 +379,7 @@ def test_graphic_comparison_image_prompt_is_structured_and_exact():
 
 
 def test_converted_graphic_intent_still_uses_graphic_image_prompt():
-    from video_agent.assets.service import build_scene_image_prompt
+    from video_agent.shorts.assets.image_prompt import build_scene_image_prompt
 
     prompt = build_scene_image_prompt(
         {
@@ -399,8 +408,8 @@ def test_converted_graphic_intent_still_uses_graphic_image_prompt():
 
 
 def test_lifestyle_image_prompt_includes_required_visual_evidence_without_text_overlay():
-    from video_agent.assets.service import build_scene_image_prompt
     from video_agent.browser_worker.drivers.chatgpt_image import build_image_gen_prompt
+    from video_agent.shorts.assets.image_prompt import build_scene_image_prompt
 
     prompt = build_scene_image_prompt(
         {
@@ -641,7 +650,8 @@ def test_chatgpt_lifestyle_image_label_for_non_graphic_ai():
 
 
 def test_graphic_scene_with_video_blur_still_acquires(tmp_path):
-    from video_agent.stages.assets import prepare_assets
+    # graphic_ layout + AI fallback are short behavior (P4 decoupling).
+    from video_agent.shorts.assets.prepare import prepare_assets
 
     gen_calls = []
 

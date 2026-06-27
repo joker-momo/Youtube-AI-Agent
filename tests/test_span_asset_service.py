@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from video_agent.assets.service import StockAssetService
+from video_agent.shorts.assets import ShortSpanAssetService
 from video_agent.shorts.visual_acquisition import SpanSearchBudget
 
 
@@ -45,9 +45,11 @@ class _Stock:
         return [dict(c, provider=provider) for c in self.candidates]
 
 
-def _service(candidates: list[dict]) -> tuple[StockAssetService, _Stock]:
+def _service(candidates: list[dict]) -> tuple[ShortSpanAssetService, _Stock]:
+    # PR C span search/selection lives on ShortSpanAssetService after the P4
+    # asset-layer decoupling (it was a delegating wrapper on StockAssetService).
     stock = _Stock(candidates)
-    svc = StockAssetService(
+    svc = ShortSpanAssetService.for_visual_config(
         visual_config={"providers": ["pexels_video"], "strategy": "auto"},
         stock_client=stock,
         download_client=SimpleNamespace(

@@ -30,6 +30,49 @@ def _member_scenes(short_scenes: dict[str, Any], scene_ids: list[str]) -> list[d
     return [by_id[sid] for sid in scene_ids if sid in by_id]
 
 
+def _span_visual_route(member_scenes: list[dict[str, Any]]) -> str:
+    """Decide whether this span should enter native-video QA or generated art.
+
+    This is intentionally small and deterministic: explicit graphic/image scene
+    strategy wins before we spend time downloading Pexels finalists.
+    """
+    strategies = {
+        str(scene.get("asset_strategy") or "").strip().lower() for scene in member_scenes
+    }
+    layouts = {str(scene.get("layout") or "").strip().lower() for scene in member_scenes}
+    visual_types = {
+        str(scene.get("visual_type") or "").strip().lower() for scene in member_scenes
+    }
+    if (
+        "graphic_fallback" in strategies
+        or any(layout.startswith("graphic_") for layout in layouts)
+        or "graphic" in visual_types
+    ):
+        return "generated_graphic"
+    if "ai_image_preferred" in strategies:
+        return "generated_image"
+    return "native_video_candidate"
+
+
+def _generated_selection(span: dict[str, Any], *, visual_route: str) -> dict[str, Any]:
+    return {
+        "visual_span_id": span["visual_span_id"],
+        "visual_route": visual_route,
+        "provisional_candidate_id": None,
+        "metadata_selection_status": f"routed_to_{visual_route}",
+        "metadata_pre_score": None,
+        "runner_up_ids": [],
+        "render_eligible": False,
+        "requires_local_validation": False,
+        "fallback_level": 0,
+        "fallback_used": True,
+        "rejection_reasons": {},
+        "evidence_records": [],
+        "download_policy": "none",
+        "downloaded_candidate_count": 0,
+    }
+
+
 def _artifact_header(short_id: str, *, input_hash: str, created_by_stage: str) -> dict[str, Any]:
     return {
         "schema_version": 1,
@@ -41,6 +84,8 @@ def _artifact_header(short_id: str, *, input_hash: str, created_by_stage: str) -
 
 
 def _span_verdict(selection: dict[str, Any]) -> str:
+    if str(selection.get("visual_route") or "") in {"generated_graphic", "generated_image"}:
+        return "PASS"
     if selection.get("metadata_selection_status") in {"metadata_rejected", "metadata_insufficient"}:
         return "FAIL"
     records = selection.get("evidence_records") or []
@@ -83,6 +128,7 @@ def _metadata_qa(
                 "scene_ids": span.get("scene_ids") or [],
                 "planned_duration_sec": span.get("planned_duration_sec"),
                 "duration_bucket": span.get("duration_bucket"),
+                "visual_route": selection.get("visual_route") or span.get("visual_route"),
                 "verdict": verdict,
                 "render_eligible": False,
                 "requires_local_validation": bool(selection.get("requires_local_validation", True)),
@@ -195,7 +241,13 @@ def _stage_visual_acquisition(ctx: BuildContext) -> StageResult:
                 channel_config=channel_config,
             )
             acquisition = one_context["spans"][0]
+            visual_route = _span_visual_route(members)
+            acquisition["visual_route"] = visual_route
             acquisition_spans.append(acquisition)
+            if visual_route != "native_video_candidate":
+                candidates_by_span[acquisition["visual_span_id"]] = []
+                selections.append(_generated_selection(acquisition, visual_route=visual_route))
+                continue
             budget = budget_for_importance(
                 str(acquisition.get("visual_importance") or "normal"), cfg
             )
@@ -204,12 +256,17 @@ def _stage_visual_acquisition(ctx: BuildContext) -> StageResult:
             )
             candidates_by_span[acquisition["visual_span_id"]] = candidates
             selections.append(
-                service.select_provisional_span_candidate(
-                    acquisition_context=acquisition,
-                    candidates=candidates,
-                    recent_visual_memory={},
-                    config={"download_policy": cfg["acquisition"].get("download_policy", "none")},
-                )
+                {
+                    **service.select_provisional_span_candidate(
+                        acquisition_context=acquisition,
+                        candidates=candidates,
+                        recent_visual_memory={},
+                        config={
+                            "download_policy": cfg["acquisition"].get("download_policy", "none")
+                        },
+                    ),
+                    "visual_route": visual_route,
+                }
             )
 
         input_hash = stable_hash(

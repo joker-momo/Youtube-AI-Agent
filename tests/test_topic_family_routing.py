@@ -37,6 +37,19 @@ def test_resolve_topic_family_classifier():
     }
     assert resolve_topic_family(script_dict) == TopicFamily.SLEEP
 
+
+def test_resolve_topic_family_food_context_beats_incidental_sleep_word():
+    script_dict = {
+        "hook": "TU MANO AYUDA",
+        "narration": (
+            "TU MANO AYUDA. Uno: depende de apetito, actividad, sueño, objetivos y resto "
+            "del plato. Dos: para desayunar, una o dos rebanadas según tamaño."
+        ),
+        "title": "",
+    }
+
+    assert resolve_topic_family(script_dict) == TopicFamily.NUTRITION
+
 def test_resolve_topic_family_general_fallback(caplog):
     script_dict = {
         "hook": "Algo totalmente distinto",

@@ -69,7 +69,11 @@ def _spans() -> dict[str, Any]:
 
 
 class _Service:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
     def get_visual_span_candidates(self, *, acquisition_context, budget):
+        self.calls.append(acquisition_context["visual_span_id"])
         return [
             {
                 "candidate_id": f"pexels_video-{acquisition_context['visual_span_id']}",
@@ -181,3 +185,27 @@ def test_visual_acquisition_stage_writes_pr_c_artifacts_without_pr_d_artifact(
     assert json.dumps(ctx.extras["short_scenes"], sort_keys=True) == before_scenes
     assert "visual_metadata_qa" in ctx.extras
     assert ("visual_acquisition", "completed") in ctx.calls
+
+
+def test_visual_acquisition_routes_graphic_span_without_pexels_candidates(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service = _Service()
+    monkeypatch.setattr(
+        "video_agent.shorts.builder.stages.visual_acquisition.StockAssetService",
+        lambda *a, **k: service,
+    )
+    ctx = _ctx(tmp_path)
+    ctx.extras["short_scenes"]["scenes"][1]["asset_strategy"] = "graphic_fallback"
+
+    result = _stage_visual_acquisition(ctx)
+
+    assert result.signal is StageSignal.PROCEED
+    selection = json.loads(
+        (ctx.json_dir / paths.SHORT_VISUAL_SPAN_SELECTION_FILE).read_text()
+    )
+    by_span = {span["visual_span_id"]: span for span in selection["spans"]}
+    assert by_span["vs02"]["visual_route"] == "generated_graphic"
+    assert by_span["vs02"]["provisional_candidate_id"] is None
+    assert by_span["vs02"]["requires_local_validation"] is False
+    assert service.calls == ["vs01"]

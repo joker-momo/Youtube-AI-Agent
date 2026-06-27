@@ -62,7 +62,22 @@ def resolve_topic_family(script_dict: dict) -> TopicFamily:
     
     if any(k in text for k in ["ejercicio", "movimiento", "sentadilla", "caminar", "entrenar"]):
         return TopicFamily.MOVEMENT
-    if any(k in text for k in ["pan ", "alimentación", "comida", "desayuno", "cena", "dieta"]):
+    if any(
+        k in text
+        for k in [
+            "pan",
+            "alimentación",
+            "comida",
+            "desayuno",
+            "desayunar",
+            "cena",
+            "dieta",
+            "rebanada",
+            "hidrato",
+            "plato",
+            "apetito",
+        ]
+    ):
         return TopicFamily.NUTRITION
     if any(k in text for k in ["dormir", "sueño", "descanso", "insomnio"]):
         return TopicFamily.SLEEP
@@ -95,4 +110,3 @@ def load_env() -> None:
                         val = val[1:-1]
                     if key and key not in os.environ:
                         os.environ[key] = val
-

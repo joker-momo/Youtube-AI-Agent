@@ -153,6 +153,25 @@ def test_unconverted_graphic_scene_is_rejected() -> None:
         )
 
 
+def test_converted_graphic_intent_compiles_when_image_backed() -> None:
+    scene = _scene("s02", 2.0)
+    scene["visual_type"] = "graphic"
+    scene["generated_image_source_layout"] = "graphic_checklist"
+    doc = {"scenes": [scene]}
+    schedule = compile_asset_schedule(
+        short_id="x",
+        scene_doc=doc,
+        visual_spans={"spans": [{"id": "vs01", "scene_ids": ["s02"], "planned_mode": "graphic_led"}]},
+        resolved_visuals={"scenes": {"s02": _image_backed("s02")}},
+        fps=FPS,
+        timing_source="tts_final",
+        scene_version=1,
+    )
+
+    assert schedule["qa"]["verdict"] == "PASS", schedule["qa"]["errors"]
+    assert schedule["tracks"][0]["source_media_kind"] == sched.IMAGE_BACKED_VIDEO
+
+
 # --------------------------------------------------------------------------- #
 # selector gates (cases 8, 18, 19, 21, 22)
 # --------------------------------------------------------------------------- #

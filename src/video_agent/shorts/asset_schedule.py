@@ -559,7 +559,7 @@ def compile_asset_schedule(
     leaked = [
         f"{_scene_id(scene, idx)}:{scene.get('layout')}"
         for idx, scene in enumerate(scenes)
-        if _is_graphic_scene(scene)
+        if _is_unconverted_graphic_scene(scene)
     ]
     if leaked:
         raise RuntimeError(

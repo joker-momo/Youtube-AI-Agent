@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from video_agent.assets.providers import normalize_pexels_response, normalize_pixabay_response
+from video_agent.assets.providers import StockPhotoClient, normalize_pexels_response, normalize_pixabay_response
 
 
 def test_normalize_pexels_response_preserves_credit_and_download_url():
@@ -68,8 +68,31 @@ def test_keywordize_query_splits_hyphens_and_removes_verbs():
     assert res == "adult hands laptop"
 
 
+def test_pexels_search_loads_dotenv_when_env_key_missing(monkeypatch):
+    from video_agent.assets import providers
+
+    monkeypatch.delenv("PEXELS_API_KEY", raising=False)
+
+    def fake_load_env():
+        monkeypatch.setenv("PEXELS_API_KEY", "loaded-from-dotenv")
+
+    captured = {}
+
+    def fake_read_json(url, headers):
+        captured["url"] = url
+        captured["headers"] = headers
+        return {"photos": []}
+
+    monkeypatch.setattr(providers, "load_env", fake_load_env)
+    monkeypatch.setattr(providers, "_read_json", fake_read_json)
+
+    StockPhotoClient().search("pexels", "woman kitchen", {"per_page": 1})
+
+    assert "api.pexels.com/v1/search" in captured["url"]
+    assert captured["headers"]["Authorization"] == "loaded-from-dotenv"
+
+
 from unittest.mock import patch
-from video_agent.assets.providers import StockPhotoClient
 
 @patch("video_agent.assets.providers._read_json")
 def test_coverr_video_search_retry_fallback(mock_read_json):
@@ -105,6 +128,5 @@ def test_coverr_video_search_exclude_ids_fallback(mock_read_json):
     assert res["hits"][0]["id"] == "v2"
     # Check that it called _read_json twice to fall back since the hit on the first call was excluded
     assert mock_read_json.call_count == 2
-
 
 

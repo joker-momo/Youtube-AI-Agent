@@ -91,7 +91,7 @@ def test_ai_image_preferred_ignores_cached_graphic_fallback():
     assert svc._ai_generate_scene_asset.called
 
 
-def test_fallback_cascade_graphic_fallback():
+def test_graphic_fallback_strategy_uses_chatgpt_image_not_placeholder():
     svc = _mock_service()
     scene = {
         "id": "s1",
@@ -103,7 +103,9 @@ def test_fallback_cascade_graphic_fallback():
     asset = svc.get_scene_asset(scene, "channel", "job")
 
     assert asset is not None
-    assert asset["asset_tier"] == "graphic_fallback"
+    assert asset["asset_tier"] == "ai_image"
+    assert asset["provider"] == "ai_generated"
+    assert svc._ai_generate_scene_asset.called
     assert not svc._search_and_download.called
 
 

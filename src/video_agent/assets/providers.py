@@ -6,6 +6,8 @@ from typing import Any
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
+from video_agent.contracts import load_env
+
 DEFAULT_HEADERS = {"User-Agent": "Youtube-AI-Agent-MVP/0.1"}
 
 # Cinematic-prompt boilerplate that bloats queries. Pexels tolerates long
@@ -233,6 +235,14 @@ def normalize_coverr_video_response(response: dict[str, Any]) -> list[dict[str, 
 
 
 class StockPhotoClient:
+    @staticmethod
+    def _env_key(name: str) -> str | None:
+        value = os.environ.get(name)
+        if value:
+            return value
+        load_env()
+        return os.environ.get(name)
+
     def search(self, provider: str, query: str, filters: dict[str, Any], exclude_ids: set[str] | None = None) -> dict[str, Any]:
         if provider == "pexels":
             return self._search_pexels(query, filters)
@@ -260,7 +270,7 @@ class StockPhotoClient:
         raise ValueError(f"Unsupported stock photo provider: {provider}")
 
     def _search_pexels(self, query: str, filters: dict[str, Any]) -> dict[str, Any]:
-        api_key = os.environ.get("PEXELS_API_KEY")
+        api_key = self._env_key("PEXELS_API_KEY")
         if not api_key:
             raise RuntimeError("PEXELS_API_KEY is required for provider=pexels")
         kw_query = keywordize_query(query, max_terms=6)
@@ -274,7 +284,7 @@ class StockPhotoClient:
         return _read_json(f"https://api.pexels.com/v1/search?{params}", {"Authorization": api_key})
 
     def _search_pexels_video(self, query: str, filters: dict[str, Any]) -> dict[str, Any]:
-        api_key = os.environ.get("PEXELS_API_KEY")
+        api_key = self._env_key("PEXELS_API_KEY")
         if not api_key:
             raise RuntimeError("PEXELS_API_KEY is required for provider=pexels_video")
         min_dur = int(filters.get("min_duration_sec", 10))
@@ -290,7 +300,7 @@ class StockPhotoClient:
         return _read_json(f"https://api.pexels.com/videos/search?{params}", {"Authorization": api_key})
 
     def _search_pixabay(self, query: str, filters: dict[str, Any]) -> dict[str, Any]:
-        api_key = os.environ.get("PIXABAY_API_KEY")
+        api_key = self._env_key("PIXABAY_API_KEY")
         if not api_key:
             raise RuntimeError("PIXABAY_API_KEY is required for provider=pixabay")
         orientation = filters.get("orientation", "horizontal")
@@ -309,7 +319,7 @@ class StockPhotoClient:
         return _read_json(f"https://pixabay.com/api/?{params}")
 
     def _search_pixabay_video(self, query: str, filters: dict[str, Any], exclude_ids: set[str] | None = None) -> dict[str, Any]:
-        api_key = os.environ.get("PIXABAY_API_KEY")
+        api_key = self._env_key("PIXABAY_API_KEY")
         if not api_key:
             raise RuntimeError("PIXABAY_API_KEY is required for provider=pixabay_video")
         page_size = max(3, int(filters.get("per_page", 10)))
@@ -345,7 +355,7 @@ class StockPhotoClient:
         return response
 
     def _search_coverr_video(self, query: str, filters: dict[str, Any], exclude_ids: set[str] | None = None) -> dict[str, Any]:
-        api_key = os.environ.get("COVERR_API_KEY")
+        api_key = self._env_key("COVERR_API_KEY")
         if not api_key:
             raise RuntimeError("COVERR_API_KEY is required for provider=coverr_video")
         

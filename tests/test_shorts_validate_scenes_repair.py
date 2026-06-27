@@ -88,3 +88,60 @@ def test_repair_visual_only_unreadable_item_4_uses_actual_label_for_validation()
     assert "Vuelve a harina" not in scenes[0]["caption"]
     assert "Noticias, discusiones" in scenes[0]["caption"]
     assert not any(issue.type == "visual_only_unreadable" for issue in issues)
+
+
+# repair_excess_graphic_scenes demotes the lowest-value graphics back to realistic
+# scenes when a normal Short exceeds the 2-graphic cap, so the over-cap repairable
+# error converges deterministically instead of looping to a hard blocker.
+
+
+def _three_graphic_scenes():
+    return [
+        {"id": "s01", "layout": "graphic_label_callout", "narration": "Mira la etiqueta.",
+         "on_screen_text": "ETIQUETA", "duration_sec": 3.0,
+         "layout_payload": {"title": "ETIQUETA", "productLabel": "x", "callouts": []}},
+        {"id": "s02", "layout": "graphic_comparison", "narration": "Compara fibra.",
+         "on_screen_text": "FIBRA", "duration_sec": 3.0,
+         "layout_payload": {"title": "FIBRA", "left": {}, "right": {}}},
+        {"id": "s03", "layout": "graphic_checklist", "narration": "Resumen.",
+         "on_screen_text": "RESUMEN", "duration_sec": 3.0, "visual_type": "graphic",
+         "layout_payload": {"title": "RESUMEN", "items": ["uno", "dos"]}},
+    ]
+
+
+def test_repair_excess_graphic_scenes_demotes_to_cap():
+    from video_agent.shorts.validate_scenes import (
+        count_graphic_scenes,
+        repair_excess_graphic_scenes,
+    )
+
+    scenes = _three_graphic_scenes()
+    assert repair_excess_graphic_scenes(scenes, {"short_format": "checklist"}) is True
+    # Now at or under the 2-graphic cap.
+    assert count_graphic_scenes(scenes) <= 2
+    # The demoted scene became a realistic short_tip with no graphic markers.
+    demoted = [s for s in scenes if not str(s["layout"]).startswith("graphic_")]
+    assert demoted, "expected at least one demoted scene"
+    d = demoted[0]
+    assert d["layout"] == "short_tip"
+    assert d.get("visual_type") != "graphic"
+    assert "layout_payload" not in d
+    assert d["visual_prompt"].strip()
+    # Narration / id preserved.
+    assert d["narration"]
+    assert d["id"]
+
+
+def test_repair_excess_graphic_scenes_noop_under_cap():
+    from video_agent.shorts.validate_scenes import repair_excess_graphic_scenes
+
+    scenes = _three_graphic_scenes()[:2]
+    assert repair_excess_graphic_scenes(scenes, {"short_format": "checklist"}) is False
+
+
+def test_repair_excess_graphic_scenes_respects_explicit_graphic_led():
+    from video_agent.shorts.validate_scenes import repair_excess_graphic_scenes
+
+    scenes = _three_graphic_scenes()
+    # Explicit opt-in must NOT be demoted.
+    assert repair_excess_graphic_scenes(scenes, {"graphic_led": True}) is False

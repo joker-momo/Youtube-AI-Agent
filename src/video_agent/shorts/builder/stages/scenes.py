@@ -622,6 +622,33 @@ def _scenes_generate_and_normalize(ctx, loop):
             ok=True,
         )
 
+    if validate_scenes.repair_missing_graphic_checklist_scene(scenes, short_script):
+        short_scenes["scenes"] = scenes
+        state.current_scenes_version += 1
+        state.latest_scene_validation_ok = False
+        state.latest_scene_validation_version = None
+        _recorder.record_event(
+            "deterministic",
+            "missing_graphic_checklist_repair",
+            {"attempt": scenes_attempts, "layout": "graphic_checklist"},
+            ok=True,
+        )
+
+    # Demote the lowest-value excess graphics back to realistic scenes when a
+    # normal Short is over the 2-graphic cap. Prevents the over-cap repairable
+    # error from looping to a hard blocker when the LLM keeps re-emitting graphics.
+    if validate_scenes.repair_excess_graphic_scenes(scenes, short_script):
+        short_scenes["scenes"] = scenes
+        state.current_scenes_version += 1
+        state.latest_scene_validation_ok = False
+        state.latest_scene_validation_version = None
+        _recorder.record_event(
+            "deterministic",
+            "excess_graphic_demote_repair",
+            {"attempt": scenes_attempts},
+            ok=True,
+        )
+
     structure_issues = validate_scenes.validate_scene_structure(
         scenes,
         scenes_doc=short_scenes,

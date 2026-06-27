@@ -1,6 +1,14 @@
 from __future__ import annotations
 
+from typing import Any
+
 from video_agent.shorts.validation.checks import *  # noqa: F401,F403
+from video_agent.shorts.validation._helpers import _joined_scene_text, _scene_id
+from video_agent.shorts.validation.graphic_checks import (
+    _missing_graphic_candidate,
+    graphic_repair_targets,
+    is_explicit_graphic_led,
+)
 
 
 def _is_five_error_bread_script(script: dict[str, Any] | None) -> bool:
@@ -56,6 +64,173 @@ def repair_five_error_bread_payoff_layout(
         changed = True
     if not payoff.get("visual_prompt"):
         payoff["visual_prompt"] = "Graphic checklist card for a better bread portion routine"
+        changed = True
+    return changed
+
+
+def repair_missing_graphic_checklist_scene(
+    scenes: list[dict[str, Any]], script: dict[str, Any] | None
+) -> bool:
+    """Promote one compact structured scene to a ChatGPT-backed graphic.
+
+    Scene generation can correctly identify a compact proof/comparison/portion
+    beat but leave it as a ``short_*`` lifestyle scene. If the Short is
+    checklist/explainer-like and still has room under the two-graphic cap,
+    convert the best existing structured scene before spending another LLM retry.
+    """
+    if not script:
+        return False
+    graphic_count = sum(
+        1 for scene in scenes if str(scene.get("layout") or "").startswith("graphic_")
+    )
+    if graphic_count >= MAX_GRAPHIC_SCENES_PER_SHORT:
+        return False
+    def _title(scene: dict[str, Any]) -> str:
+        title = str(scene.get("on_screen_text") or "").strip() or str(
+            (scene.get("layout_payload") or {}).get("title") if isinstance(scene.get("layout_payload"), dict) else ""
+        ).strip()
+        return title[:48] or "GUÍA VISUAL"
+
+    def _graphic_payload(scene: dict[str, Any], layout: str) -> dict[str, Any]:
+        text = _joined_scene_text(scene).lower()
+        title = _title(scene)
+        existing = scene.get("layout_payload")
+        items = list((existing or {}).get("items") or []) if isinstance(existing, dict) else []
+        items = [str(item).strip() for item in items if str(item).strip()]
+        if layout == "graphic_comparison":
+            left_text = "1 rebanada" if ("rebanada" in text or "1 o 2" in text) else "Opción A"
+            right_text = "2 rebanadas" if ("rebanada" in text or "1 o 2" in text) else "Opción B"
+            return {
+                "title": title,
+                "left": {"heading": "MENOS", "text": left_text, "badge": "Empieza aquí"},
+                "right": {"heading": "MÁS", "text": right_text, "badge": "Según tu plato"},
+                "footer": "Ajusta al contexto.",
+                "variant": "warm_olive",
+                "visual_tone": "focus",
+                "background_mode": "video_blur",
+                "surface_style": "soft_card",
+            }
+        if layout == "graphic_plate_ratio":
+            return {
+                "title": title,
+                "segments": [
+                    {"label": "Pan", "value": 25},
+                    {"label": "Resto del plato", "value": 75},
+                ],
+                "footer": "Mira el conjunto.",
+                "variant": "warm_olive",
+                "visual_tone": "focus",
+                "background_mode": "video_blur",
+                "surface_style": "plate_focus",
+            }
+        if layout == "graphic_label_callout":
+            return {
+                "title": title,
+                "productLabel": "Etiqueta",
+                "callouts": [
+                    {"label": "Ingrediente", "value": "primero"},
+                    {"label": "Fibra", "value": "compara"},
+                ],
+                "variant": "warm_olive",
+                "visual_tone": "focus",
+                "background_mode": "video_blur",
+                "surface_style": "soft_card",
+            }
+        return {
+            "title": title,
+            "items": items[:5] or ["Mira el contexto", "Decide antes", "Ajusta al plato"],
+            "variant": "warm_olive",
+            "visual_tone": "focus",
+            "background_mode": "video_blur",
+            "surface_style": "soft_card",
+        }
+
+    def _target_layout(scene: dict[str, Any]) -> str:
+        text = _joined_scene_text(scene).lower()
+        if any(term in text for term in ("1 o 2", "una o dos", "opción a", "opcion a", "opción b", "opcion b", " vs ")):
+            return "graphic_comparison"
+        if sum(1 for term in ("porción", "porcion", "palma", "plato", "hidrato", "rebanada") if term in text) >= 2:
+            return "graphic_plate_ratio"
+        if sum(1 for term in ("etiqueta", "fibra", "azúcar", "azucar", "ingrediente", "por 100 g") if term in text) >= 2:
+            return "graphic_label_callout"
+        return "graphic_checklist"
+
+    for scene in scenes:
+        if str(scene.get("layout") or "") not in {"short_checklist", "short_tip"}:
+            continue
+        payload = scene.get("layout_payload")
+        items = list((payload or {}).get("items") or []) if isinstance(payload, dict) else []
+        has_items = len([item for item in items if str(item).strip()]) >= 2
+        if not has_items and not _missing_graphic_candidate(scene):
+            continue
+        layout = "graphic_checklist" if has_items else _target_layout(scene)
+        scene["layout"] = layout
+        scene["layout_payload"] = _graphic_payload(scene, layout)
+        scene["visual_type"] = "graphic"
+        scene["asset_strategy"] = "ai_image_preferred"
+        return True
+    return False
+
+
+def _demote_graphic_to_short_tip(scene: dict[str, Any]) -> None:
+    """Turn one over-cap graphic scene into a realistic short_tip scene in place.
+
+    Keeps narration / duration / id / on_screen_text; strips the graphic-only
+    layout + payload + visual_type so it renders as a realistic supermarket/kitchen
+    beat instead of a card. Builds a fallback visual_prompt from the graphic's
+    title/items when the scene has none.
+    """
+    title = str(scene.get("on_screen_text") or "").strip()
+    payload = scene.get("layout_payload")
+    if isinstance(payload, dict):
+        if not title:
+            title = str(payload.get("title") or "").strip()
+        items = [str(i).strip() for i in (payload.get("items") or []) if str(i).strip()]
+    else:
+        items = []
+    scene["layout"] = "short_tip"
+    scene.pop("layout_payload", None)
+    # Detection keys off layout startswith graphic_ OR visual_type == "graphic".
+    if str(scene.get("visual_type") or "").strip().lower() == "graphic":
+        scene.pop("visual_type", None)
+    scene["asset_strategy"] = "stock_ok"
+    if not str(scene.get("visual_prompt") or "").strip():
+        focus = title or (items[0] if items else "")
+        base = "Realistic Spanish supermarket/kitchen scene, vertical 9:16, warm natural light"
+        scene["visual_prompt"] = f"{base}, showing {focus}".strip().rstrip(",") if focus else base
+
+
+def repair_excess_graphic_scenes(
+    scenes: list[dict[str, Any]], script: dict[str, Any] | None
+) -> bool:
+    """Demote the lowest-value graphics when a normal Short is over the cap.
+
+    A normal Short allows at most ``MAX_GRAPHIC_SCENES_PER_SHORT`` graphics. The
+    LLM frequently emits more for checklist/explainer ideas; without an explicit
+    graphic-led request that is a repairable error. Convert the lowest-value
+    excess graphics into realistic short_tip scenes deterministically — before
+    spending another LLM retry that often re-emits the same over-cap layout and
+    loops straight to a hard blocker. ``graphic_repair_targets`` decides which
+    graphics to keep vs. convert.
+    """
+    graphic_count = sum(
+        1 for s in scenes if str(s.get("layout") or "").startswith("graphic_")
+    )
+    if graphic_count <= MAX_GRAPHIC_SCENES_PER_SHORT:
+        return False
+    if is_explicit_graphic_led(script):
+        return False
+    _keep_ids, convert_ids = graphic_repair_targets(scenes)
+    convert = set(convert_ids)
+    if not convert:
+        return False
+    changed = False
+    for index, scene in enumerate(scenes):
+        if not str(scene.get("layout") or "").startswith("graphic_"):
+            continue
+        if _scene_id(scene, index) not in convert:
+            continue
+        _demote_graphic_to_short_tip(scene)
         changed = True
     return changed
 

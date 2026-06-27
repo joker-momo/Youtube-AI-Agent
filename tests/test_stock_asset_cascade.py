@@ -262,7 +262,8 @@ def test_standard_layout_retains_placeholder_on_fallback(tmp_path):
 def test_graphic_layout_generates_chatgpt_image_with_full_payload(tmp_path):
     from PIL import Image
 
-    from video_agent.stages.assets import prepare_assets
+    # graphic→short_tip relabel lives in the SHORT fork after P4 decoupling.
+    from video_agent.shorts.assets.prepare import prepare_assets
 
     gen_calls = []
 
@@ -519,7 +520,8 @@ def test_placeholder_video_frame_meets_aesthetic_targets(tmp_path):
 
 
 def test_missing_orientation_metadata_defaults_to_portrait_for_shorts(tmp_path):
-    from video_agent.stages.assets import prepare_assets
+    # portrait-from-shorts detection lives in the SHORT fork after P4 decoupling.
+    from video_agent.shorts.assets.prepare import prepare_assets
 
     scene_doc = {
         "total_duration_sec": 3,
@@ -589,7 +591,8 @@ def test_graphic_scene_uses_chatgpt_image_by_default(tmp_path):
     rigid paper graphic cards."""
     from PIL import Image
 
-    from video_agent.stages.assets import prepare_assets
+    # graphic→short_tip relabel lives in the SHORT fork after P4 decoupling.
+    from video_agent.shorts.assets.prepare import prepare_assets
 
     gen_calls = []
 

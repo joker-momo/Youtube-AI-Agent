@@ -4,9 +4,12 @@ import pytest
 from PIL import Image
 
 from video_agent.assets.service import _candidate_score
-from video_agent.stages.assets import prepare_assets
-from video_agent.stages.assets import _choose_bgm_track
 
+# The graphic/defer/relabel tests below exercise the SHORT fork — that logic
+# moved out of the long stage in P4 (asset-layer decoupling), so they drive the
+# short prepare_assets and patch the short ShortSceneResolver, not the long stage.
+from video_agent.shorts.assets.prepare import prepare_assets as short_prepare_assets
+from video_agent.stages.assets import _choose_bgm_track, prepare_assets
 
 STYLE_DNA = {
     "palette": {
@@ -564,7 +567,7 @@ def test_graphic_scene_fails_when_chatgpt_image_is_not_generated(tmp_path, monke
     }
 
     monkeypatch.setattr(
-        "video_agent.stages.assets.StockAssetService.get_scene_asset",
+        "video_agent.shorts.assets.scene_resolver.ShortSceneResolver.get_scene_asset",
         lambda self, scene, channel_id, job_id: {
             "provider": "graphic_fallback",
             "asset_tier": "graphic_fallback",
@@ -573,7 +576,7 @@ def test_graphic_scene_fails_when_chatgpt_image_is_not_generated(tmp_path, monke
     )
 
     with pytest.raises(RuntimeError, match=r"s01.*graphic_checklist.*ChatGPT"):
-        prepare_assets(
+        short_prepare_assets(
             tmp_path / "shorts" / "short-01",
             STYLE_DNA,
             doc,
@@ -608,7 +611,7 @@ def test_defer_graphic_ai_skips_chatgpt_and_makes_placeholder(tmp_path, monkeypa
     }
 
     monkeypatch.setattr(
-        "video_agent.stages.assets.StockAssetService.get_scene_asset",
+        "video_agent.shorts.assets.scene_resolver.ShortSceneResolver.get_scene_asset",
         lambda self, scene, channel_id, job_id: {
             "provider": "graphic_fallback",
             "asset_tier": "graphic_fallback",
@@ -616,7 +619,7 @@ def test_defer_graphic_ai_skips_chatgpt_and_makes_placeholder(tmp_path, monkeypa
         },
     )
 
-    manifest = prepare_assets(
+    manifest = short_prepare_assets(
         tmp_path / "shorts" / "short-01",
         STYLE_DNA,
         doc,
@@ -660,7 +663,7 @@ def test_graphic_scene_with_chatgpt_image_becomes_media_layout(tmp_path, monkeyp
     }
 
     monkeypatch.setattr(
-        "video_agent.stages.assets.StockAssetService.get_scene_asset",
+        "video_agent.shorts.assets.scene_resolver.ShortSceneResolver.get_scene_asset",
         lambda self, scene, channel_id, job_id: {
             "provider": "ai_generated",
             "local_path": str(generated),
@@ -669,7 +672,7 @@ def test_graphic_scene_with_chatgpt_image_becomes_media_layout(tmp_path, monkeyp
         },
     )
 
-    prepare_assets(
+    short_prepare_assets(
         tmp_path / "shorts" / "short-01",
         STYLE_DNA,
         doc,

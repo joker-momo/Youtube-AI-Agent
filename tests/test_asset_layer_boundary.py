@@ -1,7 +1,6 @@
 """Enforces the Shorts<->Long asset-layer boundary (spec 2026-06-27, §6).
 
-A future change that re-couples the two pipelines turns the suite red. The
-`stages/assets ↛ shorts` assertion is added in P4 once the long file is stripped.
+A future change that re-couples the two pipelines turns the suite red.
 """
 from __future__ import annotations
 
@@ -45,3 +44,9 @@ def test_core_primitives_are_leaves():
         mods = _imports(SRC / "assets" / name)
         bad = sorted(m for m in mods if m.startswith(("video_agent.stages", "video_agent.shorts")))
         assert not bad, f"assets/{name} must be a leaf primitive: {bad}"
+
+
+def test_stages_assets_never_imports_shorts():
+    mods = _imports(SRC / "stages" / "assets.py")
+    bad = sorted(m for m in mods if m.startswith("video_agent.shorts"))
+    assert not bad, f"stages/assets.py must not import video_agent.shorts.*: {bad}"

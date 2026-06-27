@@ -37,9 +37,6 @@ from video_agent.contracts import ARTIFACT_ASSETS, ARTIFACT_SCENES, repo_root
 from video_agent.storage.public_jobs import prepare_public_job_dir
 from video_agent.utils.json_io import write_json
 
-class RequiredGeneratedImageError(RuntimeError):
-    """Raised when a planning-only graphic scene has no ChatGPT image."""
-
 
 def _project_name_from_out_path(out_path: str | Path) -> str:
     """Readable ChatGPT project name like ``<job_id>_<scene_id>`` derived from the
@@ -88,13 +85,11 @@ def prepare_assets(
     stock_client: Any | None = None,
     download_client: Any | None = None,
     tts_client: Any | None = None,
-    llm_history_path: Path | None = None,
     render_backgrounds: bool = True,
     render_tts: bool = True,
     on_scene_resolved: Callable[[dict[str, Any]], None] | None = None,
     vision_qa_fn: Callable[[dict[str, Any], str], dict[str, Any]] | None = None,
     only_scene_ids: set[str] | None = None,
-    defer_graphic_ai: bool = False,
 ) -> dict[str, Any]:
     assets_dir = job_dir / "assets"
     assets_dir.mkdir(parents=True, exist_ok=True)
@@ -110,27 +105,14 @@ def prepare_assets(
 
     # Determine portrait default dynamically
     is_portrait = (visual_config.get("orientation") == "portrait")
-    if not is_portrait:
-        if "shorts" in job_dir.parts or visual_config.get("format") == "short":
-            is_portrait = True
 
     source_dir = _resolve_source_dir(visual_config.get("source_dir"))
-    # When a history path is supplied (Shorts), log every AI image-gen prompt to
-    # the same prompt-history stream as the ChatGPT/Gemini calls.
-    image_gen_recorder = None
-    if llm_history_path is not None:
-        try:
-            from video_agent.shorts.llm_history import LLMHistoryRecorder
-            image_gen_recorder = LLMHistoryRecorder(Path(llm_history_path))
-        except Exception:  # pragma: no cover - logging must never break the stage
-            image_gen_recorder = None
     stock_service = (
         StockAssetService(
             visual_config,
             stock_client=stock_client,
             download_client=download_client,
             image_gen_fn=image_gen_fn or _default_sync_image_gen,
-            image_gen_recorder=image_gen_recorder,
             vision_qa_fn=vision_qa_fn,
         )
         if visual_config.get("strategy") in {"auto", "stock_photo_api"}
@@ -171,30 +153,8 @@ def prepare_assets(
         local_image = primary_asset or _find_local_scene_image(scene["id"], source_dir)
         stock_asset = None
         scene_dur = float(scene.get("duration_sec") or 30)
-        _layout = str(scene.get("layout") or "")
-        was_graphic_layout = _layout.startswith("graphic_")
-        if was_graphic_layout:
-            if defer_graphic_ai:
-                # Step 5: defer this graphic scene's ChatGPT generation to the
-                # single post-QA pass. Skip the AI tier now (placeholder) so the
-                # whole batch of needed images can be generated together later.
-                scene["_skip_ai_fallback"] = True
-            else:
-                # graphic_* is planning vocabulary only. A provisional stock video
-                # must never suppress the required ChatGPT image acquisition.
-                scene["_skip_ai_fallback"] = False
         if not local_image and stock_service:
             stock_asset = stock_service.get_scene_asset(scene, channel_id, job_dir.name)
-        if (
-            was_graphic_layout
-            and not defer_graphic_ai
-            and (not stock_asset or stock_asset.get("provider") != "ai_generated")
-        ):
-            provider = stock_asset.get("provider") if stock_asset else "none"
-            raise RequiredGeneratedImageError(
-                f"Scene {scene['id']} layout {_layout} requires a ChatGPT-generated "
-                f"image; acquired provider={provider}."
-            )
         # Force all scene backgrounds to video so Remotion always renders OffthreadVideo.
         asset_suffix = ".mp4"
         image_path = assets_dir / f"{scene['id']}{asset_suffix}"
@@ -273,11 +233,6 @@ def prepare_assets(
         public_ref = f"jobs/{job_dir.name}/assets/{image_path.name}"
         scene["asset_refs"]["background"] = public_ref
 
-        if was_graphic_layout and stock_asset and stock_asset.get("provider") == "ai_generated":
-            scene["generated_image_source_layout"] = _layout
-            scene["layout"] = "short_tip"
-            scene["background_mode"] = "generated_image"
-            scene.pop("_skip_ai_fallback", None)
         scene_asset = {
             "scene_id": scene["id"],
             "background": str(image_path.resolve()),
@@ -285,8 +240,6 @@ def prepare_assets(
             "source": source,
             "source_path": source_path,
         }
-        if scene.get("generated_image_source_layout"):
-            scene_asset["generated_image_source_layout"] = scene.get("generated_image_source_layout")
         scene_asset.update(extra_manifest)
         scene_asset["background_source"] = _background_source_label(scene_asset)
         scene_asset["media_kind"] = media_kind
@@ -310,14 +263,6 @@ def prepare_assets(
             channel_id=channel_id,
             outputs_dir=job_dir,
         )
-        # Attach deterministic ROI crop plans now that asset_refs.background is
-        # resolved, so render/QA see crop_plan in the persisted scene artifact
-        # (not only in memory). Skips graphic_* and background-less scenes.
-        try:
-            from video_agent.shorts.roi_crop_planner import apply_crop_plan
-            scene_doc["scenes"] = apply_crop_plan(scene_doc)["scenes"]
-        except Exception:  # pragma: no cover - crop planning must never break asset prep
-            pass
         # Persist asset_refs + the per-scene background sourcing report so the
         # Shorts Studio UI can show which source each scene used.
         write_json(job_dir / ARTIFACT_SCENES, scene_doc)

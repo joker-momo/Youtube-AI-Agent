@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
 import os
-from pathlib import Path
 from typing import Any
 
 from video_agent.assets.media_ops import extract_asset_frame  # extracted (P1)
@@ -39,289 +37,15 @@ from video_agent.assets.stock_core import (  # extracted (P2/T3a, T3b)
     StockSearchCore,  # extracted (T3b) — stateful search machinery
 )
 from video_agent.contracts import repo_root
-from video_agent.shorts.visual_acquisition import compile_span_search_queries
-from video_agent.shorts.visual_candidate_scoring import (
-    artifact_candidate_record,
-    merge_query_origin,
-    metadata_identity,
-)
-from video_agent.shorts.visual_candidate_scoring import (
-    select_provisional_span_candidate as _select_provisional_span_candidate,
+from video_agent.shorts.assets import ShortSpanAssetService
+from video_agent.shorts.assets.image_prompt import (
+    build_scene_image_prompt as build_scene_image_prompt,  # noqa: F401 - back-compat re-export (T4)
 )
 
 # extract_asset_frame + _IMAGE_SUFFIXES moved to assets/media_ops.py (P1).
-
-
-
-
-
-
-
-
-
-
-# Safety net: when ChatGPT leaks Spanish into visual_prompt despite the prompt rule,
-# we still try to send a meaningful English query to Pexels rather than the raw
-# Spanish prose. This is keyword extraction, not real translation — adequate
-# because Pexels stock search is token-based.
-
-
-
-
-
-
-
-
-
-def _compact_payload_text(value: Any) -> str:
-    """Flatten a layout payload into prompt text without losing its labels."""
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value.strip()
-    if isinstance(value, (int, float, bool)):
-        return str(value)
-    if isinstance(value, list):
-        return "; ".join(filter(None, (_compact_payload_text(item) for item in value)))
-    if isinstance(value, dict):
-        parts: list[str] = []
-        for key, item in value.items():
-            text = _compact_payload_text(item)
-            if text:
-                parts.append(f"{key}: {text}")
-        return "; ".join(parts)
-    try:
-        return json.dumps(value, ensure_ascii=False)
-    except TypeError:
-        return str(value)
-
-
-def _compact_list(items: Any) -> str:
-    if not isinstance(items, list):
-        return ""
-    cleaned = [str(item).strip() for item in items if str(item).strip()]
-    return "; ".join(cleaned)
-
-
-def _required_visual_evidence_text(scene: dict[str, Any]) -> str:
-    evidence = scene.get("required_visual_evidence") or {}
-    if not isinstance(evidence, dict):
-        return ""
-    sections: list[str] = []
-    positive_fields = (
-        ("required_actions", "actions"),
-        ("required_objects", "objects"),
-        ("subject_pose", "subject"),
-        ("visibility", "visibility"),
-    )
-    negative_fields = (
-        ("forbidden_pose", "forbidden pose"),
-        ("forbidden_context", "avoid setting"),
-        ("forbidden_mood", "forbidden mood"),
-    )
-    for key, label in positive_fields:
-        text = _compact_list(evidence.get(key))
-        if text:
-            sections.append(f"{label}: {text}")
-    for key, label in negative_fields:
-        text = _compact_list(evidence.get(key))
-        if text:
-            sections.append(f"{label}: {text}")
-    return "\n".join(sections)
-
-
-def _graphic_layout_contract(layout: str, payload: dict[str, Any]) -> str:
-    if not isinstance(payload, dict):
-        return ""
-    if layout == "graphic_comparison":
-        left = payload.get("left") if isinstance(payload.get("left"), dict) else {}
-        right = payload.get("right") if isinstance(payload.get("right"), dict) else {}
-        footer = str(payload.get("footer") or "").strip()
-        lines = [
-            "Layout contract: graphic_comparison.",
-            "Use a clean side-by-side composition with two balanced panels over a realistic, softly blurred scene background.",
-            "LEFT PANEL:",
-            f"- heading exactly: {str(left.get('heading') or '').strip()}",
-            f"- supporting line exactly: {str(left.get('text') or '').strip()}",
-            "RIGHT PANEL:",
-            f"- heading exactly: {str(right.get('heading') or '').strip()}",
-            f"- supporting line exactly: {str(right.get('text') or '').strip()}",
-        ]
-        if footer:
-            lines.append(f"Footer exactly: {footer}")
-        lines.append("Do not invent extra numbers, calories, grams, medical claims, warning icons, red crosses, or good-versus-bad moral judgment.")
-        return "\n".join(lines)
-    if layout == "graphic_checklist":
-        items = [str(item).strip() for item in (payload.get("items") or []) if str(item).strip()]
-        lines = [
-            "Layout contract: graphic_checklist.",
-            "Create one saveable, premium checklist card integrated into a realistic editorial background.",
-            "Show only these checklist items, in this order:",
-        ]
-        lines.extend(f"- {item}" for item in items)
-        lines.append("Do not add extra checklist items, decorative icons that change meaning, tiny footnotes, or dense paragraphs.")
-        return "\n".join(lines)
-    if layout == "graphic_plate_ratio":
-        segments = payload.get("segments") or []
-        lines = [
-            "Layout contract: graphic_plate_ratio.",
-            "Create a clear plate/portion ratio visual with warm realistic food texture and readable segment labels.",
-            "Use only these segments:",
-        ]
-        for segment in segments if isinstance(segments, list) else []:
-            if isinstance(segment, dict):
-                lines.append(
-                    f"- {str(segment.get('label') or '').strip()}: {str(segment.get('value') or '').strip()}"
-                )
-        lines.append("Do not add calorie math, grams, scales, medical symbols, or extra ratios.")
-        return "\n".join(lines)
-    if layout == "graphic_label_callout":
-        callouts = payload.get("callouts") or []
-        lines = [
-            "Layout contract: graphic_label_callout.",
-            "Create a realistic product/label close-up with a few clean callouts, not a generic template.",
-        ]
-        product = str(payload.get("productLabel") or "").strip()
-        if product:
-            lines.append(f"Product label context: {product}")
-        lines.append("Use only these callouts:")
-        for callout in callouts if isinstance(callouts, list) else []:
-            if isinstance(callout, dict):
-                note = str(callout.get("note") or "").strip()
-                line = (
-                    f"- {str(callout.get('label') or '').strip()}: "
-                    f"{str(callout.get('value') or '').strip()}"
-                )
-                if note:
-                    line += f" ({note})"
-                lines.append(line)
-        lines.append("Do not add unrelated nutrition values, brand logos, warning stamps, or tiny legal-style copy.")
-        return "\n".join(lines)
-    return f"Layout contract: {layout}.\nUse the payload exactly; do not invent extra teaching points."
-
-
-def build_scene_image_prompt(scene: dict[str, Any], query: str) -> str:
-    """Build the ChatGPT image prompt for AI fallback scenes.
-
-    For former ``graphic_*`` scenes the generated image must carry the same
-    teaching content as the graphic payload, but as a richer editorial visual
-    instead of a rigid renderer card.
-    """
-    layout = str(scene.get("layout") or "")
-    payload = scene.get("layout_payload") or {}
-    title = (
-        str(payload.get("title") or "")
-        if isinstance(payload, dict)
-        else ""
-    ).strip()
-    on_screen = str(scene.get("on_screen_text") or title or "").strip()
-    caption = str(scene.get("caption") or "").strip()
-    narration = str(scene.get("narration") or "").strip()
-    visual_prompt = str(scene.get("visual_prompt") or query or "").strip()
-    payload_text = _compact_payload_text(payload)
-    evidence_text = _required_visual_evidence_text(scene)
-    source_graphic_layout = str(scene.get("generated_image_source_layout") or "").strip()
-    graphic_layout = (
-        layout
-        if layout.startswith("graphic_")
-        else (
-            source_graphic_layout
-            if source_graphic_layout.startswith("graphic_")
-            else ("graphic_generated" if str(scene.get("visual_type") or "") == "graphic" or str(scene.get("asset_strategy") or "") == "graphic_fallback" else "")
-        )
-    )
-    is_graphic = bool(graphic_layout)
-    is_cta = layout in {"short_cta", "cta"} or str(scene.get("retention_function") or "") == "cta"
-    is_hook = layout in {"short_hook", "hook"} or str(scene.get("retention_function") or "") == "hook"
-
-    if is_hook:
-        # The 3-second hook decides the swipe. A clean, human, emotional first
-        # frame beats an empty-room stock clip. CLEAN background only (renderer
-        # overlays the hook headline) — no trigger words so the driver keeps its
-        # "no text overlays" guard.
-        return (
-            "A vertical medium close-up photograph of one calm adult aged 50 to 60 at home "
-            "(living room or kitchen), face clearly visible and centered, expression subtly "
-            "overwhelmed yet composed, gently holding a phone or a warm mug of tea, soft warm "
-            "natural light, shallow depth of field, photorealistic editorial photography.\n"
-            f"Scene mood: {caption or narration or visual_prompt}"
-        )
-
-    if is_graphic:
-        layout_contract = _graphic_layout_contract(graphic_layout, payload if isinstance(payload, dict) else {})
-        return (
-            "Create a premium vertical editorial image for a Spanish wellness Short for adults 45+. "
-            "Replace a flat renderer card with a natural, polished visual that still carries the teaching content exactly. "
-            "Use warm Mediterranean light, realistic textures, tasteful magazine-style composition, and large legible Spanish typography inside mobile safe margins. "
-            "Make the first frame useful and readable without zooming. "
-            "Do not use a plain beige card, generic icons, stock-photo collage, watermark, tiny text, extra claims, or English wording.\n"
-            f"Scene layout: {graphic_layout}\n"
-            f"Scene visual idea: {visual_prompt}\n"
-            f"Main headline to include exactly: {on_screen or title}\n"
-            f"{layout_contract}\n"
-            f"Full payload reference: {payload_text}\n"
-            f"Required visual evidence:\n{evidence_text or 'Use the scene visual idea and payload as the source of truth.'}\n"
-            f"Narration context: {narration or caption}\n"
-            "Keep every written element short, high contrast, and visually integrated with the scene."
-        )
-    if is_cta:
-        # CLEAN background only — the renderer overlays the CTA headline itself, so
-        # the image must contain NO burned-in wording (a generated image with the
-        # headline plus the renderer overlay produced two overlapping texts). Phrase
-        # it WITHOUT trigger words (text/title/overlay/word/logo/watermark) so the
-        # driver keeps its default "no text overlays, no watermark" guard.
-        return (
-            "A warm, inviting vertical wellness photograph for adults 45+. "
-            "A calm mature 45+ adult in a peaceful walking or at-home wellness moment, "
-            "soft natural golden light, gentle shallow depth of field, serene and hopeful mood, "
-            "with plenty of calm empty space in the upper third of the frame. "
-            "Photorealistic editorial photography.\n"
-            f"Scene mood: {caption or narration or visual_prompt}"
-        )
-    if str(scene.get("asset_strategy") or "") == "ai_image_preferred" or evidence_text:
-        return (
-            "Create a premium photorealistic lifestyle image for a Spanish wellness Short for adults 45+. "
-            "Use a realistic mature adult, warm natural Mediterranean light, calm editorial composition, and a clear opening action. "
-            "The image should feel like a real photographed moment, not a template, stock collage, illustration, or poster.\n"
-            f"Scene visual idea: {visual_prompt or query}\n"
-            f"Required visual evidence:\n{evidence_text or 'Follow the scene visual idea exactly.'}\n"
-            "No readable signage, captions, UI, numbers, commercial marks, medical symbols, scales, alarmist colors, or shame/fear mood."
-        )
-    return visual_prompt or query
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+# build_scene_image_prompt + span methods moved to shorts/assets/ (T4); the
+# image-prompt helper is re-imported above and the span methods are delegated
+# to an internal ShortSpanAssetService so existing import sites stay valid.
 
 
 class StockAssetService:
@@ -368,6 +92,17 @@ class StockAssetService:
             stock_client=stock_client,
             download_client=download_client,
             vision_qa_fn=vision_qa_fn,
+        )
+        # Shorts span search + AI image generation (T4). Composes the SAME
+        # ``self.core`` so the metadata cache, asset library and error log stay
+        # unified across the long-video and Shorts code paths. The span methods
+        # below are thin delegates to this service.
+        self._span = ShortSpanAssetService(
+            visual_config,
+            core=self.core,
+            providers=self.providers,
+            image_gen_fn=image_gen_fn,
+            image_gen_recorder=image_gen_recorder,
         )
 
     def _is_key_scene(self, scene: dict[str, Any]) -> bool:
@@ -551,75 +286,23 @@ class StockAssetService:
         # Tier 5 — block + review (returns None)
         return None
 
+    # --- Shorts span + AI-image delegates (T4) -------------------------------
+    # The implementations now live in ``video_agent.shorts.assets``. These thin
+    # wrappers forward to ``self._span`` so existing callers and tests that reach
+    # for ``StockAssetService`` keep working unchanged. ``_ai_generate_scene_asset``
+    # stays patchable here because ``get_scene_asset`` (above) calls it via
+    # ``self`` and tests monkeypatch it on the instance.
+
     def get_visual_span_candidates(
         self,
         *,
         acquisition_context: dict[str, Any],
         budget: Any,
     ) -> list[dict[str, Any]]:
-        """PR C metadata-only span search.
-
-        Searches provider metadata for the complete visual span, deduplicates by
-        provider identity (or normalized metadata identity), and returns artifact
-        safe candidate records. It never downloads or materializes assets.
-        """
-        provider = str(
-            (((self.visual_config.get("visual_quality_flow") or {}).get("acquisition") or {}).get("provider"))
-            or (self.providers[0] if self.providers else "pexels_video")
+        """PR C metadata-only span search (delegated to ShortSpanAssetService)."""
+        return self._span.get_visual_span_candidates(
+            acquisition_context=acquisition_context, budget=budget
         )
-        providers = [provider] if provider else list(self.providers)
-        queries = compile_span_search_queries(
-            acquisition_context,
-            locale=str(acquisition_context.get("locale") or "es-ES"),
-            provider=provider,
-        )
-        flat_queries: list[tuple[str, str]] = []
-        for query_class in ("primary", "alternates", "equivalent_action"):
-            for query in queries.get(query_class) or []:
-                flat_queries.append((query_class, query))
-        flat_queries = flat_queries[: max(0, int(getattr(budget, "max_queries", 1)))]
-
-        filters = _stock_filters(
-            self.visual_config,
-            scene_duration_sec=int(float(acquisition_context.get("planned_duration_sec") or 0.0)),
-        )
-        filters["per_page"] = int(getattr(budget, "metadata_candidates_per_query", filters.get("per_page", 8)))
-        ttl_hours = int(self.visual_config.get("query_cache_ttl_hours", 24))
-        config = ((self.visual_config.get("visual_quality_flow") or {}).get("acquisition") or {})
-        records_by_identity: dict[tuple[str, str], dict[str, Any]] = {}
-        for query_class, query in flat_queries:
-            for provider_name in providers:
-                response = self.core.cache.get(provider_name, query, filters)
-                if response is None:
-                    try:
-                        response = self.core.stock_client.search(provider_name, query, filters)
-                    except Exception as exc:  # noqa: BLE001 - report-only metadata search degrades safely.
-                        err = {
-                            "provider": provider_name,
-                            "error_type": exc.__class__.__name__,
-                            "message": str(exc),
-                            "stage": "visual_span_metadata_search",
-                        }
-                        if err not in self.core.last_errors:
-                            self.core.last_errors.append(err)
-                        continue
-                    self.core.cache.set(provider_name, query, filters, response, ttl_hours=ttl_hours)
-                for candidate in self.core.stock_client.normalize(provider_name, response):
-                    identity = metadata_identity(candidate)
-                    if identity in records_by_identity:
-                        merge_query_origin(records_by_identity[identity], query=query, query_class=query_class)
-                        continue
-                    record = artifact_candidate_record(
-                        candidate,
-                        context=acquisition_context,
-                        query=query,
-                        query_class=query_class,
-                        config=config,
-                    )
-                    records_by_identity[identity] = record
-                    if len(records_by_identity) >= int(getattr(budget, "max_unique_metadata_candidates", 12)):
-                        return list(records_by_identity.values())
-        return list(records_by_identity.values())
 
     def select_provisional_span_candidate(
         self,
@@ -629,8 +312,8 @@ class StockAssetService:
         recent_visual_memory: dict[str, Any],
         config: dict[str, Any],
     ) -> dict[str, Any]:
-        """PR C metadata-only provisional selection. Never render-eligible."""
-        return _select_provisional_span_candidate(
+        """PR C metadata-only provisional selection (delegated)."""
+        return self._span.select_provisional_span_candidate(
             acquisition_context=acquisition_context,
             candidates=candidates,
             recent_visual_memory=recent_visual_memory,
@@ -641,119 +324,13 @@ class StockAssetService:
         self, prompt: str, scene: dict[str, Any], attempt: int, *,
         ok: bool, duration_ms: int = 0, error: str | None = None,
     ) -> None:
-        """Log one AI image-gen prompt to the Short's history (no-op if unset)."""
-        rec = self.image_gen_recorder
-        if rec is None:
-            return
-        try:
-            rec.record_image_gen(
-                prompt,
-                kind=f"image_gen:scene-{scene.get('id', '?')}:attempt-{attempt + 1}",
-                ok=ok,
-                duration_ms=duration_ms,
-                error=error,
-                response="image generated" if ok else "",
-            )
-        except Exception:  # pragma: no cover - logging must never break gen
-            pass
+        """Log one AI image-gen prompt to the Short's history (delegated)."""
+        self._span._record_image_gen(
+            prompt, scene, attempt, ok=ok, duration_ms=duration_ms, error=error
+        )
 
     def _ai_generate_scene_asset(
         self, scene: dict[str, Any], query: str, channel_id: str, job_id: str
     ) -> dict[str, Any] | None:
-        """Last-resort tier: render an AI image from the scene's visual_prompt."""
-        import hashlib
-
-        prompt = build_scene_image_prompt(scene, query).strip()
-        if not prompt:
-            return None
-
-        aspect_ratio = "9:16"
-        style_version = "v1"
-        model_name = "dall-e-3"
-        prompt_hash = hashlib.sha256(f"{prompt}_{aspect_ratio}_{style_version}_{model_name}".encode()).hexdigest()[:16]
-
-        out_dir = Path(self.core.library.root) / "ai_generated"
-        out_path = out_dir / f"{job_id}_{scene['id']}_{prompt_hash}.png"
-
-        # Cache check
-        if not (out_path.exists() and out_path.stat().st_size > 1024):
-            try:
-                out_dir.mkdir(parents=True, exist_ok=True)
-
-                # The browser-worker image driver (build_image_gen_prompt) is the
-                # single source of truth for the dimension/format instruction and
-                # runs contradiction checks (text/watermark/border) against the
-                # prompt. Pass the raw scene/CTA prompt so the instruction is added
-                # exactly once — a manual copy here duplicated it and bypassed the
-                # contradiction stripping (e.g. CTA wants readable text but the
-                # buried copy still said "no commentary").
-                full_prompt = prompt
-
-                # Browser-worker refuses to write outside the 'jobs/' directory.
-                # So we must tell it to write to a temp file inside the job dir, then move it.
-                temp_path = Path(f"jobs/{job_id}/assets/ai_temp_{scene['id']}_{prompt_hash}.png").resolve()
-                temp_path.parent.mkdir(parents=True, exist_ok=True)
-
-                # Attempt generation with 1 retry
-                import time as _time
-                for attempt in range(2):
-                    _t0 = _time.monotonic()
-                    try:
-                        self.image_gen_fn(full_prompt, temp_path)
-                        import shutil
-                        if temp_path.exists():
-                            shutil.move(str(temp_path), str(out_path))
-                        self._record_image_gen(
-                            full_prompt, scene, attempt, ok=True,
-                            duration_ms=int((_time.monotonic() - _t0) * 1000),
-                        )
-                        break
-                    except Exception as e:
-                        self._record_image_gen(
-                            full_prompt, scene, attempt, ok=False, error=f"{type(e).__name__}: {e}",
-                            duration_ms=int((_time.monotonic() - _t0) * 1000),
-                        )
-                        if attempt == 1:
-                            raise e
-            except Exception as exc:  # pragma: no cover - defensive
-                self.core.last_errors.append(
-                    {"provider": "ai_generated", "error_type": exc.__class__.__name__, "message": str(exc), "stage": "ai_gen"}
-                )
-                return None
-
-        # Sanity Checks
-        if not out_path.exists():
-            return None
-        if out_path.stat().st_size < 1024:
-            # File exists but is too small (blank/corrupt)
-            return None
-
-        # Optional: check aspect ratio or if it's all black/white if PIL is available
-        # (Assuming file size > 1KB is a basic sanity check for non-blank for now)
-
-        asset_id = f"ai_{job_id}_{scene['id']}"
-        try:
-            self.core.library.record_usage(
-                asset_id, channel_id=channel_id, job_id=job_id,
-                scene_id=scene["id"], scene_intent=scene.get("motion"),
-            )
-        except Exception:  # pragma: no cover - library is best-effort here
-            pass
-
-        return {
-            "provider": "ai_generated",
-            "asset_id": asset_id,
-            "provider_asset_id": asset_id,
-            "media_type": "image",
-            "local_path": str(out_path),
-            "attribution": "AI-generated (ChatGPT image)",
-            "asset_tier": "ai_image",
-            "asset_selection": {
-                "query": prompt,
-                "source": "ai_generated",
-                "weak_match": False,
-                "asset_match_status": "ai_generated",
-                "reasons": ["ai_generated"],
-                "matched_terms": [],
-            },
-        }
+        """Last-resort AI image tier (delegated to ShortSpanAssetService)."""
+        return self._span._ai_generate_scene_asset(scene, query, channel_id, job_id)

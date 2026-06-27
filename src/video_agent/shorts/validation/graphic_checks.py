@@ -425,6 +425,9 @@ def _validate_comparison(payload: dict, sid: Any) -> None:
         )
         _require_short_string(side.get("text"), _COMPARISON_TEXT_MAX, f"{side_name}.text", sid)
         badge = side.get("badge")
+        if isinstance(badge, str) and not badge.strip():
+            side.pop("badge", None)
+            badge = None
         if badge is not None:
             _require_short_string(badge, _COMPARISON_BADGE_MAX, f"{side_name}.badge", sid)
         for field in ("heading", "text", "badge"):

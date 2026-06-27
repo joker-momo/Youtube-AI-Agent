@@ -511,6 +511,38 @@ def test_v19_dense_slideshow_still_repairable():
     assert any(issue.type == "slideshow_risk" and issue.severity == "repairable_error" for issue in issues)
 
 
+def test_slideshow_risk_identifies_exact_dense_graphic_scene():
+    from video_agent.shorts.idea_preservation import validate_scene_idea_coverage
+    from video_agent.shorts.validate_scenes import build_scene_repair_plan
+
+    scenes_doc = {
+        "scenes": [
+            _scene("s01", [], layout="short_hook"),
+            _scene(
+                "s02",
+                [1],
+                layout="graphic_checklist",
+                payload_items=["Apetito", "Actividad", "Sueño", "Objetivos", "Resto del plato"],
+            ),
+            _scene("s03", [2], layout="short_tip", payload_items=["1 grande", "2 pequeñas"]),
+            _scene("s04", [3], layout="short_tip", payload_items=["Plato", "Pan pequeño"]),
+            _scene("s05", [4], layout="short_tip"),
+            _scene("s06", [5], layout="short_tip"),
+            _scene("s07", [], layout="graphic_checklist", payload_items=["Porción", "Plato", "Comida"]),
+            _scene("s08", [], layout="short_cta"),
+        ]
+    }
+
+    issues = validate_scene_idea_coverage(scenes_doc, _five_error_script())
+    issue = next(issue for issue in issues if issue.type == "slideshow_risk")
+    plan = build_scene_repair_plan(scenes_doc["scenes"], [issue], script=_five_error_script())
+    instructions = "\n".join(plan["instructions"])
+
+    assert issue.scene_id == "s02"
+    assert "Fix s02" in instructions
+    assert "Reduce s02" in instructions
+
+
 def test_remaining_v19_four_short_checklists_and_six_checklist_like_is_repairable():
     from video_agent.shorts.idea_preservation import validate_scene_idea_coverage
 
@@ -1020,5 +1052,4 @@ def test_ensure_script_idea_fields_overwrites_stale_hook():
     assert res["original_idea"]["hook_text"] == "New Correct Hook"
     assert res["original_idea"]["idea_id"] == "idea_123"
     assert res["idea_id"] == "idea_123"
-
 

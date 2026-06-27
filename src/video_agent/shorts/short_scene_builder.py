@@ -189,12 +189,14 @@ def _restore_first_hook_scene_narration(sc: dict[str, Any], index: int, short_sc
     current = str(sc.get("narration") or "").strip()
     if hook.lower() in current.lower():
         return
-    desired = _first_hook_beat_narration(short_script)
-    if not desired:
-        return
-    sc["narration"] = desired
+    # Preserve the mandatory script hook without copying the whole first beat.
+    # The first beat often contains hook + setup; forcing that into a 2-3 second
+    # short_hook scene causes deterministic scene_narration_fit failures.
+    if current and not str(sc.get("caption") or "").strip():
+        sc["caption"] = current
+    sc["narration"] = hook
     warnings = list(sc.get("planner_warnings") or [])
-    warnings.append("first_hook_narration_restored_from_script")
+    warnings.append("first_hook_narration_restored_from_hook")
     sc["planner_warnings"] = warnings
 
 

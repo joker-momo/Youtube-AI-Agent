@@ -71,6 +71,47 @@ def test_scene_normalizer_caps_short_cta_duration():
     assert out["total_duration_sec"] == 2.8
 
 
+def test_scene_normalizer_restores_only_short_hook_not_full_script_beat():
+    from video_agent.shorts.short_scene_builder import normalize_short_scenes
+    from video_agent.shorts.validate_scenes import estimate_fits
+
+    doc = {
+        "scenes": [
+            {
+                "scene_id": "s01",
+                "layout": "short_hook",
+                "duration_sec": 2.4,
+                "narration": "Tu mano te da una pista.",
+                "on_screen_text": "TU MANO AYUDA",
+            },
+            {
+                "scene_id": "s02",
+                "layout": "short_tip",
+                "duration_sec": 3.2,
+                "narration": "Decide antes de empezar.",
+            },
+        ]
+    }
+    script = {
+        "hook": "TU MANO AYUDA",
+        "narration": "TU MANO AYUDA. ¿Repites pan por costumbre? No hay medida universal.",
+        "beats": [
+            {
+                "purpose": "hook",
+                "narration": "TU MANO AYUDA. ¿Repites pan por costumbre? No hay medida universal.",
+            }
+        ],
+    }
+
+    out = normalize_short_scenes(doc, script)
+    first = out["scenes"][0]
+
+    assert first["narration"] == "TU MANO AYUDA"
+    assert "Repites pan" not in first["narration"]
+    assert estimate_fits(first["narration"], first["duration_sec"])
+    assert "first_hook_narration_restored_from_hook" in first["planner_warnings"]
+
+
 def test_scene_normalizer_replaces_stale_food_payload_for_non_food_topic():
     from video_agent.shorts.short_scene_builder import normalize_short_scenes
 
@@ -207,6 +248,27 @@ def test_phase15_graphic_validator_rejects_forbidden_comparison_words():
         assert "veneno" in str(exc).lower()
     else:
         raise AssertionError("expected forbidden comparison language to fail validation")
+
+
+def test_graphic_comparison_allows_blank_optional_badges():
+    from video_agent.shorts.validate_scenes import validate_short_graphic_scenes
+
+    scene = {
+        "id": "s04",
+        "layout": "graphic_comparison",
+        "duration_sec": 4,
+        "layout_payload": {
+            "title": "DESAYUNO: 1 O 2",
+            "left": {"heading": "1 REBANADA", "text": "Mira el tamaño", "badge": ""},
+            "right": {"heading": "2 REBANADAS", "text": "Mira el acompañamiento", "badge": ""},
+        },
+    }
+
+    warnings = validate_short_graphic_scenes([scene])
+
+    assert warnings == []
+    assert "badge" not in scene["layout_payload"]["left"]
+    assert "badge" not in scene["layout_payload"]["right"]
 
 
 def test_graphic_validator_rejects_slow_graphic_bursts():
@@ -427,6 +489,80 @@ def test_checklist_requires_at_least_one_graphic_candidate():
     blocking = [i for i in issues if i.severity in ("blocking_error", "repairable_error")]
     assert any(i.type == "missing_graphic_required" for i in blocking), issues
     assert any("graphic_checklist" in (i.repair_hint or "") for i in blocking)
+
+
+def test_missing_graphic_repair_promotes_structured_short_checklist():
+    from video_agent.shorts.validate_scenes import (
+        repair_missing_graphic_checklist_scene,
+        validate_scene_structure,
+    )
+
+    scenes = [
+        {"id": "s01", "layout": "short_hook", "duration_sec": 2.4, "on_screen_text": "TU MANO AYUDA", "narration": "TU MANO AYUDA."},
+        {
+            "id": "s02",
+            "layout": "short_tip",
+            "duration_sec": 4.9,
+            "on_screen_text": "TU CONTEXTO",
+            "narration": "La porción depende de apetito, actividad, sueño, objetivos y plato.",
+            "layout_payload": {
+                "title": "TU CONTEXTO",
+                "items": ["Apetito y actividad", "Sueño y objetivos", "Resto del plato"],
+            },
+        },
+        {"id": "s03", "layout": "graphic_checklist", "duration_sec": 4.2, "on_screen_text": "MEJOR ASÍ", "narration": "Prueba una rebanada del tamaño de tu palma.", "layout_payload": {"title": "MEJOR ASÍ", "items": ["Una rebanada", "Tamaño palma"]}},
+        {"id": "s04", "layout": "short_cta", "duration_sec": 2.4, "on_screen_text": "GUÁRDALO", "narration": "Guárdalo."},
+    ]
+    script = {
+        "short_format": "checklist",
+        "narration": " ".join(s["narration"] for s in scenes),
+        "idea_contract": {"must_preserve_count": True, "original_count": 2, "final_count": 2},
+    }
+
+    assert repair_missing_graphic_checklist_scene(scenes, script) is True
+
+    assert scenes[1]["layout"] == "graphic_checklist"
+    assert scenes[1]["visual_type"] == "graphic"
+    assert scenes[1]["asset_strategy"] == "ai_image_preferred"
+    issues = validate_scene_structure(
+        scenes,
+        scenes_doc={"total_duration_sec": 13.9, "scenes": scenes},
+        script=script,
+    )
+    assert not any(i.type == "missing_graphic_required" for i in issues), issues
+
+
+def test_missing_graphic_repair_promotes_compact_portion_tip_without_items():
+    from video_agent.shorts.validate_scenes import (
+        repair_missing_graphic_checklist_scene,
+        validate_scene_structure,
+    )
+
+    scenes = [
+        {"id": "s01", "layout": "short_hook", "duration_sec": 2.4, "on_screen_text": "TU MANO AYUDA", "narration": "TU MANO AYUDA."},
+        {"id": "s02", "layout": "short_tip", "duration_sec": 4.0, "on_screen_text": "DESAYUNO: 1 O 2", "narration": "En el desayuno, una o dos rebanadas pueden encajar.", "visual_prompt": "Spanish breakfast table with one or two bread slices clearly compared.", "layout_payload": {"title": "DESAYUNO: 1 O 2", "items": []}},
+        {"id": "s03", "layout": "graphic_comparison", "duration_sec": 4.0, "on_screen_text": "USA TU PALMA", "narration": "Prueba una rebanada del tamaño de tu palma.", "layout_payload": {"title": "USA TU PALMA", "left": {"heading": "REFERENCIA", "text": "Tu palma"}, "right": {"heading": "PORCIÓN", "text": "Una rebanada"}}},
+        {"id": "s04", "layout": "short_cta", "duration_sec": 2.4, "on_screen_text": "GUÁRDALO", "narration": "Guárdalo."},
+    ]
+    script = {
+        "short_format": "checklist",
+        "narration": " ".join(s["narration"] for s in scenes),
+        "idea_contract": {"must_preserve_count": True, "original_count": 2, "final_count": 2},
+    }
+
+    assert repair_missing_graphic_checklist_scene(scenes, script) is True
+
+    assert scenes[1]["layout"] == "graphic_comparison"
+    assert scenes[1]["visual_type"] == "graphic"
+    assert scenes[1]["asset_strategy"] == "ai_image_preferred"
+    assert scenes[1]["layout_payload"]["left"]["text"] == "1 rebanada"
+    assert scenes[1]["layout_payload"]["right"]["text"] == "2 rebanadas"
+    issues = validate_scene_structure(
+        scenes,
+        scenes_doc={"total_duration_sec": 12.8, "scenes": scenes},
+        script=script,
+    )
+    assert not any(i.type == "missing_graphic_required" for i in issues), issues
 
 
 def test_audio_fit_blocks_when_narration_audio_exceeds_video_duration():
@@ -668,7 +804,7 @@ def test_normalize_short_scenes_keeps_existing_narration():
     assert out["scenes"][0]["id"] == "s1"
 
 
-def test_normalize_short_scenes_restores_first_hook_beat_when_llm_drops_hook():
+def test_normalize_short_scenes_restores_hook_without_copying_full_beat():
     from video_agent.shorts import short_scene_builder
 
     scenes_doc = {
@@ -702,7 +838,8 @@ def test_normalize_short_scenes_restores_first_hook_beat_when_llm_drops_hook():
 
     out = short_scene_builder.normalize_short_scenes(scenes_doc, script)
 
-    assert out["scenes"][0]["narration"] == "TU MANO AYUDA. ¿Repites pan por costumbre?"
+    assert out["scenes"][0]["narration"] == "TU MANO AYUDA"
+    assert "Repites pan" not in out["scenes"][0]["narration"]
     assert out["scenes"][1]["narration"] == "Depende de tu apetito."
 
 

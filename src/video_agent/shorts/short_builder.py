@@ -781,11 +781,10 @@ def _build_short_impl(
         if _local_qa_result.returns is not None:
             return _local_qa_result.returns
 
-        # Lazy AI fallback: the background stage skipped ChatGPT for scenes whose
-        # span had a provisional Pexels video. Now that visual_local_qa validated
-        # those clips, generate ChatGPT images ONLY for scenes in spans whose video
-        # was rejected (so generated_image_fallback in visual_beats has a real
-        # image instead of a placeholder). Quality-first, but no wasted gen.
+        # Lazy AI fallback: background skipped ChatGPT only for native-video
+        # routes. Now that visual_local_qa validated those clips, generate
+        # ChatGPT images only for failed native routes / explicit controlled
+        # fallbacks. Generated graphic/image routes already acquired assets.
         _stage_fallback_image_gen(_ctx)
 
         # Stage: Visual beats — PR E bounded visual-plan selection over PR D

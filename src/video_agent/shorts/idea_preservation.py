@@ -857,6 +857,10 @@ def _visible_text_chunk_count(scene: dict[str, Any]) -> int:
     return count
 
 
+def _scene_identifier(scene: dict[str, Any], index: int) -> str:
+    return str(scene.get("id") or scene.get("scene_id") or f"s{index + 1:02d}")
+
+
 def _slideshow_issues(scenes: list[dict[str, Any]], attempt: int = 1) -> list[SceneValidationIssue]:
     graphic = 0
     graphic_checklist = 0
@@ -868,7 +872,8 @@ def _slideshow_issues(scenes: list[dict[str, Any]], attempt: int = 1) -> list[Sc
     consecutive_dense = 0
     current_dense = 0
     has_footage_base = False
-    for scene in scenes:
+    dense_targets: list[tuple[int, int, str, str]] = []
+    for idx, scene in enumerate(scenes):
         layout = str(scene.get("layout") or "")
         payload = scene.get("layout_payload") if isinstance(scene.get("layout_payload"), dict) else {}
         payload_items = list(payload.get("items") or [])
@@ -888,12 +893,21 @@ def _slideshow_issues(scenes: list[dict[str, Any]], attempt: int = 1) -> list[Sc
             max_consecutive = max(max_consecutive, current_consecutive)
         else:
             current_consecutive = 0
-        dense_scene = _visible_text_chunk_count(scene) >= 4
+        visible_chunks = _visible_text_chunk_count(scene)
+        dense_scene = visible_chunks >= 4
         if dense_scene:
             scenes_with_4_chunks += 1
         if is_checklist_like and dense_scene:
             current_dense += 1
             consecutive_dense = max(consecutive_dense, current_dense)
+            dense_targets.append(
+                (
+                    visible_chunks,
+                    len(payload_items),
+                    _scene_identifier(scene, idx),
+                    layout,
+                )
+            )
         else:
             current_dense = 0
     bad = (
@@ -917,17 +931,30 @@ def _slideshow_issues(scenes: list[dict[str, Any]], attempt: int = 1) -> list[Sc
     severity = "repairable_error" if hard_dense else "warning"
     if attempt >= 2:
         severity = "warning"
+    target_scene_id = None
+    target_layout = ""
+    if dense_targets:
+        _chunks, _items, target_scene_id, target_layout = max(dense_targets)
     return [SceneValidationIssue(
         type="slideshow_risk",
-        scene_id=None,
+        scene_id=target_scene_id,
         severity=severity,
         detail=(
             "Short is too text/list heavy: "
             f"graphics={graphic}, graphic_checklist={graphic_checklist}, "
             f"short_checklist={short_checklist}, checklist_like={checklist_like}."
+            + (
+                f" Densest checklist/graphic scene: {target_scene_id} ({target_layout})."
+                if target_scene_id
+                else ""
+            )
         ),
         repair_hint=(
-            "Reduce the exact dense checklist/graphic scene carrying too many text chunks."
+            (
+                f"Reduce {target_scene_id}, the exact dense checklist/graphic scene carrying too many text chunks."
+                if target_scene_id
+                else "Reduce the exact dense checklist/graphic scene carrying too many text chunks."
+            )
             if severity == "repairable_error"
             else "Allowed if footage-led, readable, and all promised items are covered."
         ),

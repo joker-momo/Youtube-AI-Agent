@@ -188,6 +188,15 @@ def recover_stale_short(
     recovered["recovered_at"] = now_iso
     recovered["updated_at"] = now_iso
     recovered["heartbeat_at"] = now_iso
+    for stage in recovered.get("stages") or []:
+        if not isinstance(stage, dict):
+            continue
+        if stage.get("status") != "in_progress":
+            continue
+        stage["status"] = "failed"
+        stage["completed_at"] = now_iso
+        stage["actual_seconds"] = stage.get("actual_seconds")
+        stage["error"] = recovered["recovery_reason"]
     write_short_status(long_job_dir, short_id, recovered)
     return recovered
 

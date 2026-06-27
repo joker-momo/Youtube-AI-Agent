@@ -64,6 +64,29 @@ def test_orphaned_generating_no_owner_stale_recovers_to_terminal(tmp_path: Path)
     assert on_disk["stop_requested"] is True
 
 
+def test_recovery_closes_in_progress_stage_as_failed(tmp_path: Path):
+    job = _job(tmp_path)
+    short_id = "short-01"
+    doc = _write_status(job, short_id, status="generating", age_seconds=600)
+    doc["stages"] = [
+        {"name": "background", "status": "in_progress", "started_at": doc["updated_at"]},
+        {"name": "render", "status": "pending"},
+    ]
+    write_short_status(job, short_id, doc)
+
+    recovered = shorts_status.recover_stale_short(
+        job, short_id, doc, owner_alive=False, threshold=300,
+    )
+
+    assert recovered is not None
+    background = next(s for s in recovered["stages"] if s["name"] == "background")
+    render = next(s for s in recovered["stages"] if s["name"] == "render")
+    assert background["status"] == "failed"
+    assert background["completed_at"] == recovered["recovered_at"]
+    assert background["error"] == recovered["recovery_reason"]
+    assert render["status"] == "pending"
+
+
 def test_generating_with_live_owner_is_not_recovered(tmp_path: Path):
     job = _job(tmp_path)
     short_id = "short-01"

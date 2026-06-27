@@ -812,13 +812,25 @@ def build_scene_repair_plan(
             )
         elif issue.type == "slideshow_risk":
             repair_modes.append("reduce_slideshow_density")
-            issue_instrs.append(
-                "- Reduce only the exact dense checklist/graphic scene identified by the validator."
-            )
+            if issue.scene_id:
+                issue_instrs.extend(
+                    [
+                        f"- Fix {issue.scene_id}:",
+                        f"  - Reduce {issue.scene_id}, the exact dense checklist/graphic scene identified by the validator.",
+                        "  - Keep only 2-3 visible text chunks total: one short title plus 1-2 short labels/items.",
+                        "  - If the idea still needs more context, move it to realistic footage-led narration/caption in adjacent short_tip scenes.",
+                    ]
+                )
+            else:
+                issue_instrs.append(
+                    "- Reduce only the exact dense checklist/graphic scene identified by the validator."
+                )
             issue_instrs.append(
                 "- Do not convert good footage-led item scenes into short_checklist scenes."
             )
-            if issue.repair_hint:
+            if issue.repair_hint and not (
+                issue.scene_id and str(issue.repair_hint).startswith(f"Reduce {issue.scene_id}")
+            ):
                 issue_instrs.append(f"- {issue.repair_hint}")
         elif issue.type == "payoff_layout":
             repair_modes.append("payoff_checklist")

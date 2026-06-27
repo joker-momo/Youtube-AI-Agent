@@ -457,7 +457,7 @@ def test_placeholder_image_meets_aesthetic_targets(tmp_path):
     import numpy as np
     from PIL import Image
 
-    from video_agent.stages.assets import _write_placeholder_image
+    from video_agent.assets.media_ops import _write_placeholder_image
 
     tmp_img_path = tmp_path / "test_placeholder_aesthetic.jpg"
     palette = {

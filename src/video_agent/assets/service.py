@@ -2,45 +2,21 @@ from __future__ import annotations
 
 from typing import Any
 
-from video_agent.assets.media_ops import extract_asset_frame  # extracted (P1)
 from video_agent.assets.providers import StockPhotoClient
 from video_agent.assets.stock_core import (  # extracted (P2/T3a, T3b)
-    _evidence_terms,
-    _term_hits,
-    metadata_evidence_qa,
-    _assert_safe_http_url,
-    _SPANISH_TO_ENGLISH_KEYWORDS,
-    _SPANISH_STOPWORDS_FOR_TRANSLATE,
-    _is_likely_spanish_query,
-    _translate_spanish_query_to_english,
-    _force_elderly_demographic,
     DownloadClient,
-    UrlDownloadClient,
-    _resolve_project_path,
-    _stock_filters,
-    STOPWORDS,
-    NEGATIVE_CONTEXT_TERMS,
-    NEGATIVE_ALLOW_TERMS,
-    TERM_SYNONYMS,
-    _tokens,
-    _query_terms,
-    _term_matches_tags,
-    _candidate_score,
-    _ASSET_SELECTION_DEFAULTS,
-    _asset_selection_config,
-    _quality_norm,
-    _normalize_candidate_scores,
-    _candidate_haystack,
-    _asset_quality_dimensions,
+    StockSearchCore,
     _editorial_query,
-    StockSearchCore,  # extracted (T3b) — stateful search machinery
+    _force_elderly_demographic,
+    _stock_filters,
+    _translate_spanish_query_to_english,
 )
-from video_agent.contracts import repo_root
 
-# extract_asset_frame + _IMAGE_SUFFIXES moved to assets/media_ops.py (P1).
 # The per-scene graphic/ChatGPT-AI tiers and the Shorts visual-span methods live
 # in the Shorts fork (video_agent.shorts.assets) after the P4 asset-layer
-# decoupling; this long-facing service keeps only the stock cascade.
+# decoupling; this long-facing service keeps only the stock cascade. The moved
+# stock helpers (search/score/translate/cache) now live in assets.stock_core and
+# are imported there directly by callers, not re-exported through this module.
 
 
 class StockAssetService:

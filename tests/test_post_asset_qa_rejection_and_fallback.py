@@ -1,6 +1,8 @@
-import pytest
 from unittest.mock import MagicMock
+
 from video_agent.assets.service import StockAssetService
+from video_agent.assets.stock_core import metadata_evidence_qa
+
 
 def _mock_service(vision_qa_responses):
     # vision_qa_responses is a list of results to return sequentially
@@ -20,7 +22,7 @@ def _mock_service(vision_qa_responses):
     svc.core.library = MagicMock()
     svc.core.library.root = "/tmp"
     svc.core.library.has_asset.return_value = False
-    
+
     # Mocking _search_and_download is a bit complex because it's called internally.
     # We will just mock it entirely, but wait, the QA logic is INSIDE _search_and_download.
     # So we need to mock the provider search to return dummy candidates, and let _search_and_download run.
@@ -36,15 +38,15 @@ def test_post_asset_qa_rejection_and_fallback():
             {"id": "2", "image": "img2.jpg", "url": "http://img2.jpg", "tags": []}
         ]
     }
-    
+
     vision_qa_responses = [
         {"verdict": "FAIL", "missing_evidence": ["person"], "reason": "No person"},
         {"verdict": "PASS", "confidence": 0.9}
     ]
-    
+
     def mock_vision_qa(scene, local_path):
         return vision_qa_responses.pop(0)
-        
+
     svc = StockAssetService(
         visual_config={"providers": ["pexels"]},
         stock_client=stock_client,
@@ -89,8 +91,6 @@ def test_post_asset_qa_rejection_and_fallback():
 # --- Deterministic metadata QA (no injected vision fn) ---------------------
 # Reproduces the three real MOVEMENT bad matches from the rendered Short and
 # asserts the built-in metadata gate rejects each via required_visual_evidence.
-
-from video_agent.assets.service import metadata_evidence_qa
 
 _MOVEMENT_EVIDENCE = {
     "required_actions": ["standing", "gentle movement or stretching"],

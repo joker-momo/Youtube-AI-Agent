@@ -351,7 +351,7 @@ def copy_or_download_candidate(
 class FinalistDownloader:
     def __init__(self, download_client: Any | None = None) -> None:
         if download_client is None:
-            from video_agent.assets.service import UrlDownloadClient
+            from video_agent.assets.stock_core import UrlDownloadClient
 
             download_client = UrlDownloadClient()
         self.download_client = download_client

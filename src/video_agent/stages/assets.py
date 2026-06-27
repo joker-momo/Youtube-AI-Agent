@@ -1,21 +1,15 @@
 from __future__ import annotations
 
-import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from video_agent.assets.materialize import materialize_media
 from video_agent.assets.audio_ops import (  # extracted shared primitives (P1)
-    _choose_bgm_track,
-    _mix_bgm_with_narration,
     _synthesize_narration_and_mix,
     _write_audio_progress,
-    _write_silent_wav,
 )
+from video_agent.assets.materialize import materialize_media
 from video_agent.assets.media_ops import (  # extracted shared primitives (P1)
-    _hex_to_rgb,
-    _write_placeholder_image,
     _write_placeholder_video,
     _write_preview_still,
     _write_video_from_image,
@@ -37,41 +31,6 @@ from video_agent.contracts import ARTIFACT_ASSETS, ARTIFACT_SCENES, repo_root
 from video_agent.storage.public_jobs import prepare_public_job_dir
 from video_agent.utils.json_io import write_json
 
-
-def _project_name_from_out_path(out_path: str | Path) -> str:
-    """Readable ChatGPT project name like ``<job_id>_<scene_id>`` derived from the
-    image's out_path (``jobs/<job_id>/assets/ai_temp_<scene>_<hash>.png``) so the
-    project is identifiable in the ChatGPT sidebar instead of a generic 'fallback'."""
-    try:
-        p = Path(out_path)
-        job_id = p.parent.parent.name if p.parent.parent.name not in ("", "assets") else p.parent.name
-        stem = p.stem
-        scene = stem
-        if stem.startswith("ai_temp_"):
-            scene = stem[len("ai_temp_"):].rsplit("_", 1)[0]  # drop the trailing hash
-        name = f"{job_id}_{scene}".strip("_")
-        return name or "fallback"
-    except Exception:
-        return "fallback"
-
-
-def _default_sync_image_gen(prompt: str, out_path: str | Path) -> None:
-    import asyncio
-    import os
-
-    from video_agent.orchestrator.browser_client import BrowserClient
-
-    # Default to localhost since the script is mostly run natively on host machine now
-    browser_worker_url = os.environ.get("BROWSER_WORKER_URL", "http://localhost:8001")
-    client = BrowserClient(browser_worker_url)
-    asyncio.run(
-        client.generate_image(
-            prompt=prompt,
-            project_name=_project_name_from_out_path(out_path),
-            out_path=str(out_path),
-            aspect_ratio="9:16",
-        )
-    )
 
 def prepare_assets(
     job_dir: Path,
@@ -112,7 +71,7 @@ def prepare_assets(
             visual_config,
             stock_client=stock_client,
             download_client=download_client,
-            image_gen_fn=image_gen_fn or _default_sync_image_gen,
+            image_gen_fn=image_gen_fn,
             vision_qa_fn=vision_qa_fn,
         )
         if visual_config.get("strategy") in {"auto", "stock_photo_api"}

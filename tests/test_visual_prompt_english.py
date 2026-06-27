@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from video_agent.assets.service import (
+from video_agent.assets.stock_core import (
     _is_likely_spanish_query,
     _translate_spanish_query_to_english,
 )
@@ -10,7 +10,6 @@ from video_agent.operator_validators import (
     _looks_like_spanish_visual_prompt,
     _validate_visual_prompt,
 )
-
 
 # ---------- detector ----------
 
@@ -124,6 +123,7 @@ def test_translate_handles_objects_sequence_prompt():
 
 def test_enforce_scenes_visual_prompt_english_flips_verdict(tmp_path):
     import json
+
     from video_agent.orchestrator.stages import _enforce_scenes_visual_prompt_english
 
     job_dir = tmp_path / "job-test"
@@ -157,6 +157,7 @@ def test_enforce_scenes_visual_prompt_english_flips_verdict(tmp_path):
 
 def test_enforce_scenes_visual_prompt_english_no_op_when_all_english(tmp_path):
     import json
+
     from video_agent.orchestrator.stages import _enforce_scenes_visual_prompt_english
 
     job_dir = tmp_path / "job-test"

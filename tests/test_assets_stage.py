@@ -3,13 +3,14 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from video_agent.assets.service import _candidate_score
+from video_agent.assets.audio_ops import _choose_bgm_track
+from video_agent.assets.stock_core import _candidate_score
 
 # The graphic/defer/relabel tests below exercise the SHORT fork — that logic
 # moved out of the long stage in P4 (asset-layer decoupling), so they drive the
 # short prepare_assets and patch the short ShortSceneResolver, not the long stage.
 from video_agent.shorts.assets.prepare import prepare_assets as short_prepare_assets
-from video_agent.stages.assets import _choose_bgm_track, prepare_assets
+from video_agent.stages.assets import prepare_assets
 
 STYLE_DNA = {
     "palette": {

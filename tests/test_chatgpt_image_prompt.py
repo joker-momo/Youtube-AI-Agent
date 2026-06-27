@@ -157,6 +157,39 @@ def test_generate_images_selects_create_image_mode_for_each_prompt(monkeypatch, 
     assert events[-1] == "delete-chat"
 
 
+def test_image_driver_does_not_navigate_home_twice_before_new_chat(monkeypatch):
+    class FakePage:
+        def __init__(self):
+            self.url = ""
+            self.goto_calls = []
+
+        async def goto(self, url, **kwargs):
+            self.goto_calls.append(url)
+            self.url = url
+
+        async def wait_for_timeout(self, ms):
+            return None
+
+        async def content(self):
+            return "<html></html>"
+
+    async def fake_pause(*args, **kwargs):
+        return None
+
+    page = FakePage()
+    driver = ChatGPTImageDriver(page=page)
+    monkeypatch.setattr(chatgpt_image, "human_pause", fake_pause)
+    monkeypatch.setattr(driver, "_click_first_visible", lambda *a, **k: asyncio.sleep(0, False))
+
+    async def run():
+        await driver.open()
+        await driver._start_new_chat()
+
+    asyncio.run(run())
+
+    assert page.goto_calls == [chatgpt_image.CHATGPT_HOME]
+
+
 def test_image_mode_does_not_pause_to_probe_removed_aspect_ratio_controls(monkeypatch):
     driver = ChatGPTImageDriver(page=object())
     selector_calls = []

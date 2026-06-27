@@ -555,6 +555,7 @@ def prepare_assets(
     on_scene_resolved: Callable[[dict[str, Any]], None] | None = None,
     vision_qa_fn: Callable[[dict[str, Any], str], dict[str, Any]] | None = None,
     only_scene_ids: set[str] | None = None,
+    defer_graphic_ai: bool = False,
 ) -> dict[str, Any]:
     assets_dir = job_dir / "assets"
     assets_dir.mkdir(parents=True, exist_ok=True)
@@ -634,13 +635,21 @@ def prepare_assets(
         _layout = str(scene.get("layout") or "")
         was_graphic_layout = _layout.startswith("graphic_")
         if was_graphic_layout:
-            # graphic_* is planning vocabulary only. A provisional stock video
-            # must never suppress the required ChatGPT image acquisition.
-            scene["_skip_ai_fallback"] = False
+            if defer_graphic_ai:
+                # Step 5: defer this graphic scene's ChatGPT generation to the
+                # single post-QA pass. Skip the AI tier now (placeholder) so the
+                # whole batch of needed images can be generated together later.
+                scene["_skip_ai_fallback"] = True
+            else:
+                # graphic_* is planning vocabulary only. A provisional stock video
+                # must never suppress the required ChatGPT image acquisition.
+                scene["_skip_ai_fallback"] = False
         if not local_image and stock_service:
             stock_asset = stock_service.get_scene_asset(scene, channel_id, job_dir.name)
-        if was_graphic_layout and (
-            not stock_asset or stock_asset.get("provider") != "ai_generated"
+        if (
+            was_graphic_layout
+            and not defer_graphic_ai
+            and (not stock_asset or stock_asset.get("provider") != "ai_generated")
         ):
             provider = stock_asset.get("provider") if stock_asset else "none"
             raise RequiredGeneratedImageError(

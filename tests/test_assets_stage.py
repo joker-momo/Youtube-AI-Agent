@@ -521,8 +521,11 @@ def test_prepare_assets_auto_uses_stock_photo_api_when_local_image_is_missing(tm
 
 
 def test_prepare_assets_falls_back_to_placeholder_when_stock_provider_fails(tmp_path, monkeypatch):
+    from video_agent.assets import providers
+
     monkeypatch.delenv("PEXELS_API_KEY", raising=False)
     monkeypatch.delenv("PIXABAY_API_KEY", raising=False)
+    monkeypatch.setattr(providers, "load_env", lambda: None)
     doc = scene_doc()
     doc["scenes"][0]["visual_prompt"] = "calm sleep wellness bedroom"
     job_dir = tmp_path / "jobs" / "job-fallback"
@@ -582,6 +585,56 @@ def test_graphic_scene_fails_when_chatgpt_image_is_not_generated(tmp_path, monke
             },
             render_tts=False,
         )
+
+
+def test_defer_graphic_ai_skips_chatgpt_and_makes_placeholder(tmp_path, monkeypatch):
+    """Step 5: with defer_graphic_ai=True the background pass must NOT force a
+    ChatGPT image for a graphic scene (no RequiredGeneratedImageError); it lays
+    down a placeholder so the post-QA unified pass can generate every needed
+    image in one batch."""
+    doc = {
+        "total_duration_sec": 4.0,
+        "scenes": [
+            {
+                "id": "s01",
+                "layout": "graphic_checklist",
+                "duration_sec": 4.0,
+                "on_screen_text": "REVISA ESTO",
+                "visual_prompt": "premium vertical editorial checklist",
+                "layout_payload": {"title": "REVISA ESTO", "items": ["Uno", "Dos"]},
+                "asset_refs": {},
+            }
+        ],
+    }
+
+    monkeypatch.setattr(
+        "video_agent.stages.assets.StockAssetService.get_scene_asset",
+        lambda self, scene, channel_id, job_id: {
+            "provider": "graphic_fallback",
+            "asset_tier": "graphic_fallback",
+            "asset_selection": {"asset_match_status": "graphic_fallback"},
+        },
+    )
+
+    manifest = prepare_assets(
+        tmp_path / "shorts" / "short-01",
+        STYLE_DNA,
+        doc,
+        visual_config={
+            "strategy": "auto",
+            "orientation": "portrait",
+            "query_cache_path": str(tmp_path / "query-cache.db"),
+            "asset_library_path": str(tmp_path / "asset-library"),
+        },
+        render_tts=False,
+        defer_graphic_ai=True,
+    )
+
+    scene = manifest["scenes"][0]
+    # Deferred: still a graphic layout (not converted yet), no ChatGPT image.
+    assert doc["scenes"][0]["layout"] == "graphic_checklist"
+    assert scene["source"] == "generated_placeholder"
+    assert Path(scene["background"]).exists()
 
 
 def test_graphic_scene_with_chatgpt_image_becomes_media_layout(tmp_path, monkeypatch):

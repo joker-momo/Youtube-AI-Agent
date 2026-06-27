@@ -29,10 +29,16 @@ def assert_no_unconverted_graphic_scenes(short_scenes: dict) -> None:
         )
 
 
-def _persist_prepared_short_scenes(short_dir: Path, short_scenes: dict) -> None:
+def _persist_prepared_short_scenes(
+    short_dir: Path, short_scenes: dict, *, assert_converted: bool = True
+) -> None:
     for scene in short_scenes.get("scenes") or []:
         scene.pop("_skip_ai_fallback", None)
-    assert_no_unconverted_graphic_scenes(short_scenes)
+    # The background pass defers graphic scene conversion to the post-QA unified
+    # gen (step 5), so graphic_* layouts legitimately still exist here; the guard
+    # runs after that pass instead (assert_converted=False during background).
+    if assert_converted:
+        assert_no_unconverted_graphic_scenes(short_scenes)
     atomic_write_json(
         short_dir / paths.SHORT_JSON_SUBDIR / paths.SHORT_SCENES_FILE,
         short_scenes,
@@ -87,10 +93,9 @@ def synthesize_short_backgrounds(
     from video_agent.stages.assets import prepare_assets
 
     ctx = _short_asset_context(short_dir, channel_config)
-    # Lazy AI policy: scenes covered by a span that already has a provisional
-    # Pexels VIDEO finalist skip the ChatGPT tier now (span video supersedes the
-    # per-scene background at render). AI is only generated later, for spans whose
-    # video gets rejected by visual_local_qa. Saves ~10 min of wasted image-gen.
+    # Lazy AI policy: scenes routed to native-video QA skip the ChatGPT tier now
+    # because a validated span video can supersede per-scene backgrounds at
+    # render. Generated graphic/image routes still acquire ChatGPT assets here.
     _mark_video_covered_scenes(short_dir, short_scenes)
     # Log AI image-gen prompts to the Short's prompt history (same JSONL the
     # ChatGPT/Gemini calls write to). short_dir is this Short's folder, so the
@@ -104,14 +109,20 @@ def synthesize_short_backgrounds(
         render_tts=False,
         on_scene_resolved=on_scene_resolved,
         llm_history_path=llm_history_path,
+        # Step 5: graphic scenes get a placeholder now; their ChatGPT image is
+        # generated later in the single post-QA pass (_stage_fallback_image_gen).
+        defer_graphic_ai=True,
         **ctx,
     )
-    _persist_prepared_short_scenes(short_dir, short_scenes)
+    _persist_prepared_short_scenes(short_dir, short_scenes, assert_converted=False)
 
 
-def _spans_with_provisional_video(short_dir: Path) -> set[str]:
-    """Scene ids covered by a span that already has a provisional Pexels VIDEO
-    finalist (read from acquisition artifacts written before the background stage)."""
+def _scenes_with_native_video_route(short_dir: Path) -> set[str]:
+    """Scene ids covered by a span routed to native-video QA.
+
+    ``visual_route`` is the source of truth. A stale provisional id on a generated
+    graphic/image span must not suppress ChatGPT image generation.
+    """
     from video_agent.utils.json_io import read_json
 
     jd = short_dir / paths.SHORT_JSON_SUBDIR
@@ -120,11 +131,16 @@ def _spans_with_provisional_video(short_dir: Path) -> set[str]:
         sel = (read_json(jd / "visual_span_asset_selection.json") or {}).get("spans") or []
     except Exception:
         return set()
-    has_video = {
-        s.get("visual_span_id")
-        for s in sel
-        if s.get("provisional_candidate_id")
-    }
+    has_video = set()
+    for selection in sel:
+        route = str(selection.get("visual_route") or "").strip()
+        if route:
+            if route == "native_video_candidate" and selection.get("provisional_candidate_id"):
+                has_video.add(selection.get("visual_span_id"))
+            continue
+        # Back-compat for old artifacts written before visual_route existed.
+        if selection.get("provisional_candidate_id"):
+            has_video.add(selection.get("visual_span_id"))
     covered: set[str] = set()
     for sp in spans:
         if (sp.get("id") or sp.get("visual_span_id")) in has_video:
@@ -133,7 +149,7 @@ def _spans_with_provisional_video(short_dir: Path) -> set[str]:
 
 
 def _mark_video_covered_scenes(short_dir: Path, short_scenes: dict) -> None:
-    covered = _spans_with_provisional_video(short_dir)
+    covered = _scenes_with_native_video_route(short_dir)
     for scene in short_scenes.get("scenes") or []:
         is_graphic = str(scene.get("layout") or "").startswith("graphic_")
         scene["_skip_ai_fallback"] = not is_graphic and scene.get("id") in covered
@@ -143,7 +159,7 @@ def regen_fallback_backgrounds(
     short_dir: Path, short_scenes: dict, channel_config: dict, scene_ids: set[str]
 ) -> None:
     """Lazy second pass: generate ChatGPT images ONLY for the given scenes (spans
-    whose Pexels video was rejected by visual_local_qa), merging into the existing
+    whose native-video route failed visual_local_qa), merging into the existing
     manifest/report. No-op when scene_ids is empty."""
     if not scene_ids:
         return

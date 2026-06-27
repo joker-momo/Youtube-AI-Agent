@@ -120,10 +120,10 @@ def test_descends_to_ai_gen_when_no_strict_stock():
 
 
 def test_skip_ai_fallback_flag_defers_chatgpt_for_video_covered_scene():
-    # Lazy AI policy: a scene whose span already has a provisional Pexels VIDEO
-    # finalist carries _skip_ai_fallback=True -> the cascade must NOT call ChatGPT
-    # image gen; it degrades to a graphic_fallback placeholder instead (AI is
-    # generated later only if visual_local_qa rejects the span video).
+    # Lazy AI policy: a scene whose span is routed to native-video QA carries
+    # _skip_ai_fallback=True -> the cascade must NOT call ChatGPT image gen; it
+    # degrades to a graphic_fallback placeholder unless visual_local_qa later
+    # rejects the span video and fallback regen explicitly re-enables AI.
     calls = {"n": 0}
 
     def fake_gen(prompt, out_path):
@@ -141,6 +141,26 @@ def test_skip_ai_fallback_flag_defers_chatgpt_for_video_covered_scene():
     assert calls["n"] == 0  # ChatGPT NOT invoked
     assert asset is not None
     assert asset["asset_tier"] == "graphic_fallback"
+
+
+def test_ai_image_preferred_skips_stock_search_and_goes_directly_to_chatgpt(tmp_path):
+    calls = {"image": 0}
+    svc = _service({"pexels_video": [_cand("vid-ok", "pexels_video", _STRICT_TAGS)]})
+    svc.library.root = tmp_path / "asset_library"
+
+    def fake_gen(prompt, out_path):
+        calls["image"] += 1
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(out_path).write_bytes(b"x" * 2048)
+
+    svc.image_gen_fn = fake_gen
+    scene = {**_scene(), "asset_strategy": "ai_image_preferred"}
+
+    asset = svc.get_scene_asset(scene, channel_id="ch", job_id="job")
+
+    assert asset is not None
+    assert asset["provider"] == "ai_generated"
+    assert calls["image"] == 1
 
 
 def test_weak_stock_fallback_when_no_ai_and_no_strict():
@@ -314,6 +334,102 @@ def test_graphic_layout_generates_chatgpt_image_with_full_payload(tmp_path):
     assert scene_doc["scenes"][0]["layout"] == "short_tip"
     assert scene["provider"] == "ai_generated"
     assert scene["background_source"] == "ChatGPT infographic"
+
+
+def test_graphic_comparison_image_prompt_is_structured_and_exact():
+    from video_agent.assets.service import build_scene_image_prompt
+
+    prompt = build_scene_image_prompt(
+        {
+            "id": "s04",
+            "layout": "graphic_comparison",
+            "on_screen_text": "DESAYUNO: 1 O 2",
+            "visual_prompt": "Two realistic Spanish breakfast plates: left has one bread slice, right has two bread slices.",
+            "narration": "En desayuno, una o dos rebanadas pueden encajar.",
+            "layout_payload": {
+                "title": "DESAYUNO: 1 O 2",
+                "left": {"heading": "1 REBANADA", "text": "Mira el tamaño"},
+                "right": {"heading": "2 REBANADAS", "text": "Mira el acompañamiento"},
+                "footer": "Depende del plato.",
+            },
+        },
+        "breakfast bread portion",
+    )
+
+    assert "graphic_comparison" in prompt
+    assert "side-by-side" in prompt
+    assert "LEFT PANEL" in prompt
+    assert "RIGHT PANEL" in prompt
+    assert "Main headline to include exactly: DESAYUNO: 1 O 2" in prompt
+    assert "1 REBANADA" in prompt
+    assert "Mira el tamaño" in prompt
+    assert "2 REBANADAS" in prompt
+    assert "Mira el acompañamiento" in prompt
+    assert "Do not invent extra numbers" in prompt
+
+
+def test_converted_graphic_intent_still_uses_graphic_image_prompt():
+    from video_agent.assets.service import build_scene_image_prompt
+
+    prompt = build_scene_image_prompt(
+        {
+            "id": "s05",
+            "layout": "short_tip",
+            "visual_type": "graphic",
+            "generated_image_source_layout": "graphic_comparison",
+            "asset_strategy": "graphic_fallback",
+            "on_screen_text": "SEGÚN EL PLATO",
+            "visual_prompt": "Comparison graphic over a real kitchen table.",
+            "layout_payload": {
+                "title": "SEGÚN EL PLATO",
+                "left": {"heading": "DESAYUNO", "text": "1–2 rebanadas"},
+                "right": {"heading": "COMIDA", "text": "Trozo pequeño"},
+            },
+        },
+        "bread plate comparison",
+    )
+
+    assert "Scene layout: graphic_comparison" in prompt
+    assert "LEFT PANEL" in prompt
+    assert "DESAYUNO" in prompt
+    assert "RIGHT PANEL" in prompt
+    assert "COMIDA" in prompt
+    assert "No readable signage" not in prompt
+
+
+def test_lifestyle_image_prompt_includes_required_visual_evidence_without_text_overlay():
+    from video_agent.assets.service import build_scene_image_prompt
+    from video_agent.browser_worker.drivers.chatgpt_image import build_image_gen_prompt
+
+    prompt = build_scene_image_prompt(
+        {
+            "id": "s02",
+            "layout": "short_tip",
+            "on_screen_text": "MIRA TU CONTEXTO",
+            "visual_prompt": "Adult prepares a breakfast plate with bread beside protein and fruit.",
+            "narration": "Mira tu contexto antes de repetir pan.",
+            "asset_strategy": "ai_image_preferred",
+            "required_visual_evidence": {
+                "required_actions": ["Adult checks bread portion before eating."],
+                "required_objects": ["Clearly visible bread", "Complete breakfast plate"],
+                "visibility": ["Bread count is unmistakable in the first frame."],
+                "forbidden_context": ["No calorie numbers", "No weighing scale"],
+            },
+        },
+        "breakfast bread context",
+    )
+
+    full_prompt = build_image_gen_prompt(prompt, aspect_ratio="9:16")
+
+    assert "photorealistic lifestyle image" in prompt
+    assert "Required visual evidence" in prompt
+    assert "Adult checks bread portion before eating." in prompt
+    assert "Clearly visible bread" in prompt
+    assert "No calorie numbers" in prompt
+    assert "No readable signage, captions, UI, numbers" in prompt
+    assert "MIRA TU CONTEXTO" not in prompt
+    assert "no text overlays" in full_prompt
+    assert "no watermark" in full_prompt
 
 
 def test_graphic_layout_has_no_graphic_fallback_when_chatgpt_is_unavailable():

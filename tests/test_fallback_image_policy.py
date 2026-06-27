@@ -14,6 +14,12 @@ def _run(monkeypatch, tmp_path: Path, asset_qa, scenes):
 
     def _regen(short_dir, short_scenes, channel_config, rejected_scene_ids):
         captured["regen"] = set(rejected_scene_ids)
+        # Faithful to the real regen contract: a graphic_* scene that gets a
+        # ChatGPT image is relabeled to an image-backed layout.
+        for sc in short_scenes.get("scenes") or []:
+            if sc.get("id") in rejected_scene_ids and str(sc.get("layout") or "").startswith("graphic_"):
+                sc["layout"] = "short_tip"
+                sc["background_mode"] = "generated_image"
 
     monkeypatch.setattr("video_agent.shorts.audio.regen_fallback_backgrounds", _regen)
     ctx = SimpleNamespace(
@@ -55,6 +61,45 @@ def test_rejected_span_gets_fallback(monkeypatch, tmp_path):
     scenes = {"scenes": [{"id": "s1", "layout": "short_checklist"}]}
     regen = _run(monkeypatch, tmp_path, asset_qa, scenes)
     assert "s1" in regen
+
+
+def test_generated_graphic_route_is_regenerated_in_unified_pass(monkeypatch, tmp_path):
+    """Step 5: generated-graphic spans defer their ChatGPT gen from background to
+    this single post-QA pass, so they MUST be in the regen set now."""
+    asset_qa = {
+        "spans": [
+            {
+                "scene_ids": ["s1"],
+                "visual_route": "generated_graphic",
+                "final_candidate_id": None,
+                "final_selection_status": "routed_to_generated_graphic",
+                "qa": {"verdict": "PASS"},
+            }
+        ]
+    }
+    scenes = {"scenes": [{"id": "s1", "layout": "short_tip"}]}
+    regen = _run(monkeypatch, tmp_path, asset_qa, scenes)
+    assert "s1" in regen
+
+
+def test_graphic_layout_scene_is_regenerated_and_converted(monkeypatch, tmp_path):
+    """A graphic_* layout scene must be in the unified gen set and end up
+    converted (no graphic_* leak reaches render)."""
+    asset_qa = {
+        "spans": [
+            {
+                "scene_ids": ["s1"],
+                "visual_route": "generated_graphic",
+                "final_candidate_id": None,
+                "final_selection_status": "routed_to_generated_graphic",
+                "qa": {"verdict": "PASS"},
+            }
+        ]
+    }
+    scenes = {"scenes": [{"id": "s1", "layout": "graphic_checklist"}]}
+    regen = _run(monkeypatch, tmp_path, asset_qa, scenes)
+    assert "s1" in regen
+    assert scenes["scenes"][0]["layout"] == "short_tip"  # converted, no leak
 
 
 def test_cta_always_forced_even_with_passing_native(monkeypatch, tmp_path):

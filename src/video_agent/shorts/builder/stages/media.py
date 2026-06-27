@@ -254,9 +254,9 @@ def _stage_background(ctx: BuildContext) -> None:
             )
 
         ctx.background_fn(sd, short_scenes, ctx.channel_config, on_scene_resolved=_on_scene_bg)
-        from video_agent.shorts.audio import assert_no_unconverted_graphic_scenes
-
-        assert_no_unconverted_graphic_scenes(short_scenes)
+        # Step 5: graphic scenes are intentionally still graphic_* here — their
+        # ChatGPT image is generated in the post-QA unified pass, which also runs
+        # the fail-closed assert_no_unconverted_graphic_scenes guard.
         # Load the resolved assets manifest into context for the schedule stage
         # (spec §20). Keep background_fn backward compatible — it need not return it.
         manifest_path = ctx.json_dir / "assets_manifest.json"
@@ -299,21 +299,32 @@ def _stage_fallback_image_gen(ctx: BuildContext) -> None:
 
     # (a) Spans with no usable native -> map their scenes to fallback, and record
     # which scenes had a confident PASS so we never override good native below.
+    # Step 5 (unified gen): non-native (generated_graphic/image) spans deferred
+    # their ChatGPT image from the background stage to THIS single post-QA pass,
+    # so they now belong in the gen set too.
     confident_native_scene_ids: set[str] = set()
     for span in asset_qa.get("spans") or []:
         status = span.get("final_selection_status")
         verdict = (span.get("qa") or {}).get("verdict")
         scene_ids = [str(s) for s in (span.get("scene_ids") or [])]
+        visual_route = str(span.get("visual_route") or "native_video_candidate")
+        if visual_route != "native_video_candidate":
+            rejected_scene_ids.update(scene_ids)  # deferred graphic/image route
+            continue
         if status == "rejected" or verdict == "FAIL" or not span.get("final_candidate_id"):
             rejected_scene_ids.update(scene_ids)
         elif verdict == "PASS" and span.get("render_eligible"):
             confident_native_scene_ids.update(scene_ids)
 
-    # (b)/(c) Layout-driven controlled backgrounds.
+    # (b)/(c) Layout-driven controlled backgrounds + (d) every graphic_* scene,
+    # whose ChatGPT image generation is deferred to this pass and MUST happen.
     for scene in short_scenes.get("scenes") or []:
         layout = str(scene.get("layout") or "")
         rf = str(scene.get("retention_function") or "")
         sid = str(scene.get("id"))
+        if layout.startswith("graphic_"):
+            rejected_scene_ids.add(sid)  # (d) deferred graphic image, always gen
+            continue
         is_cta = layout in {"short_cta", "cta"} or rf == "cta"
         is_controlled_action = layout in {"short_hook", "hook", "short_tip"} or rf == "hook"
         if is_cta:
@@ -323,10 +334,13 @@ def _stage_fallback_image_gen(ctx: BuildContext) -> None:
 
     if not rejected_scene_ids:
         return
+    from video_agent.shorts.audio import (
+        _persist_prepared_short_scenes,
+        regen_fallback_backgrounds,
+    )
+
     ctx.update_stage("background", "in_progress", fallback_regen=sorted(rejected_scene_ids))
     try:
-        from video_agent.shorts.audio import regen_fallback_backgrounds
-
         regen_fallback_backgrounds(
             ctx.short_dir, short_scenes, ctx.channel_config, rejected_scene_ids
         )
@@ -340,6 +354,10 @@ def _stage_fallback_image_gen(ctx: BuildContext) -> None:
         )
     except Exception as exc:  # noqa: BLE001 - lazy gen failure degrades to placeholder
         ctx.update_stage("background", "completed", fallback_regen_error=str(exc))
+    # Fail-closed guard (moved here from the background stage): persist the
+    # converted scenes and assert no planning-only graphic_* layout leaks to
+    # render. Raises if a graphic scene never got its ChatGPT image.
+    _persist_prepared_short_scenes(ctx.short_dir, short_scenes)
 
 
 def _stage_audio(ctx: BuildContext) -> StageResult:

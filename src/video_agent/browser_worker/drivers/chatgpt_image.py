@@ -399,14 +399,17 @@ class ChatGPTImageDriver:
         temporary chats in accounts where image generation is disabled there.
         The conversation is deleted after the image is downloaded.
         """
-        try:
-            await self.page.goto(
-                CHATGPT_HOME, wait_until="domcontentloaded", timeout=30_000
-            )
-            await human_pause(self.page, min_ms=800, max_ms=1600)
-        except Exception:
-            # Best effort — fall back to clicking an in-page "New chat" control.
-            pass
+        current_url = str(getattr(self.page, "url", "") or "")
+        already_in_chatgpt = current_url.startswith("https://chatgpt.com/")
+        if not already_in_chatgpt:
+            try:
+                await self.page.goto(
+                    CHATGPT_HOME, wait_until="domcontentloaded", timeout=30_000
+                )
+                await human_pause(self.page, min_ms=800, max_ms=1600)
+            except Exception:
+                # Best effort — fall back to clicking an in-page "New chat" control.
+                pass
         # Best-effort click of an explicit "New chat" affordance to guarantee a
         # clean composer even if we were already on a stale conversation.
         await self._click_first_visible(NEW_CHAT_SELECTORS, timeout_ms=2_000)

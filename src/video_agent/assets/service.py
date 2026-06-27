@@ -290,6 +290,110 @@ def _compact_payload_text(value: Any) -> str:
         return str(value)
 
 
+def _compact_list(items: Any) -> str:
+    if not isinstance(items, list):
+        return ""
+    cleaned = [str(item).strip() for item in items if str(item).strip()]
+    return "; ".join(cleaned)
+
+
+def _required_visual_evidence_text(scene: dict[str, Any]) -> str:
+    evidence = scene.get("required_visual_evidence") or {}
+    if not isinstance(evidence, dict):
+        return ""
+    sections: list[str] = []
+    positive_fields = (
+        ("required_actions", "actions"),
+        ("required_objects", "objects"),
+        ("subject_pose", "subject"),
+        ("visibility", "visibility"),
+    )
+    negative_fields = (
+        ("forbidden_pose", "forbidden pose"),
+        ("forbidden_context", "avoid setting"),
+        ("forbidden_mood", "forbidden mood"),
+    )
+    for key, label in positive_fields:
+        text = _compact_list(evidence.get(key))
+        if text:
+            sections.append(f"{label}: {text}")
+    for key, label in negative_fields:
+        text = _compact_list(evidence.get(key))
+        if text:
+            sections.append(f"{label}: {text}")
+    return "\n".join(sections)
+
+
+def _graphic_layout_contract(layout: str, payload: dict[str, Any]) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    if layout == "graphic_comparison":
+        left = payload.get("left") if isinstance(payload.get("left"), dict) else {}
+        right = payload.get("right") if isinstance(payload.get("right"), dict) else {}
+        footer = str(payload.get("footer") or "").strip()
+        lines = [
+            "Layout contract: graphic_comparison.",
+            "Use a clean side-by-side composition with two balanced panels over a realistic, softly blurred scene background.",
+            "LEFT PANEL:",
+            f"- heading exactly: {str(left.get('heading') or '').strip()}",
+            f"- supporting line exactly: {str(left.get('text') or '').strip()}",
+            "RIGHT PANEL:",
+            f"- heading exactly: {str(right.get('heading') or '').strip()}",
+            f"- supporting line exactly: {str(right.get('text') or '').strip()}",
+        ]
+        if footer:
+            lines.append(f"Footer exactly: {footer}")
+        lines.append("Do not invent extra numbers, calories, grams, medical claims, warning icons, red crosses, or good-versus-bad moral judgment.")
+        return "\n".join(lines)
+    if layout == "graphic_checklist":
+        items = [str(item).strip() for item in (payload.get("items") or []) if str(item).strip()]
+        lines = [
+            "Layout contract: graphic_checklist.",
+            "Create one saveable, premium checklist card integrated into a realistic editorial background.",
+            "Show only these checklist items, in this order:",
+        ]
+        lines.extend(f"- {item}" for item in items)
+        lines.append("Do not add extra checklist items, decorative icons that change meaning, tiny footnotes, or dense paragraphs.")
+        return "\n".join(lines)
+    if layout == "graphic_plate_ratio":
+        segments = payload.get("segments") or []
+        lines = [
+            "Layout contract: graphic_plate_ratio.",
+            "Create a clear plate/portion ratio visual with warm realistic food texture and readable segment labels.",
+            "Use only these segments:",
+        ]
+        for segment in segments if isinstance(segments, list) else []:
+            if isinstance(segment, dict):
+                lines.append(
+                    f"- {str(segment.get('label') or '').strip()}: {str(segment.get('value') or '').strip()}"
+                )
+        lines.append("Do not add calorie math, grams, scales, medical symbols, or extra ratios.")
+        return "\n".join(lines)
+    if layout == "graphic_label_callout":
+        callouts = payload.get("callouts") or []
+        lines = [
+            "Layout contract: graphic_label_callout.",
+            "Create a realistic product/label close-up with a few clean callouts, not a generic template.",
+        ]
+        product = str(payload.get("productLabel") or "").strip()
+        if product:
+            lines.append(f"Product label context: {product}")
+        lines.append("Use only these callouts:")
+        for callout in callouts if isinstance(callouts, list) else []:
+            if isinstance(callout, dict):
+                note = str(callout.get("note") or "").strip()
+                line = (
+                    f"- {str(callout.get('label') or '').strip()}: "
+                    f"{str(callout.get('value') or '').strip()}"
+                )
+                if note:
+                    line += f" ({note})"
+                lines.append(line)
+        lines.append("Do not add unrelated nutrition values, brand logos, warning stamps, or tiny legal-style copy.")
+        return "\n".join(lines)
+    return f"Layout contract: {layout}.\nUse the payload exactly; do not invent extra teaching points."
+
+
 def build_scene_image_prompt(scene: dict[str, Any], query: str) -> str:
     """Build the ChatGPT image prompt for AI fallback scenes.
 
@@ -309,7 +413,18 @@ def build_scene_image_prompt(scene: dict[str, Any], query: str) -> str:
     narration = str(scene.get("narration") or "").strip()
     visual_prompt = str(scene.get("visual_prompt") or query or "").strip()
     payload_text = _compact_payload_text(payload)
-    is_graphic = layout.startswith("graphic_")
+    evidence_text = _required_visual_evidence_text(scene)
+    source_graphic_layout = str(scene.get("generated_image_source_layout") or "").strip()
+    graphic_layout = (
+        layout
+        if layout.startswith("graphic_")
+        else (
+            source_graphic_layout
+            if source_graphic_layout.startswith("graphic_")
+            else ("graphic_generated" if str(scene.get("visual_type") or "") == "graphic" or str(scene.get("asset_strategy") or "") == "graphic_fallback" else "")
+        )
+    )
+    is_graphic = bool(graphic_layout)
     is_cta = layout in {"short_cta", "cta"} or str(scene.get("retention_function") or "") == "cta"
     is_hook = layout in {"short_hook", "hook"} or str(scene.get("retention_function") or "") == "hook"
 
@@ -327,16 +442,21 @@ def build_scene_image_prompt(scene: dict[str, Any], query: str) -> str:
         )
 
     if is_graphic:
+        layout_contract = _graphic_layout_contract(graphic_layout, payload if isinstance(payload, dict) else {})
         return (
             "Create a premium vertical editorial image for a Spanish wellness Short for adults 45+. "
-            "Replace a flat infographic/card with a natural, polished visual that still includes all teaching content. "
-            "Use warm Mediterranean light, realistic textures, tasteful magazine-style composition, and large legible Spanish typography. "
-            "Do not use a plain beige card, template checklist, generic icons, stock-photo collage, watermark, or tiny text.\n"
+            "Replace a flat renderer card with a natural, polished visual that still carries the teaching content exactly. "
+            "Use warm Mediterranean light, realistic textures, tasteful magazine-style composition, and large legible Spanish typography inside mobile safe margins. "
+            "Make the first frame useful and readable without zooming. "
+            "Do not use a plain beige card, generic icons, stock-photo collage, watermark, tiny text, extra claims, or English wording.\n"
+            f"Scene layout: {graphic_layout}\n"
             f"Scene visual idea: {visual_prompt}\n"
             f"Main headline to include exactly: {on_screen or title}\n"
-            f"Graphic payload content to include clearly: {payload_text}\n"
+            f"{layout_contract}\n"
+            f"Full payload reference: {payload_text}\n"
+            f"Required visual evidence:\n{evidence_text or 'Use the scene visual idea and payload as the source of truth.'}\n"
             f"Narration context: {narration or caption}\n"
-            "Keep the text short, high contrast, inside mobile safe margins, and visually integrated with the scene."
+            "Keep every written element short, high contrast, and visually integrated with the scene."
         )
     if is_cta:
         # CLEAN background only — the renderer overlays the CTA headline itself, so
@@ -351,6 +471,15 @@ def build_scene_image_prompt(scene: dict[str, Any], query: str) -> str:
             "with plenty of calm empty space in the upper third of the frame. "
             "Photorealistic editorial photography.\n"
             f"Scene mood: {caption or narration or visual_prompt}"
+        )
+    if str(scene.get("asset_strategy") or "") == "ai_image_preferred" or evidence_text:
+        return (
+            "Create a premium photorealistic lifestyle image for a Spanish wellness Short for adults 45+. "
+            "Use a realistic mature adult, warm natural Mediterranean light, calm editorial composition, and a clear opening action. "
+            "The image should feel like a real photographed moment, not a template, stock collage, illustration, or poster.\n"
+            f"Scene visual idea: {visual_prompt or query}\n"
+            f"Required visual evidence:\n{evidence_text or 'Follow the scene visual idea exactly.'}\n"
+            "No readable signage, captions, UI, numbers, commercial marks, medical symbols, scales, alarmist colors, or shame/fear mood."
         )
     return visual_prompt or query
 
@@ -846,10 +975,15 @@ class StockAssetService:
         # --- Library cache hit: skip API + download entirely ---
         # BYPASS cache when demographic keywords are present — the library token-overlap
         # search cannot enforce demographic constraints, so we must hit the API fresh.
-        # Also bypass cache for graphic_* planning intents: they require an
-        # explicit ChatGPT-generated infographic, not a stale stock/placeholder
-        # asset that merely matches query tokens.
-        if not is_graphic_layout and not self._query_requires_fresh_search(query):
+        # Also bypass cache for graphic/image planning intents: they require an
+        # explicit ChatGPT-generated asset, not a stale stock/placeholder asset
+        # that merely matches query tokens.
+        generated_strategy = strategy in {"graphic_fallback", "ai_image_preferred"}
+        if (
+            not is_graphic_layout
+            and not generated_strategy
+            and not self._query_requires_fresh_search(query)
+        ):
             cached = self._try_library_cache(query, media_type_hint, channel_id, job_id, scene, candidate_budget)
             if cached is not None:
                 return cached
@@ -876,8 +1010,10 @@ class StockAssetService:
 
         # 5-tier cascade based on asset_strategy
 
-        # Tier 1 & 2: Strict Stock Search (always attempted first if not graphic_fallback)
-        if strategy != "graphic_fallback" and not is_graphic_layout:
+        # Tier 1 & 2: Strict Stock Search.
+        # Explicit generated routes bypass stock entirely; their route decision
+        # already said a controlled ChatGPT image is the desired asset.
+        if strategy not in {"graphic_fallback", "ai_image_preferred"} and not is_graphic_layout:
             # Tier 1 — stock video, strict only.
             asset = _search(self.providers, require_strict=True)
             if asset is not None:
@@ -911,13 +1047,11 @@ class StockAssetService:
         # pause). Weak stock (Tier 4b) is kept only as the degraded path for when
         # AI generation is unavailable or fails. Quality > cost (PRIME DIRECTIVE).
         enable_ai_fallback = str(os.environ.get("ENABLE_AI_IMAGE_FALLBACK", "true")).lower() == "true"
-        # Lazy AI policy: when this scene is covered by a span that already has a
-        # provisional Pexels VIDEO finalist, skip the expensive ChatGPT tier here.
-        # The span video supersedes the per-scene background at render time; AI is
-        # only generated later (post visual_local_qa) for spans whose video was
-        # rejected. Avoids ~10 min of wasted image-gen per short.
+        # Lazy AI policy: when this scene is covered by a native-video route,
+        # skip expensive ChatGPT here. Generated graphic/image routes and failed
+        # native routes explicitly re-enable this tier.
         skip_ai = bool(scene.get("_skip_ai_fallback"))
-        ai_triggered = (strategy != "graphic_fallback" or is_graphic_layout) and not skip_ai
+        ai_triggered = not skip_ai
         if ai_triggered and enable_ai_fallback and self.image_gen_fn is not None:
             # max retries logic is handled inside _ai_generate_scene_asset
             asset = self._ai_generate_scene_asset(scene, query, channel_id, job_id)
@@ -926,14 +1060,15 @@ class StockAssetService:
                 asset["asset_selection"]["asset_match_status"] = "ai_generated"
                 return asset
 
-        # Structured graphic intents require a real ChatGPT image. Returning the
-        # legacy graphic_fallback here would let Shorts silently reach a
+        # Structured graphic/image intents require a real ChatGPT image. Returning
+        # the legacy graphic_fallback here would let Shorts silently reach a
         # placeholder/Remotion-card path after generation failed.
-        if is_graphic_layout:
+        if is_graphic_layout or strategy == "graphic_fallback":
             return None
 
-        # Tier 4a — Text-led fallback for non-graphic key scenes.
-        if strategy == "graphic_fallback" or is_key:
+        # Tier 4a — Text-led fallback for non-graphic key scenes only. Explicit
+        # graphic/image strategies returned above if ChatGPT generation failed.
+        if is_key:
             return {
                 "provider": "graphic_fallback",
                 "asset_id": f"graphic_{job_id}_{scene['id']}",
@@ -947,7 +1082,7 @@ class StockAssetService:
                     "source": "graphic_fallback",
                     "weak_match": False,
                     "asset_match_status": "graphic_fallback",
-                    "reasons": [f"graphic_fallback_strategy_{strategy}"],
+                    "reasons": ["key_scene_text_led_fallback"],
                     "matched_terms": [],
                 },
             }

@@ -39,6 +39,79 @@ def _audio_fit_within_deterministic_budget(script: dict, idea: dict | None) -> b
     return total_words <= max_words and global_words <= max_words
 
 
+def _norm_text_token(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip()).lower()
+
+
+def _opens_with_selected_hook(script: dict, idea: dict | None) -> bool:
+    """True when narration opens with the selected hook text.
+
+    For Shorts Studio ideas, ``hook_text`` is the editorial contract. A script
+    QA complaint may prefer a pain-question opener, but if the script opens with
+    the selected hook and immediately continues into the pain/context beat, that
+    is a product-polish opinion rather than a hard blocker.
+    """
+    narration = _norm_text_token(script.get("narration"))
+    if not narration:
+        return False
+
+    hook_candidates = [
+        (idea or {}).get("hook_text"),
+        (idea or {}).get("hook"),
+        script.get("hook"),
+    ]
+    for hook in hook_candidates:
+        hook_text = _norm_text_token(hook)
+        if hook_text and narration.startswith(hook_text):
+            return True
+    return False
+
+
+def _selected_hook_title_drop_complaint(detail: str, issue_type: str) -> bool:
+    # Normalize so paraphrases from the LLM judge still match: collapse hyphens
+    # ("first-2-seconds" -> "first 2 seconds") and apostrophes ("doesn't" ->
+    # "doesnt"). The literal-phrase matcher used to miss these and let a weak-hook
+    # complaint hard-block forever even when the contracted hook_text was used.
+    text = f"{issue_type} {detail}".lower().replace("-", " ")
+    text = text.replace("'", "").replace("’", "")
+    opens_complaint = any(
+        k in text
+        for k in (
+            "title drop",
+            "does not open",
+            "doesnt open",
+            "fails to open",
+            "first 2 seconds",
+            "first two seconds",
+        )
+    )
+    return (
+        "hook" in text
+        and opens_complaint
+        and any(k in text for k in ("pain", "curiosity", "common mistake", "curious question"))
+    )
+
+
+def _audio_fit_required_change(detail: str) -> bool:
+    text = detail.lower()
+    return any(
+        k in text
+        for k in (
+            "micro-compress",
+            "microcompress",
+            "breathing room",
+            "allow breathing",
+            "natural pauses",
+            "audio-fit",
+            "rushed",
+            "ritmo",
+            "pausas",
+            "locución",
+            "locucion",
+        )
+    ) and any(k in text for k in ("wording", "narration", "palabras", "checklist", "items"))
+
+
 def _count_not_locked(idea: dict | None, script: dict | None) -> bool:
     """True when the idea's item count is NOT a locked promise.
 
@@ -116,6 +189,110 @@ def _graphic_scene_duration_within_hard_max(scenes: dict, scene_id: Any, detail:
     return 0 < dur <= hard_max
 
 
+def _graphic_payload_text_within_deterministic_limits(
+    scenes: dict, scene_id: Any, detail: str
+) -> bool:
+    """True when a Gemini complaint about graphic step/checklist text being
+    "too long" (or demanding fewer words per step/item) targets a scene whose
+    payload text is actually within the deterministic per-entry character caps.
+
+    Step/checklist payload text length is owned deterministically by
+    ``validation/graphic_checks.py`` (``_STEP_TEXT_MAX`` / ``_CHECKLIST_ITEM_MAX``).
+    The LLM judge sometimes invents a stricter, undocumented rule — e.g. "keep
+    each step under 3 words" — and hard-blocks valid 3-word steps (the prompt's
+    own example uses 3-word steps), causing a non-converging scene-QA loop. When
+    every entry is within the deterministic cap, the judge's opinion is advisory.
+    """
+    sid = str(scene_id or "").strip().lower()
+    if not sid:
+        m = re.search(r"\b(s\d+)\b", (detail or "").lower())
+        sid = m.group(1) if m else ""
+    if not sid:
+        return False
+
+    scene = None
+    for sc in scenes.get("scenes") or []:
+        if isinstance(sc, dict) and str(sc.get("id") or sc.get("scene_id") or "").lower() == sid:
+            scene = sc
+            break
+    if scene is None:
+        return False
+
+    layout = str(scene.get("layout") or "")
+    payload = scene.get("layout_payload")
+    if not isinstance(payload, dict):
+        return False
+    try:
+        from video_agent.shorts.validation._constants import (
+            _CHECKLIST_ITEM_MAX,
+            _STEP_TEXT_MAX,
+        )
+    except Exception:
+        return False
+
+    if layout == "graphic_step_list":
+        steps = payload.get("steps")
+        if not isinstance(steps, list) or not steps:
+            return False
+        return all(
+            isinstance(s, dict)
+            and isinstance(s.get("text"), str)
+            and 0 < len(s["text"]) <= _STEP_TEXT_MAX
+            for s in steps
+        )
+    if layout == "graphic_checklist":
+        items = payload.get("items")
+        if not isinstance(items, list) or not items:
+            return False
+        return all(isinstance(i, str) and 0 < len(i) <= _CHECKLIST_ITEM_MAX for i in items)
+    return False
+
+
+def _is_graphic_payload_text_length_complaint(detail: str) -> bool:
+    """A Gemini complaint about graphic step/checklist entry text being too long
+    or having too many words. Deliberately narrow so it only catches the
+    fabricated per-entry length/word-count rule, not real structural blockers."""
+    d = (detail or "").lower()
+    targets_entry = any(
+        t in d for t in ("step", "steps", "checklist", "item", "graphic_step_list")
+    )
+    length_complaint = any(
+        t in d
+        for t in (
+            "too long",
+            "per step",
+            "per item",
+            "words per",
+            "under 3 words",
+            "fewer words",
+            "shorten",
+            "characters",
+        )
+    )
+    return targets_entry and length_complaint
+
+
+def _short_total_duration_within_contract(scenes: dict, detail: str) -> bool:
+    """True when a Gemini strict-duration complaint conflicts with the
+    deterministic Shorts duration contract.
+
+    The deterministic validator allows Shorts in the 20-60s hard range, and the
+    current repair plan explicitly treats 28-34s as acceptable when pacing and
+    audio-fit are strong. Gemini sometimes applies stale bread-specific 26-30s
+    polishing guidance as a hard blocker; that must not stop render by itself.
+    """
+    if "duration" not in (detail or "").lower() and "duración" not in (detail or "").lower():
+        return False
+    total = scenes.get("total_duration_sec")
+    if total is None:
+        total = sum(float(scene.get("duration_sec") or 0.0) for scene in scenes.get("scenes") or [])
+    try:
+        total_f = float(total or 0.0)
+    except (TypeError, ValueError):
+        return False
+    return 28.0 <= total_f <= 34.0
+
+
 def normalize_qa_issue(
     issue: Any,
     *,
@@ -180,6 +357,20 @@ def normalize_qa_issue(
             trigger_regeneration=False,
         )
 
+    if inferred_source == "gemini_scene_qa" and issue_type_lower == "duration":
+        if _short_total_duration_within_contract(scenes, detail):
+            return NormalizedIssue(
+                issue_class=IssueClass.SOFT_WARNING,
+                reason="duration_within_deterministic_contract",
+                source=inferred_source,
+                scene_id=scene_id,
+                issue_type=issue_type,
+                detail=detail,
+                repair_hint=repair_hint,
+                include_in_retry_feedback=True,
+                trigger_regeneration=False,
+            )
+
     if (
         "duration_pacing" in issue_type_lower
         or "pacing remains strong" in detail_lower
@@ -219,6 +410,23 @@ def normalize_qa_issue(
             trigger_regeneration=False,
         )
 
+    if (
+        inferred_source == "gemini_scene_qa"
+        and _is_graphic_payload_text_length_complaint(detail)
+        and _graphic_payload_text_within_deterministic_limits(scenes, scene_id, detail)
+    ):
+        return NormalizedIssue(
+            issue_class=IssueClass.SOFT_WARNING,
+            reason="graphic_payload_text_within_deterministic_limits",
+            source=inferred_source,
+            scene_id=scene_id,
+            issue_type=issue_type,
+            detail=detail,
+            repair_hint=repair_hint,
+            include_in_retry_feedback=True,
+            trigger_regeneration=False,
+        )
+
     severity_lower = ""
     if isinstance(issue, dict):
         severity_lower = str(issue.get("severity") or "").lower()
@@ -231,6 +439,7 @@ def normalize_qa_issue(
     trigger_regeneration = True
     include_in_retry_feedback = True
     audio_fit_within_budget = False
+    selected_hook_contract_ok = False
 
     # Safety, source fidelity/support, health claim, contract -> HARD_BLOCKER
     is_hard = False
@@ -339,7 +548,21 @@ def normalize_qa_issue(
 
     if issue_type_lower in ("style", "structure") and any(
         k in detail_lower
-        for k in ("word count", "words", "speaking time", "audio-fit", "rushed", "pacing")
+        for k in (
+            "word count",
+            "words",
+            "speaking time",
+            "audio-fit",
+            "rushed",
+            "pacing",
+            "palabra",
+            "locución",
+            "locucion",
+            "pausa",
+            "acelerad",
+            "atropellad",
+            "ritmo",
+        )
     ):
         # The deterministic audio-fit budget (validation/script_checks.py) is the
         # source of truth for narration density. The LLM judge re-estimates word
@@ -357,6 +580,20 @@ def normalize_qa_issue(
             is_repairable = True
             is_hard = False
             reason = "repairable_audio_fit"
+
+    if _selected_hook_title_drop_complaint(detail, issue_type) and _opens_with_selected_hook(
+        script, idea
+    ):
+        selected_hook_contract_ok = True
+        is_hard = False
+        is_repairable = False
+        reason = "selected_hook_contract_used"
+
+    if _audio_fit_required_change(detail) and _audio_fit_within_deterministic_budget(script, idea):
+        audio_fit_within_budget = True
+        is_hard = False
+        is_repairable = False
+        reason = "audio_fit_within_deterministic_budget"
 
     # CTA: the deterministic gate (cta_beat_missing_channel_direction in
     # validation/script_checks.py) runs before script QA, so any script reaching
@@ -490,6 +727,7 @@ def normalize_qa_issue(
         or cta_deterministically_ok
         or graphic_duration_within_max
         or count_not_locked_grouping
+        or selected_hook_contract_ok
     ):
         is_soft = True
 
@@ -530,6 +768,21 @@ def normalize_qa_issue(
             "guárdalo",
             "generic error label",
             "five-errors-rule",
+            # The 5-error-bread label rule (prompts.py "5-error bread Short" block)
+            # only applies to the dedicated "5 errores al comer pan" Short. Gemini
+            # over-triggers it on any bread Short and phrases it many ways, so match
+            # the rule by name AND by its exclusive uppercase labels — if the judge
+            # demands one of these on a non-five-errors Short, it is wrong context.
+            "5-error bread",
+            "5 error bread",
+            "five-error bread",
+            "five error bread",
+            "special bread short rule",
+            "uppercase specific label",
+            "specific uppercase label",
+            "non-specific label",
+            "sumar sin decidir",
+            "barra a la vista",
         ]
         is_duration_rule = False
         if "3.2" in detail_lower and "4" in detail_lower:

@@ -22,6 +22,10 @@ class RemotionCommands:
     thumbnail: list[str]
 
 
+class RemotionSubprocessError(RuntimeError):
+    """Remotion failed; message includes the subprocess output tail."""
+
+
 def _audio_loudness_config(render_props_path: Path) -> dict:
     props = read_json(render_props_path)
     render_cfg = props.get("render", {}) or {}
@@ -305,6 +309,7 @@ def _run_with_progress(
     """Run a subprocess, streaming stdout and writing Remotion progress to a JSON file."""
     if stop_request_path is not None and stop_request_path.exists():
         raise RuntimeError("Stop requested by operator.")
+    output_tail: list[str] = []
     with subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -331,6 +336,9 @@ def _run_with_progress(
                         pass
                     raise RuntimeError("Stop requested by operator.")
                 print(line, end="", flush=True)
+                output_tail.append(line.rstrip())
+                if len(output_tail) > 80:
+                    output_tail = output_tail[-80:]
                 m_frame = re.search(r"(\d+)\s*/\s*(\d+)", line)
                 if m_frame and progress_path:
                     frame = int(m_frame.group(1))
@@ -373,7 +381,20 @@ def _run_with_progress(
                     pass
         rc = proc.wait()
         if rc != 0:
-            raise subprocess.CalledProcessError(rc, cmd)
+            tail_text = "\n".join(output_tail[-40:]).strip()
+            if progress_path is not None:
+                try:
+                    atomic_write_text(
+                        progress_path.with_name("render_subprocess_error.txt"),
+                        tail_text,
+                        encoding="utf-8",
+                    )
+                except OSError:
+                    pass
+            message = f"Remotion subprocess exited with code {rc}."
+            if tail_text:
+                message += f" Last output:\n{tail_text}"
+            raise RemotionSubprocessError(message)
 
 
 def _mark_render_stage_completed(job_dir: Path) -> None:
@@ -560,7 +581,7 @@ def render_with_remotion(
                     stop_request_path=stop_request_path,
                     pid_file_path=thumb_pid_path,
                 )
-            except subprocess.CalledProcessError as exc:
+            except RemotionSubprocessError as exc:
                 # One bad variant should not invalidate the rendered video.
                 thumb_errors.append(f"variant {i}: {exc}")
         # Keep thumbnail.jpg as alias of thumbnail_1.jpg for backward compat

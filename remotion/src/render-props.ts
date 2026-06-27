@@ -140,6 +140,11 @@ export type Scene = {
   // renderer ignores these until the compiled VisualTimeline lands (PR B).
   visual_span_id?: string;
   visual_span_intent?: string;
+  // Shorts ChatGPT graphic image conversion marker. These scenes keep a
+  // normal short_* layout for renderer compatibility, but the generated image
+  // already contains the teaching text, so ShortVideo must not add text overlays.
+  generated_image_source_layout?: string;
+  background_mode?: string;
   // Long-form graphic scenes (checklist/warning/quote/cta): a ChatGPT-generated
   // image replaces the Remotion card when image_ref is set (spec long-form v2 §3.1).
   graphic?: {needed?: boolean; prompt?: string; image_ref?: string};

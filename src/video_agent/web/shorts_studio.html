@@ -1849,9 +1849,11 @@ function renderStep(jobId, s, idx, fallbackStartedAt = null) {
   // writes current_span / span_index / candidate_index while judging finalists).
   let stageProgressHtml = '';
   if (shownStatus === 'in_progress' && s.span_total) {
-    const spanPart = `${escapeHtml(String(s.current_span || ''))} ${s.span_index || 0}/${s.span_total}`;
+    const sceneIds = Array.isArray(s.current_scene_ids) ? s.current_scene_ids.join(',') : '';
+    const scenePart = sceneIds ? `🎬 ${escapeHtml(sceneIds)} · ` : '';
+    const spanPart = `${scenePart}span ${s.span_index || 0}/${s.span_total}`;
     const candPart = s.candidate_total ? ` · cand ${s.candidate_index || 0}/${s.candidate_total}` : '';
-    stageProgressHtml = `<span class="pill in_progress" title="span / candidate progress">${spanPart}${candPart}</span>`;
+    stageProgressHtml = `<span class="pill in_progress" title="QA-ing scene ${escapeHtml(sceneIds || String(s.current_span || ''))} (span ${s.span_index || 0}/${s.span_total})">${spanPart}${candPart}</span>`;
   }
 
   const compactStepGlyph = (
@@ -2004,52 +2006,172 @@ function renderBackgroundLive(bl) {
     </div>`;
 }
 
+// Verdict pill style for Visual Local QA outcomes shown per scene.
+function qaVerdictBadge(v) {
+  const t = String(v || '').toUpperCase();
+  let style = 'background:#f3f4f6;color:#374151', label = t || '—';
+  if (t === 'PASS') { style = 'background:#dcfce7;color:#166534'; label = '✓ PASS'; }
+  else if (t === 'FAIL') { style = 'background:#fee2e2;color:#991b1b'; label = '✗ FAIL'; }
+  else if (t === 'SKIP') { style = 'background:#e2e8f0;color:#475569'; label = '⊘ SKIP'; }
+  else if (t === 'CAPABILITY_REDUCED') { style = 'background:#fef9c3;color:#854d0e'; label = '◐ REDUCED'; }
+  return `<span style="font-size:11px;font-weight:700;border-radius:999px;padding:2px 9px;${style}">${escapeHtml(label)}</span>`;
+}
+
+// Build scene_id -> {route, verdict} from visual_span_asset_qa.json. A span whose
+// visual_route is not native_video_candidate is a non-video (graphic/generated)
+// route and is intentionally SKIPPED by the local-QA stage (it only validates
+// stock VIDEO), so we surface that as SKIP rather than a missing verdict.
+function buildSceneQaMap(qaDoc) {
+  const map = {};
+  const spans = (qaDoc && Array.isArray(qaDoc.spans)) ? qaDoc.spans : [];
+  for (const sp of spans) {
+    const route = String(sp.visual_route || 'native_video_candidate');
+    const verdict = route !== 'native_video_candidate'
+      ? 'SKIP'
+      : String((sp.qa || {}).verdict || '').toUpperCase();
+    for (const sid of (sp.scene_ids || [])) {
+      map[String(sid)] = { route, verdict, status: sp.final_selection_status };
+    }
+  }
+  return map;
+}
+
+// scene_id -> compiled-schedule track. The compiled asset schedule is the RENDER
+// source of truth: the visual-span pipeline (visual_local_qa) replaces many
+// scenes' background-stage pick with a validated Pexels VIDEO, so background_report
+// (written earlier, at acquisition) is stale. Read the schedule to show reality.
+function buildSceneScheduleMap(csDoc) {
+  const map = {};
+  const tracks = (csDoc && Array.isArray(csDoc.tracks)) ? csDoc.tracks : [];
+  for (const t of tracks) {
+    for (const sid of (t.scene_ids || [])) map[String(sid)] = t;
+  }
+  return map;
+}
+
+// Resolve the human source label from the ACTUAL rendered track, keeping the
+// finer ChatGPT label (infographic vs lifestyle) from background_report when the
+// schedule only says "ai_generated".
+function scheduleSourceLabel(t, brLabel) {
+  const prov = String(t.provider || '').toLowerCase();
+  const smk = String(t.source_media_kind || '').toLowerCase();
+  if (smk === 'native_video') {
+    if (prov.includes('pexels')) return 'Pexels video';
+    if (prov.includes('pixabay')) return 'Pixabay video';
+    return (prov ? prov.charAt(0).toUpperCase() + prov.slice(1) : 'Stock') + ' video';
+  }
+  if (prov === 'ai_generated') {
+    return (brLabel && brLabel.toLowerCase().includes('chatgpt')) ? brLabel : 'ChatGPT image';
+  }
+  if (prov.includes('pexels')) return 'Pexels photo';
+  if (prov.includes('pixabay')) return 'Pixabay photo';
+  return brLabel || (prov ? prov.charAt(0).toUpperCase() + prov.slice(1) : 'Unknown');
+}
+
 async function spViewBackgroundSources(jobId, shortId, btn) {
   const panel = btn.closest('div').parentElement.querySelector('.bg-sources-panel');
   if (!panel) return;
   if (panel.style.display !== 'none') { panel.style.display = 'none'; return; }
   panel.style.display = 'block';
-  panel.innerHTML = '<div style="color:var(--muted);font-size:12px">Loading background sources…</div>';
-  const path = 'shorts/' + shortId + '/json/background_report.json';
-  const url = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(path) + '&t=' + Date.now();
+  panel.innerHTML = '<div style="color:var(--muted);font-size:12px">Loading scenes & QA…</div>';
+  const art = (p) => '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent('shorts/' + shortId + '/json/' + p) + '&t=' + Date.now();
   try {
-    const r = await fetch(url);
+    // background_report = per-scene acquisition detail (query / attribution / motion).
+    // compiled_asset_schedule = what actually renders (authoritative source + asset path).
+    // visual_span_asset_qa = pass/fail/skip verdict. All optional except background_report.
+    const [r, rcs, rqa] = await Promise.all([
+      fetch(art('background_report.json')),
+      fetch(art('compiled_asset_schedule.json')).catch(() => null),
+      fetch(art('visual_span_asset_qa.json')).catch(() => null),
+    ]);
     if (!r.ok) { panel.innerHTML = '<div style="color:var(--muted);font-size:12px">No background report yet for this Short.</div>'; return; }
     const data = JSON.parse(await r.text());
     const scenes = Array.isArray(data.scenes) ? data.scenes : [];
     if (!scenes.length) { panel.innerHTML = '<div style="color:var(--muted);font-size:12px">No scenes in background report.</div>'; return; }
+    let qaMap = {}, schedMap = {};
+    if (rqa && rqa.ok) { try { qaMap = buildSceneQaMap(JSON.parse(await rqa.text())); } catch (_) {} }
+    if (rcs && rcs.ok) { try { schedMap = buildSceneScheduleMap(JSON.parse(await rcs.text())); } catch (_) {} }
+    const hasQa = Object.keys(qaMap).length > 0;
+    const hasSched = Object.keys(schedMap).length > 0;
+    // Resolved (actual) source per scene: schedule wins, background_report fallback.
+    const resolvedSrc = (s) => {
+      const t = schedMap[String(s.scene_id)];
+      return t ? scheduleSourceLabel(t, s.background_source) : (s.background_source || 'Unknown');
+    };
+    // Summary counts by resolved source + QA verdict.
+    let nVideo = 0, nChatgpt = 0, nGraphic = 0, nOther = 0;
+    let qPass = 0, qFail = 0, qSkip = 0, qReduced = 0;
+    for (const s of scenes) {
+      const src = resolvedSrc(s).toLowerCase();
+      if (src.includes('video')) nVideo++;
+      else if (src.includes('chatgpt')) nChatgpt++;
+      else if (src.includes('graphic')) nGraphic++;
+      else nOther++;
+      const v = (qaMap[String(s.scene_id)] || {}).verdict;
+      if (v === 'PASS') qPass++; else if (v === 'FAIL') qFail++;
+      else if (v === 'SKIP') qSkip++; else if (v === 'CAPABILITY_REDUCED') qReduced++;
+    }
+    const chip = (label, style) => `<span style="font-size:11px;font-weight:700;border-radius:999px;padding:2px 10px;${style}">${label}</span>`;
+    const summary = `
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#f8fafc">
+        ${chip('Total ' + scenes.length + ' scenes', 'background:#1e293b;color:#fff')}
+        ${chip('🎞 Pexels video ' + nVideo, bgSourceBadgeStyle('pexels video'))}
+        ${chip('🖼 ChatGPT ' + nChatgpt, bgSourceBadgeStyle('chatgpt'))}
+        ${nGraphic ? chip('▦ Graphic ' + nGraphic, bgSourceBadgeStyle('graphic')) : ''}
+        ${nOther ? chip('? Other ' + nOther, 'background:#f3f4f6;color:#374151') : ''}
+        ${hasQa ? `<span style="color:var(--line-strong,#cbd5e1)">|</span>
+          <span style="font-size:11px;color:var(--muted);font-weight:700">Visual QA:</span>
+          ${chip('✓ ' + qPass, 'background:#dcfce7;color:#166534')}
+          ${qFail ? chip('✗ ' + qFail, 'background:#fee2e2;color:#991b1b') : ''}
+          ${qReduced ? chip('◐ ' + qReduced, 'background:#fef9c3;color:#854d0e') : ''}
+          ${chip('⊘ skip ' + qSkip, 'background:#e2e8f0;color:#475569')}`
+        : `<span style="font-size:11px;color:var(--muted)">Visual QA: not run yet</span>`}
+      </div>
+      ${hasSched ? '' : '<div style="font-size:11px;color:#9a3412;margin-bottom:8px">⚠ Compiled schedule not found — showing acquisition-time sources (may differ from final render).</div>'}`;
     const rows = scenes.map(s => {
-      const src = s.background_source || 'Unknown';
+      const qa = qaMap[String(s.scene_id)];
+      const qaBadge = (hasQa && qa) ? qaVerdictBadge(qa.verdict) : '';
+      const track = schedMap[String(s.scene_id)];
+      const src = resolvedSrc(s);
+      // Stale acquisition source, shown struck-through when the render upgraded it.
+      const acq = s.background_source || '';
+      const stale = (acq && acq !== src)
+        ? ` <span style="font-size:10px;color:var(--muted-2,#94a3b8);text-decoration:line-through" title="acquisition-time pick (replaced by render)">${escapeHtml(acq)}</span>`
+        : '';
       const motion = s.motion ? ` · <span style="color:var(--muted)">${escapeHtml(s.motion)}</span>` : '';
       const q = s.query ? `<div style="font-size:11px;color:var(--muted-2,#94a3b8);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(s.query)}">${escapeHtml((s.query || '').slice(0, 90))}</div>` : '';
       const lnk = s.source_url ? `<div style="font-size:11px;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(s.source_url)}"><a href="${escapeHtml(s.source_url)}" target="_blank" style="color:var(--blue);text-decoration:none">🔗 ${escapeHtml(s.source_url)}</a></div>` : '';
-      // Inline 9:16 preview of the resolved background. Video sources render a
-      // hover-playable <video>; still-image sources (photo / ChatGPT image) get
-      // the saved <scene>_preview.jpg as an <img>. Both live in the short's
-      // assets dir, served via the artifact route.
+      // Inline 9:16 preview of the ACTUAL rendered background. Prefer the compiled
+      // track's asset_ref (the visual-span video when upgraded); fall back to the
+      // background-stage <scene>.mp4 / <scene>_preview.jpg.
       const artBase = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=';
       const thumbStyle = 'width:34px;height:60px;flex:none;object-fit:cover;border-radius:5px;background:#0f172a';
       let thumb = '';
       if (s.scene_id) {
-        if (s.media_kind === 'image') {
-          const imgPath = 'shorts/' + shortId + '/assets/' + s.scene_id + '_preview.jpg';
-          thumb = `<img src="${artBase + encodeURIComponent(imgPath)}" loading="lazy" onerror="this.style.display='none'" style="${thumbStyle}">`;
-        } else {
-          const vidPath = 'shorts/' + shortId + '/assets/' + s.scene_id + '.mp4';
+        const isVideo = track ? String(track.source_media_kind || '').toLowerCase() === 'native_video' : (s.media_kind !== 'image');
+        // asset_ref like "jobs/<id>/assets/visual_spans/x.mp4" → take the part after "/assets/".
+        const rel = track && track.asset_ref ? (track.asset_ref.split('/assets/')[1] || '') : '';
+        if (isVideo) {
+          const vidPath = rel ? ('shorts/' + shortId + '/assets/' + rel) : ('shorts/' + shortId + '/assets/' + s.scene_id + '.mp4');
           const vidUrl = artBase + encodeURIComponent(vidPath) + '#t=0.1';
           thumb = `<video src="${vidUrl}" muted preload="metadata" playsinline
                      onmouseover="this.play()" onmouseout="this.pause();this.currentTime=0.1"
                      onerror="this.style.display='none'"
                      style="${thumbStyle};cursor:pointer"></video>`;
+        } else {
+          const imgPath = 'shorts/' + shortId + '/assets/' + s.scene_id + '_preview.jpg';
+          thumb = `<img src="${artBase + encodeURIComponent(imgPath)}" loading="lazy" onerror="this.style.display='none'" style="${thumbStyle}">`;
         }
       }
       return `
         <div style="border:1px solid var(--line);border-radius:8px;padding:7px 9px;background:#fff;display:flex;gap:9px;align-items:flex-start">
           ${thumb}
           <div style="min-width:0;flex:1">
-            <div style="display:flex;align-items:center;gap:8px">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
               <span style="font-weight:700;font-size:12px;min-width:38px">${escapeHtml(s.scene_id || '')}</span>
               <span style="font-size:11px;font-weight:700;border-radius:999px;padding:2px 9px;${bgSourceBadgeStyle(src)}">${escapeHtml(src)}</span>
+              ${stale}
+              ${qaBadge}
               <span style="font-size:11px">${motion}</span>
             </div>
             ${q}
@@ -2057,9 +2179,9 @@ async function spViewBackgroundSources(jobId, shortId, btn) {
           </div>
         </div>`;
     }).join('');
-    panel.innerHTML = `<div style="font-weight:700;font-size:12px;margin-bottom:6px">🎬 Per-scene background sources</div><div style="display:grid;gap:6px">${rows}</div>`;
+    panel.innerHTML = `<div style="font-weight:700;font-size:12px;margin-bottom:6px">🎬 Scenes & Visual QA</div>${summary}<div style="display:grid;gap:6px">${rows}</div>`;
   } catch (e) {
-    panel.innerHTML = '<div style="color:var(--muted);font-size:12px">Failed to load background report.</div>';
+    panel.innerHTML = '<div style="color:var(--muted);font-size:12px">Failed to load scenes & QA.</div>';
   }
 }
 
@@ -3619,7 +3741,8 @@ async function loadShortsIdeasTab(jobId) {
     const ideas = data.ideas || [];
     
     const ideasJson = JSON.stringify(ideas);
-    if (ideasJson === LAST_IDEAS_JSON_BY_JOB[jobId]) {
+    const ideasStillLoading = container.textContent.includes('Loading ideas');
+    if (ideasJson === LAST_IDEAS_JSON_BY_JOB[jobId] && !ideasStillLoading) {
       return;
     }
     LAST_IDEAS_JSON_BY_JOB[jobId] = ideasJson;
@@ -3770,9 +3893,11 @@ function renderShortStep(jobId, shortId, s, idx) {
   // writes current_span / span_index / candidate_index while judging finalists).
   let stageProgressHtml = '';
   if (shownStatus === 'in_progress' && s.span_total) {
-    const spanPart = `${escapeHtml(String(s.current_span || ''))} ${s.span_index || 0}/${s.span_total}`;
+    const sceneIds = Array.isArray(s.current_scene_ids) ? s.current_scene_ids.join(',') : '';
+    const scenePart = sceneIds ? `🎬 ${escapeHtml(sceneIds)} · ` : '';
+    const spanPart = `${scenePart}span ${s.span_index || 0}/${s.span_total}`;
     const candPart = s.candidate_total ? ` · cand ${s.candidate_index || 0}/${s.candidate_total}` : '';
-    stageProgressHtml = `<span class="pill in_progress" title="span / candidate progress">${spanPart}${candPart}</span>`;
+    stageProgressHtml = `<span class="pill in_progress" title="QA-ing scene ${escapeHtml(sceneIds || String(s.current_span || ''))} (span ${s.span_index || 0}/${s.span_total})">${spanPart}${candPart}</span>`;
   }
 
   let inputs = [];
@@ -4400,7 +4525,7 @@ function renderSingleCardHtml(jobId, d, idx, shortsSeoData, isOpen) {
         <button class="action-btn warn" onclick="spStopShort('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', this)" ${isRunning ? '' : 'disabled'}>Stop</button>
         <button class="action-btn" onclick="spResumeShort('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', '${escapeHtml(st)}', this)" ${isStoppedOrFailed ? '' : 'disabled'}>Resume</button>
         <button class="action-btn" onclick="spViewPromptHistory('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', this)">📜 Prompt history</button>
-        <button class="action-btn" onclick="spViewBackgroundSources('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', this)">🎬 Background sources</button>
+        <button class="action-btn" onclick="spViewBackgroundSources('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', this)">🎬 Scenes & QA</button>
         <div style="flex:1"></div>
         <button class="action-btn danger" onclick="spDeleteShort('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', this)" ${isRunning ? 'disabled' : ''}>Delete</button>
       </div>

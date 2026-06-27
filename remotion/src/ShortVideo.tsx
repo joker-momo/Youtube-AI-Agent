@@ -47,6 +47,14 @@ function assertNoLegacyGraphicScenes(scenes: Scene[]): void {
   }
 }
 
+function isGeneratedGraphicScene(scene: Scene): boolean {
+  const sourceLayout = String(scene.generated_image_source_layout || '');
+  return (
+    sourceLayout.startsWith('graphic_') ||
+    (scene.visual_type === 'graphic' && scene.background_mode === 'generated_image')
+  );
+}
+
 export const ShortVideo: React.FC<RenderProps> = (props) => {
   const {fps} = useVideoConfig();
   const scenes = props.scenes || [];
@@ -77,6 +85,7 @@ export const ShortVideo: React.FC<RenderProps> = (props) => {
           }
 
           const Layout = pickShortLayout(scene.layout);
+          const isGeneratedGraphic = isGeneratedGraphicScene(scene);
           return (
             <Sequence
               key={sceneId}
@@ -85,13 +94,15 @@ export const ShortVideo: React.FC<RenderProps> = (props) => {
               name={sceneId}
             >
               <AbsoluteFill>
-                <ShortReadabilityOverlay overlay={pickOverlayKey(scene)} />
-                <Layout
-                  on_screen_text={scene.on_screen_text}
-                  caption={scene.caption}
-                  layout_payload={scene.layout_payload as any}
-                  accentColor={accentColor}
-                />
+                {!isGeneratedGraphic && <ShortReadabilityOverlay overlay={pickOverlayKey(scene)} />}
+                {!isGeneratedGraphic && (
+                  <Layout
+                    on_screen_text={scene.on_screen_text}
+                    caption={scene.caption}
+                    layout_payload={scene.layout_payload as any}
+                    accentColor={accentColor}
+                  />
+                )}
               </AbsoluteFill>
             </Sequence>
           );
@@ -112,6 +123,7 @@ export const ShortVideo: React.FC<RenderProps> = (props) => {
         const bg = (scene as any).asset_refs?.background as string | undefined;
 
         const Layout = pickShortLayout(scene.layout);
+        const isGeneratedGraphic = isGeneratedGraphicScene(scene);
         return (
           <Sequence key={scene.id || i} from={from} durationInFrames={durFrames} name={scene.id || `scene-${i + 1}`}>
             <AbsoluteFill>
@@ -122,12 +134,14 @@ export const ShortVideo: React.FC<RenderProps> = (props) => {
                 cropPlan={scene.crop_plan}
                 durationInFrames={durFrames}
               />
-              <Layout
-                on_screen_text={scene.on_screen_text}
-                caption={scene.caption}
-                layout_payload={scene.layout_payload as any}
-                accentColor={accentColor}
-              />
+              {!isGeneratedGraphic && (
+                <Layout
+                  on_screen_text={scene.on_screen_text}
+                  caption={scene.caption}
+                  layout_payload={scene.layout_payload as any}
+                  accentColor={accentColor}
+                />
+              )}
             </AbsoluteFill>
           </Sequence>
         );

@@ -1,9 +1,10 @@
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
-from video_agent.stages.render import build_remotion_commands
+from video_agent.stages.render import RemotionSubprocessError, _run_with_progress, build_remotion_commands
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -95,6 +96,31 @@ def test_video_render_ignores_unknown_gl_backend(tmp_path):
 
     assert "--gl" not in commands.video
     assert "--gl" not in commands.thumbnail
+
+
+def test_run_with_progress_preserves_failure_tail(tmp_path):
+    progress_path = tmp_path / "render_progress.json"
+
+    try:
+        _run_with_progress(
+            [
+                sys.executable,
+                "-c",
+                "print('Rendered 370/927'); print('browser crashed while decoding media'); raise SystemExit(7)",
+            ],
+            progress_path,
+        )
+    except RemotionSubprocessError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("expected Remotion subprocess failure")
+
+    assert "exited with code 7" in message
+    assert "Rendered 370/927" in message
+    assert "browser crashed while decoding media" in message
+    assert (tmp_path / "render_subprocess_error.txt").read_text(encoding="utf-8") == (
+        "Rendered 370/927\nbrowser crashed while decoding media"
+    )
 
 
 def test_pre_render_duration_validation_blocks_props_scene_sum_mismatch(tmp_path):

@@ -99,6 +99,8 @@ def test_shorts_studio_includes_panel_and_api_hooks():
     assert "id=\"shorts-page\"" in shorts_studio_text
     assert "fetch('/shorts-studio/state')" in shorts_studio_text
     assert "/shorts-studio/jobs/" in shorts_studio_text
+    assert "const ideasStillLoading = container.textContent.includes('Loading ideas')" in shorts_studio_text
+    assert "ideasJson === LAST_IDEAS_JSON_BY_JOB[jobId] && !ideasStillLoading" in shorts_studio_text
 
 
 def test_dashboard_has_link_to_shorts_studio():
@@ -106,4 +108,3 @@ def test_dashboard_has_link_to_shorts_studio():
     dashboard_text = dashboard_path.read_text(encoding="utf-8")
 
     assert "href=\"/shorts-studio\"" in dashboard_text
-

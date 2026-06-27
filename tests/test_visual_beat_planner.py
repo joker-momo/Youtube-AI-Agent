@@ -34,6 +34,15 @@ def _resolved(scene_id: str, *, source_kind: str = "native_video") -> dict[str, 
     }
 
 
+def _graphic_fallback_resolved(scene_id: str) -> dict[str, Any]:
+    return {
+        **_resolved(scene_id, source_kind="generated_placeholder"),
+        "provider": "graphic_fallback",
+        "asset_tier": "graphic_fallback",
+        "source": "generated_placeholder",
+    }
+
+
 def _trim() -> dict[str, Any]:
     return {
         "schema_version": 1,
@@ -64,6 +73,20 @@ def _asset_qa(verdict: str = "PASS") -> dict[str, Any]:
                 "visual_span_id": "vs01",
                 "final_candidate_id": "final-01",
                 "render_eligible": verdict != "FAIL",
+                "qa": {"verdict": verdict, "errors": [], "warnings": []},
+            }
+        ]
+    }
+
+
+def _asset_qa_for_span(span_id: str, verdict: str = "PASS", *, route: str = "native_video_candidate") -> dict[str, Any]:
+    return {
+        "spans": [
+            {
+                "visual_span_id": span_id,
+                "visual_route": route,
+                "final_candidate_id": "final-01" if route == "native_video_candidate" else None,
+                "render_eligible": route == "native_video_candidate" and verdict != "FAIL",
                 "qa": {"verdict": verdict, "errors": [], "warnings": []},
             }
         ]
@@ -265,3 +288,56 @@ def test_no_valid_pexels_span_uses_generated_image_fallback_plan() -> None:
     assert selected["mode"] == "generated_image_fallback"
     assert selected["beats"][0]["type"] == "generated_image"
     assert span["qa"]["verdict"] == "PASS"
+
+
+def test_renderable_graphic_fallback_span_uses_generated_image_plan() -> None:
+    plan = build_visual_beat_plan(
+        short_id="short-04",
+        scene_doc={"scenes": [_scene("s04", 2.0)]},
+        visual_spans={"spans": [{"id": "vs04", "scene_ids": ["s04"]}]},
+        resolved_visuals={"scenes": {"s04": _graphic_fallback_resolved("s04")}},
+        trim_window_plan={"spans": []},
+        visual_span_asset_qa={
+            "spans": [
+                {
+                    "visual_span_id": "vs04",
+                    "visual_route": "generated_graphic",
+                    "final_candidate_id": None,
+                    "render_eligible": False,
+                    "qa": {"verdict": "PASS", "errors": [], "warnings": []},
+                }
+            ]
+        },
+        channel_config={"shorts": {"visual_quality_flow": {"beat_planner": {"enabled": True}}}},
+        fps=30,
+    )
+
+    span = plan["spans"][0]
+    selected = span["selected_plan"]
+    assert selected["mode"] == "generated_image_fallback"
+    assert selected["beats"][0]["provider"] == "graphic_fallback"
+    assert span["qa"]["verdict"] == "PASS"
+
+
+def test_confident_native_tip_keeps_native_over_generated_fallback() -> None:
+    plan = build_visual_beat_plan(
+        short_id="short-04",
+        scene_doc={"scenes": [_scene("s01", 2.0)]},
+        visual_spans={"spans": [{"id": "vs01", "scene_ids": ["s01"]}]},
+        resolved_visuals={"scenes": {"s01": _resolved("s01", source_kind="image_backed_video")}},
+        trim_window_plan={
+            "spans": [
+                {
+                    **_trim()["spans"][0],
+                    "visual_span_id": "vs01",
+                    "scene_ids": ["s01"],
+                }
+            ]
+        },
+        visual_span_asset_qa=_asset_qa_for_span("vs01", "PASS"),
+        channel_config={"shorts": {"visual_quality_flow": {"beat_planner": {"enabled": True}}}},
+        fps=30,
+    )
+
+    selected = plan["spans"][0]["selected_plan"]
+    assert selected["mode"] == "continuous_clip"

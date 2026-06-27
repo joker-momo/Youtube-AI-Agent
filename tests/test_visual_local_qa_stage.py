@@ -254,6 +254,40 @@ def test_visual_local_qa_downloads_only_winner_and_bounded_runner_then_replaces(
     assert ctx.extras["trim_window_plan"] == trim_plan
 
 
+def test_visual_local_qa_skips_generated_graphic_route_without_download(
+    tmp_path: Path, monkeypatch
+) -> None:
+    downloader = _Downloader()
+    monkeypatch.setattr(
+        "video_agent.shorts.builder.stages.visual_local_qa.FinalistDownloader",
+        lambda *a, **k: downloader,
+    )
+    monkeypatch.setattr(
+        "video_agent.shorts.builder.stages.visual_local_qa.LocalVisualAnalyzer",
+        lambda *a, **k: _Analyzer(),
+    )
+    ctx = _ctx(tmp_path)
+    span = ctx.extras["visual_acquisition_context"]["spans"][0]
+    span["visual_route"] = "generated_graphic"
+    selection = ctx.extras["visual_span_asset_selection"]["spans"][0]
+    selection["visual_route"] = "generated_graphic"
+    selection["provisional_candidate_id"] = None
+    selection["runner_up_ids"] = []
+    selection["requires_local_validation"] = False
+
+    result = _stage_visual_local_qa(ctx)
+
+    assert result.returns is None
+    assert downloader.downloaded == []
+    asset_qa = json.loads((ctx.json_dir / paths.SHORT_VISUAL_SPAN_ASSET_QA_FILE).read_text())
+    trim_plan = json.loads((ctx.json_dir / paths.SHORT_TRIM_WINDOW_PLAN_FILE).read_text())
+    span_qa = asset_qa["spans"][0]
+    assert span_qa["visual_route"] == "generated_graphic"
+    assert span_qa["final_selection_status"] == "routed_to_generated_graphic"
+    assert span_qa["qa"]["verdict"] == "PASS"
+    assert trim_plan["spans"] == []
+
+
 def test_report_only_capability_reduced_does_not_block_render(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
         "video_agent.shorts.builder.stages.visual_local_qa.FinalistDownloader",

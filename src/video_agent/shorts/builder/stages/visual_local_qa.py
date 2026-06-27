@@ -298,6 +298,18 @@ def _selection_status(provisional_id: str | None, final_id: str | None) -> str:
     return "replaced"
 
 
+def _visual_route(span: dict[str, Any], selection: dict[str, Any]) -> str:
+    return str(
+        selection.get("visual_route")
+        or span.get("visual_route")
+        or "native_video_candidate"
+    )
+
+
+def _skip_route_status(visual_route: str) -> str:
+    return f"routed_to_{visual_route}"
+
+
 def _stage_visual_local_qa(ctx: BuildContext) -> StageResult:
     """Analyze PR C finalists locally, choose final trim windows, and write PR D artifacts."""
     short_id = ctx.short_plan["short_id"]
@@ -343,6 +355,7 @@ def _stage_visual_local_qa(ctx: BuildContext) -> StageResult:
                 str(sid) in controlled_action_ids for sid in (span.get("scene_ids") or [])
             )
             selection = selection_by_span.get(span_id, {})
+            visual_route = _visual_route(span, selection)
             required_frames = _span_required_frames(span, short_scenes, fps)
             provisional_id = selection.get("provisional_candidate_id")
             candidate_qas: list[dict[str, Any]] = []
@@ -350,6 +363,25 @@ def _stage_visual_local_qa(ctx: BuildContext) -> StageResult:
             final_trim: dict[str, Any] | None = None
             final_analysis: dict[str, Any] | None = None
             final_semantic_records: list[dict[str, Any]] = []
+
+            if visual_route != "native_video_candidate":
+                span_qas.append(
+                    {
+                        "visual_span_id": span_id,
+                        "scene_ids": span.get("scene_ids") or [],
+                        "visual_route": visual_route,
+                        "required_duration_in_frames": required_frames,
+                        "provisional_candidate_id": provisional_id,
+                        "final_candidate_id": None,
+                        "final_selection_status": _skip_route_status(visual_route),
+                        "render_eligible": False,
+                        "requires_local_validation": False,
+                        "candidate_qa": [],
+                        "evidence_records": [],
+                        "qa": {"verdict": "PASS", "errors": [], "warnings": []},
+                    }
+                )
+                continue
 
             finalist_ids = list(_finalist_ids(selection, max_runner_ups=max_runner_ups))
             candidate_total = len(finalist_ids)
@@ -363,6 +395,9 @@ def _stage_visual_local_qa(ctx: BuildContext) -> StageResult:
                     "visual_local_qa",
                     "in_progress",
                     current_span=span_id,
+                    # Scenes covered by this span so the dashboard shows WHICH scene
+                    # is being QA'd (operators think in scenes, not span ids).
+                    current_scene_ids=[str(s) for s in (span.get("scene_ids") or [])],
                     span_index=span_index,
                     span_total=span_total,
                     candidate_index=cand_index,
@@ -465,6 +500,7 @@ def _stage_visual_local_qa(ctx: BuildContext) -> StageResult:
             span_qa = {
                 "visual_span_id": span_id,
                 "scene_ids": span.get("scene_ids") or [],
+                "visual_route": visual_route,
                 "required_duration_in_frames": required_frames,
                 "provisional_candidate_id": provisional_id,
                 "final_candidate_id": final_id,

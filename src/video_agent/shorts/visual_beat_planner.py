@@ -157,6 +157,19 @@ def _qa_verdict(span_qa: dict[str, Any] | None) -> str:
     return str(verdict or "PASS")
 
 
+def _span_visual_route(span_qa: dict[str, Any] | None) -> str:
+    return str((span_qa or {}).get("visual_route") or "native_video_candidate")
+
+
+def _confident_native_pass(span_qa: dict[str, Any] | None) -> bool:
+    return (
+        _span_visual_route(span_qa) == "native_video_candidate"
+        and _qa_verdict(span_qa) == "PASS"
+        and bool((span_qa or {}).get("render_eligible", True))
+        and bool((span_qa or {}).get("final_candidate_id"))
+    )
+
+
 def _adapted_asset_ref(adapted: dict[str, Any] | None) -> str:
     return str((adapted or {}).get("public_ref") or (adapted or {}).get("local_path") or "")
 
@@ -173,6 +186,10 @@ def _resolved_native(adapted: dict[str, Any] | None) -> bool:
 def _resolved_generated_image(adapted: dict[str, Any] | None) -> bool:
     if not adapted or not adapted.get("exists", True) or not _adapted_asset_ref(adapted):
         return False
+    provider = str(adapted.get("provider") or "").strip().lower()
+    tier = str(adapted.get("asset_tier") or "").strip().lower()
+    if provider == "graphic_fallback" or tier == "graphic_fallback":
+        return True
     return str(adapted.get("source_media_kind") or "") in {
         asset_schedule.IMAGE_BACKED_VIDEO,
         asset_schedule.NATIVE_IMAGE,
@@ -497,37 +514,39 @@ def build_visual_beat_plan(
         member_scenes = [scene_by_id[sid] for sid in member_ids]
         if not member_scenes:
             continue
+        span_qa = span_qas.get(span_id)
+        visual_route = _span_visual_route(span_qa)
 
         candidates: list[dict[str, Any]] = []
-        if "continuous_clip" in config["modes"]:
+        if visual_route == "native_video_candidate" and "continuous_clip" in config["modes"]:
             candidate = _continuous_candidate(
                 span_id=span_id,
                 member_ids=member_ids,
                 member_scenes=member_scenes,
                 trim=trims.get(span_id),
-                span_qa=span_qas.get(span_id),
+                span_qa=span_qa,
             )
             if candidate:
                 candidates.append(candidate)
-        if "two_clip" in config["modes"]:
+        if visual_route == "native_video_candidate" and "two_clip" in config["modes"]:
             candidate = _two_clip_candidate(
                 span_id=span_id,
                 member_ids=member_ids,
                 member_scenes=member_scenes,
                 adapted_scenes=adapted_scenes,
                 trim=trims.get(span_id),
-                span_qa=span_qas.get(span_id),
+                span_qa=span_qa,
             )
             if candidate:
                 candidates.append(candidate)
-        if "clip_plus_graphic" in config["modes"]:
+        if visual_route == "native_video_candidate" and "clip_plus_graphic" in config["modes"]:
             candidate = _clip_plus_graphic_candidate(
                 span_id=span_id,
                 member_ids=member_ids,
                 member_scenes=member_scenes,
                 adapted_scenes=adapted_scenes,
                 trim=trims.get(span_id),
-                span_qa=span_qas.get(span_id),
+                span_qa=span_qa,
             )
             if candidate:
                 candidates.append(candidate)
@@ -537,7 +556,7 @@ def build_visual_beat_plan(
                 member_ids=member_ids,
                 adapted_scenes=adapted_scenes,
                 trim=trims.get(span_id),
-                span_qa=span_qas.get(span_id),
+                span_qa=span_qa,
             )
             if candidate:
                 candidates.append(candidate)
@@ -546,7 +565,9 @@ def build_visual_beat_plan(
         # The hook needs a human/emotional first frame (stock gives empty rooms);
         # CTA stock often carries foreign-language text / off-brand boards. A
         # controlled AI background reads far cleaner for both.
-        if any(_is_controlled_visual_scene(s) for s in member_scenes):
+        has_cta = any(_is_cta_scene(s) for s in member_scenes)
+        should_prefer_fallback = has_cta or not _confident_native_pass(span_qa)
+        if should_prefer_fallback and any(_is_controlled_visual_scene(s) for s in member_scenes):
             _fb = next(
                 (c for c in candidates if c.get("mode") == "generated_image_fallback"), None
             )

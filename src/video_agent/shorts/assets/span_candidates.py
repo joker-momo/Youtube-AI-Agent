@@ -55,6 +55,41 @@ class ShortSpanAssetService:
         self._image_gen_fn = image_gen_fn
         self._image_gen_recorder = image_gen_recorder
 
+    @classmethod
+    def for_visual_config(
+        cls,
+        visual_config: dict[str, Any],
+        *,
+        stock_client: Any = None,
+        download_client: Any = None,
+        image_gen_fn: Any = None,
+        image_gen_recorder: Any = None,
+        vision_qa_fn: Any = None,
+    ) -> ShortSpanAssetService:
+        """Build a standalone span service that owns its own ``StockSearchCore``.
+
+        Used by the Shorts metadata-acquisition stage, which only needs the span
+        search/selection surface (no full per-scene cascade). The metadata-only
+        span flow never reaches the weak-match path, so the core needs no owning
+        service (``_is_contradictory``); the span service keeps its own
+        ``image_gen_fn`` / ``image_gen_recorder`` for the AI tier.
+        """
+        providers = list(visual_config.get("providers") or ["pexels", "pixabay"])
+        core = StockSearchCore(
+            visual_config,
+            service=None,
+            stock_client=stock_client,
+            download_client=download_client,
+            vision_qa_fn=vision_qa_fn,
+        )
+        return cls(
+            visual_config,
+            core=core,
+            providers=providers,
+            image_gen_fn=image_gen_fn,
+            image_gen_recorder=image_gen_recorder,
+        )
+
     @property
     def image_gen_fn(self) -> Any:
         """Last-resort tier: callable(prompt: str, out_path: Path) -> None.

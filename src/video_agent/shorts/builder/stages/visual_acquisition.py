@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from video_agent.assets.service import StockAssetService
 from video_agent.shorts import paths
+from video_agent.shorts.assets import ShortSpanAssetService
 from video_agent.shorts.builder.context import BuildContext
 from video_agent.shorts.builder.types import _PROCEED, StageResult
 from video_agent.shorts.manifest import write_short_status
@@ -225,7 +225,7 @@ def _stage_visual_acquisition(ctx: BuildContext) -> StageResult:
         if provider:
             visual_config["providers"] = [provider]
 
-        service = StockAssetService(visual_config)
+        service = ShortSpanAssetService.for_visual_config(visual_config)
         acquisition_spans: list[dict[str, Any]] = []
         candidates_by_span: dict[str, list[dict[str, Any]]] = {}
         selections: list[dict[str, Any]] = []

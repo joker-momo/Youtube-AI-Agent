@@ -90,7 +90,7 @@ def synthesize_short_backgrounds(
     """Resolve every scene's background (Pexels video/photo, ChatGPT image, or
     placeholder) WITHOUT synthesizing audio. Runs as its own pipeline stage so the
     UI can report, scene-by-scene, which source was used."""
-    from video_agent.stages.assets import prepare_assets
+    from video_agent.shorts.assets.prepare import prepare_assets
 
     ctx = _short_asset_context(short_dir, channel_config)
     # Lazy AI policy: scenes routed to native-video QA skip the ChatGPT tier now
@@ -163,7 +163,7 @@ def regen_fallback_backgrounds(
     manifest/report. No-op when scene_ids is empty."""
     if not scene_ids:
         return
-    from video_agent.stages.assets import prepare_assets
+    from video_agent.shorts.assets.prepare import prepare_assets
 
     ctx = _short_asset_context(short_dir, channel_config)
     for scene in short_scenes.get("scenes") or []:
@@ -185,7 +185,7 @@ def regen_fallback_backgrounds(
 def synthesize_short_narration(short_dir: Path, short_scenes: dict, channel_config: dict) -> Path:
     """Synthesize the Short's narration track. Backgrounds are resolved earlier by
     ``synthesize_short_backgrounds`` (separate stage), so this pass skips visuals."""
-    from video_agent.stages.assets import prepare_assets
+    from video_agent.shorts.assets.prepare import prepare_assets
 
     ctx = _short_asset_context(short_dir, channel_config)
     prepare_assets(

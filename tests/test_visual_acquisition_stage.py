@@ -153,8 +153,8 @@ def test_visual_acquisition_stage_writes_pr_c_artifacts_without_pr_d_artifact(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setattr(
-        "video_agent.shorts.builder.stages.visual_acquisition.StockAssetService",
-        lambda *a, **k: _Service(),
+        "video_agent.shorts.builder.stages.visual_acquisition.ShortSpanAssetService",
+        SimpleNamespace(for_visual_config=lambda *a, **k: _Service()),
     )
     ctx = _ctx(tmp_path)
     before_scenes = json.dumps(ctx.extras["short_scenes"], sort_keys=True)
@@ -192,8 +192,8 @@ def test_visual_acquisition_routes_graphic_span_without_pexels_candidates(
 ) -> None:
     service = _Service()
     monkeypatch.setattr(
-        "video_agent.shorts.builder.stages.visual_acquisition.StockAssetService",
-        lambda *a, **k: service,
+        "video_agent.shorts.builder.stages.visual_acquisition.ShortSpanAssetService",
+        SimpleNamespace(for_visual_config=lambda *a, **k: service),
     )
     ctx = _ctx(tmp_path)
     ctx.extras["short_scenes"]["scenes"][1]["asset_strategy"] = "graphic_fallback"

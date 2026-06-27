@@ -90,7 +90,7 @@ def test_background_stage_persists_converted_graphic_scene(monkeypatch, tmp_path
         scene["asset_refs"]["background"] = "jobs/short-01/assets/s01.mp4"
         return {"scenes": []}
 
-    monkeypatch.setattr("video_agent.stages.assets.prepare_assets", fake_prepare_assets)
+    monkeypatch.setattr("video_agent.shorts.assets.prepare.prepare_assets", fake_prepare_assets)
     monkeypatch.setattr(audio, "_short_asset_context", lambda short_dir, config: {})
     monkeypatch.setattr(audio, "_mark_video_covered_scenes", lambda short_dir, doc: None)
 
@@ -113,7 +113,7 @@ def test_background_stage_defers_graphic_scene_without_raising(monkeypatch, tmp_
     }
 
     monkeypatch.setattr(
-        "video_agent.stages.assets.prepare_assets",
+        "video_agent.shorts.assets.prepare.prepare_assets",
         lambda **kwargs: {"scenes": []},
     )
     monkeypatch.setattr(audio, "_short_asset_context", lambda short_dir, config: {})

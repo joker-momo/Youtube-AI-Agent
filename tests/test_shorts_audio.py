@@ -186,7 +186,7 @@ def test_synthesize_short_narration_forces_dynamic_sync_off(tmp_path: Path, monk
         (job_dir / "assets").mkdir(parents=True, exist_ok=True)
         (job_dir / "assets" / "narration.wav").write_bytes(b"\0\0")
 
-    monkeypatch.setattr("video_agent.stages.assets.prepare_assets", fake_prepare_assets)
+    monkeypatch.setattr("video_agent.shorts.assets.prepare.prepare_assets", fake_prepare_assets)
 
     short_dir = tmp_path / "short"
     short_dir.mkdir()

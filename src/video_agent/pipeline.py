@@ -704,6 +704,47 @@ def _attach_enforced_visual_schedule(
         render_props["elena_cues"] = cues
 
 
+def _elena_overlay_enabled(channel_config: dict) -> bool:
+    """Whether the Elena brand overlay is explicitly enabled for this channel.
+
+    Elena is an independent brand-support layer, NOT part of the B-roll/background
+    schedule, so it mounts on an opt-in flag regardless of the background
+    span-planning mode. Default off → channels that do not set it render
+    byte-identical to before.
+    """
+    elena = ((channel_config or {}).get("visual") or {}).get("elena") or {}
+    return bool(elena.get("enabled"))
+
+
+def _attach_elena_cues(
+    render_props: dict, job_dir: Path, channel_config: dict
+) -> None:
+    """Inject Elena presenter cues into ``render_props`` independent of span mode.
+
+    Elena is a brand overlay, so it must be mountable without flipping background
+    span planning to ``enforced``. Runs only when ``visual.elena.enabled`` is set,
+    never for Short jobs (they own their render_props via ``video_agent.shorts``),
+    and never double-injects when the enforced schedule path already attached cues.
+    Cues are recompiled from the FINAL post-TTS scene durations in ``render_props``
+    (falling back to the on-disk ``elena_cues.json`` sidecar), matching the
+    enforced-path staleness fix.
+    """
+    if "elena_cues" in render_props:
+        return  # the enforced schedule path already attached cues
+    if _is_short_job_dir(job_dir, channel_config):
+        return
+    if not _elena_overlay_enabled(channel_config):
+        return
+
+    scenes = render_props.get("scenes")
+    fps = int(((channel_config or {}).get("render") or {}).get("fps") or 30)
+    cues = _recompile_elena_cues(job_dir, scenes, fps, channel_config) if scenes else None
+    if cues is None:
+        cues = _read_sidecar_json(job_dir, "elena_cues.json")
+    if cues is not None:
+        render_props["elena_cues"] = cues
+
+
 def run_pipeline(options: PipelineOptions) -> PipelineResult:
     root = repo_root()
     channel_config = read_yaml(options.channel_path)
@@ -756,6 +797,7 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
         include_duration_in_frames=True,
     )
     _attach_enforced_visual_schedule(render_props, job_dir, channel_config)
+    _attach_elena_cues(render_props, job_dir, channel_config)
     write_json(job_dir / ARTIFACT_RENDER_PROPS, render_props)
     validate_json(render_props, root / "schemas/render-props.schema.json")
     visual_review = _write_visual_review(job_dir, job_id, assets, scene_doc)
@@ -1165,6 +1207,7 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
         include_duration_in_frames=not is_short_job,
     )
     _attach_enforced_visual_schedule(render_props, job_dir, channel_config)
+    _attach_elena_cues(render_props, job_dir, channel_config)
     write_json(job_dir / ARTIFACT_RENDER_PROPS, render_props)
     validate_json(render_props, root / "schemas/render-props.schema.json")
     visual_review = _write_visual_review(job_dir, job_id, assets, scene_doc)

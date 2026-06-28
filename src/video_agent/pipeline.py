@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import logging
 import math
 import os
 import subprocess
@@ -523,6 +524,141 @@ def _write_report(
     return report_path
 
 
+def _read_sidecar_json(job_dir: Path, name: str) -> dict | None:
+    """Read a long-form sidecar artifact (``json/<name>`` then root), or ``None``."""
+    for candidate in (job_dir / "json" / name, job_dir / name):
+        if candidate.exists():
+            return json.loads(candidate.read_text(encoding="utf-8"))
+    return None
+
+
+def _recompile_asset_schedule(
+    job_dir: Path, scenes: list[dict], fps: int
+) -> dict | None:
+    """Recompile the asset schedule from the FINAL post-TTS scene durations.
+
+    The ``visual_schedule`` stage compiles against scenes.json *before* render-time
+    TTS finalizes per-scene durations, so the on-disk artifact is stale by the time
+    the renderer consumes it. Recompiling here keeps the background-layer frame
+    boundaries identical to the actual scene timeline. Falls back to ``None`` (→ the
+    on-disk artifact) when inputs are missing or compilation fails.
+    """
+    spans = _read_sidecar_json(job_dir, "visual_spans.json")
+    if not spans:
+        return None
+    try:
+        from video_agent.visual import compile_asset_schedule
+
+        source_clips = _read_sidecar_json(job_dir, "span_source_clips.json")
+        return compile_asset_schedule(
+            scene_doc={"scenes": scenes},
+            visual_spans=spans,
+            fps=fps,
+            timing_source="tts_final",
+            source_clips=source_clips or None,
+        )
+    except Exception as exc:  # noqa: BLE001 - fall back to on-disk artifact
+        logging.getLogger(__name__).warning(
+            "Visual schedule recompile failed (%s); using on-disk artifact", exc
+        )
+        return None
+
+
+def _recompile_elena_cues(
+    job_dir: Path, scenes: list[dict], fps: int, channel_config: dict
+) -> dict | None:
+    """Recompile Elena cues from final durations (same staleness as the schedule).
+
+    Only recompiles when the ``elena_plan`` stage already produced ``elena_cues.json``
+    (i.e. Elena is part of this job). Falls back to ``None`` otherwise / on error.
+    """
+    if _read_sidecar_json(job_dir, "elena_cues.json") is None:
+        return None
+    try:
+        from video_agent.visual import build_elena_cues
+
+        return build_elena_cues(
+            {"scenes": scenes},
+            channel_config or {},
+            fps,
+            job_id=job_dir.name,
+            mode="report_only",
+        )
+    except Exception as exc:  # noqa: BLE001 - fall back to on-disk artifact
+        logging.getLogger(__name__).warning(
+            "Elena cue recompile failed (%s); using on-disk artifact", exc
+        )
+        return None
+
+
+def _comp_duration_in_frames(
+    scenes: list[dict], *, intro_sec: float, outro_sec: float, fps: int
+) -> int:
+    """Total composition frames for the long-form ``ChannelVideo`` layout.
+
+    Mirrors ``ChannelVideo.tsx``: the scene layer is shifted by ``introFrames`` and
+    an outro is appended, so the composition length is
+    ``introFrames + totalSceneFrames + outroFrames`` — NOT the scenes-only
+    ``visual_schedule.total_duration_in_frames``. Per-quantity rounding uses
+    ``floor(x*fps + 0.5)`` to match JS ``Math.round`` (the schedule + renderer use
+    the same), so the result is frame-exact. Root.tsx consumes this via
+    ``render.duration_in_frames``; without it an enforced render would cut the intro
+    shift + the entire outro.
+    """
+
+    def _f(sec: float) -> int:
+        return math.floor(float(sec or 0.0) * fps + 0.5)
+
+    scene_frames = sum(_f(s.get("duration_sec")) for s in (scenes or []))
+    return _f(intro_sec) + scene_frames + _f(outro_sec)
+
+
+def _build_render_props(
+    *,
+    channel_config: dict,
+    style: dict,
+    render_base: dict,
+    scene_doc: dict,
+    audio: dict,
+    seo: dict,
+    branding: dict,
+    fps: int,
+    include_duration_in_frames: bool,
+) -> dict:
+    """Assemble the render_props dict shared by ``run_pipeline`` and
+    ``render_operator_job``.
+
+    ``duration_sec`` always covers scenes + branding intro/outro. ``duration_in_frames``
+    (the exact composition frame count) is pinned only for long-form
+    (``include_duration_in_frames``) — shorts mount the scene layer at frame 0 and let
+    Root size to the schedule total, so it must stay absent there. Centralized so the
+    duration math lives in ONE place instead of being edited in two call sites.
+    """
+    scenes = scene_doc["scenes"]
+    scene_duration_sec = round(
+        sum(float(s.get("duration_sec") or 0.0) for s in (scenes or [])), 1
+    )
+    render = dict(render_base) | {
+        "duration_sec": scene_duration_sec + branding["intro_sec"] + branding["outro_sec"]
+    }
+    if include_duration_in_frames:
+        render["duration_in_frames"] = _comp_duration_in_frames(
+            scenes,
+            intro_sec=branding["intro_sec"],
+            outro_sec=branding["outro_sec"],
+            fps=fps,
+        )
+    return {
+        "channel": channel_config["channel"],
+        "style": style,
+        "render": render,
+        "scenes": scenes,
+        "audio": audio,
+        "seo": seo,
+        "branding": branding,
+    }
+
+
 def _attach_enforced_visual_schedule(
     render_props: dict, job_dir: Path, channel_config: dict
 ) -> None:
@@ -531,20 +667,32 @@ def _attach_enforced_visual_schedule(
 
     In ``report_only`` / ``disabled`` (the default) the schedule is omitted, so the
     renderer keeps the legacy per-scene background — frame-identical to before this
-    feature. Independent of the Shorts render path.
+    feature. When enforced, the schedule and Elena cues are recompiled from the
+    final post-TTS scene durations in ``render_props`` (the on-disk sidecars are
+    stale — compiled before render-time duration sync); callers without ``scenes``
+    fall back to the on-disk artifacts. Independent of the Shorts render path.
     """
     from video_agent.visual import resolve_visual_span_config
 
     if resolve_visual_span_config(channel_config or {}).get("mode") != "enforced":
         return
-    for name, key in (
-        ("compiled_asset_schedule.json", "visual_schedule"),
-        ("elena_cues.json", "elena_cues"),
-    ):
-        for candidate in (job_dir / "json" / name, job_dir / name):
-            if candidate.exists():
-                render_props[key] = json.loads(candidate.read_text(encoding="utf-8"))
-                break
+
+    scenes = render_props.get("scenes")
+    fps = int(((channel_config or {}).get("render") or {}).get("fps") or 30)
+
+    schedule = _recompile_asset_schedule(job_dir, scenes, fps) if scenes else None
+    if schedule is None:
+        schedule = _read_sidecar_json(job_dir, "compiled_asset_schedule.json")
+    if schedule is not None:
+        render_props["visual_schedule"] = schedule
+
+    cues = (
+        _recompile_elena_cues(job_dir, scenes, fps, channel_config) if scenes else None
+    )
+    if cues is None:
+        cues = _read_sidecar_json(job_dir, "elena_cues.json")
+    if cues is not None:
+        render_props["elena_cues"] = cues
 
 
 def run_pipeline(options: PipelineOptions) -> PipelineResult:
@@ -587,17 +735,17 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
     logger.log("ASSETS_READY", {"job_id": job_id, "cost_usd": 0})
 
     branding = _prepare_branding(channel_config)
-    scene_duration_sec = round(sum(float(s.get("duration_sec") or 0.0) for s in (scene_doc.get("scenes") or [])), 1)
-    render_props = {
-        "channel": channel_config["channel"],
-        "style": style,
-        "render": channel_config["render"]
-        | {"duration_sec": scene_duration_sec + branding["intro_sec"] + branding["outro_sec"]},
-        "scenes": scene_doc["scenes"],
-        "audio": assets["audio"],
-        "seo": seo,
-        "branding": branding,
-    }
+    render_props = _build_render_props(
+        channel_config=channel_config,
+        style=style,
+        render_base=channel_config["render"],
+        scene_doc=scene_doc,
+        audio=assets["audio"],
+        seo=seo,
+        branding=branding,
+        fps=int((channel_config["render"] or {}).get("fps") or 30),
+        include_duration_in_frames=True,
+    )
     _attach_enforced_visual_schedule(render_props, job_dir, channel_config)
     write_json(job_dir / ARTIFACT_RENDER_PROPS, render_props)
     validate_json(render_props, root / "schemas/render-props.schema.json")
@@ -682,30 +830,34 @@ def _sync_scene_durations_from_audio(job_dir: Path, scene_doc: dict) -> None:
             if total_audio is None:
                 total_audio = float(scene_doc.get("total_duration_sec") or 60)
 
-            updated = False
-            for idx, scene in enumerate(scenes):
-                sid = scene["id"]
-                if sid not in offsets:
-                    continue
-                my_offset = offsets[sid]
-                if idx + 1 < len(scenes):
-                    next_sid = scenes[idx + 1]["id"]
-                    next_offset = offsets.get(next_sid, total_audio)
-                    dur = next_offset - my_offset
-                else:
-                    dur = total_audio - my_offset + TAIL_PAD_SEC
-                scene["duration_sec"] = round(max(3.0, dur), 3)
-                updated = True
-
-            if updated:
-                scene_doc["total_duration_sec"] = int(
-                    round(sum(float(s["duration_sec"]) for s in scenes))
-                )
-                log.info(
-                    "Duration sync (whisper): %s",
-                    [(s["id"], s["duration_sec"]) for s in scenes],
-                )
-                return
+            # Whisper ``audio_offset_sec`` values are cumulative *plan* durations,
+            # so the raw per-scene deltas reproduce the LLM estimates and carry no
+            # audio correction on their own. Use the deltas only as relative shares
+            # and scale them to the MEASURED narration length, so the plan/measure
+            # gap is spread across ALL scenes instead of dumped onto the last one.
+            if scenes and all(s["id"] in offsets for s in scenes):
+                # Offsets confirm whisper mapped every scene against real audio.
+                # Weight by each scene's plan duration (the offsets are merely the
+                # cumulative sum of these, so they add no extra per-scene signal),
+                # then rescale to the measured total below.
+                plan_durs = [float(s.get("duration_sec") or 0.0) for s in scenes]
+                plan_total = sum(plan_durs)
+                if plan_total > 0:
+                    usable = max(0.0, total_audio - TAIL_PAD_SEC)
+                    last_idx = len(scenes) - 1
+                    for idx, scene in enumerate(scenes):
+                        dur = usable * (plan_durs[idx] / plan_total)
+                        if idx == last_idx:
+                            dur += TAIL_PAD_SEC
+                        scene["duration_sec"] = round(max(3.0, dur), 3)
+                    scene_doc["total_duration_sec"] = int(
+                        round(sum(float(s["duration_sec"]) for s in scenes))
+                    )
+                    log.info(
+                        "Duration sync (whisper): %s",
+                        [(s["id"], s["duration_sec"]) for s in scenes],
+                    )
+                    return
         except Exception as exc:
             log.warning("Duration sync strategy A failed: %s", exc)
 
@@ -959,17 +1111,21 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
         if "cover_composition" in shorts_render and shorts_render["cover_composition"] is not None:
             render_config["thumbnail_composition"] = shorts_render["cover_composition"]
 
-    scene_duration_sec = round(sum(float(s.get("duration_sec") or 0.0) for s in (scene_doc.get("scenes") or [])), 1)
-    render_props = {
-        "channel": channel_config["channel"],
-        "style": style,
-        "render": render_config
-        | {"duration_sec": scene_duration_sec + branding["intro_sec"] + branding["outro_sec"]},
-        "scenes": scene_doc["scenes"],
-        "audio": assets["audio"],
-        "seo": seo,
-        "branding": branding,
-    }
+    # Long-form pins the exact composition frame count (intro + scenes + outro) so
+    # an enforced render is not sized to the scenes-only schedule total (which would
+    # cut the intro shift + outro). Shorts mount the scene layer at frame 0 → leave
+    # it absent so Root keeps using the schedule total.
+    render_props = _build_render_props(
+        channel_config=channel_config,
+        style=style,
+        render_base=render_config,
+        scene_doc=scene_doc,
+        audio=assets["audio"],
+        seo=seo,
+        branding=branding,
+        fps=int(render_config.get("fps") or 30),
+        include_duration_in_frames=not is_short_job,
+    )
     _attach_enforced_visual_schedule(render_props, job_dir, channel_config)
     write_json(job_dir / ARTIFACT_RENDER_PROPS, render_props)
     validate_json(render_props, root / "schemas/render-props.schema.json")

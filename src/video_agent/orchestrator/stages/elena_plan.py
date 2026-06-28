@@ -23,6 +23,7 @@ from video_agent.orchestrator.stages._shared import (
     _complete_stage,
     _resolve_artifact,
     _start_stage,
+    resolve_stage_fps,
 )
 from video_agent.storage.atomic import atomic_write_json
 from video_agent.utils.json_io import read_json, read_yaml
@@ -32,20 +33,6 @@ __all__ = ["run_elena_plan_stage"]
 
 _STAGE = "elena_plan"
 _OUTPUT_NAME = "elena_cues.json"
-_DEFAULT_FPS = 30
-
-
-def _resolve_fps(channel_path: Path | None) -> int:
-    if channel_path is None:
-        return _DEFAULT_FPS
-    path = Path(channel_path)
-    if not path.exists():
-        return _DEFAULT_FPS
-    try:
-        cfg: dict[str, Any] = read_yaml(path) or {}
-        return int(((cfg.get("render") or {}).get("fps")) or _DEFAULT_FPS)
-    except Exception:
-        return _DEFAULT_FPS
 
 
 def _channel_config(channel_path: Path | None) -> dict[str, Any]:
@@ -74,7 +61,7 @@ def run_elena_plan_stage(job_dir: Path, channel_path: Path | None = None) -> Pat
     cues = build_elena_cues(
         scene_doc,
         _channel_config(channel_path),
-        _resolve_fps(channel_path),
+        resolve_stage_fps(channel_path),
         job_id=state.job_id,
         mode="report_only",
     )

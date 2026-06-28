@@ -14,7 +14,6 @@ per-scene background. Independent of ``video_agent.shorts``.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 from video_agent.contracts import ARTIFACT_SCENES
 from video_agent.orchestrator.job_state import load_job
@@ -23,9 +22,10 @@ from video_agent.orchestrator.stages._shared import (
     _complete_stage,
     _resolve_artifact,
     _start_stage,
+    resolve_stage_fps,
 )
 from video_agent.storage.atomic import atomic_write_json
-from video_agent.utils.json_io import read_json, read_yaml
+from video_agent.utils.json_io import read_json
 from video_agent.visual import compile_asset_schedule
 
 __all__ = ["run_visual_schedule_stage"]
@@ -38,22 +38,6 @@ _SPANS_NAME = "visual_spans.json"
 # present a span renders one continuous acquired clip; absent → Phase-2 behaviour
 # (first member scene's prepared clip).
 _SOURCE_CLIPS_NAME = "span_source_clips.json"
-_DEFAULT_FPS = 30
-
-
-def _resolve_fps(channel_path: Path | None) -> int:
-    """Read ``render.fps`` from the channel config (best-effort, default 30)."""
-    if channel_path is None:
-        return _DEFAULT_FPS
-    path = Path(channel_path)
-    if not path.exists():
-        return _DEFAULT_FPS
-    try:
-        cfg: dict[str, Any] = read_yaml(path) or {}
-        fps = ((cfg.get("render") or {}).get("fps")) or _DEFAULT_FPS
-        return int(fps)
-    except Exception:
-        return _DEFAULT_FPS
 
 
 def run_visual_schedule_stage(job_dir: Path, channel_path: Path | None = None) -> Path:
@@ -83,7 +67,7 @@ def run_visual_schedule_stage(job_dir: Path, channel_path: Path | None = None) -
     _start_stage(job_dir, _STAGE)
     scene_doc = read_json(scenes_path) or {}
     visual_spans = read_json(spans_path) or {}
-    fps = _resolve_fps(channel_path)
+    fps = resolve_stage_fps(channel_path)
 
     # Use real per-span acquired clips when the live acquisition step produced them.
     source_clips_path = scenes_path.parent / _SOURCE_CLIPS_NAME

@@ -16,6 +16,7 @@ __all__ = [
     "_resolve_idea_path",
     "_resolve_artifact",
     "_run_blocking_with_timeout",
+    "resolve_stage_fps",
     "_start_stage",
     "_complete_stage",
     "IDEA_FILE",
@@ -86,6 +87,26 @@ def _resolve_artifact(job_dir: Path, new_rel: str, legacy_rel: str | None = None
     return legacy_path
 
 
+def resolve_stage_fps(channel_path: Path | None, default: int = 30) -> int:
+    """Read ``render.fps`` from the channel config (best-effort, default 30).
+
+    Shared by the long-form ``visual_schedule`` and ``elena_plan`` stages (which
+    had identical copy-pasted resolvers). Never raises.
+    """
+    if channel_path is None:
+        return default
+    path = Path(channel_path)
+    if not path.exists():
+        return default
+    try:
+        from video_agent.utils.json_io import read_yaml
+
+        cfg = read_yaml(path) or {}
+        return int(((cfg.get("render") or {}).get("fps")) or default)
+    except Exception:
+        return default
+
+
 def _run_blocking_with_timeout(
     label: str,
     timeout_sec: int,
@@ -150,7 +171,16 @@ def _complete_stage(job_dir: Path, stage_name: str, output: Path) -> None:
         stage.started_at = previous_end or ts
     stage.status = "completed"
     stage.completed_at = ts
-    next_pending = next((s for s in state.stages if s.status == "pending"), None)
+    # Advance to the next pending stage AFTER the one that just completed. Using
+    # the first pending stage anywhere in the list would let a skipped/left-pending
+    # earlier stage drag current_stage backward, wedging the next stage's
+    # ``current_stage != _STAGE`` guard.
+    completed_idx = next(
+        (i for i, s in enumerate(state.stages) if s.name == stage_name), -1
+    )
+    next_pending = next(
+        (s for s in state.stages[completed_idx + 1:] if s.status == "pending"), None
+    )
     if next_pending is not None:
         state.current_stage = next_pending.name
     state.updated_at = ts
@@ -165,5 +195,5 @@ def _complete_stage(job_dir: Path, stage_name: str, output: Path) -> None:
             "output": str(output.relative_to(job_dir)),
         },
     )
-    if next_pending is None:
+    if not any(s.status == "pending" for s in state.stages):
         _logger.log("JOB_COMPLETED", {"job_id": state.job_id})

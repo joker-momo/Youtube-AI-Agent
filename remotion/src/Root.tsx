@@ -9,11 +9,36 @@ import {defaultRenderProps, RenderProps} from './render-props';
 // compositions render with the correct typeface from frame 0.
 import './shorts/loadFonts';
 
+// Shorts metadata: the scene layer starts at frame 0, so the compiled schedule
+// total IS the whole composition length (preferred). Unchanged contract.
 const calculateVideoMetadata = ({props}: {props: RenderProps}) => {
   const fps = props.render?.fps ?? defaultRenderProps.render.fps;
   const duration_sec = props.render?.duration_sec ?? defaultRenderProps.render.duration_sec;
   const durationInFrames =
     props.visual_schedule?.total_duration_in_frames ??
+    props.render?.duration_in_frames ??
+    Math.max(1, Math.round(duration_sec * fps));
+  const resStr = props.render?.resolution || defaultRenderProps.render.resolution;
+  const parts = resStr.split('x');
+  const width = parseInt(parts[0] || '1920', 10);
+  const height = parseInt(parts[1] || '1080', 10);
+  return {
+    fps,
+    durationInFrames,
+    width,
+    height,
+  };
+};
+
+// Long-form metadata: ChannelVideo shifts the scene layer by introFrames and
+// appends an outro, so the composition length is intro + scenes + outro. The
+// pipeline pins that as render.duration_in_frames; the scenes-only
+// visual_schedule.total_duration_in_frames must NOT be used here (it would cut
+// the intro shift + the entire outro).
+const calculateChannelMetadata = ({props}: {props: RenderProps}) => {
+  const fps = props.render?.fps ?? defaultRenderProps.render.fps;
+  const duration_sec = props.render?.duration_sec ?? defaultRenderProps.render.duration_sec;
+  const durationInFrames =
     props.render?.duration_in_frames ??
     Math.max(1, Math.round(duration_sec * fps));
   const resStr = props.render?.resolution || defaultRenderProps.render.resolution;
@@ -40,7 +65,7 @@ export const Root: React.FC = () => {
         width={1920}
         height={1080}
         defaultProps={defaultRenderProps}
-        calculateMetadata={calculateVideoMetadata}
+        calculateMetadata={calculateChannelMetadata}
       />
       <Composition
         id="ThumbnailStandard"

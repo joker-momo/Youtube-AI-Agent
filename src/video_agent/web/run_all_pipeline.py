@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import errno
 import fcntl
+import logging
 import time
 from pathlib import Path
 
@@ -625,7 +626,9 @@ async def _execute_run_all_locked(
 
                 write_review_verdict(job_dir)
             except Exception:
-                pass
+                logging.getLogger(__name__).warning(
+                    "write_review_verdict failed (non-fatal)", exc_info=True
+                )
             # Shorts autopilot auto-trigger (new jobs): only on long Review PASS
             # and when enabled. Fire-and-forget so the long pipeline returns.
             try:
@@ -636,7 +639,9 @@ async def _execute_run_all_locked(
 
                     enqueue_shorts_autopilot(job_dir, channel_config, force=False, client=client)
             except Exception:
-                pass
+                logging.getLogger(__name__).warning(
+                    "Shorts autopilot auto-trigger failed (non-fatal)", exc_info=True
+                )
     except StageInputMissingError as exc:
         state = load_job(job_dir)
         await notify_job_failed(

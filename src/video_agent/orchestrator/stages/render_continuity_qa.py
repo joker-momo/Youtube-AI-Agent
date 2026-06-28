@@ -13,6 +13,7 @@ if the schedule, the rendered video, or ffmpeg is unavailable it reports PASS wi
 
 from __future__ import annotations
 
+import math
 import shutil
 import subprocess
 from pathlib import Path
@@ -79,9 +80,38 @@ def analyze_span_continuity(
     }
 
 
-def _sample_luma(video: Path, frames: list[int], total: int) -> list[float] | None:
-    """Mean luma for the requested frame indices (others default to a non-black
-    sentinel). Returns None when ffmpeg/PIL is unavailable."""
+def _intro_offset_frames(job_dir: Path) -> int:
+    """Frames the rendered scene layer is shifted by (long-form intro).
+
+    ``ChannelVideo.tsx`` mounts the scene layer at ``introFrames`` while the
+    schedule ``scene_boundaries`` are scene-layer 0-based, so the QA must sample
+    the rendered video at ``boundary + introFrames``. Read from the already-written
+    ``render_props.json`` (branding.intro_sec * render.fps, JS ``Math.round``).
+    Returns 0 when render_props / branding is absent (e.g. shorts, intro disabled).
+    """
+    for candidate in (job_dir / "json" / "render_props.json", job_dir / "render_props.json"):
+        if not candidate.exists():
+            continue
+        try:
+            rp = read_json(candidate) or {}
+        except Exception:
+            return 0
+        fps = float(((rp.get("render") or {}).get("fps")) or 0.0)
+        intro_sec = float(((rp.get("branding") or {}).get("intro_sec")) or 0.0)
+        if fps <= 0 or intro_sec <= 0:
+            return 0
+        return math.floor(intro_sec * fps + 0.5)
+    return 0
+
+
+def _sample_luma(
+    video: Path, frames: list[int], total: int, *, frame_offset: int = 0
+) -> list[float] | None:
+    """Mean luma for the requested SCENE-LAYER frame indices (others default to a
+    non-black sentinel). The rendered video is sampled at ``index + frame_offset``
+    (the intro shift) but values are stored at the unshifted scene-layer index, so
+    :func:`analyze_span_continuity` stays pure. Returns None when ffmpeg/PIL is
+    unavailable."""
     if not frames or not shutil.which("ffmpeg"):
         return None
     try:
@@ -89,7 +119,7 @@ def _sample_luma(video: Path, frames: list[int], total: int) -> list[float] | No
     except Exception:
         return None
     wanted = sorted(set(frames))
-    select = "+".join(f"eq(n\\,{f})" for f in wanted)
+    select = "+".join(f"eq(n\\,{f + frame_offset})" for f in wanted)
     tmp = video.parent / "_continuity_tmp"
     if tmp.exists():
         shutil.rmtree(tmp, ignore_errors=True)
@@ -157,7 +187,11 @@ def run_render_continuity_qa_stage(job_dir: Path, channel_path: Path | None = No
         return out_path
 
     frames = sorted({f for b in boundaries for f in (b - 1, b)})
-    luma = _sample_luma(video, frames, int(schedule.get("total_duration_in_frames") or 0))
+    intro_offset = _intro_offset_frames(job_dir)
+    luma = _sample_luma(
+        video, frames, int(schedule.get("total_duration_in_frames") or 0),
+        frame_offset=intro_offset,
+    )
     if luma is None:
         result = {"verdict": "PASS", "skipped": True,
                   "reason": "luma sampling unavailable (ffmpeg/PIL)"}

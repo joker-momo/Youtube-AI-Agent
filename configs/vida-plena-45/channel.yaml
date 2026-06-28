@@ -129,13 +129,19 @@ domain_plugins:
 models:
   default: "mock-local"
 tts:
-  provider: "kokoro"
-  voice_id: "ef_dora"
-  lang_code: "e"
-  speed: 1.03
-  sample_rate: 24000
+  # Elena presenter voice — MeloTTS ES (local, MIT), middle-aged Spanish female.
+  # Runs in a sidecar venv (tools/melo-venv) via a worker; see src/video_agent/tts.py
+  # MeloTTSClient. Set up the venv with tools/setup-melo-venv.sh.
+  provider: "melo"
+  language: "ES"
+  speed: 1.05                 # MeloTTS model tempo (pitch-safe); ~3% faster than 1.0
+  pitch_shift_semitones: -1.0 # ages raw ~190 Hz → ~179 Hz (middle-aged); do not go below -1.5
+  segmentation: "scene"       # synth whole-scene narration (MeloTTS handles prosody)
+  device: "mps"
+  sample_rate: 24000          # pipeline rate; melo's native 44100 is resampled down
   pace_wpm: 120
   scene_lead_in_sec: 0.45
+  # Fallback engine: switch provider to "kokoro" (clause segmentation + humanize below).
   humanize:
     enabled: true
     pause_comma_ms: 230
@@ -402,14 +408,21 @@ shorts:
     fallback_formats:
       - "myth_or_contradiction"
   tts:
-    provider: "kokoro"
-    voice_id: "ef_dora"
-    speed: 1.07
+    # Same Elena voice as long-form (MeloTTS ES) — keep one consistent voice across
+    # the channel. Runs via the sidecar venv/worker (see top-level tts + tts.py).
+    provider: "melo"
+    language: "ES"
+    speed: 1.05                 # match long-form; bump to ~1.07 here for snappier Shorts if wanted
+    pitch_shift_semitones: -1.0
+    segmentation: "scene"
+    device: "mps"
     pace_wpm: 130
     # Shorts render one narration track over scenes timed by planned duration,
     # so per-scene audio must be padded to the plan (not shrunk to raw speech).
     # shorts/audio.py also forces this; set here for clarity.
     dynamic_sync: false
+    sample_rate: 24000
+    # Fallback engine: switch provider to "kokoro" (uses clause humanize below).
     humanize:
       enabled: true
       pause_comma_ms: 160

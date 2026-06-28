@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
-from pathlib import Path
 import tempfile
+from pathlib import Path
 from typing import Any, Protocol
 
 from video_agent.qa.spoken_text import normalize_spoken_text
@@ -11,6 +12,30 @@ from video_agent.qa.spoken_text import normalize_spoken_text
 
 class TTSClient(Protocol):
     def synthesize(self, text: str, output_path: Path, config: dict[str, Any]) -> dict[str, Any]: ...
+
+
+def _pitch_ratio(semitones: float) -> float:
+    """Frequency ratio for a pitch shift of ``semitones`` (negative = lower)."""
+    return 2.0 ** (float(semitones) / 12.0)
+
+
+def _build_pitch_resample_cmd(
+    src: str, dst: str, semitones: float, *, in_sr: int, out_sr: int
+) -> list[str]:
+    """ffmpeg command to pitch-shift by ``semitones`` and resample to ``out_sr`` (mono).
+
+    Uses ``asetrate`` (shifts pitch + formants + rate) then ``atempo`` to restore the
+    original duration — duration-preserving, dependency-free. A zero shift skips the
+    pitch stage and only resamples.
+    """
+    if abs(float(semitones)) < 1e-6:
+        af = f"aresample={int(out_sr)}"
+    else:
+        ratio = _pitch_ratio(semitones)
+        new_sr = int(round(int(in_sr) * ratio))
+        atempo = 1.0 / ratio
+        af = f"asetrate={new_sr},atempo={atempo:.6f},aresample={int(out_sr)}"
+    return ["ffmpeg", "-y", "-i", str(src), "-af", af, "-ac", "1", str(dst), "-loglevel", "error"]
 
 
 def _humanize_cfg(config: dict[str, Any]) -> dict[str, Any]:
@@ -58,7 +83,7 @@ def _pause_after(punct: str, cfg: dict[str, Any]) -> float:
 def _segment_speed(base_speed: float, scene_idx: int, seg_idx: int, jitter_pct: float) -> float:
     if jitter_pct <= 0:
         return base_speed
-    seed = f"{scene_idx}:{seg_idx}".encode("utf-8")
+    seed = f"{scene_idx}:{seg_idx}".encode()
     raw = int(hashlib.sha256(seed).hexdigest()[:8], 16)
     signed = (raw / 0xFFFFFFFF) * 2.0 - 1.0  # [-1, 1]
     jitter = signed * (jitter_pct / 100.0)
@@ -91,6 +116,10 @@ def synthesize_scene_track(
     # Enable dynamic sync by default for optimal audio/video seamlessness
     dynamic_sync = bool(config.get("dynamic_sync", True))
     scene_lead_in_sec = max(0.0, float(config.get("scene_lead_in_sec", 0.0)))
+    # "scene" → synthesize each scene's narration in a single call (lets neural
+    # engines like MeloTTS do their own sentence-level prosody); "clause" (default)
+    # → split into clauses with humanize pauses (Kokoro path, unchanged).
+    segmentation = str(config.get("segmentation", "clause")).lower()
 
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_root = Path(temp_dir)
@@ -105,47 +134,64 @@ def synthesize_scene_track(
             if index > 1 and scene_lead_in_sec > 0:
                 scene_audio.append(np.zeros(int(round(sample_rate * scene_lead_in_sec)), dtype=np.float32))
             narration_text = normalize_spoken_text(str(scene["narration"]))
-            paragraphs = [p for p in narration_text.split("\n\n") if p.strip()]
-            if not paragraphs:
-                paragraphs = [str(scene["narration"])]
-            seg_counter = 0
-            for p_idx, paragraph in enumerate(paragraphs):
-                segments = _split_segments(paragraph)
-                if not segments:
-                    segments = [(paragraph, "")]
-                for seg_text, punct in segments:
-                    seg_counter += 1
-                    segment_path = temp_root / f"scene-{index:02d}-seg-{seg_counter:03d}.wav"
-                    seg_cfg = dict(config)
-                    if hcfg["enabled"]:
-                        seg_cfg["speed"] = _segment_speed(
-                            base_speed, index, seg_counter, hcfg["speed_jitter_pct"]
-                        )
-                    metadata = client.synthesize(seg_text, segment_path, seg_cfg)
-                    scene_rate = int(metadata.get("sample_rate") or sample_rate)
-                    if scene_rate != sample_rate:
-                        raise RuntimeError(
-                            f"TTS sample-rate drift on scene {index}: expected {sample_rate}, got {scene_rate}"
-                        )
-                    audio, read_rate = sf.read(segment_path, dtype="float32")
-                    if read_rate != sample_rate:
-                        raise RuntimeError(
-                            f"TTS sample-rate mismatch: expected {sample_rate}, got {read_rate}"
-                        )
-                    if audio.ndim > 1:
-                        audio = audio.mean(axis=1)
-                    scene_audio.append(audio.astype(np.float32))
-                    if hcfg["enabled"]:
-                        pause_sec = _pause_after(punct, hcfg)
-                        if pause_sec > 0:
-                            silence_frames = int(round(sample_rate * pause_sec))
-                            scene_audio.append(np.zeros(silence_frames, dtype=np.float32))
-                if hcfg["enabled"] and p_idx < len(paragraphs) - 1:
-                    paragraph_sec = max(0.0, hcfg["pause_paragraph_ms"] / 1000.0)
-                    if paragraph_sec > 0:
-                        scene_audio.append(
-                            np.zeros(int(round(sample_rate * paragraph_sec)), dtype=np.float32)
-                        )
+            if segmentation == "scene":
+                full_path = temp_root / f"scene-{index:02d}-full.wav"
+                metadata = client.synthesize(narration_text, full_path, dict(config))
+                scene_rate = int(metadata.get("sample_rate") or sample_rate)
+                if scene_rate != sample_rate:
+                    raise RuntimeError(
+                        f"TTS sample-rate drift on scene {index}: expected {sample_rate}, got {scene_rate}"
+                    )
+                audio, read_rate = sf.read(full_path, dtype="float32")
+                if read_rate != sample_rate:
+                    raise RuntimeError(
+                        f"TTS sample-rate mismatch: expected {sample_rate}, got {read_rate}"
+                    )
+                if audio.ndim > 1:
+                    audio = audio.mean(axis=1)
+                scene_audio.append(audio.astype(np.float32))
+            else:
+                paragraphs = [p for p in narration_text.split("\n\n") if p.strip()]
+                if not paragraphs:
+                    paragraphs = [str(scene["narration"])]
+                seg_counter = 0
+                for p_idx, paragraph in enumerate(paragraphs):
+                    segments = _split_segments(paragraph)
+                    if not segments:
+                        segments = [(paragraph, "")]
+                    for seg_text, punct in segments:
+                        seg_counter += 1
+                        segment_path = temp_root / f"scene-{index:02d}-seg-{seg_counter:03d}.wav"
+                        seg_cfg = dict(config)
+                        if hcfg["enabled"]:
+                            seg_cfg["speed"] = _segment_speed(
+                                base_speed, index, seg_counter, hcfg["speed_jitter_pct"]
+                            )
+                        metadata = client.synthesize(seg_text, segment_path, seg_cfg)
+                        scene_rate = int(metadata.get("sample_rate") or sample_rate)
+                        if scene_rate != sample_rate:
+                            raise RuntimeError(
+                                f"TTS sample-rate drift on scene {index}: expected {sample_rate}, got {scene_rate}"
+                            )
+                        audio, read_rate = sf.read(segment_path, dtype="float32")
+                        if read_rate != sample_rate:
+                            raise RuntimeError(
+                                f"TTS sample-rate mismatch: expected {sample_rate}, got {read_rate}"
+                            )
+                        if audio.ndim > 1:
+                            audio = audio.mean(axis=1)
+                        scene_audio.append(audio.astype(np.float32))
+                        if hcfg["enabled"]:
+                            pause_sec = _pause_after(punct, hcfg)
+                            if pause_sec > 0:
+                                silence_frames = int(round(sample_rate * pause_sec))
+                                scene_audio.append(np.zeros(silence_frames, dtype=np.float32))
+                    if hcfg["enabled"] and p_idx < len(paragraphs) - 1:
+                        paragraph_sec = max(0.0, hcfg["pause_paragraph_ms"] / 1000.0)
+                        if paragraph_sec > 0:
+                            scene_audio.append(
+                                np.zeros(int(round(sample_rate * paragraph_sec)), dtype=np.float32)
+                            )
             if scene_audio:
                 audio = np.concatenate(scene_audio)
             else:
@@ -227,10 +273,122 @@ class KokoroTTSClient:
         }
 
 
+class MeloTTSClient:
+    """MeloTTS provider (Elena voice).
+
+    MeloTTS' dependencies (old transformers/librosa + a Japanese dict) clash with
+    the project venv, so it runs in a sidecar venv driven by a persistent worker
+    process (model loaded once, JSON-over-stdio). This client lives in the project
+    venv: it talks to the worker, then pitch-shifts + resamples the raw 44.1 kHz
+    output to the pipeline rate with ffmpeg. Worker starts lazily on first synth.
+    """
+
+    def __init__(self, config: dict[str, Any] | None = None) -> None:
+        cfg = dict(config or {})
+        self._language = str(cfg.get("language", "ES"))
+        self._device = str(cfg.get("device", "mps"))
+        repo_root = Path(__file__).resolve().parents[2]
+        self._venv_python = str(
+            cfg.get("melo_venv_python") or (repo_root / "tools" / "melo-venv" / "bin" / "python")
+        )
+        self._worker_script = str(
+            cfg.get("melo_worker_script") or (Path(__file__).resolve().parent / "tts_melo_worker.py")
+        )
+        self._proc: Any = None
+
+    def _ensure_worker(self) -> None:
+        if self._proc is not None:
+            return
+        import json
+        import subprocess
+
+        env = dict(os.environ)
+        env.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+        cmd = [
+            self._venv_python,
+            self._worker_script,
+            "--language",
+            self._language,
+            "--device",
+            self._device,
+        ]
+        self._proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+        ready = self._proc.stdout.readline()
+        if not ready:
+            raise RuntimeError("MeloTTS worker failed to start (no handshake).")
+        handshake = json.loads(ready)
+        if not handshake.get("ready"):
+            raise RuntimeError(f"MeloTTS worker error on start: {handshake.get('error')}")
+
+    def synthesize(self, text: str, output_path: Path, config: dict[str, Any]) -> dict[str, Any]:
+        import json
+        import subprocess
+
+        self._ensure_worker()
+        speed = float(config.get("speed", 1.0))
+        out_sr = int(config.get("sample_rate", config.get("output_sample_rate", 24000)))
+        semitones = float(config.get("pitch_shift_semitones", 0.0))
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            raw_path = Path(temp_dir) / "melo_raw.wav"
+            assert self._proc is not None and self._proc.stdin is not None
+            self._proc.stdin.write(
+                json.dumps({"text": text, "speed": speed, "out": str(raw_path)}) + "\n"
+            )
+            self._proc.stdin.flush()
+            line = self._proc.stdout.readline() if self._proc.stdout else ""
+            if not line:
+                raise RuntimeError("MeloTTS worker died during synthesis.")
+            resp = json.loads(line)
+            if not resp.get("ok"):
+                raise RuntimeError(f"MeloTTS worker error: {resp.get('error')}")
+            in_sr = int(resp.get("sample_rate", 44100))
+            cmd = _build_pitch_resample_cmd(
+                str(raw_path), str(output_path), semitones, in_sr=in_sr, out_sr=out_sr
+            )
+            subprocess.run(cmd, check=True)
+
+        return {
+            "provider": "melo",
+            "language": self._language,
+            "speed": speed,
+            "pitch_shift_semitones": semitones,
+            "sample_rate": out_sr,
+        }
+
+    def close(self) -> None:
+        if self._proc is not None:
+            try:
+                if self._proc.stdin:
+                    self._proc.stdin.close()
+                self._proc.terminate()
+                self._proc.wait(timeout=5)
+            except Exception:
+                self._proc.kill()
+            finally:
+                self._proc = None
+
+    def __del__(self) -> None:  # best-effort cleanup
+        try:
+            self.close()
+        except Exception:
+            pass
+
+
 def build_tts_client(config: dict[str, Any]) -> TTSClient | None:
     provider = config.get("provider", "mock-local")
     if provider == "mock-local":
         return None
     if provider == "kokoro":
         return KokoroTTSClient()
+    if provider == "melo":
+        return MeloTTSClient(config)
     raise ValueError(f"Unsupported TTS provider: {provider}")

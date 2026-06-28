@@ -32,6 +32,7 @@ browser_trace/
 /.remotion
 /logs
 /.venv
+/tools/melo-venv
 /.understand-anything
 /inputs/ideas
 /scratch

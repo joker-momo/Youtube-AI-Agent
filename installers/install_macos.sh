@@ -83,6 +83,12 @@ mkdir -p caches/huggingface caches/whisper logs
 python -c "import whisper; whisper.load_model('tiny'); print('Whisper tiny: ok')" || warn "Whisper warmup skipped"
 python -c "from kokoro import KPipeline; KPipeline(lang_code='e', repo_id='hexgrad/Kokoro-82M'); print('Kokoro: ok')" || warn "Kokoro warmup skipped"
 
+# 6b. MeloTTS sidecar venv (Elena voice — provider: melo). Isolated from .venv
+#     because MeloTTS' old deps would clash with the project venv. Best-effort.
+step "Building MeloTTS sidecar venv (Elena voice)"
+PYTHON311="${PYTHON_BIN}" bash tools/setup-melo-venv.sh \
+  || warn "MeloTTS venv setup skipped — run 'bash tools/setup-melo-venv.sh' later (narration is SILENT without it)"
+
 # 7. .env scaffold
 if [[ ! -f ".env" && -f ".env.example" ]]; then
   cp .env.example .env

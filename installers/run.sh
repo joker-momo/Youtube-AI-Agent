@@ -187,6 +187,13 @@ fi
 # shellcheck disable=SC1091
 source .venv/bin/activate
 
+# MeloTTS sidecar venv (Elena voice). Non-fatal: narration falls back to SILENT
+# if the channel uses provider "melo" and this venv is absent.
+if [[ ! -d "tools/melo-venv" ]]; then
+  echo -e "${RED}⚠️  tools/melo-venv missing — Elena (MeloTTS) narration will be SILENT.${NC}"
+  echo -e "${CYAN}   Build it once: bash tools/setup-melo-venv.sh${NC}"
+fi
+
 if [[ "${REINSTALL_DEPS}" == "true" ]]; then
   echo -e "${CYAN}Reinstalling Python deps...${NC}"
   python -m pip install --upgrade pip wheel

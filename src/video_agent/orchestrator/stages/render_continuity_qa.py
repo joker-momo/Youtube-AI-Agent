@@ -131,10 +131,17 @@ def _sample_luma(
             check=True, capture_output=True, timeout=300,
         )
         pngs = sorted(tmp.glob("*.png"))
+        # The png -> frame mapping below is POSITIONAL: png[i] is assumed to be
+        # wanted[i]. That holds only when ffmpeg emitted exactly one frame per
+        # requested index (CFR render + every index in range). On any mismatch (a
+        # dropped/duplicated frame on VFR input, or an out-of-range request) the
+        # indices shift and every subsequent boundary would be read off the wrong
+        # frame -> silent false continuity verdict. Fail safe: skip the QA rather
+        # than emit a wrong verdict.
+        if len(pngs) != len(wanted):
+            return None
         luma = [128.0] * max(total, (max(wanted) + 1))
         for idx, png in enumerate(pngs):
-            if idx >= len(wanted):
-                break
             with Image.open(png) as im:
                 gray = im.convert("L")
                 hist = gray.histogram()
@@ -156,6 +163,37 @@ def _find_rendered_video(job_dir: Path) -> Path | None:
     return mp4s[0] if mp4s else None
 
 
+def _qa_schedule(job_dir: Path, sched_path: Path) -> dict | None:
+    """The asset schedule the renderer actually consumed.
+
+    Enforced renders recompile the schedule from the FINAL post-TTS scene
+    durations and embed it in ``render_props.json`` under ``visual_schedule``
+    (see ``pipeline._attach_enforced_visual_schedule``). The on-disk
+    ``compiled_asset_schedule.json`` is the ``visual_schedule`` stage output,
+    compiled *before* render-time duration sync, so its ``scene_boundaries`` are
+    stale by render time. Sampling luma at stale boundaries inspects the wrong
+    frames -> false continuity verdicts. Prefer the embedded schedule so QA reads
+    the same boundaries the renderer drew; fall back to the on-disk artifact
+    (report_only / legacy jobs / older runs without the embedded copy)."""
+    for candidate in (job_dir / "json" / "render_props.json", job_dir / "render_props.json"):
+        if not candidate.exists():
+            continue
+        try:
+            rp = read_json(candidate) or {}
+        except Exception:
+            break
+        sched = rp.get("visual_schedule")
+        if isinstance(sched, dict) and sched.get("scene_boundaries"):
+            return sched
+        break
+    if sched_path.exists():
+        try:
+            return read_json(sched_path) or None
+        except Exception:
+            return None
+    return None
+
+
 def run_render_continuity_qa_stage(job_dir: Path, channel_path: Path | None = None) -> Path:
     """Verify span continuity in the rendered video; write the QA artifact."""
     state = load_job(job_dir)
@@ -170,14 +208,14 @@ def run_render_continuity_qa_stage(job_dir: Path, channel_path: Path | None = No
     video = _find_rendered_video(job_dir)
     out_path = scenes_path.parent / _OUTPUT_NAME
 
-    if not sched_path.exists() or video is None:
+    schedule = _qa_schedule(job_dir, sched_path)
+    if schedule is None or video is None:
         result = {"verdict": "PASS", "skipped": True,
                   "reason": "no compiled schedule or rendered video"}
         atomic_write_json(out_path, result)
         _complete_stage(job_dir, _STAGE, out_path)
         return out_path
 
-    schedule = read_json(sched_path) or {}
     boundaries = _internal_boundaries(schedule)
     if not boundaries:
         result = {"verdict": "PASS", "skipped": False, "checked_boundaries": [],

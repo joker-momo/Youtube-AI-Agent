@@ -129,3 +129,17 @@ def test_falls_back_to_stale_file_when_no_scenes(tmp_path):
         rp, tmp_path, {"visual": {"span_planning": {"mode": "enforced"}}}
     )
     assert rp["visual_schedule"]["total_duration_in_frames"] == 10
+
+
+# ── #4: enforced span planning is long-form only — never leak into a Short ─────
+def test_not_injected_for_short_job_dir(tmp_path):
+    # A short job dir (under jobs/.../shorts/) must never receive the long-form
+    # enforced schedule, even with enforced config + an on-disk schedule present.
+    short_dir = tmp_path / "shorts" / "job-1"
+    (short_dir / "json").mkdir(parents=True)
+    (short_dir / "json" / "compiled_asset_schedule.json").write_text(json.dumps(_SCHEDULE))
+    rp: dict = {}
+    _attach_enforced_visual_schedule(
+        rp, short_dir, {"visual": {"span_planning": {"mode": "enforced"}}}
+    )
+    assert "visual_schedule" not in rp

@@ -670,10 +670,19 @@ def _attach_enforced_visual_schedule(
     feature. When enforced, the schedule and Elena cues are recompiled from the
     final post-TTS scene durations in ``render_props`` (the on-disk sidecars are
     stale — compiled before render-time duration sync); callers without ``scenes``
-    fall back to the on-disk artifacts. Independent of the Shorts render path.
+    fall back to the on-disk artifacts.
+
+    Enforced span planning is a LONG-FORM feature: shorts mount the scene layer at
+    frame 0 and own their render_props via ``video_agent.shorts``, so a short job
+    dir must never receive the long enforced schedule. Short dirs already lack the
+    long sidecars (so this was a no-op in practice); the explicit guard codifies
+    the "independent of the Shorts render path" invariant and keeps it leak-proof
+    if a short ever runs under an enforced channel config.
     """
     from video_agent.visual import resolve_visual_span_config
 
+    if _is_short_job_dir(job_dir, channel_config):
+        return
     if resolve_visual_span_config(channel_config or {}).get("mode") != "enforced":
         return
 
@@ -777,6 +786,31 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
     )
 
 
+_TIMELINE_OVERFLOW_TOL_SEC = 0.05  # ignore sub-frame rounding noise
+
+
+def _warn_if_timeline_exceeds_audio(
+    log: logging.Logger, scenes: list[dict], total_audio: float, *, strategy: str
+) -> bool:
+    """Warn when the 3.0 s min-scene floor pushes the scene timeline past the
+    measured narration (-> the last scene lingers with no voice = trailing dead air).
+
+    The floor is a deliberate readability guard (no scene flashes under 3.0 s), so
+    when it forces an overflow the right fix is upstream (fewer scenes / longer
+    narration). This only SURFACES that mismatch for review; it changes no
+    duration. Returns True when it warned."""
+    timeline = sum(float(s.get("duration_sec") or 0.0) for s in scenes)
+    if timeline > total_audio + _TIMELINE_OVERFLOW_TOL_SEC:
+        log.warning(
+            "Duration sync (%s): scene timeline %.2fs exceeds measured narration "
+            "%.2fs by %.2fs after the 3.0s min-scene floor on %d scenes — trailing "
+            "dead air; reduce scene count or lengthen narration",
+            strategy, timeline, total_audio, timeline - total_audio, len(scenes),
+        )
+        return True
+    return False
+
+
 def _sync_scene_durations_from_audio(job_dir: Path, scene_doc: dict) -> None:
     """Recalculate each scene's duration_sec from the actual synthesized audio.
 
@@ -850,6 +884,9 @@ def _sync_scene_durations_from_audio(job_dir: Path, scene_doc: dict) -> None:
                         if idx == last_idx:
                             dur += TAIL_PAD_SEC
                         scene["duration_sec"] = round(max(3.0, dur), 3)
+                    _warn_if_timeline_exceeds_audio(
+                        log, scenes, total_audio, strategy="whisper"
+                    )
                     scene_doc["total_duration_sec"] = int(
                         round(sum(float(s["duration_sec"]) for s in scenes))
                     )
@@ -885,6 +922,7 @@ def _sync_scene_durations_from_audio(job_dir: Path, scene_doc: dict) -> None:
         ratio = float(scene.get("duration_sec") or 1) / original_total
         scene["duration_sec"] = round(max(3.0, ratio * total_audio), 3)
 
+    _warn_if_timeline_exceeds_audio(log, scenes, total_audio, strategy="proportional")
     scene_doc["total_duration_sec"] = int(round(total_audio))
     log.info(
         "Duration sync (proportional): total=%.1fs, scenes=%s",

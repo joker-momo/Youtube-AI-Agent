@@ -219,6 +219,7 @@ export PYTHONPATH="${REPO_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}"
 # Python side also setdefaults this; export here so every launched process is safe.
 export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
 export JOBS_DIR="${REPO_DIR}/jobs"
+export INPUTS_DIR="${REPO_DIR}/inputs"
 export WORKER_ASSETS_ROOT="${REPO_DIR}/jobs"
 export BROWSER_TRACE_DIR="${REPO_DIR}/browser_trace"
 export CHANNEL_CONFIG="${CHANNEL_CONFIG:-${REPO_DIR}/configs/vida-plena-45/channel.yaml}"

@@ -10,24 +10,29 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from video_agent.contracts import EVENT_LOG
+from video_agent.notifications.telegram import (
+    notify_job_done_with_files,
+    notify_job_failed,
+    notify_stage_done,
+)
 from video_agent.orchestrator import load_job
+from video_agent.orchestrator.briefing import build_initial_briefing
 from video_agent.orchestrator.browser_client import (
     BrowserClient,
     BrowserClientError,
     LoginRequiredFromWorker,
 )
-from video_agent.orchestrator.briefing import build_initial_briefing
 from video_agent.orchestrator.stages import (
     StageInputMissingError,
     auto_assets_chatgpt_stage,
     auto_idea_research_stage,
-    run_graphic_images_stage,
     auto_qa_with_rework,
     auto_scenes_stage,
     auto_script_stage,
     auto_seo_stage,
     auto_thumbnail_image_stage,
     run_elena_plan_stage,
+    run_graphic_images_stage,
     run_render_continuity_qa_stage,
     run_render_stage,
     run_review_stage,
@@ -35,11 +40,7 @@ from video_agent.orchestrator.stages import (
     run_visual_spans_stage,
     run_whisper_timestamps_stage,
 )
-from video_agent.notifications.telegram import (
-    notify_job_done_with_files,
-    notify_job_failed,
-    notify_stage_done,
-)
+
 # Legacy auto_shorts_* stages are deprecated and intentionally NOT imported.
 # Shorts are produced by the sequential Shorts Autopilot (video_agent.shorts).
 from video_agent.utils.json_io import read_yaml
@@ -230,8 +231,13 @@ async def _execute_run_all_locked(
         )
 
     # Run lightweight idea research before opening persistent model tabs.
-    start_idx = stage_order.index(pending_stage)
-    remaining = set(stage_order[start_idx:])
+    # ``remaining`` = ONLY the non-completed stages. A contiguous slice from the
+    # first pending stage would re-include already-completed LATER stages on a
+    # partial resume (e.g. graphic_images reset to pending while thumbnail_image
+    # stays completed) and re-run them, tripping their current_stage guard with a
+    # spurious 409. Membership is order-independent; the sequential if-blocks below
+    # still enforce execution order.
+    remaining = {s.name for s in state.stages if s.status != "completed"}
 
     if "idea_research" in remaining:
         _check_stop_requested()
@@ -258,7 +264,7 @@ async def _execute_run_all_locked(
         new_pending = next((s.name for s in state.stages if s.status != "completed"), None)
         if new_pending is None:
             return {"completed": completed, "state": state.to_dict()}
-        remaining = set(stage_order[stage_order.index(new_pending):])
+        remaining = {s.name for s in state.stages if s.status != "completed"}
         approvals = load_approvals(job_dir)
         blocked_by = approval_block_for_current_stage(state.current_stage, approvals)
         if enforce_approvals and blocked_by:

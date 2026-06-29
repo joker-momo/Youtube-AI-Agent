@@ -388,7 +388,7 @@ async def notify_job_done(
     stages_done: list[str] | None = None,
     wall_seconds: float | None = None,
 ) -> None:
-    parts = [f"✅ <b>Job complete</b>", f"<code>{_esc(job_id)}</code>"]
+    parts = ["✅ <b>Job complete</b>", f"<code>{_esc(job_id)}</code>"]
     if stages_done:
         parts.append(f"{len(stages_done)} stages completed")
     if wall_seconds is not None:
@@ -404,7 +404,7 @@ async def notify_job_failed(
     stopped_at: str | None = None,
     error: str | None = None,
 ) -> None:
-    parts = [f"❌ <b>Job failed</b>", f"<code>{_esc(job_id)}</code>"]
+    parts = ["❌ <b>Job failed</b>", f"<code>{_esc(job_id)}</code>"]
     if stopped_at:
         parts.append(f"Stopped at: <code>{_esc(stopped_at)}</code>")
     if error:
@@ -449,8 +449,14 @@ async def notify_job_done_with_files(
         thumb = job_dir / "thumbnail.jpg"
     await _send_photo_file(thumb, caption=f"🖼 {job_id}")
 
-    # Video
-    video = job_dir / "video.mp4"
+    # Video — the renderer writes to ARTIFACT_VIDEO ("outputs/video.mp4"), so the
+    # old hardcoded job_dir/"video.mp4" never existed and the video was silently
+    # skipped on completion. Use ARTIFACT_VIDEO, with a legacy fallback.
+    from video_agent.contracts import ARTIFACT_VIDEO
+
+    video = job_dir / ARTIFACT_VIDEO
+    if not video.exists():
+        video = job_dir / "video.mp4"
     await _send_video_file(video, caption=f"🎬 {job_id}")
 
 

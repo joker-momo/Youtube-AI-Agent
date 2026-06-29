@@ -22,16 +22,35 @@ logger = logging.getLogger("video_agent.worker")
 
 
 def get_jobs_root() -> Path:
-    return Path(os.environ.get("JOBS_DIR", "/app/jobs"))
+    env = os.environ.get("JOBS_DIR")
+    if env:
+        return Path(env)
+    from video_agent.contracts import repo_root
+
+    return repo_root() / "jobs"
 
 
 def get_channel_path() -> Path:
-    return Path(
-        os.environ.get(
-            "CHANNEL_CONFIG",
-            "/app/configs/vida-plena-45/channel.yaml",
-        )
-    )
+    """Resolve the channel config path for the worker.
+
+    Prefer ``CHANNEL_CONFIG`` when it points at an existing file; otherwise fall
+    back to the **repo-relative** default — NOT the Docker ``/app`` path, which
+    does not exist on local/Mac runs. A wrong/missing ``CHANNEL_CONFIG`` here
+    silently drops opt-in flags like ``visual.elena.enabled`` (the channel reads
+    as flagless → Elena never injected), which was bug-394. Logs the resolved
+    path so a misconfigured env is visible instead of silent.
+    """
+    from video_agent.contracts import repo_root
+
+    env = os.environ.get("CHANNEL_CONFIG")
+    if env and Path(env).exists():
+        logger.info("Worker channel config: %s (from CHANNEL_CONFIG)", env)
+        return Path(env)
+    if env:
+        logger.warning("CHANNEL_CONFIG=%s missing; falling back to repo default", env)
+    default = repo_root() / "configs" / "vida-plena-45" / "channel.yaml"
+    logger.info("Worker channel config: %s (repo default)", default)
+    return default
 
 
 def _is_retryable_exception(exc: Exception) -> bool:

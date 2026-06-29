@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from video_agent.contracts import EVENT_LOG
 from video_agent.orchestrator.job_state import load_job, save_job
@@ -183,6 +183,16 @@ def _complete_stage(job_dir: Path, stage_name: str, output: Path) -> None:
     )
     if next_pending is not None:
         state.current_stage = next_pending.name
+    elif completed_idx + 1 < len(state.stages):
+        # No PENDING stage remains after this one, but later stages exist that are
+        # already "completed" (a re-run where downstream stages were left completed
+        # from a prior pass — e.g. re-rendering: render/continuity re-run while
+        # `review` still reads completed). Advance FORWARD to the immediate next
+        # stage anyway so its ``current_stage == _STAGE`` guard passes and the run
+        # loop can re-record it, instead of wedging current_stage on the stage that
+        # just completed (which raised "Cannot run review from current_stage=
+        # render_continuity_qa" → HTTP 409 → job failed without finalizing).
+        state.current_stage = state.stages[completed_idx + 1].name
     state.updated_at = ts
     save_job(job_dir, state)
 

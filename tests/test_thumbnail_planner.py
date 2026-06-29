@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-
 from video_agent import thumbnail_planner as tp
-
 
 # --- §12 normalize_thumbnail_variants -------------------------------------
 
@@ -428,3 +425,55 @@ def test_plan_schema_includes_category_safety_rules_and_strategy_description():
         assert plan.get("category_safety_rules")
         assert plan.get("visual_strategy_description")
         assert plan.get("primary_category_label")
+
+
+# --- competitor-teardown CTR formula (2026-06-29) --------------------------
+
+_SEO_3 = {
+    "title": "El mejor pan después de los 60",
+    "title_variants": [
+        {"title": "El mejor pan", "thumbnail_text": "¿EL MEJOR PAN?"},
+        {"title": "Qué pan elegir", "thumbnail_text": "MIRA LA HARINA"},
+        {"title": "Pan bueno vs malo", "thumbnail_text": "NO ES EL PAN"},
+    ],
+}
+
+
+def test_plan_includes_punch_color():
+    plans = tp.plan_thumbnail_prompts(_SEO_3, {})
+    assert all(p["punch_color"] for p in plans)
+
+
+def test_resolve_punch_color_default_and_override():
+    assert tp.resolve_thumbnail_punch_color({}) == "#E11D2A"
+    assert tp.resolve_thumbnail_punch_color(
+        {"thumbnail": {"punch_color": "#FF0000"}}
+    ) == "#FF0000"
+
+
+def test_prompt_bakes_red_punch_box_and_mobile_rule():
+    plans = tp.plan_thumbnail_prompts(_SEO_3, {})
+    p = plans[0]["prompt"]
+    assert "red box" in p
+    assert plans[0]["punch_color"] in p
+    assert "210" in p  # mobile-readability rule
+    assert "7 words" in p
+    assert "2-block hierarchy" in p
+
+
+def test_object_strategy_has_arrow_and_number_badges():
+    desc = tp.describe_strategy("object_driven")
+    assert "red arrow" in desc
+    assert "number badges" in desc
+
+
+def test_comparison_strategy_has_check_cross_and_labels():
+    desc = tp.describe_strategy("comparison_driven")
+    assert "red cross" in desc
+    assert "green check" in desc
+    assert "ANTES" in desc
+
+
+def test_strategy_graphics_allowed_in_prompt():
+    plans = tp.plan_thumbnail_prompts(_SEO_3, {})
+    assert "Strategy graphics" in plans[1]["prompt"]

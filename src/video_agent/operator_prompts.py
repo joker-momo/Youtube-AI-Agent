@@ -55,19 +55,16 @@ def _locale_block_lines(channel_config: dict[str, Any], *, header: str = "LOCALE
 
 def _chatgpt_script_prompt(channel_config: dict[str, Any], idea: dict[str, Any]) -> str:
     cf = channel_config.get("content_format", {})
-    target_sec = cf.get("target_duration_sec", 840)
-    pace_wpm = channel_config.get("tts", {}).get("pace_wpm", 145)
-    # Inflation factor: LLM historically under-produces by ~30-45%. To land the
-    # rendered video inside the 12-15 min content_format window, we ask the
-    # script for a ~20-minute target so the actual output falls back to spec.
-    script_budget_multiplier = float(
-        channel_config.get("tts", {}).get("script_word_budget_multiplier", 1.43)
-    )
-    prompt_target_sec = int(round(target_sec * script_budget_multiplier))
-    target_min = round(prompt_target_sec / 60)
-    total_words = round(prompt_target_sec / 60 * pace_wpm)
-    min_words = int(round(total_words * 0.92))
-    max_words = int(round(total_words * 1.10))
+    pace_wpm = channel_config.get("tts", {}).get("pace_wpm", 120)
+    # Quality-first length: a hard MINIMUM only, NO upper cap. The script IS the
+    # spoken narration — the scenes stage preserves it (splits into more scenes)
+    # rather than condensing — so the floor is the real ~11-min content_format
+    # minimum, not an inflated draft target. Develop every idea fully; never trim
+    # to hit a time budget. (See bug-402: the old 1.43 multiplier assumed the LLM
+    # under-produced; current models over-produce, so the surplus was discarded.)
+    floor_sec = int(cf.get("duration_sec_min", 660))
+    floor_min = round(floor_sec / 60)
+    min_words = int(round(floor_sec / 60 * pace_wpm))
     return "\n".join(
         [
             "You are exporting a SCRIPT artifact as a JSON file for a YouTube channel pipeline.",
@@ -77,9 +74,10 @@ def _chatgpt_script_prompt(channel_config: dict[str, Any], idea: dict[str, Any])
             "Required JSON schema:",
             "- channel_id, job_id, hook, sections, narration, cta, qa",
             "- sections: array of 6-10 objects, each with: title, key_points (list), narration_text",
-            f"- narration: natural Spanish for a {target_min}-minute video (~{total_words} words total)",
-            f"- ⚠️ WORD-COUNT FLOOR (MANDATORY): the combined narration across ALL sections MUST contain BETWEEN {min_words} AND {max_words} spoken Spanish words. Count every word. If you fall under {min_words}, expand the weakest sections with more concrete steps, examples, mini-stories, or sensory detail — do NOT pad with filler, slogans, or repeated phrases.",
-            f"- Each of the 6-10 sections should contribute roughly {round(total_words / 8)} ± 60 words of narration_text.",
+            f"- narration: natural Spanish, AT LEAST a {floor_min}-minute video (~{min_words}+ spoken words). There is NO maximum — a longer script is welcome whenever it adds real value.",
+            f"- ⚠️ WORD-COUNT FLOOR (MANDATORY): the combined narration across ALL sections MUST contain AT LEAST {min_words} spoken Spanish words. There is NO upper limit. Count every word; if you are under {min_words}, expand with more concrete steps, examples, mini-stories, or sensory detail.",
+            "- QUALITY OVER BREVITY: develop every idea fully. Never cut, compress, or skip a useful point to save time — completeness and depth win. Never pad with filler, slogans, or repeated phrases.",
+            "- Each of the 6-10 sections must be fully developed (practical how-to, amounts, timing, one short relatable example where it helps); do not leave any section thin just to balance length.",
             f"- hook: opening sentence ≤28 words. Pattern: [relatable symptom] + [implicit promise].",
             "  Example: 'Si después de los 45 te cuesta conciliar el sueño o despiertas a las 3 de la mañana, esto es exactamente para ti.'",
             "- cta: closing call-to-action sentence",
@@ -215,6 +213,33 @@ _SCENE_RHYTHM_RULES = [
 ]
 
 
+def _visual_context_line(channel_config: dict[str, Any]) -> str:
+    """Visual-context guidance for ``visual_prompt``, derived from the channel
+    niche instead of hardcoded to one topic.
+
+    An explicit ``niche.visual_context`` string overrides everything. Otherwise a
+    generic line keyed to the niche category + audience age tells the model to
+    DERIVE each scene's setting from its own narration — so a nutrition / memory /
+    exercise video no longer gets pushed toward a bedroom/sleep setting.
+    """
+    niche = channel_config.get("niche") or {}
+    override = str(niche.get("visual_context") or "").strip()
+    if override:
+        return f"- visual_prompt must match: {override}"
+    category = str(niche.get("category") or "health and wellness").replace("_", " ")
+    audience = channel_config.get("audience") or {}
+    age_range = audience.get("age_range") or [45]
+    age = age_range[0] if isinstance(age_range, list) and age_range else 45
+    return (
+        f"- visual_prompt must match THIS video's specific topic AND the channel context "
+        f"({category} for adults {age}+): real everyday domestic settings, authentic mature "
+        f"people, calm natural light. DERIVE the exact setting/action from the scene's own "
+        f"narration (kitchen + real food for nutrition, gentle movement for exercise, calm "
+        f"bedroom for sleep). Do NOT default to a bedroom/sleep setting unless the narration "
+        f"is about sleep."
+    )
+
+
 def _chatgpt_scenes_prompt(
     channel_config: dict[str, Any],
     script: dict[str, Any],
@@ -240,19 +265,20 @@ def _chatgpt_scenes_prompt(
         "Required JSON schema:",
         "- channel_id, job_id, scenes (array), total_duration_sec, qa",
         "- each scene object: id, duration_sec, narration, on_screen_text, caption, visual_prompt, motion, asset_refs, layout, layout_payload, layout_reason",
-        f"- create {scenes_min}-{scenes_max} scenes; each scene duration_sec should be {scene_dur_target-3}–{scene_dur_target+3} seconds",
-        f"- total_duration_sec must be approximately {target_sec} (sum of all scene durations)",
+        f"- create AT LEAST {scenes_min} scenes (more when the script is longer — do not cap at {scenes_max}); each scene duration_sec should be {scene_dur_target-3}–{scene_dur_target+3} seconds",
+        "- total_duration_sec is the sum of all scene durations and is DRIVEN BY THE SCRIPT length; preserve the full narration rather than trimming to a fixed total.",
+        "- ⚠️ PRESERVE CONTENT: distribute the FULL script narration across scenes; do not condense or omit the script's details, examples, or steps.",
         "- scene ids: sequential scene-01, scene-02, ...",
         "- HOOK RULE: scene-01 narration must match the script hook word-for-word.",
-        "  scene-01 on_screen_text: bold 3-6 word question or statement (e.g. '¿Por qué no puedes dormir?').",
+        "  scene-01 on_screen_text: bold 3-6 word Spanish question or statement that hooks the viewer on THIS video's topic.",
         "- ⚠️ OPENING RETENTION: the render skips logo intro/outro. scene-01 is the very first frame the viewer sees. Keep scene-01 duration_sec between 8 and 12 — short enough to feel snappy but long enough to land the hook.",
         "- scenes 01-03 (first ~30 s) must deliver the first concrete payoff promised by the script hook. Do NOT use them for channel name, greetings, or 'today we will talk about'. Open IN the pain or contradiction.",
-        "- scenes 01-03 visual_prompt must show the pain/situation directly (e.g. 'Mature woman lying awake in dim bedroom looking at ceiling, soft moonlight, close-up'), not a generic logo card or wide establishing shot.",
+        "- scenes 01-03 visual_prompt must show the pain/situation of THIS video's topic directly (a real mature person in the relevant everyday setting the narration describes), not a generic logo card or wide establishing shot.",
         "- asset_refs: must be an object {}, never an array",
         "- on_screen_text MUST be 2-4 words (keyword hook), and MUST NOT duplicate caption text.",
         "- caption should be natural spoken sentence(s); never copy on_screen_text verbatim.",
-        "- visual_prompt: ⚠️ MANDATORY ENGLISH ONLY. NEVER Spanish. visual_prompt is fed directly to Pexels stock search, which is English-keyword based. Spanish prompts produce off-topic stock footage (e.g. 'Bellagio fountains' for a 'rutina nocturna' scene). Required style: specific (person + setting + action + lighting + camera framing). Example: 'Mature woman in her 50s arranging pillows on a calm bedroom bed at dusk, warm tungsten light, close-up shot'. ALL OTHER FIELDS may be Spanish, but visual_prompt MUST be English.",
-        "- visual_prompt must match sleep-wellness context for adults 45+: bedroom night routine, evening herbal tea, low-impact stretching, doctor consultation, calm morning sunlight.",
+        "- visual_prompt: ⚠️ MANDATORY ENGLISH ONLY. NEVER Spanish. visual_prompt is fed directly to Pexels stock search, which is English-keyword based. Spanish prompts produce off-topic stock footage (e.g. 'Bellagio fountains' for a 'rutina nocturna' scene). Required style: specific (person + setting + action + lighting + camera framing). Example TEMPLATE (adapt setting + action to THIS scene's narration): 'Mature woman in her 50s [action from narration] in a [relevant everyday setting], warm natural light, medium shot'. ALL OTHER FIELDS may be Spanish, but visual_prompt MUST be English.",
+        _visual_context_line(channel_config),
         "- avoid off-topic visuals (cars, highways, random city traffic, tech gadgets unless explicitly in narration).",
         "- motion: 'slow_zoom' / 'pan_right' / 'pan_left'; never repeat same motion 3x in a row",
         "- layout: one of [\"hook\", \"subtitle\", \"checklist\", \"warning\", \"quote\", \"cta\"].",
@@ -298,7 +324,7 @@ def _chatgpt_scenes_prompt(
         "• Start your response with the character { and end with the character }.",
         f"• Expected response size: approximately {int(scenes_min) * 300}-{int(scenes_max) * 350} characters.",
         "• You MUST complete the entire JSON in this single response. Do NOT truncate.",
-        "• If you run low on space, reduce narration text length per scene rather than dropping scenes.",
+        "• If you run low on space, ADD more scenes — never shorten, summarize, or drop the script's content to fit.",
         "• Double-check: every { has a matching } before you finish.",
     ])
     
@@ -308,9 +334,21 @@ def _chatgpt_scenes_prompt(
 def _chatgpt_scenes_plan_prompt(channel_config: dict[str, Any], script: dict[str, Any]) -> str:
     cf = channel_config.get("content_format", {})
     scenes_min = int(cf.get("scenes_count_min", 40))
-    scenes_max = int(cf.get("scenes_count_max", 55))
-    target_scene_count = round((scenes_min + scenes_max) / 2)
-    target_sec = int(cf.get("target_duration_sec", 840))
+    pace_wpm = int(channel_config.get("tts", {}).get("pace_wpm", 120))
+    floor_sec = int(cf.get("duration_sec_min", 660))
+    # Content-driven scene count: ~45 spoken words per scene, floored at
+    # scenes_min and at the ~11-min minimum. NO upper cap — the count grows with
+    # the script so this stage PRESERVES the full narration instead of condensing
+    # it to a fixed length. (See bug-402.)
+    words_per_scene = 45
+    narration_words = len(str(script.get("narration") or "").split())
+    floor_scenes = max(scenes_min, round(floor_sec / 60 * pace_wpm / words_per_scene))
+    target_scene_count = max(floor_scenes, -(-narration_words // words_per_scene))
+    target_sec = (
+        max(floor_sec, round(narration_words / pace_wpm * 60))
+        if narration_words
+        else int(cf.get("target_duration_sec", 840))
+    )
     channel_id = (
         channel_config.get("channel", {}).get("id")
         or script.get("channel_id")
@@ -353,6 +391,7 @@ def _chatgpt_scenes_plan_prompt(channel_config: dict[str, Any], script: dict[str
             "- scene ranges must cover the full target_scene_count.",
             "- scene IDs must be sequential: scene-01, scene-02, ...",
             "- final batch must include the final scene.",
+            "- ⚠️ COVER THE ENTIRE SCRIPT: create enough batches/scenes that the full approved narration is preserved across scenes. Do not compress, summarize, or drop any section — the scene count scales with script length.",
             "",
             *_locale_block_lines(channel_config, header="Locale rules:"),
             "- Spanish text fields must use the configured language for the configured locale.",
@@ -412,7 +451,8 @@ def _chatgpt_scenes_batch_prompt(
         "- Every scene must include: id, duration_sec, narration, on_screen_text, caption, visual_prompt, motion, asset_refs, layout, layout_payload, layout_reason.",
         "- asset_refs must be {}.",
         "- ⚠️ visual_prompt MANDATORY ENGLISH ONLY. NEVER Spanish. Fed directly to Pexels (English keyword search). Spanish visual_prompt = rejected, you will be asked to regenerate. Example: 'Mature adult woman drinking herbal tea on a sofa at night, warm tungsten lighting, medium shot'.",
-        "- narration must follow the approved script context.",
+        "- narration must reproduce the approved script content for this scene range FAITHFULLY: keep every concrete detail, example, step, and explanation from the matching script sections. Do NOT summarize, shorten, or drop content.",
+        "- If a script section is long, split it across MORE scenes (35–60 words each) rather than cutting content.",
         "- layout must be one of: hook, subtitle, checklist, warning, quote, cta.",
         "- layout_payload must be an object with {title, body, bullets, cta}; use empty strings/[] for unused fields.",
         "- layout_reason must be a short English reason explaining why the layout fits the narration.",

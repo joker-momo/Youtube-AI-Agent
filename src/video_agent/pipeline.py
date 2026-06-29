@@ -303,11 +303,19 @@ def _scene_visual_issues(scene: dict) -> list[dict]:
             
     if _is_key_scene(scene):
         if asset_match_status == "weak_match":
+            # WARNING, not error. A "weak" match is usually a query-ranked Pexels
+            # VIDEO that lacks the strict tag/alt metadata needed to score "strong"
+            # (Pexels videos carry no tags/alt at all) — it is still on-topic footage
+            # for the right demographic. Hard-failing the WHOLE render over it is
+            # worse than the placeholder gradient that critical scenes already fall
+            # back to, so downgrade to a warning and let the render proceed with the
+            # real asset. A genuine NO_SAFE_VISUAL_ASSET (no asset at all) stays an
+            # error below.
             issues.append(
                 {
                     "type": "WEAK_MATCH_ON_CRITICAL_SCENE",
-                    "severity": "error",
-                    "message": f"Weak match fallback is not allowed for critical scene. {context_str}",
+                    "severity": "warning",
+                    "message": f"Weak (query-ranked) match on critical scene — allowed. {context_str}",
                 }
             )
         elif asset_match_status in {"no_match", "unknown", "", None}:

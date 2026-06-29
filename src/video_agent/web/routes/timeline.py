@@ -10,10 +10,16 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 
 from video_agent.contracts import EVENT_LOG, repo_root
+from video_agent.orchestrator.stages import IDEA_FILE
 from video_agent.web.approval_flow import (
     APPROVAL_REQUIRED_STAGES,
     approval_block_for_current_stage,
     load_approvals,
+)
+from video_agent.web.routes._common import (
+    _queue_status,
+    _safe_job_dir,
+    get_jobs_root,
 )
 from video_agent.web.run_all_pipeline import stop_request_path
 from video_agent.web.timeline_helpers import (
@@ -23,13 +29,6 @@ from video_agent.web.timeline_helpers import (
     job_has_in_progress_stage,
     resolve_inside,
     stage_duration_seconds,
-)
-from video_agent.orchestrator.stages import IDEA_FILE
-
-from video_agent.web.routes._common import (
-    _queue_status,
-    _safe_job_dir,
-    get_jobs_root,
 )
 
 router = APIRouter()
@@ -273,6 +272,46 @@ def job_timeline(
                     "total": total,
                     "label": f"Batch {done}/{total or '?'} saved",
                 }
+        elif name == "graphic_images":
+            # Per-image progress: count the graphic PNGs already on disk vs the
+            # number of graphic-layout scenes that need one. PNG count is robust
+            # across a resume (no double-count from re-emitted events).
+            assets_dir = job_dir / "assets"
+            done = (
+                len(list(assets_dir.glob("graphic-*.png"))) if assets_dir.is_dir() else 0
+            )
+            total = 0
+            for cand in (job_dir / "json" / "scenes.json", job_dir / "scenes.json"):
+                try:
+                    if cand.exists():
+                        scenes_doc = json.loads(cand.read_text(encoding="utf-8"))
+                        total = sum(
+                            1
+                            for sc in (scenes_doc.get("scenes") or [])
+                            if str(sc.get("layout") or "").strip().lower()
+                            in ("checklist", "warning", "quote", "cta")
+                            and not (
+                                isinstance(sc.get("graphic"), dict)
+                                and sc["graphic"].get("needed") is False
+                            )
+                        )
+                        break
+                except Exception:
+                    total = 0
+            if done or total:
+                sub_progress = {
+                    "kind": "graphic_images",
+                    "done": done,
+                    "total": total,
+                    "label": f"Image {done}/{total or '?'} generated",
+                }
+        # NOTE: do NOT add a fast-changing (per-frame) render sub_progress here —
+        # the dashboard's stableTimelineKey serializes the timeline to gate full
+        # detail-panel re-renders, so a frame-by-frame label changes the key every
+        # poll → full root.innerHTML rebuild every tick → visible UI flicker. Live
+        # render % is already shown via the dashboard's dedicated render_progress
+        # poller (targeted in-place DOM updates), so the render row stays live
+        # without churning the whole panel.
         item = {
             **stage,
             "inputs": inputs,

@@ -1207,7 +1207,8 @@ async function fetchJobs() {
     document.getElementById('panel-count').textContent = d.count + ' jobs';
     // Only re-render jobs list when data actually changed — prevents flicker from polling.
     const jobsJson = JSON.stringify(jobs);
-    if (jobsJson !== LAST_JOBS_JSON) {
+    const jobsChanged = jobsJson !== LAST_JOBS_JSON;
+    if (jobsChanged) {
       LAST_JOBS_JSON = jobsJson;
       renderKpis(jobs);
       renderJobsList(jobs);
@@ -1232,7 +1233,11 @@ async function fetchJobs() {
       return;
     }
     updateVncPanel();
-    fetchTimeline(SELECTED_ID);
+    // Refresh the timeline only while the job is running, or on the poll where its
+    // status just changed (so the final completed state lands once). A finished
+    // job's timeline is static — polling it every tick just looks like the UI
+    // "reloading" and loads the machine for nothing.
+    if (isJobRunning(JOBS_BY_ID[SELECTED_ID]) || jobsChanged) fetchTimeline(SELECTED_ID);
   } catch (e) { console.error(e); }
 }
 
@@ -1742,18 +1747,28 @@ function startRenderProgressPolling(jobId) {
       if (p.eta) parts.push('ETA ' + p.eta);
       const metaStr = parts.join(' · ');
 
+      // "Preparing" until Remotion emits real frame counts — the render stage is
+      // in_progress during the long prepare_assets phase BEFORE the first frame, and
+      // render_progress.json may still hold a stale value. Show a clear preparing
+      // state instead of a frozen/stale percent so the bar is never misleading.
+      const preparing = !(p.frame > 0 && p.total_frames > 0);
+      const labelTxt = preparing ? 'Preparing render…' : 'Rendering…';
+      const metaTxt = preparing ? 'Fetching B-roll & bundling…' : metaStr;
+
       // Save into global cache FIRST — so DOM rebuild in fetchTimeline reads this value
-      RENDER_PROGRESS_CACHE = { pct: p.percent || 0, meta: metaStr, eta: p.eta || '' };
+      RENDER_PROGRESS_CACHE = { pct: preparing ? 0 : (p.percent || 0), meta: metaTxt, eta: preparing ? '' : (p.eta || ''), label: labelTxt, preparing };
 
       // Then update existing DOM elements (targeted update, no flicker)
       const bar = document.getElementById('render-progress-bar');
       const pct = document.getElementById('render-progress-pct');
       const meta = document.getElementById('render-progress-meta');
       const eta = document.getElementById('render-progress-eta');
-      if (bar) bar.style.width = p.percent + '%';
-      if (pct) pct.textContent = Math.round(p.percent) + '%';
-      if (meta) meta.textContent = metaStr;
-      if (eta) eta.textContent = p.eta ? p.eta : 'Calculating...';
+      const label = document.getElementById('render-progress-label');
+      if (label) label.textContent = labelTxt;
+      if (bar) { bar.style.width = (preparing ? 100 : p.percent) + '%'; bar.style.opacity = preparing ? '0.35' : '1'; }
+      if (pct) pct.textContent = preparing ? '⏳' : Math.round(p.percent) + '%';
+      if (meta) meta.textContent = metaTxt;
+      if (eta) eta.textContent = preparing ? 'Preparing…' : (p.eta ? p.eta : 'Calculating...');
 
       // Stop polling when render completes (step is no longer in_progress)
       const lastTl = LAST_TIMELINE;
@@ -1856,15 +1871,15 @@ function renderStep(jobId, s, idx, fallbackStartedAt = null) {
     renderProgressHtml = `
       <div style="margin:10px 0 4px;padding:0 2px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
-          <span style="font-size:12px;color:var(--muted);font-weight:600">Rendering…</span>
-          <span id="render-progress-pct" style="font-size:13px;font-weight:700;color:var(--blue)">${Math.round(_rpc.pct)}%</span>
+          <span id="render-progress-label" style="font-size:12px;color:var(--muted);font-weight:600">${_rpc.label || 'Rendering…'}</span>
+          <span id="render-progress-pct" style="font-size:13px;font-weight:700;color:var(--blue)">${_rpc.preparing ? '⏳' : Math.round(_rpc.pct)+'%'}</span>
         </div>
         <div style="height:6px;border-radius:4px;background:var(--line-strong);overflow:hidden">
-          <div id="render-progress-bar" style="height:100%;width:${_rpc.pct}%;background:var(--blue);border-radius:4px;transition:width 1s linear"></div>
+          <div id="render-progress-bar" style="height:100%;width:${_rpc.preparing ? 100 : _rpc.pct}%;opacity:${_rpc.preparing ? 0.35 : 1};background:var(--blue);border-radius:4px;transition:width 1s linear"></div>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;font-size:12px">
           <span style="color:var(--muted);font-weight:500">⏰ Time remaining:</span>
-          <span id="render-progress-eta" style="font-weight:700;color:#f5841f">${_rpc.eta ? _rpc.eta : 'Calculating...'}</span>
+          <span id="render-progress-eta" style="font-weight:700;color:#f5841f">${_rpc.preparing ? 'Preparing…' : (_rpc.eta ? _rpc.eta : 'Calculating...')}</span>
         </div>
         <div id="render-progress-meta" style="margin-top:5px;font-size:11px;color:var(--muted-2)">${_rpc.meta}</div>
       </div>`;
@@ -2681,7 +2696,11 @@ function scheduleWsReconnect(jobId) {
 function startTimelinePolling() {
   if (TIMELINE_POLL_TIMER) return;
   TIMELINE_POLL_TIMER = setInterval(() => {
-    if (SELECTED_ID) fetchTimeline(SELECTED_ID);
+    // Poll the (heavy) timeline only while the selected job is actually running.
+    // When completed/failed the timeline is static, so the constant 2s poll is pure
+    // noise — it looks like the UI "reloading" and loads the machine. fetchJobs (4s)
+    // detects when a new job starts and resumes live timeline updates.
+    if (SELECTED_ID && isJobRunning(JOBS_BY_ID[SELECTED_ID])) fetchTimeline(SELECTED_ID);
   }, 2000);
 }
 

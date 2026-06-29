@@ -14,7 +14,6 @@ import re
 import unicodedata
 from typing import Any
 
-
 # ---------------------------------------------------------------------------
 # §6.1 Text normalization (accent-insensitive)
 # ---------------------------------------------------------------------------
@@ -552,19 +551,27 @@ def category_label(category: str | None) -> str:
 def describe_strategy(strategy: str) -> str:
     if strategy == "face_driven":
         return (
-            "FACE-DRIVEN. The emotional face is the main attention hook. "
-            "The topic prop is visible but secondary."
+            "FACE-DRIVEN. A real, expressive mature face is the main hook — "
+            "confident or concerned-but-hopeful, ideally mid-gesture (e.g. pointing "
+            "at the prop). Use a genuine photographic person; this authenticity is "
+            "the channel's edge over AI-looking competitors. The topic prop stays "
+            "visible but secondary."
         )
     if strategy == "object_driven":
         return (
-            "OBJECT-DRIVEN. The topic object is the main attention hook, "
-            "large and instantly understandable at thumbnail size. "
-            "A person may be smaller, hands-only, or partially visible."
+            "OBJECT-DRIVEN. The topic object is the dominant hook: large, sharp and "
+            "instantly understandable at thumbnail size. Add ONE bold red arrow "
+            "pointing at the key object. If the topic is a numbered list, tag the "
+            "relevant objects with large red number badges 1, 2, 3. A person is "
+            "optional (hands-only or absent) — a strong object plus curiosity can "
+            "out-click a face."
         )
     if strategy == "comparison_driven":
         return (
-            "COMPARISON-DRIVEN. Show a clear contrast, choice, or "
-            "before/after habit cue without medical fear or humiliating body comparison."
+            "COMPARISON-DRIVEN. Split the frame into two clear zones — a worse/old "
+            "habit versus a better/new one — marked with a large red cross and a "
+            "green check, plus small ANTES / DESPUÉS labels. Keep it about everyday "
+            "habits or food, never body-shaming or medical fear."
         )
     return "FACE-DRIVEN. Use a clear expressive face and one topic-relevant visual cue."
 
@@ -698,6 +705,14 @@ def resolve_thumbnail_accent_color(channel_config: dict) -> str:
     return "#F2C94C"
 
 
+def resolve_thumbnail_punch_color(channel_config: dict) -> str:
+    """Red box color for the 1-2 word punch line (competitor-proven CTR device)."""
+    thumbnail_cfg = (channel_config or {}).get("thumbnail") or {}
+    if thumbnail_cfg.get("punch_color"):
+        return str(thumbnail_cfg["punch_color"])
+    return "#E11D2A"
+
+
 # ---------------------------------------------------------------------------
 # §10 Prompt builder
 # ---------------------------------------------------------------------------
@@ -742,23 +757,26 @@ def build_thumbnail_prompt(plan: dict) -> str:
         "\n"
         "Composition:\n"
         "Design for YouTube thumbnail readability.\n"
-        "Keep the image simple, high contrast, and readable at small size.\n"
-        "Reserve clean space for the hook text.\n"
-        "Avoid clutter.\n"
+        "High contrast, vivid and attention-grabbing while staying photographic "
+        "and trustworthy (not over-saturated or fake).\n"
+        "Reserve clean space for the hook text. Avoid clutter; keep ONE clear focal point.\n"
+        "Strategy graphics: you MAY add ONE bold red arrow, a red cross + green "
+        "check, OR large number badges (1, 2, 3) ONLY when the visual strategy "
+        "above calls for them, to guide the eye. No emojis, stickers, logos, "
+        "watermarks, or medical diagrams.\n"
         "\n"
-        "Text:\n"
-        f"Render this EXACT text only:\n\"{plan.get('thumbnail_text', '')}\"\n"
-        "\n"
-        "Render the hook text EXACTLY as written, preserving Spanish accents "
-        "and punctuation:\n"
-        "ñ, á, é, í, ó, ú, ü, ¿, ¡.\n"
-        "\n"
-        "All caps, huge, bold, white letters.\n"
-        "Use thick black outline and strong dark drop shadow.\n"
-        f"Use accent color {plan.get('accent_color', '#F2C94C')} only for "
-        "underline, small glow, or emphasis.\n"
-        "Place text where it is most readable.\n"
-        "No other text, no labels, no logos, no watermark.\n"
+        "Text (mobile-first, 2-block hierarchy):\n"
+        f"Use this EXACT wording only:\n\"{plan.get('thumbnail_text', '')}\"\n"
+        "Preserve Spanish accents and punctuation: ñ, á, é, í, ó, ú, ü, ¿, ¡.\n"
+        "Split it into at most 2-3 short blocks. The single most important 1-2 "
+        f"words go inside a solid {plan.get('punch_color', '#E11D2A')} red box as "
+        "the punch line; the rest is huge bold white ALL-CAPS with a thick black "
+        f"outline and drop shadow, using accent {plan.get('accent_color', '#F2C94C')} "
+        "to highlight one key word.\n"
+        "Readability rule: the wording must be legible when the thumbnail is only "
+        "about 210 px wide (mobile feed) — letters as large as possible, total "
+        "wording no more than 7 words, never a full sentence.\n"
+        "No other text beyond the wording above.\n"
         "\n"
         "Style:\n"
         "Photorealistic editorial YouTube thumbnail.\n"
@@ -782,6 +800,7 @@ def plan_thumbnail_prompts(seo: dict, channel_config: dict) -> list[dict]:
     variants = normalize_thumbnail_variants(seo)
     plans: list[dict] = []
     accent_color = resolve_thumbnail_accent_color(channel_config)
+    punch_color = resolve_thumbnail_punch_color(channel_config)
     channel_description = (
         (channel_config or {}).get("description")
         or _CHANNEL_DESCRIPTION_DEFAULT
@@ -822,6 +841,7 @@ def plan_thumbnail_prompts(seo: dict, channel_config: dict) -> list[dict]:
                 primary_preset, secondary_preset, profile["risk_level"]
             ),
             "accent_color": accent_color,
+            "punch_color": punch_color,
             "channel_description": channel_description,
         }
         plan["category_safety_rules"] = safety_rules_for_category(

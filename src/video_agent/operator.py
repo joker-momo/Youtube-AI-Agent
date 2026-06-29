@@ -651,6 +651,12 @@ def promote_operator_artifact(
 
 
 def _normalize_operator_qa(artifact: str, parsed: dict[str, Any]) -> dict[str, Any]:
+    # Gemini sometimes echoes the FULL artifact (which natively carries a "qa"
+    # field) instead of a bare {verdict, issues, ...} object, nesting the verdict
+    # under "qa". Unwrap that so the verdict is found either way (otherwise the
+    # top-level lookup misses it -> MISSING -> endless QA rework -> pipeline stall).
+    if "verdict" not in parsed and isinstance(parsed.get("qa"), dict):
+        parsed = parsed["qa"]
     verdict = str(parsed.get("verdict", "")).upper()
     if verdict != "PASS":
         raise ValueError(f"QA verdict must be PASS before promotion. Got: {verdict or '<missing>'}")

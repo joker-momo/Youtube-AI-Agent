@@ -38,8 +38,10 @@ SCHEMA_VERSION = 1
 
 # Long-form graphic layouts → rendered as ChatGPT images, always isolated.
 # MASTER-PLAN G1 (canonical, 2026-06-24): checklist/warning/quote/cta all move
-# to ChatGPT images. ``hook`` stays a Pexels/continuous-clip scene.
-GRAPHIC_LAYOUTS = frozenset({"checklist", "warning", "quote", "cta"})
+# to ChatGPT images. ``hook`` joined them 2026-06-29 (user request): a designed,
+# attention-grabbing gen-image hook reads better + avoids the weak-stock-match
+# QA block that a generic hook visual_prompt kept tripping.
+GRAPHIC_LAYOUTS = frozenset({"hook", "checklist", "warning", "quote", "cta"})
 
 
 # --------------------------------------------------------------------------- #

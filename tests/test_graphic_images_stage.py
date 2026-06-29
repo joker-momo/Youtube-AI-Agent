@@ -45,12 +45,13 @@ def test_generates_images_for_graphic_scenes_only(tmp_path):
     out = asyncio.run(run_graphic_images_stage(job_dir, None, _fake_image_fn(written)))
     doc = json.loads(out.read_text())["scenes"]
     by_id = {s["id"]: s for s in doc}
-    assert by_id["scene-02"]["graphic"]["image_ref"] == "assets/graphic-scene-02.png"
-    assert by_id["scene-04"]["graphic"]["image_ref"] == "assets/graphic-scene-04.png"
-    # non-graphic scenes get no graphic image
-    assert "graphic" not in by_id["scene-01"] or "image_ref" not in by_id["scene-01"].get("graphic", {})
+    assert by_id["scene-02"]["graphic"]["image_ref"] == "jobs/j1/assets/graphic-scene-02.png"
+    assert by_id["scene-04"]["graphic"]["image_ref"] == "jobs/j1/assets/graphic-scene-04.png"
+    # hook is now a graphic layout too (gen image, attention-grabbing) — gets an image
+    assert by_id["scene-01"]["graphic"]["image_ref"] == "jobs/j1/assets/graphic-scene-01.png"
+    # subtitle (non-graphic) gets no graphic image
     assert "graphic" not in by_id["scene-03"] or "image_ref" not in by_id["scene-03"].get("graphic", {})
-    assert len(written) == 2
+    assert len(written) == 3
 
 
 def test_graphic_needed_false_is_skipped(tmp_path):
@@ -81,4 +82,4 @@ def test_image_failure_is_non_fatal(tmp_path):
     doc = json.loads(out.read_text())["scenes"]
     by_id = {s["id"]: s for s in doc}
     assert "image_ref" not in by_id["scene-01"].get("graphic", {})  # failed, fell back
-    assert by_id["scene-02"]["graphic"]["image_ref"] == "assets/graphic-scene-02.png"  # other scene ok
+    assert by_id["scene-02"]["graphic"]["image_ref"] == "jobs/j1/assets/graphic-scene-02.png"  # other scene ok

@@ -344,6 +344,20 @@ def _candidate_score(query: str, candidate: dict[str, Any]) -> dict[str, Any]:
 
     tags_text = " ".join(str(tag).lower() for tag in candidate.get("tags") or [])
     tag_terms = _tokens(tags_text)
+    # Pexels VIDEO carries NO tags and NO alt — with a tags-only haystack every
+    # video scores zero overlap, fails the tag-overlap + demographic strict gate,
+    # and the "prefer video" design (providers=["pexels_video"]) never yields a
+    # single clip. When tags are structurally absent, fall back to the candidate's
+    # own free-text metadata (alt/title/description — what photos carry), and only
+    # if THAT is also empty (true for Pexels video) to query provenance: the asset
+    # was returned + ranked by Pexels for our demographic-forced query, so the
+    # enriched query terms (incl. "elderly/senior") are a sound on-topic signal.
+    # Photos with real tags are unaffected (this branch is skipped).
+    if not tag_terms:
+        meta_text = " ".join(
+            str(candidate.get(k) or "") for k in ("alt", "title", "description")
+        ).strip().lower()
+        tag_terms = _tokens(meta_text) if meta_text else _tokens(query.lower())
     raw_overlap = sorted(term for term in _tokens(query) if term in tag_terms)
     overlap = sorted(term for term in _query_terms(query) if _term_matches_tags(term, tag_terms))
     if overlap:

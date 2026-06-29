@@ -39,3 +39,22 @@ def test_normal_sequential_advance(tmp_path):
     _job(tmp_path, [("a", "completed"), ("b", "in_progress"), ("c", "pending")])
     _complete_stage(tmp_path, "b", tmp_path / "out.json")
     assert load_job(tmp_path).current_stage == "c"
+
+
+def test_pointer_advances_forward_when_next_stage_already_completed(tmp_path):
+    # Re-run case (HTTP-409 finalize bug): render_continuity_qa just completed, but
+    # the only later stage `review` is still "completed" from a prior pass (e.g. a
+    # re-render). current_stage must advance FORWARD to `review` so its
+    # ``current_stage == "review"`` guard passes (review re-runs and the job
+    # finalizes) instead of wedging on render_continuity_qa → "Cannot run review
+    # from current_stage='render_continuity_qa'" → 409 → job failed unfinalized.
+    _job(
+        tmp_path,
+        [
+            ("render", "completed"),
+            ("render_continuity_qa", "in_progress"),
+            ("review", "completed"),
+        ],
+    )
+    _complete_stage(tmp_path, "render_continuity_qa", tmp_path / "out.json")
+    assert load_job(tmp_path).current_stage == "review"

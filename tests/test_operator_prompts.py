@@ -105,6 +105,28 @@ def test_script_prompt_contains_spain_locale_guidance():
     assert "ordenador" in prompt
 
 
+def test_scenes_prompt_visual_context_not_hardcoded_to_sleep():
+    # The visual-context guidance must not force a sleep-only setting on every
+    # topic (it used to hardcode "sleep-wellness context: bedroom...").
+    prompt = _chatgpt_scenes_prompt(SPAIN_CONFIG, VALID_SCRIPT)
+    assert "sleep-wellness context" not in prompt
+    assert "¿Por qué no puedes dormir?" not in prompt
+    assert "derive" in prompt.lower()
+    assert "unless the narration is about sleep" in prompt
+
+
+def test_scenes_prompt_visual_context_reflects_niche_category():
+    cfg = {**SPAIN_CONFIG, "niche": {"category": "nutrition_45plus"}}
+    prompt = _chatgpt_scenes_prompt(cfg, VALID_SCRIPT)
+    assert "nutrition 45plus" in prompt  # underscores normalized to spaces
+
+
+def test_scenes_prompt_visual_context_override_wins():
+    cfg = {**SPAIN_CONFIG, "niche": {"visual_context": "bright kitchens with real Spanish food"}}
+    prompt = _chatgpt_scenes_prompt(cfg, VALID_SCRIPT)
+    assert "bright kitchens with real Spanish food" in prompt
+
+
 def test_scenes_prompt_contains_locale_and_keeps_visual_prompt_english():
     prompt = _chatgpt_scenes_prompt(SPAIN_CONFIG, VALID_SCRIPT)
     assert "es-ES" in prompt

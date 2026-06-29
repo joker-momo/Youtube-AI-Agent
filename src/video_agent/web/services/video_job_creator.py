@@ -385,8 +385,8 @@ async def create_idea_from_title(
                 session_fn=lambda messages: browser_client.run_session("chatgpt", messages),
                 duration_mode="auto",
                 target_duration_sec=None,
-                min_duration_sec=360,
-                max_duration_sec=1200,
+                min_duration_sec=660,
+                max_duration_sec=1800,
                 existing_videos=existing,
                 duplicate_policy="warn_only",
                 notes=notes,
@@ -410,8 +410,8 @@ async def create_idea_from_title(
                 idea,
                 duration_mode="auto",
                 target_duration_sec=None,
-                min_duration_sec=360,
-                max_duration_sec=1200,
+                min_duration_sec=660,
+                max_duration_sec=1800,
             )
             _validate_idea(idea)
         except HTTPException as exc:

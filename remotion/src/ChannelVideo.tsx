@@ -7,7 +7,8 @@ import {ChannelElenaPresenter} from './ChannelElenaPresenter';
 import {fitHeadline, fullFrame} from './styles';
 
 const FADE_IN = 18;          // 0.6 s fade-in per scene
-const FADE_OUT = 18;         // 0.6 s fade-out per scene (for scene-to-scene transition)
+const FADE_OUT = 18;         // 0.6 s fade-out per scene (final scene → black)
+const SCENE_XFADE = 15;      // 0.5 s cross-dissolve overlap between consecutive scenes
 const BRIDGE_FRAMES = 18;    // 0.6 s bridge between intro/main/outro
 
 const defaultSubtitles: Required<SubtitleConfig> = {
@@ -382,15 +383,23 @@ const SceneView: React.FC<{
   // When the compiled visual schedule owns the background layer, the per-scene
   // background is suppressed here so the continuous span clip shows through.
   hideBackground?: boolean;
-}> = ({scene, totalFrames, sceneIndex, totalScenes, palette, channelName, showChannelNameOverlay = false, logoPath, subtitles, isFirst = false, isLast = false, hideBackground = false}) => {
+  // Crossfade lead: frames this scene overlaps INTO the previous one. Time-based
+  // animation is shifted by this so subtitles/text stay audio-aligned; only the
+  // fade-in opacity uses the raw frame (to dissolve over the overlap).
+  leadFrames?: number;
+}> = ({scene, totalFrames, sceneIndex, totalScenes, palette, channelName, showChannelNameOverlay = false, logoPath, subtitles, isFirst = false, isLast = false, hideBackground = false, leadFrames = 0}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
-  const progress = frame / Math.max(totalFrames - 1, 1);
+  // Audio-aligned scene time: the scene's Sequence starts `leadFrames` early so it
+  // can dissolve over the previous scene, but narration/subtitles/Elena live on the
+  // continuous audio timeline — so all time-based animation uses localFrame.
+  const localFrame = frame - leadFrames;
+  const progress = Math.max(0, localFrame) / Math.max(totalFrames - 1, 1);
 
   // Animated caption: find active word segment by local scene time.
   // word_segments are rebased to scene-local time (start=0), so compare
   // against frame/fps directly — NOT audio_offset_sec + frame/fps.
-  const localTimeSec = frame / fps + subtitles.offset_sec;
+  const localTimeSec = localFrame / fps + subtitles.offset_sec;
   const segments = (scene.word_segments ?? [])
     .filter((s) => Number.isFinite(s.start) && Number.isFinite(s.end) && s.end > s.start)
     .map((s) => ({
@@ -431,16 +440,21 @@ const SceneView: React.FC<{
   const activeIndexInPage = activeWordIdx !== -1 && activePageIdx === Math.floor(activeWordIdx / wordsPerPage)
     ? activeWordIdx - activePageIdx * wordsPerPage
     : null;
-  const opacity       = interpolate(frame, [0, FADE_IN], [0, 1], {extrapolateRight: 'clamp'});
-  const headlineY     = interpolate(frame, [4, FADE_IN + 8], [20, 0], {extrapolateRight: 'clamp'});
-  const headlineAlpha = interpolate(frame, [4, FADE_IN + 8], [0, 1], {extrapolateRight: 'clamp'});
-  const captionAlpha  = interpolate(frame, [FADE_IN, FADE_IN + 14], [0, 1], {extrapolateRight: 'clamp'});
+  // Cross-dissolve IN: an incoming scene (leadFrames>0) fades up over its overlap
+  // with the previous scene; the first scene fades from black over FADE_IN. Uses the
+  // raw `frame` (0 = first rendered frame) so the dissolve covers the overlap window.
+  const opacity       = interpolate(frame, [0, leadFrames > 0 ? leadFrames : FADE_IN], [0, 1], {extrapolateRight: 'clamp'});
+  const headlineY     = interpolate(localFrame, [4, FADE_IN + 8], [20, 0], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
+  const headlineAlpha = interpolate(localFrame, [4, FADE_IN + 8], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
+  const captionAlpha  = interpolate(localFrame, [FADE_IN, FADE_IN + 14], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
 
   // Scene-to-scene fade: fade-out black overlay appears in final FADE_OUT frames.
   // Suppressed when the compiled timeline owns the background, so a continuous
   // span clip is never interrupted by a black flash at an internal scene boundary.
-  const fadeOutAlpha = (!isLast && !hideBackground)
-    ? interpolate(frame, [totalFrames - FADE_OUT, totalFrames - 1], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'})
+  // No internal dip-to-black any more — scenes cross-dissolve (the incoming scene
+  // fades in over the previous one's tail). Only the FINAL scene fades to black.
+  const fadeOutAlpha = (isLast && !hideBackground)
+    ? interpolate(localFrame, [totalFrames - FADE_OUT, totalFrames - 1], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'})
     : 0;
 
   const layoutVariant = sceneIndex % 3;
@@ -511,7 +525,9 @@ const SceneView: React.FC<{
         </div>
       ) : null}
 
-      {logoPath ? <LogoWatermark logoPath={logoPath} /> : null}
+      {/* Logo moved OUT of the per-scene layer to a single persistent top-level
+          overlay in ChannelVideo — per-scene it remounted on every cut and blinked,
+          which made the video feel like a slideshow. */}
 
       {/* Cinematic Color Grading Overlay (warm sepia + teal-green shadow) */}
       <div style={{
@@ -535,17 +551,22 @@ const SceneView: React.FC<{
         zIndex: 15,
       }} />
 
-      <RetentionOverlay
-        scene={scene}
-        palette={palette}
-        opacity={headlineAlpha}
-        isLast={isLast}
-        line={displayLine}
-        activeIndex={activeIndexInPage}
-        fallbackText={scene.on_screen_text || scene.caption || scene.narration}
-        subtitles={subtitles}
-        captionOpacity={captionAlpha}
-      />
+      {/* Graphic scenes: the ChatGPT image already has the text baked in (high
+          contrast), so DON'T overlay Remotion text on top — it would duplicate /
+          clash. Non-graphic scenes render the normal headline/subtitle overlay. */}
+      {scene.graphic?.image_ref ? null : (
+        <RetentionOverlay
+          scene={scene}
+          palette={palette}
+          opacity={headlineAlpha}
+          isLast={isLast}
+          line={displayLine}
+          activeIndex={activeIndexInPage}
+          fallbackText={scene.on_screen_text || scene.caption || scene.narration}
+          subtitles={subtitles}
+          captionOpacity={captionAlpha}
+        />
+      )}
 
       {/* Scene-to-scene fade-out: solid black overlay fades in over final FADE_OUT frames.
           Must be the LAST child so it composites on top of everything. */}
@@ -609,13 +630,18 @@ export const ChannelVideo: React.FC<RenderProps> = (props) => {
       ) : null}
       {props.scenes.map((scene, i) => {
         const totalFrames = Math.round(scene.duration_sec * fps);
-        const from = start;
+        // Overlap each scene (after the first) into the previous one's tail so they
+        // cross-dissolve instead of dipping to black. Disabled when the compiled
+        // schedule owns the background (already a continuous clip — no per-scene cut).
+        const lead = (i === 0 || visualSchedule != null) ? 0 : SCENE_XFADE;
+        const from = start - lead;
         start += totalFrames;
         return (
-          <Sequence key={scene.id} from={from} durationInFrames={totalFrames}>
+          <Sequence key={scene.id} from={from} durationInFrames={totalFrames + lead}>
             <SceneView
               scene={scene}
               totalFrames={totalFrames}
+              leadFrames={lead}
               sceneIndex={i}
               totalScenes={props.scenes.length}
               palette={props.style.palette}
@@ -634,6 +660,14 @@ export const ChannelVideo: React.FC<RenderProps> = (props) => {
       {elenaCues ? (
         <Sequence from={introFrames}>
           <ChannelElenaPresenter elena={elenaCues} />
+        </Sequence>
+      ) : null}
+      {/* Persistent logo — ONE continuous top-right overlay spanning every scene,
+          mounted once (introFrames → end of scenes) so it never blinks on a scene
+          cut. Sits above the scene layer; clear of Elena (bottom-right). */}
+      {logoPath ? (
+        <Sequence from={introFrames} durationInFrames={totalSceneFrames}>
+          <LogoWatermark logoPath={logoPath} />
         </Sequence>
       ) : null}
       {logoPath && outroFrames > 0 ? (

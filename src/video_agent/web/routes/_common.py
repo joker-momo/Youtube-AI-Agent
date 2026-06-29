@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from video_agent.contracts import repo_root
 from video_agent.orchestrator.browser_client import (
     BrowserClient,
     BrowserClientError,
@@ -64,20 +65,20 @@ _SAFE_CHANNEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 def get_jobs_root() -> Path:
-    return Path(os.environ.get("JOBS_DIR", "/app/jobs"))
+    # Default to the repo's jobs/ for native runs; the /app/* path is Docker-only,
+    # so env wins and the fallback is repo-relative (never the read-only /app).
+    return Path(os.environ.get("JOBS_DIR") or (repo_root() / "jobs"))
 
 
 def get_channel_path() -> Path:
     return Path(
-        os.environ.get(
-            "CHANNEL_CONFIG",
-            "/app/configs/vida-plena-45/channel.yaml",
-        )
+        os.environ.get("CHANNEL_CONFIG")
+        or (repo_root() / "configs/vida-plena-45/channel.yaml")
     )
 
 
 def get_inputs_root() -> Path:
-    return Path(os.environ.get("INPUTS_DIR", "/app/inputs"))
+    return Path(os.environ.get("INPUTS_DIR") or (repo_root() / "inputs"))
 
 
 def _safe_channel_id(channel_id: str) -> str:

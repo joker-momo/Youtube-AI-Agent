@@ -4,28 +4,44 @@ import json
 from pathlib import Path
 
 from video_agent.contracts import (
-    ARTIFACT_SEO,
-    ARTIFACT_SCRIPT,
-    ARTIFACT_SCENES,
-    ARTIFACT_VISUAL_REVIEW,
-    ARTIFACT_VIDEO,
     ARTIFACT_PERSONA_EVAL,
+    ARTIFACT_SCENES,
+    ARTIFACT_SCRIPT,
+    ARTIFACT_SEO,
+    ARTIFACT_VIDEO,
+    ARTIFACT_VISUAL_REVIEW,
 )
-from video_agent.pipeline import OperatorRenderOptions
 from video_agent.orchestrator.job_state import load_job
-from video_agent.utils.json_io import read_json, read_yaml, write_json as _write_json
-
 from video_agent.orchestrator.stages._shared import (
     StageInputMissingError,
-    _resolve_artifact,
     _complete_stage,
+    _resolve_artifact,
 )
+from video_agent.pipeline import OperatorRenderOptions
+from video_agent.utils.json_io import read_json, read_yaml
+from video_agent.utils.json_io import write_json as _write_json
 
 __all__ = [
     "run_render_stage",
     "run_review_stage",
     "run_persona_eval_stage",
 ]
+
+
+def _reset_render_progress(job_dir: Path) -> None:
+    """Clear ``render_progress.json`` to a clean 'not started' state at render-stage
+    start. Without this the dashboard reads the PREVIOUS run's terminal value (e.g.
+    a leftover ``percent: 100``) during the long ``prepare_assets`` phase that runs
+    BEFORE Remotion writes the first frame — so the progress bar would sit frozen at
+    a stale 100% for ~20-30min. Reset → the bar shows 0% / 'Preparing' until real
+    frame counts arrive."""
+    clean = {"percent": 0, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""}
+    for p in (job_dir / "json" / "render_progress.json", job_dir / "render_progress.json"):
+        try:
+            if p.parent.exists():
+                _write_json(p, clean)
+        except OSError:
+            pass
 
 
 def run_render_stage(job_dir: Path, channel_path: Path, *, notify_telegram: bool = True) -> Path:
@@ -37,6 +53,7 @@ def run_render_stage(job_dir: Path, channel_path: Path, *, notify_telegram: bool
     if not channel_path.exists():
         raise StageInputMissingError(f"Missing channel config {channel_path}")
 
+    _reset_render_progress(job_dir)
     try:
         # Late facade import: tests monkeypatch video_agent.orchestrator.stages.render_operator_job
         from video_agent.orchestrator import stages as stages_pkg

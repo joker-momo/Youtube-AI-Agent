@@ -72,7 +72,13 @@ class StockAssetService:
         if scene.get("retention_function") in {"hook", "proof", "payoff", "cta"}:
             return True
         prompt = (scene.get("visual_prompt") or "").lower()
-        key_terms = {"package", "label", "ingredients", "fibra", "harina", "compare", "turn", "rotate", "back label"}
+        # Label/package-reading cues that need the EXACT product on screen (key
+        # scene → strict-only, no weak fallback). "ingredients" was removed: it is
+        # the subject word of a nutrition channel (almost every food scene mentions
+        # it), so it wrongly forced generic scenes — incl. the hook — to be
+        # critical-no-fallback and rendered them as a blank gradient when strict
+        # failed. The remaining terms are specific label/comparison reads.
+        key_terms = {"package", "label", "fibra", "harina", "compare", "turn", "rotate", "back label"}
         if any(term in prompt for term in key_terms):
             return True
         return False

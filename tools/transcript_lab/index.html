@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Transcript Lab</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    margin: 0; background: #0f1115; color: #e6e8ec; line-height: 1.5;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 28px 20px 80px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: #8b909a; font-size: 13px; margin: 0 0 20px; }
+  textarea {
+    width: 100%; min-height: 130px; resize: vertical; padding: 12px 14px;
+    background: #171a21; color: #e6e8ec; border: 1px solid #2a2f3a;
+    border-radius: 10px; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .row { display: flex; gap: 10px; align-items: center; margin-top: 12px; }
+  button {
+    background: #3b82f6; color: #fff; border: 0; padding: 10px 18px;
+    border-radius: 9px; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  button:disabled { opacity: .55; cursor: default; }
+  button.ghost { background: #232733; color: #cfd3da; }
+  .hint { color: #8b909a; font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 24px; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #232733; }
+  th { color: #8b909a; font-weight: 600; }
+  .ok { color: #4ade80; } .bad { color: #f87171; }
+  .tag { font-size: 11px; background: #232733; padding: 2px 7px; border-radius: 6px; color: #cfd3da; }
+  details { margin-top: 12px; background: #14171e; border: 1px solid #232733; border-radius: 10px; }
+  summary { cursor: pointer; padding: 10px 14px; font-size: 13px; font-weight: 600; }
+  details .body { padding: 0 14px 14px; }
+  details .meta { display: flex; gap: 8px; align-items: center; margin: 4px 0 10px; flex-wrap: wrap; }
+  pre {
+    white-space: pre-wrap; word-break: break-word; max-height: 360px; overflow: auto;
+    background: #0c0e12; border: 1px solid #232733; border-radius: 8px;
+    padding: 12px; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0;
+  }
+  a { color: #60a5fa; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Transcript Lab</h1>
+  <p class="sub">Dán danh sách URL YouTube (mỗi dòng 1 URL). Ưu tiên phụ đề <b>es</b> → en. Chỉ để nghiên cứu cấu trúc.</p>
+
+  <textarea id="urls" placeholder="https://www.youtube.com/watch?v=...&#10;https://youtu.be/...&#10;https://www.youtube.com/shorts/..."></textarea>
+  <div class="row">
+    <button id="go">Fetch All</button>
+    <button class="ghost" id="clear">Clear</button>
+    <span class="hint" id="status"></span>
+  </div>
+
+  <div id="summary"></div>
+  <div id="results"></div>
+
+  <hr style="border:0;border-top:1px solid #232733;margin:32px 0 20px" />
+  <h1 style="font-size:18px">Video Teardown (download + analyze)</h1>
+  <p class="sub">Tải video 480p + audio, phân tích bố cục / âm thanh / giọng nói / hiệu ứng + metadata. Chậm (vài phút/video). Frame lưu để Claude xem.</p>
+  <textarea id="aurls" placeholder="Dán URL (mỗi dòng 1) để tải + phân tích"></textarea>
+  <div class="row">
+    <button id="ago">Download &amp; Analyze</button>
+    <span class="hint" id="astatus"></span>
+  </div>
+  <div id="aresults"></div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+function esc(s) {
+  return (s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+}
+
+async function copy(text, btn) {
+  try { await navigator.clipboard.writeText(text); const o = btn.textContent; btn.textContent = "Copied"; setTimeout(() => (btn.textContent = o), 1200); }
+  catch { btn.textContent = "Copy failed"; }
+}
+
+function render(results) {
+  const okN = results.filter((r) => r.ok).length;
+  $("summary").innerHTML =
+    `<table><thead><tr><th>#</th><th>Video</th><th>Status</th><th>Source</th><th>Lang</th><th>Chars</th></tr></thead><tbody>` +
+    results.map((r, i) =>
+      `<tr><td>${i + 1}</td><td>${esc(r.video_id) || "<span class='bad'>—</span>"}</td>` +
+      `<td>${r.ok ? "<span class='ok'>✅ ok</span>" : "<span class='bad'>❌ fail</span>"}</td>` +
+      `<td>${r.source ? `<span class='tag'>${esc(r.source)}</span>` : "—"}</td>` +
+      `<td>${esc(r.lang) || "—"}</td><td>${r.text_chars ?? "—"}</td></tr>` +
+      (r.ok ? "" : `<tr><td></td><td colspan='5' class='bad' style='font-size:12px'>${esc(r.error)}</td></tr>`)
+    ).join("") +
+    `</tbody></table><p class='hint'>${okN}/${results.length} thành công.</p>`;
+
+  $("results").innerHTML = results.filter((r) => r.ok).map((r, i) => {
+    const safe = esc(r.text);
+    return `<details ${i === 0 ? "open" : ""}>
+      <summary>${esc(r.video_id)} · ${r.text_chars} chars</summary>
+      <div class="body">
+        <div class="meta">
+          <span class="tag">${esc(r.source)}</span><span class="tag">${esc(r.lang)}</span>
+          <a href="${esc(r.url)}" target="_blank" rel="noopener">source ↗</a>
+          ${r.files ? `<a href="${esc(r.files.txt)}" target="_blank">${esc(r.files.txt)}</a>` : ""}
+          <button class="ghost copy" data-i="${i}">Copy</button>
+        </div>
+        <pre id="text-${i}">${safe}</pre>
+      </div></details>`;
+  }).join("");
+
+  document.querySelectorAll(".copy").forEach((b) =>
+    b.addEventListener("click", () => copy($("text-" + b.dataset.i).textContent, b)));
+}
+
+$("clear").addEventListener("click", () => { $("urls").value = ""; $("summary").innerHTML = ""; $("results").innerHTML = ""; $("status").textContent = ""; });
+
+function renderAnalysis(results) {
+  $("aresults").innerHTML =
+    `<table><thead><tr><th>Video</th><th>Title</th><th>Dur</th><th>Shots</th><th>Cuts/min</th><th>WPM</th><th>F0</th><th>LUFS</th><th>Frames</th></tr></thead><tbody>` +
+    results.map((r) => r.ok
+      ? `<tr><td>${esc(r.video_id)}</td><td>${esc((r.title||"").slice(0,40))}</td>` +
+        `<td>${r.duration_sec?Math.round(r.duration_sec/60)+"m":"—"}</td>` +
+        `<td>${r.shot_count??"—"}</td><td>${r.cuts_per_min??"—"}</td><td>${r.wpm??"—"}</td>` +
+        `<td>${r.f0_median_hz??"—"}</td><td>${r.integrated_lufs??"—"}</td>` +
+        `<td><a href="${esc(r.files.analysis)}" target="_blank">json</a> · ${r.frames}f</td></tr>`
+      : `<tr><td>${esc(r.video_id||"—")}</td><td colspan='8' class='bad' style='font-size:12px'>❌ ${esc(r.stage||"")}: ${esc(r.error)}</td></tr>`
+    ).join("") +
+    `</tbody></table><p class='hint'>Frame + analysis.json lưu ở output/&lt;id&gt;/ — đưa Claude xem để teardown đầy đủ.</p>`;
+}
+
+$("ago").addEventListener("click", async () => {
+  const urls = $("aurls").value.split("\n").map((s) => s.trim()).filter(Boolean);
+  if (!urls.length) { $("astatus").textContent = "Nhập ít nhất 1 URL."; return; }
+  $("ago").disabled = true;
+  $("astatus").textContent = `Đang tải + phân tích ${urls.length} video... (chậm, vài phút mỗi cái)`;
+  try {
+    const res = await fetch("/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ urls }) });
+    const data = await res.json();
+    renderAnalysis(data.results || []);
+    $("astatus").textContent = "Xong.";
+  } catch (e) {
+    $("astatus").textContent = "Lỗi: " + e;
+  } finally {
+    $("ago").disabled = false;
+  }
+});
+
+$("go").addEventListener("click", async () => {
+  const urls = $("urls").value.split("\n").map((s) => s.trim()).filter(Boolean);
+  if (!urls.length) { $("status").textContent = "Nhập ít nhất 1 URL."; return; }
+  $("go").disabled = true; $("status").textContent = `Đang lấy ${urls.length} video... (tuần tự, có thể mất chút)`;
+  try {
+    const res = await fetch("/fetch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ urls }) });
+    const data = await res.json();
+    render(data.results || []);
+    $("status").textContent = "Xong.";
+  } catch (e) {
+    $("status").textContent = "Lỗi: " + e;
+  } finally {
+    $("go").disabled = false;
+  }
+});
+</script>
+</body>
+</html>

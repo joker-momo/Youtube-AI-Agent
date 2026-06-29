@@ -1,8 +1,8 @@
 """Unit tests for the long-form Elena cue planner (``video_agent.visual.elena``).
 
-Locks the §6 ruleset: talking+hidden only (no idle), 5-10s appearances spaced
->=15s, no adjacent same asset, graphic/evidence scenes hidden, hook -> large
-emphasis, deterministic by job_id.
+Locks the simple per-scene rule: talking+hidden only, ONE cue per eligible scene
+(no frequency/spacing/band), graphic scenes hidden, hook/short-warning -> large
+emphasis, subtitle -> small circle, deterministic.
 """
 
 from __future__ import annotations
@@ -55,45 +55,34 @@ def test_only_talking_and_hidden_modes_no_idle():
     assert all(c["mode"] == "talking" for c in res["cues"])
 
 
-def test_appearances_spaced_at_least_15s_apart():
-    # Force every scene to want talking via annotation; spacing must still hold.
-    scenes = [_scene(f"scene-{i:02d}", "subtitle", 6.0, elena={"mode": "talking"}) for i in range(1, 13)]
+def test_every_eligible_scene_gets_one_cue():
+    # No frequency/spacing: every eligible scene gets exactly one cue.
+    scenes = [_scene(f"scene-{i:02d}", "subtitle", 6.0) for i in range(1, 13)]
     res = build_elena_cues(_doc(*scenes), {}, 30, job_id="job-x")
-    cues = res["cues"]
-    for i in range(1, len(cues)):
-        gap = cues[i]["start_frame"] - (cues[i - 1]["start_frame"] + cues[i - 1]["duration_frames"])
-        assert gap >= 15 * 30, f"gap {gap} < 15s at cue {i}"
+    assert len(res["cues"]) == 12
 
 
-def test_no_two_consecutive_cues_share_asset():
-    scenes = [_scene(f"scene-{i:02d}", "hook", 9.0, elena={"mode": "talking"}) for i in range(1, 13)]
+def test_consecutive_hooks_all_large_emphasis():
+    # No alternation any more: same-type scenes use the same asset.
+    scenes = [_scene(f"scene-{i:02d}", "hook", 9.0) for i in range(1, 6)]
     res = build_elena_cues(_doc(*scenes), {}, 30, job_id="job-x")
-    cues = res["cues"]
-    for i in range(1, len(cues)):
-        assert cues[i]["variant"] != cues[i - 1]["variant"]
-
-
-def test_appearance_duration_per_treatment():
-    # circle (subtitle/neutral) 6-10s; large (hook/emphasis) 5-8s.
-    scenes = [_scene(f"scene-{i:02d}", "subtitle", 20.0, elena={"mode": "talking"}) for i in range(1, 8)]
-    res = build_elena_cues(_doc(*scenes), {}, 30, job_id="job-x")
-    for c in res["cues"]:
-        if c["treatment"] == "circle":
-            assert 6 * 30 <= c["duration_frames"] <= 10 * 30
-        else:
-            assert 5 * 30 <= c["duration_frames"] <= 8 * 30
-
-    hooks = [_scene(f"h{i}", "hook", 20.0, elena={"mode": "talking"}) for i in range(1, 6)]
-    rh = build_elena_cues(_doc(*hooks), {}, 30, job_id="job-x")
-    larges = [c for c in rh["cues"] if c["treatment"] == "large"]
-    assert larges and all(5 * 30 <= c["duration_frames"] <= 8 * 30 for c in larges)
-
-
-def test_short_scene_below_5s_gets_no_cue():
-    res = build_elena_cues(
-        _doc(_scene("scene-01", "subtitle", 3.0, elena={"mode": "talking"})), {}, 30, job_id="job-x"
+    assert res["cues"] and all(
+        c["treatment"] == "large" and c["variant"] == "talk-emphasis" for c in res["cues"]
     )
-    assert res["cues"] == []
+
+
+def test_cue_duration_spans_full_scene():
+    # Elena spans the FULL scene (renderer loops the clip) — no cap, no mid-sentence cut.
+    res = build_elena_cues(
+        _doc(_scene("s1", "subtitle", 20.0), _scene("s2", "subtitle", 4.0)), {}, 30, job_id="job-x"
+    )
+    assert res["cues"][0]["duration_frames"] == 20 * 30
+    assert res["cues"][1]["duration_frames"] == 4 * 30
+
+
+def test_short_scene_still_gets_a_cue():
+    res = build_elena_cues(_doc(_scene("scene-01", "subtitle", 3.0)), {}, 30, job_id="job-x")
+    assert len(res["cues"]) == 1 and res["cues"][0]["duration_frames"] == 3 * 30
 
 
 def test_deterministic_by_job_id():
@@ -107,7 +96,7 @@ def test_metrics_and_qa_present():
     scenes = [_scene("scene-01", "hook", 10.0)] + [_scene(f"scene-{i:02d}", "subtitle", 12.0) for i in range(2, 12)]
     res = build_elena_cues(_doc(*scenes), {}, 30, job_id="job-x")
     m = res["metrics"]
-    assert "appearance_count" in m and "talking_pct" in m and "min_gap_sec" in m
+    assert "appearance_count" in m and "talking_pct" in m and "visible_pct" in m
     assert res["qa"]["verdict"] == "PASS"
     assert res["schema_version"] == 1
     assert res["fps"] == 30

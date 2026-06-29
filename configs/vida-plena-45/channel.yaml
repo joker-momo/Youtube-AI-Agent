@@ -77,11 +77,11 @@ personas:
     weight: 1.0
 content_format:
   type: "long_form"
-  target_duration_sec: 840        # 14 min sweet spot — top Spanish health channel benchmark
-  duration_sec_min: 720           # 12 min hard floor
-  duration_sec_max: 900           # 15 min hard ceiling
-  scenes_count_min: 40            # 40-55 scenes × 15-20s = 10-18 min, high visual variety
-  scenes_count_max: 55
+  target_duration_sec: 840        # soft per-scene sizing reference only; total length is content-driven (see duration_sec_min)
+  duration_sec_min: 660           # 11 min — quality-first MINIMUM (drives script word floor); develop ideas fully
+  duration_sec_max: 1800          # 30 min soft safety bound only — no hard trim; length follows content
+  scenes_count_min: 40            # floor only; scene count scales up with script length (no hard cap)
+  scenes_count_max: 55            # legacy reference; sharded planner may exceed when the script is longer
   publish_schedule:
     cadence: "3 per week"
     days: ["Monday", "Wednesday", "Friday"]
@@ -223,6 +223,10 @@ visual:
     max_scenes_per_span: 3
     max_span_sec: 40
     groupable_layouts: [subtitle]
+  # Elena brand-presenter overlay (band-aware cue planner). Injected into
+  # render_props by pipeline._attach_elena_cues independent of span mode.
+  elena:
+    enabled: true
 shorts:
   enabled: true
   # Visual span / compiled visual timeline (spec v4.0.3). Enforced mode makes

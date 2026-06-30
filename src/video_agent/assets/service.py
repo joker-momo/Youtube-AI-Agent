@@ -189,5 +189,39 @@ class StockAssetService:
                     asset["asset_selection"]["asset_match_status"] = "weak_match"
                     return asset
 
+        # Tier 4.5 — broadened-query retry before giving up. A compound
+        # visual_prompt ("fish, eggs, chicken, legumes, tofu, yogurt") can match
+        # NOTHING on Pexels; retry with a simplified query (first clause, few words)
+        # so the scene gets REAL on-topic footage (weak_match) instead of a blank
+        # placeholder. Only reached after every tier above failed, so it never
+        # changes scenes that already matched.
+        _vp = str(scene.get("visual_prompt") or "").strip()
+        _low = _vp.lower()
+        _cut = len(_vp)
+        for _m in (",", " including ", " with ", " and ", " featuring ", " plus "):
+            _i = _low.find(_m)
+            if _i != -1:
+                _cut = min(_cut, _i)
+        _broad_raw = " ".join(_vp[:_cut].split()[:4])
+        if _broad_raw:
+            broad_q = _editorial_query(_broad_raw, scene)
+            if broad_q and broad_q != query:
+                for _provs, _tier, _fb in (
+                    (self.providers, "pexels_video", False),
+                    (self.fallback_providers, "pexels_photo", True),
+                ):
+                    if not _provs:
+                        continue
+                    asset = self.core._search_and_download(
+                        providers=_provs, query=broad_q, filters=filters,
+                        ttl_hours=ttl_hours, scene=scene, channel_id=channel_id,
+                        job_id=job_id, is_fallback=_fb, require_strict=False,
+                        candidate_budget=candidate_budget,
+                    )
+                    if asset is not None:
+                        asset["asset_tier"] = _tier
+                        asset["asset_selection"]["asset_match_status"] = "weak_match"
+                        return asset
+
         # Tier 5 — block + review (returns None)
         return None

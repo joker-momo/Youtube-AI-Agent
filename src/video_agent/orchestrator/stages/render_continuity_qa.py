@@ -19,14 +19,15 @@ import subprocess
 from pathlib import Path
 from typing import Any, Sequence
 
+from video_agent.contracts import ARTIFACT_SCENES
 from video_agent.orchestrator.job_state import load_job
 from video_agent.orchestrator.stages._shared import (
     StageInputMissingError,
     _complete_stage,
     _resolve_artifact,
     _start_stage,
+    dag_mode,
 )
-from video_agent.contracts import ARTIFACT_SCENES
 from video_agent.storage.atomic import atomic_write_json
 from video_agent.utils.json_io import read_json
 
@@ -197,7 +198,7 @@ def _qa_schedule(job_dir: Path, sched_path: Path) -> dict | None:
 def run_render_continuity_qa_stage(job_dir: Path, channel_path: Path | None = None) -> Path:
     """Verify span continuity in the rendered video; write the QA artifact."""
     state = load_job(job_dir)
-    if state.current_stage != _STAGE:
+    if not dag_mode() and state.current_stage != _STAGE:
         raise StageInputMissingError(
             f"Cannot run {_STAGE} stage from current_stage={state.current_stage!r}"
         )

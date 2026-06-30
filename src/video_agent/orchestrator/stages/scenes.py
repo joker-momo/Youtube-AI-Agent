@@ -2,25 +2,25 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from video_agent.contracts import ARTIFACT_SCRIPT, ARTIFACT_SCENES
+from video_agent.contracts import ARTIFACT_SCENES, ARTIFACT_SCRIPT
 from video_agent.operator import (
     _chatgpt_scenes_prompt,
     get_scenes_qa_feedback,
     promote_operator_artifact,
 )
-from video_agent.orchestrator.job_state import load_job
-from video_agent.utils.json_io import read_json, read_yaml
-from video_agent.storage.atomic import atomic_write_text
 from video_agent.operator_validators import _looks_like_spanish_visual_prompt
-from video_agent.utils.json_io import write_json as _write_json
-
+from video_agent.orchestrator.job_state import load_job
 from video_agent.orchestrator.stages._shared import (
-    StageInputMissingError,
-    _resolve_artifact,
-    _complete_stage,
     SCENES_PROMPT_PATH,
     SCENES_RAW_PATH,
+    StageInputMissingError,
+    _complete_stage,
+    _resolve_artifact,
+    dag_mode,
 )
+from video_agent.storage.atomic import atomic_write_text
+from video_agent.utils.json_io import read_json, read_yaml
+from video_agent.utils.json_io import write_json as _write_json
 
 __all__ = [
     "run_scenes_stage",
@@ -38,7 +38,7 @@ def run_scenes_stage(job_dir: Path, channel_path: Path) -> Path:
         raise StageInputMissingError(f"Missing channel config {channel_path}")
 
     state = load_job(job_dir)
-    if state.current_stage != "scenes":
+    if not dag_mode() and state.current_stage != "scenes":
         raise StageInputMissingError(
             f"Cannot run scenes stage from current_stage={state.current_stage!r}"
         )
@@ -58,7 +58,7 @@ def run_scenes_stage(job_dir: Path, channel_path: Path) -> Path:
 
 def promote_scenes_stage(job_dir: Path, channel_path: Path, raw_response: str) -> Path:
     state = load_job(job_dir)
-    if state.current_stage != "scenes_promote":
+    if not dag_mode() and state.current_stage != "scenes_promote":
         raise StageInputMissingError(
             f"Cannot run scenes_promote stage from current_stage={state.current_stage!r}"
         )
@@ -91,6 +91,7 @@ async def auto_scenes_stage(
     session_fn,
 ) -> Path:
     import os
+
     from video_agent.orchestrator import stages as stages_pkg
     if os.environ.get("SCENES_SHARDED_GENERATION", "").strip() == "1":
         return await stages_pkg.auto_scenes_stage_sharded(job_dir, channel_path, session_fn)

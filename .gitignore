@@ -70,3 +70,4 @@ logs_run_sh.out
 configs/*/assets/elena/
 remotion/public/assets/elena/
 remotion/public/test_fixtures/
+/tools

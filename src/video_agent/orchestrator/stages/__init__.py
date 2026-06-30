@@ -8,121 +8,107 @@ the old monolithic ``stages.py``.
 from __future__ import annotations
 
 # ---------------------------------------------------------------------------
+# Type aliases (kept at facade level for backward compatibility with callers
+# that do ``from video_agent.orchestrator.stages import SessionFn``)
+# ---------------------------------------------------------------------------
+from typing import Awaitable, Callable, Sequence
+
+# ---------------------------------------------------------------------------
 # Re-export contracts / operator symbols that callers import directly from
 # this package (e.g. ``from video_agent.orchestrator.stages import repo_root``)
 # ---------------------------------------------------------------------------
 from video_agent.contracts import (
-    repo_root,
-    ARTIFACT_SEO,
-    ARTIFACT_SCRIPT,
+    ARTIFACT_PERSONA_EVAL,
+    ARTIFACT_REPORT,
     ARTIFACT_SCENES,
-    ARTIFACT_VISUAL_REVIEW,
+    ARTIFACT_SCRIPT,
+    ARTIFACT_SEO,
     ARTIFACT_THUMBNAIL,
     ARTIFACT_VIDEO,
-    ARTIFACT_REPORT,
     ARTIFACT_VISUAL_CONTACT_SHEET,
-    ARTIFACT_PERSONA_EVAL,
+    ARTIFACT_VISUAL_REVIEW,
     EVENT_LOG,
+    repo_root,
 )
 from video_agent.operator import (
-    write_operator_review,
     extract_json_objects,
+    write_operator_review,
 )
-from video_agent.pipeline import render_operator_job
 
 # ---------------------------------------------------------------------------
 # _shared
 # ---------------------------------------------------------------------------
 from video_agent.orchestrator.stages._shared import (
+    _AUDIO_SUBPROCESS_ENV,
+    _IDEA_FILE_LEGACY,
+    IDEA_FILE,
+    SCENES_BATCHES_DIR,
+    SCENES_PLAN_PATH,
+    SCENES_PROMPT_PATH,
+    SCENES_QA_BATCHES_DIR,
+    SCENES_QA_RAW_PATH,
+    SCENES_RAW_PATH,
+    SCRIPT_PROMPT_PATH,
+    SCRIPT_QA_RAW_PATH,
+    SCRIPT_RAW_PATH,
+    SEO_PROMPT_PATH,
+    SEO_QA_RAW_PATH,
+    SEO_RAW_PATH,
     StageInputMissingError,
-    _resolve_idea_path,
+    _complete_stage,
     _resolve_artifact,
+    _resolve_idea_path,
     _run_blocking_with_timeout,
     _start_stage,
-    _complete_stage,
-    IDEA_FILE,
-    _IDEA_FILE_LEGACY,
-    _AUDIO_SUBPROCESS_ENV,
-    SCRIPT_PROMPT_PATH,
-    SCRIPT_RAW_PATH,
-    SCENES_PROMPT_PATH,
-    SCENES_RAW_PATH,
-    SCENES_PLAN_PATH,
-    SCENES_BATCHES_DIR,
-    SCENES_QA_BATCHES_DIR,
-    SEO_PROMPT_PATH,
-    SEO_RAW_PATH,
-    SCRIPT_QA_RAW_PATH,
-    SCENES_QA_RAW_PATH,
-    SEO_QA_RAW_PATH,
 )
 
 # ---------------------------------------------------------------------------
-# script
+# assets_thumbnail
 # ---------------------------------------------------------------------------
-from video_agent.orchestrator.stages.script import (
-    run_script_stage,
-    promote_script_stage,
-    auto_script_stage,
-)
-
-# ---------------------------------------------------------------------------
-# scenes
-# ---------------------------------------------------------------------------
-from video_agent.orchestrator.stages.scenes import (
-    run_scenes_stage,
-    promote_scenes_stage,
-    auto_scenes_stage,
-    _enforce_scenes_visual_prompt_english,
-)
-
-# ---------------------------------------------------------------------------
-# sharding
-# ---------------------------------------------------------------------------
-from video_agent.orchestrator.stages.sharding import (
-    _request_shard_envelope,
-    _scene_id_to_batch_index,
-    _scene_ids_from_validation_error,
-    _scene_batch_repair_prompt,
-    _merge_scene_batches_with_repair,
-    auto_scenes_stage_sharded,
-    auto_scenes_qa_stage_sharded,
-)
-
-# ---------------------------------------------------------------------------
-# seo
-# ---------------------------------------------------------------------------
-from video_agent.orchestrator.stages.seo import (
-    run_seo_stage,
-    promote_seo_stage,
-    auto_seo_stage,
-    _enforce_seo_language_qa,
+from video_agent.orchestrator.stages.assets_thumbnail import (
+    _ASSET_GEN_PROMPT_PREFIX,
+    _VARIANT_STRATEGY,
+    RESEARCH_FILE,
+    _build_thumbnail_prompt,
+    _idea_keywords,
+    _legacy_build_thumbnail_prompt,
+    _scene_project_name,
+    _topic_category_guidance,
+    auto_assets_chatgpt_stage,
+    auto_idea_research_stage,
+    auto_thumbnail_image_stage,
+    generate_scene_asset,
 )
 
 # ---------------------------------------------------------------------------
 # audio
 # ---------------------------------------------------------------------------
 from video_agent.orchestrator.stages.audio import (
-    _run_audio_subprocess,
-    run_whisper_timestamps_stage,
     _rebase_words_to_scene_timestamps,
+    _run_audio_subprocess,
     _run_whisper_timestamps_stage_inline,
-)
-
-# ---------------------------------------------------------------------------
-# visual_spans / visual_schedule (long-form, report-only)
-# ---------------------------------------------------------------------------
-from video_agent.orchestrator.stages.visual_spans import (
-    run_visual_spans_stage,
-)
-from video_agent.orchestrator.stages.visual_schedule import (
-    run_visual_schedule_stage,
+    run_whisper_timestamps_stage,
 )
 from video_agent.orchestrator.stages.graphic_images import (
     run_graphic_images_stage,
 )
-from video_agent.orchestrator.stages.elena_plan import (
-    run_elena_plan_stage,
+
+# ---------------------------------------------------------------------------
+# qa
+# ---------------------------------------------------------------------------
+from video_agent.orchestrator.stages.qa import (
+    _QA_ARTIFACT_FILE,
+    _QA_RAW_PATH,
+    _auto_qa,
+    _auto_run_then_promote,
+    _max_retries_per_qa,
+    _reset_promote_and_qa,
+    auto_qa_with_rework,
+    auto_rework_artifact,
+    auto_scenes_qa_stage,
+    auto_script_qa_stage,
+    auto_seo_qa_stage,
+    promote_qa_stage,
 )
 from video_agent.orchestrator.stages.render_continuity_qa import (
     run_render_continuity_qa_stage,
@@ -132,52 +118,63 @@ from video_agent.orchestrator.stages.render_continuity_qa import (
 # render_review
 # ---------------------------------------------------------------------------
 from video_agent.orchestrator.stages.render_review import (
+    run_persona_eval_stage,
     run_render_stage,
     run_review_stage,
-    run_persona_eval_stage,
 )
 
 # ---------------------------------------------------------------------------
-# qa
+# scenes
 # ---------------------------------------------------------------------------
-from video_agent.orchestrator.stages.qa import (
-    _QA_ARTIFACT_FILE,
-    _QA_RAW_PATH,
-    promote_qa_stage,
-    _auto_run_then_promote,
-    _auto_qa,
-    auto_script_qa_stage,
-    auto_scenes_qa_stage,
-    auto_seo_qa_stage,
-    _reset_promote_and_qa,
-    auto_rework_artifact,
-    _max_retries_per_qa,
-    auto_qa_with_rework,
+from video_agent.orchestrator.stages.scenes import (
+    _enforce_scenes_visual_prompt_english,
+    auto_scenes_stage,
+    promote_scenes_stage,
+    run_scenes_stage,
 )
 
 # ---------------------------------------------------------------------------
-# assets_thumbnail
+# script
 # ---------------------------------------------------------------------------
-from video_agent.orchestrator.stages.assets_thumbnail import (
-    RESEARCH_FILE,
-    _idea_keywords,
-    auto_idea_research_stage,
-    _ASSET_GEN_PROMPT_PREFIX,
-    _scene_project_name,
-    _VARIANT_STRATEGY,
-    _topic_category_guidance,
-    _build_thumbnail_prompt,
-    _legacy_build_thumbnail_prompt,
-    generate_scene_asset,
-    auto_assets_chatgpt_stage,
-    auto_thumbnail_image_stage,
+from video_agent.orchestrator.stages.script import (
+    auto_script_stage,
+    promote_script_stage,
+    run_script_stage,
 )
 
 # ---------------------------------------------------------------------------
-# Type aliases (kept at facade level for backward compatibility with callers
-# that do ``from video_agent.orchestrator.stages import SessionFn``)
+# seo
 # ---------------------------------------------------------------------------
-from typing import Awaitable, Callable, Sequence
+from video_agent.orchestrator.stages.seo import (
+    _enforce_seo_language_qa,
+    auto_seo_stage,
+    promote_seo_stage,
+    run_seo_stage,
+)
+
+# ---------------------------------------------------------------------------
+# sharding
+# ---------------------------------------------------------------------------
+from video_agent.orchestrator.stages.sharding import (
+    _merge_scene_batches_with_repair,
+    _request_shard_envelope,
+    _scene_batch_repair_prompt,
+    _scene_id_to_batch_index,
+    _scene_ids_from_validation_error,
+    auto_scenes_qa_stage_sharded,
+    auto_scenes_stage_sharded,
+)
+from video_agent.orchestrator.stages.visual_schedule import (
+    run_visual_schedule_stage,
+)
+
+# ---------------------------------------------------------------------------
+# visual_spans / visual_schedule (long-form, report-only)
+# ---------------------------------------------------------------------------
+from video_agent.orchestrator.stages.visual_spans import (
+    run_visual_spans_stage,
+)
+from video_agent.pipeline import render_operator_job
 
 PromptFn = Callable[[str], Awaitable[str]]
 """Async callable: takes a prompt string, returns the raw model response."""
@@ -215,5 +212,6 @@ _ARTIFACT_RAW_PATH = {
 # Also update qa.py's local copies so they stay in sync when accessed
 # directly from that module.
 from video_agent.orchestrator.stages import qa as _qa_mod
+
 _qa_mod._QA_STAGE_FN.update(_QA_STAGE_FN)
 _qa_mod._ARTIFACT_PROMOTER.update(_ARTIFACT_PROMOTER)

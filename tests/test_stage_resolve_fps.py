@@ -1,7 +1,7 @@
 """Guard for the shared stage fps resolver (overlap #3).
 
-``visual_schedule`` and ``elena_plan`` had identical copy-pasted ``_resolve_fps``.
-Centralized in ``orchestrator.stages._shared.resolve_stage_fps``: reads
+The shared ``_resolve_fps`` is centralized in
+``orchestrator.stages._shared.resolve_stage_fps``: reads
 ``render.fps`` from the channel config, defaults to 30, never raises.
 """
 

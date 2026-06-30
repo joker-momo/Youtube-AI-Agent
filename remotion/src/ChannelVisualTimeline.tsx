@@ -1,5 +1,6 @@
 import React from 'react';
-import {AbsoluteFill, Img, OffthreadVideo, Sequence, useVideoConfig} from 'remotion';
+import {AbsoluteFill, Img, Sequence, useVideoConfig} from 'remotion';
+import {Video as MediaVideo} from '@remotion/media';
 import type {CompiledAssetSchedule} from './render-props';
 import {mediaSrc} from './render-props';
 
@@ -23,7 +24,7 @@ function normalizedTrimFrame(
  * Long-form background layer driven by the compiled asset schedule.
  *
  * Each `background_media` track is a single `<Sequence>` containing a single
- * `<OffthreadVideo>` (or `<Img>`) spanning the whole visual span. Because there
+ * `<MediaVideo>` (WebCodecs) (or `<Img>`) spanning the whole visual span. Because there
  * is exactly one media element per span — not one per scene — the native clip
  * plays continuously across internal scene boundaries with NO remount and NO
  * playhead reset. Independent of the Shorts VisualTimeline (used as design
@@ -55,7 +56,7 @@ export const ChannelVisualTimeline: React.FC<{schedule: CompiledAssetSchedule}> 
             name={track.visual_span_id}
           >
             {isVideo ? (
-              <OffthreadVideo
+              <MediaVideo
                 src={src}
                 muted
                 playbackRate={track.playback_rate}

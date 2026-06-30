@@ -1,9 +1,9 @@
 import React from 'react';
-import {AbsoluteFill, Audio, Img, interpolate, OffthreadVideo, Sequence, useCurrentFrame, useVideoConfig} from 'remotion';
+import {AbsoluteFill, Audio, Img, interpolate, Sequence, useCurrentFrame, useVideoConfig} from 'remotion';
+import {Video as MediaVideo} from '@remotion/media';
 import {LayoutPayload, SceneLayout, SubtitleConfig, WordSegment} from './render-props';
 import {mediaSrc, RenderProps, Scene} from './render-props';
 import {ChannelVisualTimeline} from './ChannelVisualTimeline';
-import {ChannelElenaPresenter} from './ChannelElenaPresenter';
 import {fitHeadline, fullFrame} from './styles';
 
 const FADE_IN = 18;          // 0.6 s fade-in per scene
@@ -387,11 +387,14 @@ const SceneView: React.FC<{
   // animation is shifted by this so subtitles/text stay audio-aligned; only the
   // fade-in opacity uses the raw frame (to dissolve over the overlap).
   leadFrames?: number;
-}> = ({scene, totalFrames, sceneIndex, totalScenes, palette, channelName, showChannelNameOverlay = false, logoPath, subtitles, isFirst = false, isLast = false, hideBackground = false, leadFrames = 0}) => {
+  // Hybrid graphic cards: fixed brand-gradient bg video path. When set, graphic
+  // scenes render the card shrunk & centered over it instead of full-bleed.
+  hybridCardBg?: string;
+}> = ({scene, totalFrames, sceneIndex, totalScenes, palette, channelName, showChannelNameOverlay = false, logoPath, subtitles, isFirst = false, isLast = false, hideBackground = false, leadFrames = 0, hybridCardBg}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
   // Audio-aligned scene time: the scene's Sequence starts `leadFrames` early so it
-  // can dissolve over the previous scene, but narration/subtitles/Elena live on the
+  // can dissolve over the previous scene, but narration/subtitles live on the
   // continuous audio timeline — so all time-based animation uses localFrame.
   const localFrame = frame - leadFrames;
   const progress = Math.max(0, localFrame) / Math.max(totalFrames - 1, 1);
@@ -457,6 +460,21 @@ const SceneView: React.FC<{
     ? interpolate(localFrame, [totalFrames - FADE_OUT, totalFrames - 1], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'})
     : 0;
 
+  // Hybrid graphic scene: card floats centered on the brand-gradient bg, so the
+  // strong bottom-gradient + left vignette (built for subtitle contrast) are
+  // suppressed — they would muddy the card's lower edge.
+  const isHybridGraphic = Boolean(hybridCardBg && scene.graphic?.image_ref);
+  // Graphic card eases in / out ~0.5s over the (persistent) brand-gradient bg,
+  // so it appears and disappears gradually instead of popping.
+  const CARD_FADE = Math.round(fps * 0.5);
+  const cardOpacity = isHybridGraphic
+    ? interpolate(
+        localFrame,
+        [0, CARD_FADE, totalFrames - CARD_FADE, totalFrames],
+        [0, 1, 1, 0],
+        {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'},
+      )
+    : 1;
   const layoutVariant = sceneIndex % 3;
   const headlineLeft = layoutVariant === 2 ? undefined : 56;
   const headlineRight = layoutVariant === 2 ? 56 : undefined;
@@ -470,15 +488,35 @@ const SceneView: React.FC<{
       {/* Full-bleed background — graphic ChatGPT image (graphic scenes), else
           video clip or photo. Suppressed when the compiled timeline owns the layer. */}
       {hideBackground ? null : scene.graphic?.image_ref ? (
-        <Img
-          src={mediaSrc(scene.graphic.image_ref)}
-          style={{position: 'absolute', width: '100%', height: '100%', objectFit: 'cover'}}
-        />
+        hybridCardBg ? (
+          // Hybrid: fixed brand-gradient bg video full-bleed + the generated card
+          // shrunk, centered, rounded with a soft drop shadow (bg motion shows
+          // around the edges). Kills the "static slideshow" feel of graphic scenes.
+          <>
+            <MediaVideo
+              src={mediaSrc(hybridCardBg)}
+              muted
+              style={{position: 'absolute', width: '100%', height: '100%', objectFit: 'cover'}}
+            />
+            <AbsoluteFill style={{display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: cardOpacity}}>
+              <Img
+                src={mediaSrc(scene.graphic.image_ref)}
+                style={{width: '78%', height: 'auto', objectFit: 'contain', borderRadius: 28, boxShadow: '0 30px 80px rgba(0,0,0,0.45)'}}
+              />
+            </AbsoluteFill>
+          </>
+        ) : (
+          <Img
+            src={mediaSrc(scene.graphic.image_ref)}
+            style={{position: 'absolute', width: '100%', height: '100%', objectFit: 'cover'}}
+          />
+        )
       ) : scene.asset_refs.background.endsWith('.mp4') ? (
-        // OffthreadVideo is preferred over Video for server-side rendering (faster, frame-accurate).
+        // WebCodecs <Media> Video (MediaVideo) — native HW decode, frame-accurate
+        // for server-side rendering (benchmarked vs the old extract path: SSIM 0.987).
         // loop: short Pexels clips (3-30s) repeat to fill the full scene duration.
         // No pan/zoom transform — the video itself has natural motion.
-        <OffthreadVideo
+        <MediaVideo
           src={mediaSrc(scene.asset_refs.background)}
           muted
           style={{
@@ -499,17 +537,23 @@ const SceneView: React.FC<{
         />
       )}
 
-      {/* Bottom gradient — only bottom 40% darkens, top stays natural */}
-      <div style={{
-        position: 'absolute', inset: 0,
-        background: 'linear-gradient(to top, rgba(10,16,13,0.88) 0%, rgba(10,16,13,0.5) 30%, transparent 58%)',
-      }} />
+      {/* Bottom gradient — only bottom 40% darkens, top stays natural.
+          Skipped for hybrid-card scenes (card sits on its own bg). */}
+      {isHybridGraphic ? null : (
+        <div style={{
+          position: 'absolute', inset: 0,
+          background: 'linear-gradient(to top, rgba(10,16,13,0.88) 0%, rgba(10,16,13,0.5) 30%, transparent 58%)',
+        }} />
+      )}
 
-      {/* Left vignette — subtle, helps text contrast */}
-      <div style={{
-        position: 'absolute', inset: 0,
-        background: 'linear-gradient(to right, rgba(10,16,13,0.42) 0%, transparent 52%)',
-      }} />
+      {/* Left vignette — subtle, helps text contrast.
+          Skipped for hybrid-card scenes (card sits on its own bg). */}
+      {isHybridGraphic ? null : (
+        <div style={{
+          position: 'absolute', inset: 0,
+          background: 'linear-gradient(to right, rgba(10,16,13,0.42) 0%, transparent 52%)',
+        }} />
+      )}
 
       {/* Channel name — small, top-left. Hidden by default; opt in via
           branding.show_channel_name_overlay so the opening frame stays clean. */}
@@ -552,9 +596,22 @@ const SceneView: React.FC<{
       }} />
 
       {/* Graphic scenes: the ChatGPT image already has the text baked in (high
-          contrast), so DON'T overlay Remotion text on top — it would duplicate /
-          clash. Non-graphic scenes render the normal headline/subtitle overlay. */}
-      {scene.graphic?.image_ref ? null : (
+          contrast), so DON'T overlay Remotion headline text on top — it would
+          duplicate / clash. But DO show the narration subtitle band on top of every
+          graphic scene EXCEPT the CTA (kept clean). Non-graphic (B-roll) scenes
+          render the normal headline/subtitle overlay. */}
+      {scene.graphic?.image_ref ? (
+        scene.layout !== 'cta' ? (
+          <SubtitleOverlay
+            line={displayLine}
+            activeIndex={activeIndexInPage}
+            fallbackText={scene.on_screen_text || scene.caption || scene.narration}
+            palette={palette}
+            subtitles={subtitles}
+            opacity={captionAlpha}
+          />
+        ) : null
+      ) : (
         <RetentionOverlay
           scene={scene}
           palette={palette}
@@ -593,9 +650,6 @@ export const ChannelVideo: React.FC<RenderProps> = (props) => {
   // background layer (one continuous clip per span). Absent → legacy per-scene
   // background, frame-identical to before.
   const visualSchedule = props.visual_schedule ?? null;
-  // Elena presenter overlay (bottom-right, clear of the subtitle band). Cues are
-  // scene-layer 0-based, so the overlay is shifted by introFrames like the scenes.
-  const elenaCues = props.elena_cues ?? null;
   return (
     <AbsoluteFill style={{backgroundColor: '#0C100D'}}>
       {props.audio.narration ? (
@@ -605,7 +659,7 @@ export const ChannelVideo: React.FC<RenderProps> = (props) => {
       ) : null}
       {introVideoPath && introFrames > 0 ? (
         <Sequence from={0} durationInFrames={introFrames}>
-          <OffthreadVideo
+          <MediaVideo
             src={mediaSrc(introVideoPath)}
             style={{position: 'absolute', width: '100%', height: '100%', objectFit: 'cover'}}
           />
@@ -652,19 +706,14 @@ export const ChannelVideo: React.FC<RenderProps> = (props) => {
               isFirst={i === 0}
               isLast={i === props.scenes.length - 1}
               hideBackground={visualSchedule != null}
+              hybridCardBg={props.branding?.hybrid_card_bg}
             />
           </Sequence>
         );
       })}
-      {/* Elena presenter — above B-roll/graphic, bottom-right, clear of subtitles. */}
-      {elenaCues ? (
-        <Sequence from={introFrames}>
-          <ChannelElenaPresenter elena={elenaCues} />
-        </Sequence>
-      ) : null}
       {/* Persistent logo — ONE continuous top-right overlay spanning every scene,
           mounted once (introFrames → end of scenes) so it never blinks on a scene
-          cut. Sits above the scene layer; clear of Elena (bottom-right). */}
+          cut. Sits above the scene layer (top-right). */}
       {logoPath ? (
         <Sequence from={introFrames} durationInFrames={totalSceneFrames}>
           <LogoWatermark logoPath={logoPath} />
@@ -673,7 +722,7 @@ export const ChannelVideo: React.FC<RenderProps> = (props) => {
       {logoPath && outroFrames > 0 ? (
         outroVideoPath ? (
           <Sequence from={start} durationInFrames={outroFrames}>
-            <OffthreadVideo
+            <MediaVideo
               src={mediaSrc(outroVideoPath)}
               style={{position: 'absolute', width: '100%', height: '100%', objectFit: 'cover'}}
             />

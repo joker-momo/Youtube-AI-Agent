@@ -22,6 +22,15 @@ Priority order when goals conflict:
 4. Technology choices optimized for Apple Silicon M2, when compatible with the
    higher priorities.
 
+## Hard Rules (inviolable -- every agent, no exceptions)
+
+1. NEVER change the Mac's render concurrency (thread count). Always leave
+   `render.concurrency: "auto"` (Remotion decides for the 8-core M2). Do not
+   hardcode a number, do not lower or raise it, do not "optimize" it -- for ANY
+   reason (slow machine, swap, or speed-ups included). Change ONLY with the
+   user's explicit consent. Applies to `configs/*/channel.yaml`
+   (`render.concurrency`) and any concurrency flag passed to Remotion.
+
 ## Reasoning Tier Handshake
 
 The Codex UI Reasoning setting is assumed to be Medium by default.

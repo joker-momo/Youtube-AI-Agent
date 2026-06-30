@@ -4,19 +4,19 @@ import json
 import os
 from pathlib import Path
 
-from video_agent.contracts import EVENT_LOG, ARTIFACT_SEO, ARTIFACT_SCENES, ARTIFACT_SCRIPT
+from video_agent.contracts import ARTIFACT_SCENES, ARTIFACT_SCRIPT, ARTIFACT_SEO, EVENT_LOG
 from video_agent.orchestrator.job_state import load_job
-from video_agent.utils.json_io import read_json, read_yaml
-from video_agent.utils.logging import EventLogger
-from video_agent.runtime.providers import SubprocessAudioTaskProvider
-
 from video_agent.orchestrator.stages._shared import (
+    _AUDIO_SUBPROCESS_ENV,
     StageInputMissingError,
+    _complete_stage,
     _resolve_artifact,
     _run_blocking_with_timeout,
-    _complete_stage,
-    _AUDIO_SUBPROCESS_ENV,
+    dag_mode,
 )
+from video_agent.runtime.providers import SubprocessAudioTaskProvider
+from video_agent.utils.json_io import read_json, read_yaml
+from video_agent.utils.logging import EventLogger
 
 __all__ = [
     "_run_audio_subprocess",
@@ -39,7 +39,7 @@ def _run_audio_subprocess(command: str, job_dir: Path) -> Path:
 
 def run_whisper_timestamps_stage(job_dir: Path) -> Path:
     state = load_job(job_dir)
-    if state.current_stage != "whisper_timestamps":
+    if not dag_mode() and state.current_stage != "whisper_timestamps":
         raise StageInputMissingError(
             f"Cannot run whisper_timestamps stage from current_stage={state.current_stage!r}"
         )
@@ -156,6 +156,7 @@ def _run_whisper_timestamps_stage_inline(job_dir: Path) -> Path:
     import threading
     import time
     import wave
+
     import whisper  # lazy import — heavy dep
 
     scene_doc = read_json(scenes_path)

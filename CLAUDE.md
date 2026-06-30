@@ -24,6 +24,16 @@ Khi hai mục tiêu xung đột, mục tiêu xếp trên LUÔN thắng. Mục ti
 
 ---
 
+# 🔒 HARD RULES (bất khả xâm phạm — mọi agent PHẢI tuân, không ngoại lệ)
+
+1. **KHÔNG BAO GIỜ sửa số luồng render (render concurrency) của máy Mac này.** Luôn để
+   `render.concurrency: "auto"` (Remotion tự quyết theo 8 nhân). Cấm hardcode một con số,
+   cấm hạ/nâng concurrency, cấm "tối ưu" nó — **với BẤT KỲ lý do gì** (kể cả khi máy chậm,
+   swap, hay để tăng tốc). Chỉ được đổi khi **người dùng đồng ý rõ ràng**. Áp dụng cho
+   `configs/*/channel.yaml` (`render.concurrency`) và mọi cờ concurrency truyền vào Remotion.
+
+---
+
 # OpenWolf
 
 @.wolf/OPENWOLF.md

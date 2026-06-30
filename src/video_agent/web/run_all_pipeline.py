@@ -22,6 +22,7 @@ from video_agent.orchestrator.browser_client import (
     BrowserClientError,
     LoginRequiredFromWorker,
 )
+from video_agent.orchestrator.dag import DagScheduler
 from video_agent.orchestrator.stages import (
     StageInputMissingError,
     auto_assets_chatgpt_stage,
@@ -31,7 +32,6 @@ from video_agent.orchestrator.stages import (
     auto_script_stage,
     auto_seo_stage,
     auto_thumbnail_image_stage,
-    run_elena_plan_stage,
     run_graphic_images_stage,
     run_render_continuity_qa_stage,
     run_render_stage,
@@ -40,6 +40,7 @@ from video_agent.orchestrator.stages import (
     run_visual_spans_stage,
     run_whisper_timestamps_stage,
 )
+from video_agent.orchestrator.stages._shared import set_dag_mode
 
 # Legacy auto_shorts_* stages are deprecated and intentionally NOT imported.
 # Shorts are produced by the sequential Shorts Autopilot (video_agent.shorts).
@@ -281,6 +282,10 @@ async def _execute_run_all_locked(
     # Send the role+context+constraints briefing ONCE per tab; each
     # stage then only sends its short task message.
     channel_config = read_yaml(channel_path)
+    # Opt-in parallel DAG: run the post-scenes stages as concurrent resource lanes
+    # (ChatGPT browser ‖ local MPS ‖ cpu). Default off = today's linear path.
+    parallel_dag = bool((channel_config.get("pipeline") or {}).get("parallel_dag"))
+    set_dag_mode(False)  # spine (script/scenes) runs linear; post-scenes re-enables
 
     async def _noop_close() -> None:
         return None
@@ -535,81 +540,136 @@ async def _execute_run_all_locked(
                     "scenes", job_dir, channel_path, chatgpt_fn, qa_fn
                 ),
             )
-        if "visual_spans" in remaining:
-            _check_stop_requested()
-            # Report-only long-form visual-span planning; never touches render.
-            await _record(
-                "visual_spans",
-                run_visual_spans_stage(job_dir, channel_path),
+        if parallel_dag:
+            # Parallel DAG: ChatGPT browser lane ‖ local-MPS/cpu lane run together.
+            # set_dag_mode relaxes the single-current_stage guards (this gather +
+            # the scheduler own ordering). render/qa below run under the same flag.
+            set_dag_mode(True)
+
+            async def _chatgpt_lane() -> None:
+                if "seo" in remaining or "seo_promote" in remaining:
+                    _check_stop_requested()
+                    await _record_gate_and_stop(
+                        "seo_promote",
+                        await auto_seo_stage(job_dir, channel_path, chatgpt_fn),
+                    )
+                if "seo_qa" in remaining:
+                    _check_stop_requested()
+                    await _record(
+                        "seo_qa",
+                        await auto_qa_with_rework("seo", job_dir, channel_path, chatgpt_fn, qa_fn),
+                    )
+                await _close_model_sessions()
+                if "graphic_images" in remaining:
+                    _check_stop_requested()
+                    await _record(
+                        "graphic_images",
+                        await run_graphic_images_stage(job_dir, channel_path, client.generate_image),
+                    )
+                if "thumbnail_image" in remaining:
+                    _check_stop_requested()
+                    await _record_gate_and_stop(
+                        "thumbnail_image",
+                        await auto_thumbnail_image_stage(job_dir, channel_path, client.generate_image),
+                    )
+                if "assets_chatgpt" in remaining:
+                    _check_stop_requested()
+                    await _record(
+                        "assets_chatgpt",
+                        await auto_assets_chatgpt_stage(job_dir, channel_path, client.generate_image),
+                    )
+
+            _local_fns = {
+                "visual_spans": lambda: run_visual_spans_stage(job_dir, channel_path),
+                "whisper_timestamps": lambda: run_whisper_timestamps_stage(job_dir),
+                "visual_schedule": lambda: run_visual_schedule_stage(job_dir, channel_path),
+            }
+
+            async def _run_local(name: str) -> None:
+                _check_stop_requested()
+                out = await asyncio.to_thread(_local_fns[name])
+                await _record(name, out)
+
+            _local_subset = [
+                s
+                for s in (
+                    "visual_spans", "whisper_timestamps", "visual_schedule",
+                )
+                if s in remaining
+            ]
+            await asyncio.gather(
+                _chatgpt_lane(),
+                DagScheduler().run(_local_subset, _run_local),
             )
-        if "seo" in remaining or "seo_promote" in remaining:
-            _check_stop_requested()
-            await _record_gate_and_stop(
-                "seo_promote",
-                await auto_seo_stage(job_dir, channel_path, chatgpt_fn),
-            )
-        if "seo_qa" in remaining:
-            _check_stop_requested()
-            await _record(
-                "seo_qa",
-                await auto_qa_with_rework(
-                    "seo", job_dir, channel_path, chatgpt_fn, qa_fn
-                ),
-            )
-        if any(
-            s in remaining
-            for s in (
-                "graphic_images",
-                "thumbnail_image",
-                "assets_chatgpt",
-                "whisper_timestamps",
-                "render",
-                "review",
-            )
-        ):
-            await _close_model_sessions()
-        if "graphic_images" in remaining:
-            _check_stop_requested()
-            # Generate ChatGPT images for graphic-layout scenes (checklist/warning/
-            # quote/cta). Per-scene failures are non-fatal.
-            await _record(
-                "graphic_images",
-                await run_graphic_images_stage(job_dir, channel_path, client.generate_image),
-            )
-        if "thumbnail_image" in remaining:
-            _check_stop_requested()
-            await _record_gate_and_stop(
-                "thumbnail_image",
-                await auto_thumbnail_image_stage(
-                    job_dir, channel_path, client.generate_image
-                ),
-            )
-        if "assets_chatgpt" in remaining:
-            _check_stop_requested()
-            await _record(
-                "assets_chatgpt",
-                await auto_assets_chatgpt_stage(
-                    job_dir, channel_path, client.generate_image
-                ),
-            )
-        if "whisper_timestamps" in remaining:
-            _check_stop_requested()
-            await _record("whisper_timestamps", run_whisper_timestamps_stage(job_dir))
-        if "visual_schedule" in remaining:
-            _check_stop_requested()
-            # Compile the schema-v2 asset schedule; render consumes it only when
-            # injected into render_props (gated by visual.span_planning.mode).
-            await _record(
-                "visual_schedule",
-                run_visual_schedule_stage(job_dir, channel_path),
-            )
-        if "elena_plan" in remaining:
-            _check_stop_requested()
-            # Compile the Elena presenter cue plan (report-only sidecar).
-            await _record(
-                "elena_plan",
-                run_elena_plan_stage(job_dir, channel_path),
-            )
+        else:
+            if "visual_spans" in remaining:
+                _check_stop_requested()
+                # Report-only long-form visual-span planning; never touches render.
+                await _record(
+                    "visual_spans",
+                    run_visual_spans_stage(job_dir, channel_path),
+                )
+            if "seo" in remaining or "seo_promote" in remaining:
+                _check_stop_requested()
+                await _record_gate_and_stop(
+                    "seo_promote",
+                    await auto_seo_stage(job_dir, channel_path, chatgpt_fn),
+                )
+            if "seo_qa" in remaining:
+                _check_stop_requested()
+                await _record(
+                    "seo_qa",
+                    await auto_qa_with_rework(
+                        "seo", job_dir, channel_path, chatgpt_fn, qa_fn
+                    ),
+                )
+            if any(
+                s in remaining
+                for s in (
+                    "graphic_images",
+                    "thumbnail_image",
+                    "assets_chatgpt",
+                    "whisper_timestamps",
+                    "render",
+                    "review",
+                )
+            ):
+                await _close_model_sessions()
+            if "graphic_images" in remaining:
+                _check_stop_requested()
+                # Generate ChatGPT images for graphic-layout scenes (checklist/warning/
+                # quote/cta). Per-scene failures are non-fatal.
+                await _record(
+                    "graphic_images",
+                    await run_graphic_images_stage(job_dir, channel_path, client.generate_image),
+                )
+            if "thumbnail_image" in remaining:
+                _check_stop_requested()
+                await _record_gate_and_stop(
+                    "thumbnail_image",
+                    await auto_thumbnail_image_stage(
+                        job_dir, channel_path, client.generate_image
+                    ),
+                )
+            if "assets_chatgpt" in remaining:
+                _check_stop_requested()
+                await _record(
+                    "assets_chatgpt",
+                    await auto_assets_chatgpt_stage(
+                        job_dir, channel_path, client.generate_image
+                    ),
+                )
+            if "whisper_timestamps" in remaining:
+                _check_stop_requested()
+                await _record("whisper_timestamps", run_whisper_timestamps_stage(job_dir))
+            if "visual_schedule" in remaining:
+                _check_stop_requested()
+                # Compile the schema-v2 asset schedule; render consumes it only when
+                # injected into render_props (gated by visual.span_planning.mode).
+                await _record(
+                    "visual_schedule",
+                    run_visual_schedule_stage(job_dir, channel_path),
+                )
         if "render" in remaining:
             _check_stop_requested()
             # Full pipeline ends with notify_job_done_with_files; skip per-render notify to avoid duplicates.
@@ -685,6 +745,7 @@ async def _execute_run_all_locked(
         # Always close the persistent tabs so a failure never leaks
         # browser-runtime pages.
         await _close_model_sessions()
+        set_dag_mode(False)  # clear DAG flag so a later single-stage run isn't relaxed
 
     state = load_job(job_dir)
     wall = time.monotonic() - _start_time

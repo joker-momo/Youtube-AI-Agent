@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Callable, Sequence, Awaitable
+from typing import Awaitable, Callable, Sequence
 
-from video_agent.contracts import EVENT_LOG, ARTIFACT_SCRIPT, ARTIFACT_SCENES
+from video_agent.contracts import ARTIFACT_SCENES, ARTIFACT_SCRIPT, EVENT_LOG
 from video_agent.operator import (
     _chatgpt_scenes_batch_prompt,
     _chatgpt_scenes_plan_prompt,
@@ -14,28 +14,29 @@ from video_agent.operator import (
 from video_agent.operator_shards import (
     ShardValidationError,
     extract_json_envelope,
-    merge_scenes_qa_batches,
     merge_scene_batches,
+    merge_scenes_qa_batches,
     save_envelope,
     validate_envelope,
     validate_scenes_batch,
     validate_scenes_plan,
 )
 from video_agent.orchestrator.job_state import load_job
-from video_agent.utils.json_io import read_json, read_yaml, write_json as _write_json
-from video_agent.utils.logging import EventLogger
-from video_agent.storage.atomic import atomic_write_text
-
 from video_agent.orchestrator.stages._shared import (
+    SCENES_BATCHES_DIR,
+    SCENES_PLAN_PATH,
+    SCENES_PROMPT_PATH,
+    SCENES_QA_BATCHES_DIR,
     StageInputMissingError,
+    _complete_stage,
     _resolve_artifact,
     _start_stage,
-    _complete_stage,
-    SCENES_PROMPT_PATH,
-    SCENES_PLAN_PATH,
-    SCENES_BATCHES_DIR,
-    SCENES_QA_BATCHES_DIR,
+    dag_mode,
 )
+from video_agent.storage.atomic import atomic_write_text
+from video_agent.utils.json_io import read_json, read_yaml
+from video_agent.utils.json_io import write_json as _write_json
+from video_agent.utils.logging import EventLogger
 
 SessionFn = Callable[[Sequence[str]], Awaitable[str]]
 
@@ -439,7 +440,7 @@ async def auto_scenes_qa_stage_sharded(
     session_fn: SessionFn,
 ) -> Path:
     state = load_job(job_dir)
-    if state.current_stage != "scenes_qa":
+    if not dag_mode() and state.current_stage != "scenes_qa":
         raise StageInputMissingError(
             f"Cannot auto-run sharded scenes_qa from current_stage={state.current_stage!r}"
         )

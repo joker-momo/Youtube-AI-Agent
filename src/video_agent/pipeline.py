@@ -28,7 +28,6 @@ from video_agent.stages.render import render_with_remotion
 from video_agent.stages.scene import run_scene_stage
 from video_agent.stages.script import run_script_stage
 from video_agent.stages.thumbnail import create_thumbnail_and_seo
-from video_agent.stages.visual_contact_sheet import create_visual_contact_sheet
 from video_agent.utils.json_io import read_json, read_yaml, write_json
 from video_agent.utils.logging import EventLogger
 from video_agent.utils.paths import create_job_dir
@@ -196,6 +195,17 @@ def _prepare_branding(channel_config: dict) -> dict:
             dest = dest_dir / outro_video_source.name
             materialize_media(outro_video_source, dest)
             outro_video_public = f"branding/{channel_id}/{outro_video_source.name}"
+    # Hybrid graphic cards: graphic scenes render the generated card shrunk &
+    # centered over a fixed brand-gradient background video (kills the static
+    # "slideshow" feel of consecutive graphic scenes). Enabled via
+    # ``visual.hybrid_card.enabled``; bg path defaults to the bundled brand
+    # gradient, override with ``visual.hybrid_card.bg``.
+    hybrid_cfg = (channel_config.get("visual") or {}).get("hybrid_card") or {}
+    hybrid_card_bg = (
+        str(hybrid_cfg.get("bg") or "assets/brand_bg_soft.mp4")
+        if hybrid_cfg.get("enabled")
+        else None
+    )
     return {
         "logo_path": logo_public,
         "intro_video_path": intro_video_public,
@@ -208,6 +218,9 @@ def _prepare_branding(channel_config: dict) -> dict:
         # ``branding.show_channel_name_overlay: true`` when a one-off cut
         # needs the brand label visible.
         "show_channel_name_overlay": bool(branding_cfg.get("show_channel_name_overlay", False)),
+        # Hybrid graphic cards over a fixed brand-gradient bg (visual.hybrid_card).
+        # None → graphic cards render full-bleed (legacy).
+        "hybrid_card_bg": hybrid_card_bg,
     }
 
 
@@ -217,15 +230,32 @@ def _load_style(channel_config: dict) -> dict:
 
 def _is_key_scene(scene: dict) -> bool:
     layout = scene.get("layout") or ""
-    if layout in {"short_hook", "short_cta", "graphic_label_callout", "graphic_comparison", "graphic_checklist"}:
+    if layout in {
+        "short_hook",
+        "short_cta",
+        "graphic_label_callout",
+        "graphic_comparison",
+        "graphic_checklist",
+    }:
         return True
     if scene.get("retention_function") in {"hook", "proof", "payoff", "cta"}:
         return True
     prompt = (scene.get("visual_prompt") or "").lower()
-    key_terms = {"package", "label", "ingredients", "fibra", "harina", "compare", "turn", "rotate", "back label"}
+    key_terms = {
+        "package",
+        "label",
+        "ingredients",
+        "fibra",
+        "harina",
+        "compare",
+        "turn",
+        "rotate",
+        "back label",
+    }
     if any(term in prompt for term in key_terms):
         return True
     return False
+
 
 def _scene_visual_issues(scene: dict) -> list[dict]:
     issues = []
@@ -233,14 +263,22 @@ def _scene_visual_issues(scene: dict) -> list[dict]:
     provider = scene.get("provider")
     selection = scene.get("selection") or {}
     score = selection.get("score")
-    asset_key = f"{provider}:{scene.get('provider_asset_id')}" if provider and scene.get("provider_asset_id") else None
+    asset_key = (
+        f"{provider}:{scene.get('provider_asset_id')}"
+        if provider and scene.get("provider_asset_id")
+        else None
+    )
 
     if source == "generated_placeholder":
+        # HARD GATE (user rule): never ship a video with a blank/placeholder scene.
+        # A placeholder = no real asset was found → ERROR so _validate_visual_review
+        # blocks the render. Fix the asset (re-fetch) and re-render; do not render
+        # until EVERY scene has a real asset.
         issues.append(
             {
                 "type": "PLACEHOLDER_USED",
-                "severity": "warning",
-                "message": "Scene fell back to a generated placeholder image.",
+                "severity": "error",
+                "message": "Scene fell back to a generated placeholder (no real asset) — render blocked.",
             }
         )
         for error in scene.get("stock_errors") or []:
@@ -278,9 +316,11 @@ def _scene_visual_issues(scene: dict) -> list[dict]:
                 "message": "Stock asset has no selection metadata.",
             }
         )
-        
-    asset_match_status = selection.get("asset_match_status") or ("weak_match" if selection.get("weak_match") else "unknown")
-    
+
+    asset_match_status = selection.get("asset_match_status") or (
+        "weak_match" if selection.get("weak_match") else "unknown"
+    )
+
     # Skip match-quality checks for non-stock sources (local_directory, generated_placeholder
     # without stock API, graphic_fallback). These sources don't involve stock search matching.
     if source in {"local_directory", "generated_placeholder"} and not selection:
@@ -291,7 +331,7 @@ def _scene_visual_issues(scene: dict) -> list[dict]:
         if asset_key:
             scene["asset_key"] = asset_key
         return issues
-    
+
     # Detailed Context for Errors
     context_str = f"Scene ID: {scene.get('scene_id')} | Layout: '{scene.get('layout')}' | Prompt: '{scene.get('visual_prompt')}'"
     if selection:
@@ -300,7 +340,7 @@ def _scene_visual_issues(scene: dict) -> list[dict]:
             context_str += f" | Failed Terms: {selection.get('failed_required_terms')}"
         if selection.get("fallback_reason"):
             context_str += f" | Fallback Reason: {selection.get('fallback_reason')}"
-            
+
     if _is_key_scene(scene):
         if asset_match_status == "weak_match":
             # WARNING, not error. A "weak" match is usually a query-ranked Pexels
@@ -309,8 +349,8 @@ def _scene_visual_issues(scene: dict) -> list[dict]:
             # for the right demographic. Hard-failing the WHOLE render over it is
             # worse than the placeholder gradient that critical scenes already fall
             # back to, so downgrade to a warning and let the render proceed with the
-            # real asset. A genuine NO_SAFE_VISUAL_ASSET (no asset at all) stays an
-            # error below.
+            # real asset. Only a generated_placeholder (truly blank) blocks the render
+            # (PLACEHOLDER_USED=error); a weak but real match is allowed.
             issues.append(
                 {
                     "type": "WEAK_MATCH_ON_CRITICAL_SCENE",
@@ -319,11 +359,15 @@ def _scene_visual_issues(scene: dict) -> list[dict]:
                 }
             )
         elif asset_match_status in {"no_match", "unknown", "", None}:
+            # A weak/low match is still REAL footage (not blank), so it is allowed
+            # (warning). The genuinely-blank case is a generated_placeholder, flagged
+            # PLACEHOLDER_USED=error above, which blocks the render. So this match-
+            # quality flag must NOT block (would wrongly reject real-but-weak scenes).
             issues.append(
                 {
                     "type": "NO_SAFE_VISUAL_ASSET",
-                    "severity": "error",
-                    "message": f"No safe visual asset could be found for key scene. {context_str}",
+                    "severity": "warning",
+                    "message": f"Weak/low visual match on key scene (real footage kept). {context_str}",
                 }
             )
     else:
@@ -345,7 +389,7 @@ def _scene_visual_issues(scene: dict) -> list[dict]:
                         "message": f"Weak match fallback accepted for non-critical scene. {context_str}",
                     }
                 )
-            
+
     if asset_key:
         scene["asset_key"] = asset_key
     return issues
@@ -361,6 +405,7 @@ def _is_contradictory(scene: dict, asset_selection: dict) -> bool:
         if "slice" in tags or "cutting" in tags:
             return True
     return False
+
 
 def _add_visual_qa(review: dict) -> dict:
     seen_assets = {}
@@ -425,12 +470,16 @@ def _write_visual_review(job_dir: Path, job_id: str, assets: dict, scene_doc: di
     for scene in scenes:
         summary["by_source"][scene["source"]] = summary["by_source"].get(scene["source"], 0) + 1
         if scene["provider"]:
-            summary["by_provider"][scene["provider"]] = summary["by_provider"].get(scene["provider"], 0) + 1
+            summary["by_provider"][scene["provider"]] = (
+                summary["by_provider"].get(scene["provider"], 0) + 1
+            )
         selection = scene.get("selection") or {}
         if isinstance(selection.get("score"), (int, float)):
             selection_scores.append(selection["score"])
         for provider in selection.get("searched_providers") or []:
-            summary["searched_providers"][provider] = summary["searched_providers"].get(provider, 0) + 1
+            summary["searched_providers"][provider] = (
+                summary["searched_providers"].get(provider, 0) + 1
+            )
     if selection_scores:
         summary["selection_scores"] = {
             "min": min(selection_scores),
@@ -451,6 +500,7 @@ def _validate_visual_review(visual_review: dict) -> None:
     )
     if has_critical_error:
         from video_agent.orchestrator.stages import StageInputMissingError
+
         raise StageInputMissingError(
             "QA validation failed: Weak match on critical scenes (hook/CTA). "
             "Please check visual_review.json for details."
@@ -476,7 +526,13 @@ def _write_report(
         asset_id = scene.get("provider_asset_id") or "-"
         source = scene.get("source") or "-"
         issue_count = len(scene.get("qa", {}).get("issues", []))
-        suffix = f" ({issue_count} issue)" if issue_count == 1 else f" ({issue_count} issues)" if issue_count else ""
+        suffix = (
+            f" ({issue_count} issue)"
+            if issue_count == 1
+            else f" ({issue_count} issues)"
+            if issue_count
+            else ""
+        )
         visual_lines.append(f"- {scene['scene_id']}: {source} {provider}/{asset_id}{suffix}")
 
     seo_path = _resolve_json_file(job_dir, "seo.json")
@@ -486,20 +542,12 @@ def _write_report(
             seo_data = read_json(seo_path)
             comments = seo_data.get("suggested_pinned_comments")
             if isinstance(comments, str):
-                pinned_comment_lines.extend([
-                    "",
-                    "## Suggested Pinned Comment",
-                    comments
-                ])
+                pinned_comment_lines.extend(["", "## Suggested Pinned Comment", comments])
             elif isinstance(comments, dict):
                 eb = comments.get("engagement_boosting") or comments.get("engage") or ""
                 sg = comments.get("subscriber_growth") or comments.get("subscriber") or ""
                 merged = f"{eb}\n\n{sg}".strip()
-                pinned_comment_lines.extend([
-                    "",
-                    "## Suggested Pinned Comment",
-                    merged or "n/a"
-                ])
+                pinned_comment_lines.extend(["", "## Suggested Pinned Comment", merged or "n/a"])
         except Exception:
             pass
 
@@ -540,9 +588,7 @@ def _read_sidecar_json(job_dir: Path, name: str) -> dict | None:
     return None
 
 
-def _recompile_asset_schedule(
-    job_dir: Path, scenes: list[dict], fps: int
-) -> dict | None:
+def _recompile_asset_schedule(job_dir: Path, scenes: list[dict], fps: int) -> dict | None:
     """Recompile the asset schedule from the FINAL post-TTS scene durations.
 
     The ``visual_schedule`` stage compiles against scenes.json *before* render-time
@@ -568,33 +614,6 @@ def _recompile_asset_schedule(
     except Exception as exc:  # noqa: BLE001 - fall back to on-disk artifact
         logging.getLogger(__name__).warning(
             "Visual schedule recompile failed (%s); using on-disk artifact", exc
-        )
-        return None
-
-
-def _recompile_elena_cues(
-    job_dir: Path, scenes: list[dict], fps: int, channel_config: dict
-) -> dict | None:
-    """Recompile Elena cues from final durations (same staleness as the schedule).
-
-    Only recompiles when the ``elena_plan`` stage already produced ``elena_cues.json``
-    (i.e. Elena is part of this job). Falls back to ``None`` otherwise / on error.
-    """
-    if _read_sidecar_json(job_dir, "elena_cues.json") is None:
-        return None
-    try:
-        from video_agent.visual import build_elena_cues
-
-        return build_elena_cues(
-            {"scenes": scenes},
-            channel_config or {},
-            fps,
-            job_id=job_dir.name,
-            mode="report_only",
-        )
-    except Exception as exc:  # noqa: BLE001 - fall back to on-disk artifact
-        logging.getLogger(__name__).warning(
-            "Elena cue recompile failed (%s); using on-disk artifact", exc
         )
         return None
 
@@ -643,9 +662,7 @@ def _build_render_props(
     duration math lives in ONE place instead of being edited in two call sites.
     """
     scenes = scene_doc["scenes"]
-    scene_duration_sec = round(
-        sum(float(s.get("duration_sec") or 0.0) for s in (scenes or [])), 1
-    )
+    scene_duration_sec = round(sum(float(s.get("duration_sec") or 0.0) for s in (scenes or [])), 1)
     render = dict(render_base) | {
         "duration_sec": scene_duration_sec + branding["intro_sec"] + branding["outro_sec"]
     }
@@ -675,7 +692,7 @@ def _attach_enforced_visual_schedule(
 
     In ``report_only`` / ``disabled`` (the default) the schedule is omitted, so the
     renderer keeps the legacy per-scene background — frame-identical to before this
-    feature. When enforced, the schedule and Elena cues are recompiled from the
+    feature. When enforced, the schedule is recompiled from the
     final post-TTS scene durations in ``render_props`` (the on-disk sidecars are
     stale — compiled before render-time duration sync); callers without ``scenes``
     fall back to the on-disk artifacts.
@@ -703,54 +720,6 @@ def _attach_enforced_visual_schedule(
     if schedule is not None:
         render_props["visual_schedule"] = schedule
 
-    cues = (
-        _recompile_elena_cues(job_dir, scenes, fps, channel_config) if scenes else None
-    )
-    if cues is None:
-        cues = _read_sidecar_json(job_dir, "elena_cues.json")
-    if cues is not None:
-        render_props["elena_cues"] = cues
-
-
-def _elena_overlay_enabled(channel_config: dict) -> bool:
-    """Whether the Elena brand overlay is explicitly enabled for this channel.
-
-    Elena is an independent brand-support layer, NOT part of the B-roll/background
-    schedule, so it mounts on an opt-in flag regardless of the background
-    span-planning mode. Default off → channels that do not set it render
-    byte-identical to before.
-    """
-    elena = ((channel_config or {}).get("visual") or {}).get("elena") or {}
-    return bool(elena.get("enabled"))
-
-
-def _attach_elena_cues(
-    render_props: dict, job_dir: Path, channel_config: dict
-) -> None:
-    """Inject Elena presenter cues into ``render_props`` independent of span mode.
-
-    Elena is a brand overlay, so it must be mountable without flipping background
-    span planning to ``enforced``. Runs only when ``visual.elena.enabled`` is set,
-    never for Short jobs (they own their render_props via ``video_agent.shorts``),
-    and never double-injects when the enforced schedule path already attached cues.
-    Cues are recompiled from the FINAL post-TTS scene durations in ``render_props``
-    (falling back to the on-disk ``elena_cues.json`` sidecar), matching the
-    enforced-path staleness fix.
-    """
-    if "elena_cues" in render_props:
-        return  # the enforced schedule path already attached cues
-    if _is_short_job_dir(job_dir, channel_config):
-        return
-    if not _elena_overlay_enabled(channel_config):
-        return
-
-    scenes = render_props.get("scenes")
-    fps = int(((channel_config or {}).get("render") or {}).get("fps") or 30)
-    cues = _recompile_elena_cues(job_dir, scenes, fps, channel_config) if scenes else None
-    if cues is None:
-        cues = _read_sidecar_json(job_dir, "elena_cues.json")
-    if cues is not None:
-        render_props["elena_cues"] = cues
 
 
 def run_pipeline(options: PipelineOptions) -> PipelineResult:
@@ -770,7 +739,10 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
     provider = MockProvider()
     style = _load_style(channel_config)
 
-    logger.log("JOB_STARTED", {"job_id": job_id, "channel_id": channel_config["channel"]["id"], "cost_usd": 0})
+    logger.log(
+        "JOB_STARTED",
+        {"job_id": job_id, "channel_id": channel_config["channel"]["id"], "cost_usd": 0},
+    )
     script = run_script_stage(provider, channel_config, idea, job_id, job_dir)
     validate_json(script, root / "schemas/script.schema.json")
     logger.log("SCRIPTED", {"job_id": job_id, "cost_usd": 0})
@@ -784,8 +756,7 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
         style,
         scene_doc,
         visual_config=channel_config.get("visuals"),
-        tts_config=(channel_config.get("tts") or {})
-        | {"music": channel_config.get("music") or {}},
+        tts_config=(channel_config.get("tts") or {}) | {"music": channel_config.get("music") or {}},
         channel_id=channel_config["channel"]["id"],
     )
     seo = create_thumbnail_and_seo(provider, channel_config, style, idea, job_dir)
@@ -805,11 +776,9 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
         include_duration_in_frames=True,
     )
     _attach_enforced_visual_schedule(render_props, job_dir, channel_config)
-    _attach_elena_cues(render_props, job_dir, channel_config)
     write_json(job_dir / ARTIFACT_RENDER_PROPS, render_props)
     validate_json(render_props, root / "schemas/render-props.schema.json")
     visual_review = _write_visual_review(job_dir, job_id, assets, scene_doc)
-    create_visual_contact_sheet(job_dir, visual_review)
     _validate_visual_review(visual_review)
 
     video_path = None
@@ -818,13 +787,14 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
         render_with_remotion(
             job_dir / ARTIFACT_RENDER_PROPS,
             video_path,
-            job_dir / "thumbnail.jpg",
             stop_request_path=options.stop_request_path,
             notify_telegram=options.notify_telegram,
         )
         logger.log("RENDERED", {"job_id": job_id, "video_path": str(video_path), "cost_usd": 0})
 
-    report_path = _write_report(job_dir, job_id, channel_config, idea, options.render, visual_review)
+    report_path = _write_report(
+        job_dir, job_id, channel_config, idea, options.render, visual_review
+    )
     logger.log("JOB_COMPLETED", {"job_id": job_id, "cost_usd": 0})
     return PipelineResult(
         job_id=job_id,
@@ -855,7 +825,11 @@ def _warn_if_timeline_exceeds_audio(
             "Duration sync (%s): scene timeline %.2fs exceeds measured narration "
             "%.2fs by %.2fs after the 3.0s min-scene floor on %d scenes — trailing "
             "dead air; reduce scene count or lengthen narration",
-            strategy, timeline, total_audio, timeline - total_audio, len(scenes),
+            strategy,
+            timeline,
+            total_audio,
+            timeline - total_audio,
+            len(scenes),
         )
         return True
     return False
@@ -881,6 +855,7 @@ def _sync_scene_durations_from_audio(job_dir: Path, scene_doc: dict) -> None:
     last frame doesn't cut off mid-sentence.
     """
     import logging
+
     log = logging.getLogger(__name__)
 
     scenes = scene_doc.get("scenes") or []
@@ -894,6 +869,7 @@ def _sync_scene_durations_from_audio(job_dir: Path, scene_doc: dict) -> None:
     if whisper_path.exists():
         try:
             from video_agent.utils.json_io import read_json as _rj
+
             w_data = _rj(whisper_path)
             w_scenes = w_data.get("scenes") or []
             offsets = {s["scene_id"]: float(s["audio_offset_sec"]) for s in w_scenes}
@@ -905,6 +881,7 @@ def _sync_scene_durations_from_audio(job_dir: Path, scene_doc: dict) -> None:
                 if p.exists() and p.stat().st_size > 0:
                     try:
                         import soundfile as sf
+
                         info = sf.info(str(p))
                         total_audio = float(info.duration)
                         break
@@ -934,9 +911,7 @@ def _sync_scene_durations_from_audio(job_dir: Path, scene_doc: dict) -> None:
                         if idx == last_idx:
                             dur += TAIL_PAD_SEC
                         scene["duration_sec"] = round(max(3.0, dur), 3)
-                    _warn_if_timeline_exceeds_audio(
-                        log, scenes, total_audio, strategy="whisper"
-                    )
+                    _warn_if_timeline_exceeds_audio(log, scenes, total_audio, strategy="whisper")
                     scene_doc["total_duration_sec"] = int(
                         round(sum(float(s["duration_sec"]) for s in scenes))
                     )
@@ -955,6 +930,7 @@ def _sync_scene_durations_from_audio(job_dir: Path, scene_doc: dict) -> None:
         if p.exists() and p.stat().st_size > 0:
             try:
                 import soundfile as sf
+
                 info = sf.info(str(p))
                 total_audio = float(info.duration)
                 break
@@ -998,10 +974,14 @@ def _should_prepare_audio_in_subprocess(job_dir: Path, channel_config: dict) -> 
 def _is_short_job_dir(job_dir: Path, channel_config: dict | None = None) -> bool:
     if job_dir.parent.name == "shorts":
         return True
-    if (job_dir / "json" / "short_render_props.json").exists() or (job_dir / "short_render_props.json").exists():
+    if (job_dir / "json" / "short_render_props.json").exists() or (
+        job_dir / "short_render_props.json"
+    ).exists():
         return True
     try:
-        render_resolution = str(((channel_config or {}).get("render") or {}).get("resolution") or "")
+        render_resolution = str(
+            ((channel_config or {}).get("render") or {}).get("resolution") or ""
+        )
         w_str, h_str = render_resolution.lower().split("x", 1)
         return int(h_str) > int(w_str)
     except (ValueError, AttributeError):
@@ -1033,7 +1013,9 @@ def _should_use_prepared_short(*, prepared_short: bool, is_short_job: bool, job_
 
 
 def _scene_duration_sum(scene_doc: dict) -> float:
-    return round(sum(float(scene.get("duration_sec") or 0.0) for scene in (scene_doc.get("scenes") or [])), 1)
+    return round(
+        sum(float(scene.get("duration_sec") or 0.0) for scene in (scene_doc.get("scenes") or [])), 1
+    )
 
 
 def _snapshot_scene_durations(scene_doc: dict) -> dict[str, float]:
@@ -1076,7 +1058,9 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
     if options.require_operator_qa:
         assert_operator_qa_passed(job_dir)
 
-    logger.log("OPERATOR_RENDER_STARTED", {"job_id": job_id, "channel_id": channel_config["channel"]["id"]})
+    logger.log(
+        "OPERATOR_RENDER_STARTED", {"job_id": job_id, "channel_id": channel_config["channel"]["id"]}
+    )
 
     # Merge Whisper word timestamps into scene_doc if available
     whisper_path = _resolve_json_file(job_dir, "whisper_timestamps.json")
@@ -1121,7 +1105,6 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
         validate_json(render_props, root / "schemas/render-props.schema.json")
 
         visual_review = _write_visual_review(job_dir, job_id, assets_manifest, scene_doc)
-        create_visual_contact_sheet(job_dir, visual_review)
         _validate_visual_review(visual_review)
 
         video_path = None
@@ -1130,14 +1113,15 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
             render_with_remotion(
                 job_dir / ARTIFACT_RENDER_PROPS,
                 video_path,
-                job_dir / "thumbnail.jpg",
                 stop_request_path=options.stop_request_path,
                 notify_telegram=options.notify_telegram,
             )
             logger.log("RENDERED", {"job_id": job_id, "video_path": str(video_path), "cost_usd": 0})
 
         idea = {"topic": seo.get("title") or job_id}
-        report_path = _write_report(job_dir, job_id, channel_config, idea, options.render, visual_review)
+        report_path = _write_report(
+            job_dir, job_id, channel_config, idea, options.render, visual_review
+        )
         write_operator_review(job_dir)
         logger.log("OPERATOR_RENDER_COMPLETED", {"job_id": job_id, "cost_usd": 0})
         return PipelineResult(
@@ -1170,9 +1154,9 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
     # override in shorts/audio.py. Without this, Shorts re-fetch landscape
     # Pexels clips here and overwrite the portrait ones from the TTS stage.
     visual_config = dict(channel_config.get("visuals") or {})
-    if is_short_job and (channel_config.get("shorts") or {}).get(
-        "source", {}
-    ).get("prefer_vertical_assets", True):
+    if is_short_job and (channel_config.get("shorts") or {}).get("source", {}).get(
+        "prefer_vertical_assets", True
+    ):
         visual_config["orientation"] = "portrait"
 
     assets = prepare_assets(
@@ -1180,8 +1164,7 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
         style,
         scene_doc,
         visual_config=visual_config,
-        tts_config=(channel_config.get("tts") or {})
-        | {"music": channel_config.get("music") or {}},
+        tts_config=(channel_config.get("tts") or {}) | {"music": channel_config.get("music") or {}},
         channel_id=channel_config["channel"]["id"],
     )
     if is_short_job:
@@ -1215,11 +1198,9 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
         include_duration_in_frames=not is_short_job,
     )
     _attach_enforced_visual_schedule(render_props, job_dir, channel_config)
-    _attach_elena_cues(render_props, job_dir, channel_config)
     write_json(job_dir / ARTIFACT_RENDER_PROPS, render_props)
     validate_json(render_props, root / "schemas/render-props.schema.json")
     visual_review = _write_visual_review(job_dir, job_id, assets, scene_doc)
-    create_visual_contact_sheet(job_dir, visual_review)
     _validate_visual_review(visual_review)
 
     video_path = None
@@ -1228,14 +1209,15 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
         render_with_remotion(
             job_dir / ARTIFACT_RENDER_PROPS,
             video_path,
-            job_dir / "thumbnail.jpg",
             stop_request_path=options.stop_request_path,
             notify_telegram=options.notify_telegram,
         )
         logger.log("RENDERED", {"job_id": job_id, "video_path": str(video_path), "cost_usd": 0})
 
     idea = {"topic": seo.get("title") or job_id}
-    report_path = _write_report(job_dir, job_id, channel_config, idea, options.render, visual_review)
+    report_path = _write_report(
+        job_dir, job_id, channel_config, idea, options.render, visual_review
+    )
     write_operator_review(job_dir)
     logger.log("OPERATOR_RENDER_COMPLETED", {"job_id": job_id, "cost_usd": 0})
     return PipelineResult(

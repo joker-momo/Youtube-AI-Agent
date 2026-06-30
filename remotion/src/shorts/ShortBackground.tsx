@@ -12,7 +12,8 @@
  * Shorts prompt explicitly forbids and that tanks 45+ retention.
  */
 import React from 'react';
-import {AbsoluteFill, Img, OffthreadVideo, staticFile, useCurrentFrame, interpolate, Easing} from 'remotion';
+import {AbsoluteFill, Img, staticFile, useCurrentFrame, interpolate, Easing} from 'remotion';
+import {Video as MediaVideo} from '@remotion/media';
 import {SHORT_OVERLAYS, OverlayKey} from './ShortLayoutConstants';
 import type {CropPlan} from '../render-props';
 
@@ -138,7 +139,7 @@ export const ShortBackground: React.FC<ShortBackgroundProps> = ({
       {resolved ? (
         <AbsoluteFill style={{filter: 'blur(40px) brightness(0.55)', transform: 'scale(1.15)'}}>
           {actualKind === 'video' ? (
-            <OffthreadVideo src={resolved} style={{width: '100%', height: '100%', objectFit: 'cover'}} muted />
+            <MediaVideo src={resolved} style={{width: '100%', height: '100%', objectFit: 'cover'}} muted />
           ) : (
             <Img src={resolved} style={{width: '100%', height: '100%', objectFit: 'cover'}} />
           )}
@@ -149,7 +150,7 @@ export const ShortBackground: React.FC<ShortBackgroundProps> = ({
       {resolved ? (
         <AbsoluteFill style={{transform: mediaTransform, transformOrigin: 'center center'}}>
           {actualKind === 'video' ? (
-            <OffthreadVideo src={resolved} style={{width: '100%', height: '100%', objectFit: 'cover'}} muted />
+            <MediaVideo src={resolved} style={{width: '100%', height: '100%', objectFit: 'cover'}} muted />
           ) : (
             <Img src={resolved} style={{width: '100%', height: '100%', objectFit: 'cover'}} />
           )}

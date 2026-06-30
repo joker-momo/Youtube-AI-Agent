@@ -25,9 +25,10 @@ from video_agent.orchestrator.stages._shared import (
     _complete_stage,
     _resolve_artifact,
     _start_stage,
+    dag_mode,
 )
 from video_agent.storage.atomic import atomic_write_json
-from video_agent.utils.json_io import read_json
+from video_agent.utils.json_io import read_json, read_yaml
 from video_agent.utils.logging import EventLogger
 from video_agent.visual.spans import GRAPHIC_LAYOUTS
 
@@ -91,6 +92,18 @@ def _load_style_dna(channel_path: Path | None) -> dict[str, Any]:
     return _DEFAULT_STYLE
 
 
+def _load_channel_name(channel_path: Path | None) -> str:
+    """Channel display name from channel.yaml (``channel.name``). Baked into CTA
+    card images so viewers see the exact channel to subscribe to."""
+    if channel_path is None:
+        return ""
+    try:
+        cfg = read_yaml(Path(channel_path))
+        return str(((cfg or {}).get("channel") or {}).get("name") or "").strip()
+    except Exception:
+        return ""
+
+
 def _brand_style(style: dict[str, Any]) -> str:
     """A brand-style directive (palette hex + mood + layout) so ChatGPT renders the
     card ON-brand — warm editorial, not the generic navy/white/yellow clickbait look."""
@@ -119,7 +132,9 @@ _CARD_KIND = {
 }
 
 
-def _graphic_prompt(scene: dict[str, Any], font: str = "Manrope", brand: str = "") -> str:
+def _graphic_prompt(
+    scene: dict[str, Any], font: str = "Manrope", brand: str = "", channel_name: str = ""
+) -> str:
     g = scene.get("graphic")
     graphic = g if isinstance(g, dict) else {}
     visual = str(graphic.get("prompt") or scene.get("visual_prompt") or "").strip()
@@ -163,12 +178,12 @@ def _graphic_prompt(scene: dict[str, Any], font: str = "Manrope", brand: str = "
             "never faint or washed out. Spell everything exactly with correct Spanish accents; "
             "add no other text."
         )
-        if layout == "hook":
-            # The hook keeps a LARGE circular Elena presenter overlay bottom-right;
-            # keep that corner calm so the overlay never covers key text/faces.
+        if layout == "cta" and channel_name:
+            # The final CTA card must show the exact channel name so viewers know
+            # which channel to subscribe to (smaller than the heading, near the CTA).
             parts.append(
-                "Keep the lower-right ~30% of the frame visually calm (no key text or faces "
-                "there) — a circular presenter overlay sits in that corner."
+                f'Render the channel name "{channel_name}" clearly and correctly spelled '
+                "near the call-to-action (smaller than the heading), exact accents, no other text."
             )
     return " ".join(parts).strip() or title or visual
 
@@ -201,7 +216,7 @@ async def run_graphic_images_stage(job_dir: Path, channel_path: Path | None, ima
     pipeline never halts on a single image error.
     """
     state = load_job(job_dir)
-    if state.current_stage != _STAGE:
+    if not dag_mode() and state.current_stage != _STAGE:
         raise StageInputMissingError(
             f"Cannot run {_STAGE} stage from current_stage={state.current_stage!r}"
         )
@@ -217,6 +232,7 @@ async def run_graphic_images_stage(job_dir: Path, channel_path: Path | None, ima
     style = _load_style_dna(channel_path)
     font = str((style.get("typography") or {}).get("headline") or "Manrope").strip() or "Manrope"
     brand = _brand_style(style)
+    channel_name = _load_channel_name(channel_path)
 
     generated = 0
     failed = 0
@@ -224,7 +240,7 @@ async def run_graphic_images_stage(job_dir: Path, channel_path: Path | None, ima
         if not _wants_graphic(scene):
             continue
         scene_id = str(scene.get("id") or "")
-        prompt = _graphic_prompt(scene, font, brand)
+        prompt = _graphic_prompt(scene, font, brand, channel_name)
         if not scene_id or not prompt:
             failed += 1
             logger.log("SCENE_GRAPHIC_SKIPPED", {"scene_id": scene_id, "reason": "no_prompt"})

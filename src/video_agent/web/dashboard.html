@@ -1293,7 +1293,12 @@ function renderJobsList(jobs) {
       </div>
       <div class="job-stage">
         <span class="state-dot ${state}"></span>
-        <span>${escapeHtml(STAGE_LABEL[j.current_stage] || j.current_stage || 'pending')}</span>
+        <span>${escapeHtml((() => {
+          const ip = j.in_progress || [];
+          if (ip.length > 1) return ip.map(s => STAGE_LABEL[s] || s).join('  ‖  ');
+          if (ip.length === 1) return STAGE_LABEL[ip[0]] || ip[0];
+          return STAGE_LABEL[j.current_stage] || j.current_stage || 'pending';
+        })())}</span>
       </div>
       <div class="job-meta">
         <span>${escapeHtml(j.channel_id || '-')}</span>
@@ -1753,7 +1758,9 @@ function startRenderProgressPolling(jobId) {
       // state instead of a frozen/stale percent so the bar is never misleading.
       const preparing = !(p.frame > 0 && p.total_frames > 0);
       const labelTxt = preparing ? 'Preparing render…' : 'Rendering…';
-      const metaTxt = preparing ? 'Fetching B-roll & bundling…' : metaStr;
+      const metaTxt = preparing
+        ? (p.prepare_stage ? `Preparing: ${p.prepare_stage}` : 'Fetching B-roll & bundling…')
+        : metaStr;
 
       // Save into global cache FIRST — so DOM rebuild in fetchTimeline reads this value
       RENDER_PROGRESS_CACHE = { pct: preparing ? 0 : (p.percent || 0), meta: metaTxt, eta: preparing ? '' : (p.eta || ''), label: labelTxt, preparing };

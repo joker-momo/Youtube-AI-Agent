@@ -6,22 +6,23 @@ import re
 from pathlib import Path
 
 from video_agent.contracts import (
-    EVENT_LOG,
     ARTIFACT_SCENES,
     ARTIFACT_SEO,
     ARTIFACT_THUMBNAIL,
+    EVENT_LOG,
 )
 from video_agent.orchestrator.job_state import load_job
-from video_agent.utils.json_io import read_yaml, write_json as _write_json
-from video_agent.utils.logging import EventLogger
-from video_agent.storage.public_jobs import prepare_public_job_dir
-
 from video_agent.orchestrator.stages._shared import (
     StageInputMissingError,
-    _resolve_idea_path,
-    _resolve_artifact,
     _complete_stage,
+    _resolve_artifact,
+    _resolve_idea_path,
+    dag_mode,
 )
+from video_agent.storage.public_jobs import prepare_public_job_dir
+from video_agent.utils.json_io import read_yaml
+from video_agent.utils.json_io import write_json as _write_json
+from video_agent.utils.logging import EventLogger
 
 __all__ = [
     "RESEARCH_FILE",
@@ -67,7 +68,7 @@ async def auto_idea_research_stage(
     """Record topic keyword variants and advance the research stage."""
     stage_name = "idea_research"
     state = load_job(job_dir)
-    if state.current_stage != stage_name:
+    if not dag_mode() and state.current_stage != stage_name:
         raise StageInputMissingError(
             f"Cannot run {stage_name} from current_stage={state.current_stage!r}"
         )
@@ -357,7 +358,7 @@ async def auto_assets_chatgpt_stage(
     """
     stage_name = "assets_chatgpt"
     state = load_job(job_dir)
-    if state.current_stage != stage_name:
+    if not dag_mode() and state.current_stage != stage_name:
         raise StageInputMissingError(
             f"Cannot run {stage_name} from current_stage={state.current_stage!r}"
         )
@@ -420,11 +421,13 @@ async def auto_thumbnail_image_stage(
     The render stage detects these files and skips the Remotion still step.
     """
     import shutil as _shutil
-    from PIL import Image as _PilImage, ImageOps as _PilImageOps
+
+    from PIL import Image as _PilImage
+    from PIL import ImageOps as _PilImageOps
 
     stage_name = "thumbnail_image"
     state = load_job(job_dir)
-    if state.current_stage != stage_name:
+    if not dag_mode() and state.current_stage != stage_name:
         raise StageInputMissingError(
             f"Cannot run {stage_name} from current_stage={state.current_stage!r}"
         )

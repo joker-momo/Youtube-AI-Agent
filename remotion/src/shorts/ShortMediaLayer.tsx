@@ -1,5 +1,6 @@
 import React from 'react';
-import {AbsoluteFill, Img, OffthreadVideo, staticFile, useCurrentFrame, interpolate, Easing} from 'remotion';
+import {AbsoluteFill, Img, staticFile, useCurrentFrame, interpolate, Easing} from 'remotion';
+import {Video as MediaVideo} from '@remotion/media';
 import type {CompiledVisualTrack, CropPlan} from '../render-props';
 
 export type ShortMediaLayerProps = {
@@ -125,7 +126,7 @@ export const ShortMediaLayer: React.FC<ShortMediaLayerProps> = ({
       {resolved ? (
         <AbsoluteFill style={{filter: 'blur(40px) brightness(0.55)', transform: 'scale(1.15)'}}>
           {actualKind === 'video' ? (
-            <OffthreadVideo src={resolved} style={{width: '100%', height: '100%', objectFit: 'cover'}} muted trimBefore={trimBefore} trimAfter={trimAfter} playbackRate={playbackRate} />
+            <MediaVideo src={resolved} style={{width: '100%', height: '100%', objectFit: 'cover'}} muted trimBefore={trimBefore} trimAfter={trimAfter} playbackRate={playbackRate} />
           ) : (
             <Img src={resolved} style={{width: '100%', height: '100%', objectFit: 'cover'}} />
           )}
@@ -134,7 +135,7 @@ export const ShortMediaLayer: React.FC<ShortMediaLayerProps> = ({
       {resolved ? (
         <AbsoluteFill style={{transform: mediaTransform, transformOrigin: 'center center'}}>
           {actualKind === 'video' ? (
-            <OffthreadVideo src={resolved} style={{width: '100%', height: '100%', objectFit: 'cover'}} muted trimBefore={trimBefore} trimAfter={trimAfter} playbackRate={playbackRate} />
+            <MediaVideo src={resolved} style={{width: '100%', height: '100%', objectFit: 'cover'}} muted trimBefore={trimBefore} trimAfter={trimAfter} playbackRate={playbackRate} />
           ) : (
             <Img src={resolved} style={{width: '100%', height: '100%', objectFit: 'cover'}} />
           )}

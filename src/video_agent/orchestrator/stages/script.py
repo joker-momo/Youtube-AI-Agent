@@ -7,16 +7,16 @@ from video_agent.operator import (
     promote_operator_artifact,
 )
 from video_agent.orchestrator.job_state import load_job
-from video_agent.utils.json_io import read_json, read_yaml
-from video_agent.storage.atomic import atomic_write_text
-
 from video_agent.orchestrator.stages._shared import (
-    StageInputMissingError,
-    _resolve_idea_path,
-    _complete_stage,
     SCRIPT_PROMPT_PATH,
     SCRIPT_RAW_PATH,
+    StageInputMissingError,
+    _complete_stage,
+    _resolve_idea_path,
+    dag_mode,
 )
+from video_agent.storage.atomic import atomic_write_text
+from video_agent.utils.json_io import read_json, read_yaml
 
 __all__ = [
     "run_script_stage",
@@ -40,7 +40,7 @@ def run_script_stage(job_dir: Path, channel_path: Path) -> Path:
         raise StageInputMissingError(f"Missing channel config {channel_path}")
 
     state = load_job(job_dir)
-    if state.current_stage != "script":
+    if not dag_mode() and state.current_stage != "script":
         raise StageInputMissingError(
             f"Cannot run script stage from current_stage={state.current_stage!r}"
         )
@@ -60,7 +60,7 @@ def run_script_stage(job_dir: Path, channel_path: Path) -> Path:
 
 def promote_script_stage(job_dir: Path, channel_path: Path, raw_response: str) -> Path:
     state = load_job(job_dir)
-    if state.current_stage != "script_promote":
+    if not dag_mode() and state.current_stage != "script_promote":
         raise StageInputMissingError(
             f"Cannot run script_promote stage from current_stage={state.current_stage!r}"
         )

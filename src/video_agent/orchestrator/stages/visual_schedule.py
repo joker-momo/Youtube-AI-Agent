@@ -22,6 +22,7 @@ from video_agent.orchestrator.stages._shared import (
     _complete_stage,
     _resolve_artifact,
     _start_stage,
+    dag_mode,
     resolve_stage_fps,
 )
 from video_agent.storage.atomic import atomic_write_json
@@ -47,7 +48,7 @@ def run_visual_schedule_stage(job_dir: Path, channel_path: Path | None = None) -
     order or if ``scenes.json`` / ``visual_spans.json`` are missing.
     """
     state = load_job(job_dir)
-    if state.current_stage != _STAGE:
+    if not dag_mode() and state.current_stage != _STAGE:
         raise StageInputMissingError(
             f"Cannot run {_STAGE} stage from current_stage={state.current_stage!r}"
         )

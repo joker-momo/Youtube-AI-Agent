@@ -1,7 +1,6 @@
 import React from 'react';
 import {Composition} from 'remotion';
 import {ChannelVideo} from './ChannelVideo';
-import {Thumbnail} from './Thumbnail';
 import {ShortVideo} from './ShortVideo';
 import {ShortCover} from './ShortCover';
 import {defaultRenderProps, RenderProps} from './render-props';
@@ -66,15 +65,6 @@ export const Root: React.FC = () => {
         height={1080}
         defaultProps={defaultRenderProps}
         calculateMetadata={calculateChannelMetadata}
-      />
-      <Composition
-        id="ThumbnailStandard"
-        component={Thumbnail}
-        durationInFrames={1}
-        fps={fps}
-        width={1280}
-        height={720}
-        defaultProps={defaultRenderProps}
       />
       <Composition
         id="ShortVideoStandard"

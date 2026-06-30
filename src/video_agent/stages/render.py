@@ -19,7 +19,6 @@ from video_agent.utils.json_io import read_json
 @dataclass
 class RemotionCommands:
     video: list[str]
-    thumbnail: list[str]
 
 
 class RemotionSubprocessError(RuntimeError):
@@ -51,7 +50,9 @@ def _audio_loudness_config(render_props_path: Path) -> dict:
     }
 
 
-def _normalize_video_audio(video_path: Path, *, integrated_lufs: float, true_peak_dbtp: float, lra: float) -> None:
+def _normalize_video_audio(
+    video_path: Path, *, integrated_lufs: float, true_peak_dbtp: float, lra: float
+) -> None:
     """Normalize output audio loudness in-place (via temp file swap)."""
     tmp_path = video_path.with_name(f"{video_path.stem}.loudnorm.tmp{video_path.suffix}")
     loudnorm = f"loudnorm=I={integrated_lufs}:TP={true_peak_dbtp}:LRA={lra}"
@@ -126,8 +127,33 @@ def _render_gl(render_props_path: Path) -> str | None:
     return value
 
 
+def _render_offthreadvideo_threads(render_props_path: Path) -> int | None:
+    """Parallel FFmpeg threads for OffthreadVideo frame extraction.
+
+    Remotion's default is 2 — a pool shared across all render workers. With
+    concurrency=auto (8 on this M2) the extraction pool starves the workers on a
+    video-background-heavy composition. Bumping it lets more scene frames extract
+    in parallel. This is NOT render concurrency (HARD RULE) — it only sizes the
+    decode-feeder pool, never the worker count. Unset → Remotion's default.
+    """
+    props = read_json(render_props_path)
+    raw = props.get("render", {}).get("offthreadvideo_threads")
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if value <= 0:
+        return None
+    cpu_count = os.cpu_count() or 1
+    return max(1, min(value, cpu_count))
+
+
 def _render_scene_sum(props: dict) -> float:
-    return round(sum(float(scene.get("duration_sec") or 0.0) for scene in (props.get("scenes") or [])), 3)
+    return round(
+        sum(float(scene.get("duration_sec") or 0.0) for scene in (props.get("scenes") or [])), 3
+    )
 
 
 def validate_render_duration_matches_scene_sum(
@@ -139,7 +165,9 @@ def validate_render_duration_matches_scene_sum(
     render_duration = float((props.get("render") or {}).get("duration_sec") or 0.0)
     scene_sum = _render_scene_sum(props)
     branding = props.get("branding") or {}
-    branding_duration = float(branding.get("intro_sec") or 0.0) + float(branding.get("outro_sec") or 0.0)
+    branding_duration = float(branding.get("intro_sec") or 0.0) + float(
+        branding.get("outro_sec") or 0.0
+    )
     expected_duration = round(scene_sum + branding_duration, 3)
     if abs(render_duration - expected_duration) > float(tolerance_sec):
         raise ValueError(
@@ -188,23 +216,7 @@ def validate_rendered_video_duration(
     return float(actual)
 
 
-def _get_thumbnail_composition(props: dict) -> str:
-    render_cfg = props.get("render", {}) or {}
-    comp = render_cfg.get("thumbnail_composition") or render_cfg.get("cover_composition")
-    if comp:
-        return comp
-    resolution = render_cfg.get("resolution") or ""
-    if "x" in str(resolution):
-        try:
-            w, h = str(resolution).lower().split("x", 1)
-            if int(h) > int(w):
-                return "ShortCover"
-        except ValueError:
-            pass
-    return "ThumbnailStandard"
-
-
-def build_remotion_commands(render_props_path: Path, video_path: Path, thumbnail_path: Path) -> RemotionCommands:
+def build_remotion_commands(render_props_path: Path, video_path: Path) -> RemotionCommands:
     remotion_root = repo_root() / "remotion"
     entry = remotion_root / "src/index.ts"
     public_dir = remotion_root / "public"
@@ -215,7 +227,6 @@ def build_remotion_commands(render_props_path: Path, video_path: Path, thumbnail
     base = ["npx", "--prefix", str(remotion_root), "remotion"]
     props = read_json(render_props_path)
     composition = props.get("render", {}).get("composition", "ChannelVideoStandard")
-    thumbnail_composition = _get_thumbnail_composition(props)
     video_cmd = [
         *base,
         "render",
@@ -232,71 +243,21 @@ def build_remotion_commands(render_props_path: Path, video_path: Path, thumbnail
         concurrency,
         "--hardware-acceleration",
         "if-possible",
+        # Per-frame capture quality. Remotion's default JPEG quality (80) visibly
+        # softens every frame BEFORE the h264 encode (a double-lossy generation).
+        # 100 = near-lossless capture so detail/text stay crisp; the final
+        # h264 12M is the only intended compression. Quality > render speed.
+        "--jpeg-quality",
+        "100",
     ]
     if video_bitrate:
         video_cmd += ["--video-bitrate", video_bitrate]
     if gl_backend:
         video_cmd += ["--gl", gl_backend]
-    thumbnail_cmd = [
-        *base,
-        "still",
-        str(entry),
-        thumbnail_composition,
-        str(thumbnail_path),
-        "--props",
-        input_props,
-        "--public-dir",
-        str(public_dir),
-        "--hardware-acceleration",
-        "if-possible",
-    ]
-    if gl_backend:
-        thumbnail_cmd += ["--gl", gl_backend]
-    return RemotionCommands(video=video_cmd, thumbnail=thumbnail_cmd)
-
-
-def build_thumbnail_commands(render_props_path: Path, out_dir: Path) -> list[list[str]]:
-    """Build Remotion still commands for each title_variant (up to 3).
-
-    Each command overrides seo.thumbnail_text with the variant's value.
-    Falls back to a single command using props as-is if no variants present.
-    Outputs: thumbnail_1.jpg, thumbnail_2.jpg, thumbnail_3.jpg
-    """
-    remotion_root = repo_root() / "remotion"
-    entry = remotion_root / "src/index.ts"
-    public_dir = remotion_root / "public"
-    base = ["npx", "--prefix", str(remotion_root), "remotion"]
-    props_base = read_json(render_props_path)
-    props_base["_render_props_path"] = str(render_props_path)
-    gl_backend = _render_gl(render_props_path)
-    thumbnail_composition = _get_thumbnail_composition(props_base)
-
-    variants = (props_base.get("seo") or {}).get("title_variants") or []
-    if not variants:
-        # Fallback: single thumbnail using props as-is
-        variants = [{"thumbnail_text": (props_base.get("seo") or {}).get("thumbnail_text", "")}]
-
-    cmds = []
-    for i, variant in enumerate(variants[:3]):
-        props = json.loads(json.dumps(props_base))  # deep copy
-        # While rendering thumbnails, never self-reference seo.thumbnail_path
-        # because that target image does not exist yet and causes 404 in Remotion.
-        props["seo"] = {
-            **(props.get("seo") or {}),
-            "thumbnail_text": variant.get("thumbnail_text", ""),
-            "thumbnail_path": "",
-        }
-        out_path = out_dir / f"thumbnail_{i + 1}.jpg"
-        cmd = [
-            *base, "still", str(entry), thumbnail_composition, str(out_path),
-            "--props", json.dumps(props, ensure_ascii=False),
-            "--public-dir", str(public_dir),
-            "--hardware-acceleration", "if-possible",
-        ]
-        if gl_backend:
-            cmd += ["--gl", gl_backend]
-        cmds.append(cmd)
-    return cmds
+    ot_threads = _render_offthreadvideo_threads(render_props_path)
+    if ot_threads:
+        video_cmd += ["--offthreadvideo-video-threads", str(ot_threads)]
+    return RemotionCommands(video=video_cmd)
 
 
 def _run_with_progress(
@@ -345,8 +306,9 @@ def _run_with_progress(
                     total = int(m_frame.group(2))
                     pct = round(frame / max(total, 1) * 100, 1)
                     fps_m = re.search(r"([\d.]+)\s*fps", line, re.IGNORECASE)
-                    eta_m = re.search(r"time remaining:\s*([\dm\s]+\d+s)", line, re.IGNORECASE) \
-                         or re.search(r"ETA\s*([\d:]+)", line, re.IGNORECASE)
+                    eta_m = re.search(
+                        r"time remaining:\s*([\dm\s]+\d+s)", line, re.IGNORECASE
+                    ) or re.search(r"ETA\s*([\d:]+)", line, re.IGNORECASE)
                     if fps_m:
                         fps_value = float(fps_m.group(1))
                     else:
@@ -375,7 +337,9 @@ def _run_with_progress(
                 proc.stdout.close()
             if pid_file_path is not None:
                 try:
-                    if pid_file_path.exists() and pid_file_path.read_text(encoding="utf-8").strip() == str(proc.pid):
+                    if pid_file_path.exists() and pid_file_path.read_text(
+                        encoding="utf-8"
+                    ).strip() == str(proc.pid):
                         pid_file_path.unlink()
                 except OSError:
                     pass
@@ -490,7 +454,13 @@ def _notify_render_done(job_dir: Path) -> None:
     module is unavailable. Errors are swallowed because notify failures must
     never invalidate a successful render.
     """
-    if os.environ.get("VIDEO_AGENT_DISABLE_TELEGRAM", "").strip() in {"1", "true", "TRUE", "yes", "YES"}:
+    if os.environ.get("VIDEO_AGENT_DISABLE_TELEGRAM", "").strip() in {
+        "1",
+        "true",
+        "TRUE",
+        "yes",
+        "YES",
+    }:
         return
     if not (os.environ.get("TELEGRAM_BOT_TOKEN") and os.environ.get("TELEGRAM_CHAT_ID")):
         return
@@ -516,7 +486,6 @@ def _notify_render_done(job_dir: Path) -> None:
 def render_with_remotion(
     render_props_path: Path,
     video_path: Path,
-    thumbnail_path: Path,
     *,
     stop_request_path: Path | None = None,
     notify_telegram: bool = True,
@@ -526,10 +495,9 @@ def render_with_remotion(
         job_dir = job_dir.parent
 
     expected_duration_sec = validate_render_duration_matches_scene_sum(render_props_path)
-    commands = build_remotion_commands(render_props_path, video_path, thumbnail_path)
+    commands = build_remotion_commands(render_props_path, video_path)
     progress_path = job_dir / "json" / "render_progress.json"
     render_pid_path = job_dir / "json" / ".render.pid"
-    thumb_pid_path = job_dir / "json" / ".thumbnail.pid"
     _run_with_progress(
         commands.video,
         progress_path,
@@ -558,40 +526,22 @@ def render_with_remotion(
         pass
 
     # ------------------------------------------------------------------
-    # Thumbnail step: skip if ChatGPT already generated thumbnail_1.jpg
-    # (new full-composite flow via auto_thumbnail_image_stage).
-    # Fall back to remotion still for legacy jobs or if file is missing.
+    # Thumbnail step: the ChatGPT-generated thumbnail (auto_thumbnail_image_stage)
+    # is now the ONLY thumbnail source. The legacy Remotion-still fallback was
+    # removed 2026-06-30 — if the ChatGPT thumbnail is missing we stop so it can be
+    # regenerated, rather than silently shipping a lower-quality fallback.
     # ------------------------------------------------------------------
     thumb_dir = job_dir / "outputs"
     chatgpt_thumb = thumb_dir / "thumbnail_1.jpg"
-
-    if chatgpt_thumb.exists():
-        # New flow: thumbnails were already generated with text baked in.
-        # Make sure thumbnail.jpg alias is in place for Telegram / operator UI.
-        if not (thumb_dir / "thumbnail.jpg").exists():
-            shutil.copy2(chatgpt_thumb, thumb_dir / "thumbnail.jpg")
-    else:
-        # Legacy/fallback flow: render thumbnails via Remotion still.
-        thumb_cmds = build_thumbnail_commands(render_props_path, thumb_dir)
-        thumb_errors: list[str] = []
-        for i, cmd in enumerate(thumb_cmds, start=1):
-            try:
-                _run_with_progress(
-                    cmd,
-                    stop_request_path=stop_request_path,
-                    pid_file_path=thumb_pid_path,
-                )
-            except RemotionSubprocessError as exc:
-                # One bad variant should not invalidate the rendered video.
-                thumb_errors.append(f"variant {i}: {exc}")
-        # Keep thumbnail.jpg as alias of thumbnail_1.jpg for backward compat
-        t1 = thumb_dir / "thumbnail_1.jpg"
-        if t1.exists():
-            shutil.copy2(t1, thumb_dir / "thumbnail.jpg")
-        elif thumb_errors:
-            raise RuntimeError(
-                "All thumbnail variants failed: " + "; ".join(thumb_errors)
-            )
+    if not chatgpt_thumb.exists():
+        raise RuntimeError(
+            f"ChatGPT thumbnail missing: {chatgpt_thumb}. Generate it "
+            "(auto_thumbnail_image_stage) before rendering — the Remotion thumbnail "
+            "fallback has been removed."
+        )
+    # Keep thumbnail.jpg alias in place for Telegram / operator UI.
+    if not (thumb_dir / "thumbnail.jpg").exists():
+        shutil.copy2(chatgpt_thumb, thumb_dir / "thumbnail.jpg")
 
     _mark_render_stage_completed(job_dir)
     if notify_telegram:

@@ -16,6 +16,8 @@ from video_agent.orchestrator.stages._shared import (
     StageInputMissingError,
     _complete_stage,
     _resolve_artifact,
+    _start_stage,
+    dag_mode,
 )
 from video_agent.pipeline import OperatorRenderOptions
 from video_agent.utils.json_io import read_json, read_yaml
@@ -46,13 +48,16 @@ def _reset_render_progress(job_dir: Path) -> None:
 
 def run_render_stage(job_dir: Path, channel_path: Path, *, notify_telegram: bool = True) -> Path:
     state = load_job(job_dir)
-    if state.current_stage != "render":
+    if not dag_mode() and state.current_stage != "render":
         raise StageInputMissingError(
             f"Cannot run render stage from current_stage={state.current_stage!r}"
         )
     if not channel_path.exists():
         raise StageInputMissingError(f"Missing channel config {channel_path}")
 
+    # Mark in_progress so the dashboard's render-progress bar shows — in DAG mode
+    # current_stage doesn't advance to "render", so without this the UI never polls.
+    _start_stage(job_dir, "render")
     _reset_render_progress(job_dir)
     try:
         # Late facade import: tests monkeypatch video_agent.orchestrator.stages.render_operator_job
@@ -77,10 +82,11 @@ def run_render_stage(job_dir: Path, channel_path: Path, *, notify_telegram: bool
 
 def run_review_stage(job_dir: Path) -> Path:
     state = load_job(job_dir)
-    if state.current_stage != "review":
+    if not dag_mode() and state.current_stage != "review":
         raise StageInputMissingError(
             f"Cannot run review stage from current_stage={state.current_stage!r}"
         )
+    _start_stage(job_dir, "review")
 
     try:
         # Late facade import: tests monkeypatch video_agent.orchestrator.stages.write_operator_review
@@ -95,7 +101,7 @@ def run_review_stage(job_dir: Path) -> Path:
 
 def run_persona_eval_stage(job_dir: Path, channel_path: Path) -> Path:
     state = load_job(job_dir)
-    if state.current_stage != "persona_eval":
+    if not dag_mode() and state.current_stage != "persona_eval":
         raise StageInputMissingError(
             f"Cannot run persona_eval stage from current_stage={state.current_stage!r}"
         )

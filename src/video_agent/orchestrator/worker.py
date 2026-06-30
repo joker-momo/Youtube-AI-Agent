@@ -36,9 +36,9 @@ def get_channel_path() -> Path:
     Prefer ``CHANNEL_CONFIG`` when it points at an existing file; otherwise fall
     back to the **repo-relative** default — NOT the Docker ``/app`` path, which
     does not exist on local/Mac runs. A wrong/missing ``CHANNEL_CONFIG`` here
-    silently drops opt-in flags like ``visual.elena.enabled`` (the channel reads
-    as flagless → Elena never injected), which was bug-394. Logs the resolved
-    path so a misconfigured env is visible instead of silent.
+    silently drops opt-in flags (the channel reads as flagless → features never
+    injected), which was bug-394. Logs the resolved path so a misconfigured env
+    is visible instead of silent.
     """
     from video_agent.contracts import repo_root
 

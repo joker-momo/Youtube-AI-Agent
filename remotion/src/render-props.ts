@@ -96,28 +96,6 @@ export type CompiledAssetSchedule = {
   tracks: CompiledVisualTrack[];
 };
 
-// Elena presenter cues (long-form v2 §6). "idle" removed → talking + hidden only;
-// the video is always muted at render; 24fps asset in a 30fps comp plays by
-// timestamp (no time-stretch).
-export type ElenaCue = {
-  start_frame: number;
-  duration_frames: number;
-  mode: 'talking' | 'hidden';
-  treatment?: 'circle' | 'large';
-  variant?: 'talk-neutral' | 'talk-emphasis';
-  position: 'bottom-right';
-  asset_ref?: string;
-  source_trim_frames?: number;
-  reason?: string;
-};
-
-export type ElenaCuesDoc = {
-  schema_version: 1;
-  fps: number;
-  total_frames: number;
-  cues: ElenaCue[];
-};
-
 export type Scene = {
   id: string;
   duration_sec: number;
@@ -186,9 +164,12 @@ export type RenderProps = {
     // Show the channel name in the top-left corner of every scene.
     // Defaults to false to keep the opening frame clean.
     show_channel_name_overlay?: boolean;
+    // Hybrid graphic cards: when set, graphic scenes render the generated card
+    // shrunk & centered over this fixed brand-gradient background video (a path
+    // under remotion/public/). Unset → graphic cards render full-bleed (legacy).
+    hybrid_card_bg?: string;
   };
   visual_schedule?: CompiledAssetSchedule | null;
-  elena_cues?: ElenaCuesDoc | null;
 };
 
 export const mediaSrc = (path: string): string => {

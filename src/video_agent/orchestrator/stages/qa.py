@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Awaitable, Callable, Sequence
 
-from video_agent.contracts import ARTIFACT_SCRIPT, ARTIFACT_SCENES, ARTIFACT_SEO
+from video_agent.contracts import ARTIFACT_SCENES, ARTIFACT_SCRIPT, ARTIFACT_SEO
 from video_agent.operator import (
     _gemini_qa_prompt,
     extract_json_object,
@@ -13,20 +13,21 @@ from video_agent.operator import (
 )
 from video_agent.orchestrator.job_state import load_job, save_job
 from video_agent.orchestrator.orchestrator import _now
-from video_agent.utils.json_io import read_yaml, write_json as _write_json
-from video_agent.storage.atomic import atomic_write_text
-
 from video_agent.orchestrator.stages._shared import (
-    StageInputMissingError,
-    _resolve_artifact,
-    _complete_stage,
-    SCRIPT_RAW_PATH,
-    SCENES_RAW_PATH,
-    SEO_RAW_PATH,
-    SCRIPT_QA_RAW_PATH,
     SCENES_QA_RAW_PATH,
+    SCENES_RAW_PATH,
+    SCRIPT_QA_RAW_PATH,
+    SCRIPT_RAW_PATH,
     SEO_QA_RAW_PATH,
+    SEO_RAW_PATH,
+    StageInputMissingError,
+    _complete_stage,
+    _resolve_artifact,
+    dag_mode,
 )
+from video_agent.storage.atomic import atomic_write_text
+from video_agent.utils.json_io import read_yaml
+from video_agent.utils.json_io import write_json as _write_json
 
 SessionFn = Callable[[Sequence[str]], Awaitable[str]]
 
@@ -80,7 +81,7 @@ def promote_qa_stage(
         raise StageInputMissingError(f"Unsupported QA artifact: {artifact}")
     stage_name = f"{artifact}_qa"
     state = load_job(job_dir)
-    if state.current_stage != stage_name:
+    if not dag_mode() and state.current_stage != stage_name:
         raise StageInputMissingError(
             f"Cannot run {stage_name} from current_stage={state.current_stage!r}"
         )
@@ -180,10 +181,12 @@ async def _auto_run_then_promote(
     briefing is sent as the first message of the same one-shot tab.
     """
     state = load_job(job_dir)
-    if state.current_stage == run_stage_name:
+    # DAG mode freezes current_stage, so gate the runner on dag_mode too — else the
+    # prompt file never gets written and the next step fails "Missing prompt file".
+    if dag_mode() or state.current_stage == run_stage_name:
         runner(job_dir, channel_path)
         state = load_job(job_dir)
-    if state.current_stage != promote_stage_name:
+    if not dag_mode() and state.current_stage != promote_stage_name:
         raise StageInputMissingError(
             f"Cannot auto-run {run_stage_name}/{promote_stage_name} from "
             f"current_stage={state.current_stage!r}"
@@ -279,7 +282,7 @@ async def _auto_qa(
 ) -> Path:
     stage_name = f"{artifact}_qa"
     state = load_job(job_dir)
-    if state.current_stage != stage_name:
+    if not dag_mode() and state.current_stage != stage_name:
         raise StageInputMissingError(
             f"Cannot auto-run {stage_name} from current_stage={state.current_stage!r}"
         )
@@ -486,7 +489,7 @@ async def auto_qa_with_rework(
         try:
             state = load_job(job_dir)
             promote_stage = f"{artifact}_promote"
-            if state.current_stage == promote_stage:
+            if dag_mode() or state.current_stage == promote_stage:
                 raw_path = job_dir / _ARTIFACT_RAW_PATH[artifact]
                 if not raw_path.exists():
                     raise StageInputMissingError(

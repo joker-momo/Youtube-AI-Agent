@@ -218,9 +218,21 @@ def get_render_progress(
         return {"percent": 0, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""}
     try:
         import json as _json
-        return _json.loads(progress_path.read_text(encoding="utf-8"))
+        data = _json.loads(progress_path.read_text(encoding="utf-8"))
     except Exception:
-        return {"percent": 0, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""}
+        data = {"percent": 0, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""}
+    # Before Remotion emits frames, the render stage is in prepare_assets — surface
+    # its per-scene B-roll progress (``audio_progress.json`` → "visuals (scene N/M)").
+    if not data.get("frame"):
+        ap = job_dir / "json" / "audio_progress.json"
+        if ap.exists():
+            try:
+                a = _json.loads(ap.read_text(encoding="utf-8"))
+                data["prepare_stage"] = a.get("stage")
+                data["prepare_percent"] = a.get("percent")
+            except Exception:
+                pass
+    return data
 
 
 @router.get("/jobs/{job_id}/stages/whisper_timestamps/progress")

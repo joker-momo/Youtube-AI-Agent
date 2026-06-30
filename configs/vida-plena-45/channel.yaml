@@ -1,15 +1,15 @@
 schema_version: "3.0-mvp"
 channel:
   id: "vida-plena-45"
-  name: "Vida Plena 45+"
+  name: "Vida Plena 45+: Salud y Bienestar"
   youtube_channel_id: "UCKUswqsAaLsEkcsgzTuKAmw"
   description: "Salud y bienestar práctico para personas de más de 45 años en España. Consejos sencillos sobre alimentación, descanso, movimiento suave y hábitos diarios, sin dietas extremas ni promesas milagro."
 branding:
-  # Opening retention rule: skip the logo intro and outro by default. YouTube
-  # viewers decide whether to keep watching in the first 5-15 seconds; the
-  # video must start on the narration hook, not on a branded card. Set
-  # enable_intro_outro: true only for a one-off ceremonial cut.
-  enable_intro_outro: false
+  # Intro/outro brand clips: intro.mp4 plays at the very start, outro.mp4 at the
+  # very end (durations auto-probed). Enabled 2026-07-01 by request.
+  enable_intro_outro: true
+  intro_video_path: "asset_library/source/intro.mp4"
+  outro_video_path: "asset_library/source/outro.mp4"
   # Channel-name label in the top-left corner. Hidden by default to keep the
   # opening frame clean. Flip to true when a special cut needs the brand
   # text visible on every scene.
@@ -173,7 +173,12 @@ visuals:
     quality_weight: 0.45
 music:
   source: "assets/music"
-  file: "assets/music/ether_silent_partner.mp3"
+  # BGM DISABLED 2026-06-30 (competitor teardown, 17 videos): our bed was -33dB
+  # floor — louder than ALL competitors (those with music: -44..-54dB; top
+  # performers IO2 144k / Enfermera Ana 450k use NO music). Clarity for 60+ wins.
+  # Empty file -> _choose_bgm_track returns None -> narration only (no mix).
+  # To re-enable: restore the path below + raise duck_db to ~18-20.
+  file: ""
   voice_gain_db: -4.5
   level_db: -24
   duck_db: 8
@@ -193,6 +198,14 @@ render:
   # Use Metal-backed ANGLE so Chromium WebGL composites on GPU instead of CPU.
   gl: "angle"
   concurrency: "auto"
+  # OffthreadVideo frame-extraction threads (Remotion default 2). Shared decode-feeder
+  # pool, NOT render concurrency. BENCHMARKED 2026-06-30 (1200-frame slice, real comp):
+  #   threads=4 + conc=8 → 27.3 fps  (WINNER)
+  #   threads=8 + conc=8 → 22.3 fps  (−18%: 8 threads oversubscribe the 8 cores,
+  #                                    thrashing the 8 render workers)
+  #   threads=4 + conc=4 → 22.8 fps  (−16%: confirms concurrency=auto/8 is optimal)
+  # Sweet spot = 4. Pure speed; never touches render.concurrency (stays "auto").
+  offthreadvideo_threads: 4
   subtitles:
     enabled: true
     mode: "word_highlight"
@@ -216,6 +229,12 @@ budget:
 # Long-form visual-span planning (independent of shorts.visual_timeline above).
 # Phase 1: report_only — groups contiguous subtitle scenes onto one continuous
 # background clip; never alters render until the Gate-1b grouping review passes.
+# Parallel DAG pipeline: run post-scenes stages as concurrent resource lanes
+# (ChatGPT browser ‖ local-MPS ‖ cpu). Local-MPS (whisper/TTS) overlaps the ChatGPT image lane.
+# Off = legacy linear path (the renderer/stages are byte-for-byte identical).
+pipeline:
+  parallel_dag: true
+
 visual:
   span_planning:
     enabled: true
@@ -223,10 +242,13 @@ visual:
     max_scenes_per_span: 3
     max_span_sec: 40
     groupable_layouts: [subtitle]
-  # Elena brand-presenter overlay (band-aware cue planner). Injected into
-  # render_props by pipeline._attach_elena_cues independent of span mode.
-  elena:
+  # Hybrid graphic cards: render graphic-layout scenes as the generated card
+  # shrunk & centered over a fixed brand-gradient bg video instead of full-bleed.
+  # Kills the static "slideshow" feel of consecutive graphic scenes. Read by
+  # pipeline branding builder -> render_props.branding.hybrid_card_bg.
+  hybrid_card:
     enabled: true
+    bg: "assets/brand_bg_soft.mp4"
 shorts:
   enabled: true
   # Visual span / compiled visual timeline (spec v4.0.3). Enforced mode makes

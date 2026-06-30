@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
+import os
+import threading
 from collections.abc import Callable
 from pathlib import Path
 
@@ -34,7 +36,46 @@ __all__ = [
     "SCRIPT_QA_RAW_PATH",
     "SCENES_QA_RAW_PATH",
     "SEO_QA_RAW_PATH",
+    "dag_mode",
+    "set_dag_mode",
+    "require_stage",
 ]
+
+# --- Parallel-DAG support -------------------------------------------------
+# The DAG executor sets this env so (a) stage guards relax — the scheduler
+# already guarantees dependency order, so the single-``current_stage`` check
+# would wrongly reject concurrent lanes — and (b) state writes take a process
+# lock since multiple lanes call _start_stage/_complete_stage at once.
+_DAG_ENV = "PIPELINE_PARALLEL_DAG"
+_STATE_LOCK = threading.Lock()
+
+
+def dag_mode() -> bool:
+    """True when the pipeline is running stages as a parallel DAG."""
+    return os.environ.get(_DAG_ENV) == "1"
+
+
+def set_dag_mode(on: bool) -> None:
+    """Toggle DAG mode for the current process (set by the parallel executor)."""
+    if on:
+        os.environ[_DAG_ENV] = "1"
+    else:
+        os.environ.pop(_DAG_ENV, None)
+
+
+def require_stage(state, stage_name: str) -> None:
+    """Assert ``stage_name`` may run now.
+
+    Linear mode: it must be the single ``current_stage`` (legacy invariant).
+    DAG mode: no-op — the scheduler only dispatches a stage after its deps are
+    ``completed``.
+    """
+    if dag_mode():
+        return
+    if state.current_stage != stage_name:
+        raise StageInputMissingError(
+            f"Cannot run {stage_name} stage from current_stage={state.current_stage!r}"
+        )
 
 logger = logging.getLogger("video_agent.orchestrator.stages")
 
@@ -90,8 +131,7 @@ def _resolve_artifact(job_dir: Path, new_rel: str, legacy_rel: str | None = None
 def resolve_stage_fps(channel_path: Path | None, default: int = 30) -> int:
     """Read ``render.fps`` from the channel config (best-effort, default 30).
 
-    Shared by the long-form ``visual_schedule`` and ``elena_plan`` stages (which
-    had identical copy-pasted resolvers). Never raises.
+    Used by the long-form ``visual_schedule`` stage. Never raises.
     """
     if channel_path is None:
         return default
@@ -140,18 +180,41 @@ def _start_stage(job_dir: Path, stage_name: str) -> None:
     re-run after a transient failure does not overwrite the original
     timestamp.
     """
-    state = load_job(job_dir)
-    stage = state.stage(stage_name)
-    ts = _now()
-    if stage.status not in {"completed", "skipped"} and stage.started_at is None:
-        stage.started_at = ts
-    if stage.status == "pending":
-        stage.status = "in_progress"
-    state.updated_at = ts
-    save_job(job_dir, state)
+    with _STATE_LOCK:
+        state = load_job(job_dir)
+        stage = state.stage(stage_name)
+        ts = _now()
+        if stage.status not in {"completed", "skipped"} and stage.started_at is None:
+            stage.started_at = ts
+        if stage.status == "pending":
+            stage.status = "in_progress"
+        state.updated_at = ts
+        save_job(job_dir, state)
 
 
 def _complete_stage(job_dir: Path, stage_name: str, output: Path) -> None:
+    with _STATE_LOCK:
+        state = _apply_stage_completion(job_dir, stage_name)
+
+    _logger = EventLogger(job_dir / EVENT_LOG)
+    _logger.log(
+        "STAGE_COMPLETED",
+        {
+            "job_id": state.job_id,
+            "stage": stage_name,
+            "output": str(output.relative_to(job_dir)),
+        },
+    )
+    if not any(s.status == "pending" for s in state.stages):
+        _logger.log("JOB_COMPLETED", {"job_id": state.job_id})
+
+
+def _apply_stage_completion(job_dir: Path, stage_name: str):
+    """Mark ``stage_name`` completed + (linear mode only) advance current_stage.
+
+    Caller holds ``_STATE_LOCK``. In DAG mode the scheduler owns ordering, so the
+    single-pointer advance is skipped (it would thrash with concurrent lanes).
+    """
     state = load_job(job_dir)
     ts = _now()
     stage = state.stage(stage_name)
@@ -171,39 +234,24 @@ def _complete_stage(job_dir: Path, stage_name: str, output: Path) -> None:
         stage.started_at = previous_end or ts
     stage.status = "completed"
     stage.completed_at = ts
-    # Advance to the next pending stage AFTER the one that just completed. Using
-    # the first pending stage anywhere in the list would let a skipped/left-pending
-    # earlier stage drag current_stage backward, wedging the next stage's
-    # ``current_stage != _STAGE`` guard.
-    completed_idx = next(
-        (i for i, s in enumerate(state.stages) if s.name == stage_name), -1
-    )
-    next_pending = next(
-        (s for s in state.stages[completed_idx + 1:] if s.status == "pending"), None
-    )
-    if next_pending is not None:
-        state.current_stage = next_pending.name
-    elif completed_idx + 1 < len(state.stages):
-        # No PENDING stage remains after this one, but later stages exist that are
-        # already "completed" (a re-run where downstream stages were left completed
-        # from a prior pass — e.g. re-rendering: render/continuity re-run while
-        # `review` still reads completed). Advance FORWARD to the immediate next
-        # stage anyway so its ``current_stage == _STAGE`` guard passes and the run
-        # loop can re-record it, instead of wedging current_stage on the stage that
-        # just completed (which raised "Cannot run review from current_stage=
-        # render_continuity_qa" → HTTP 409 → job failed without finalizing).
-        state.current_stage = state.stages[completed_idx + 1].name
+    # Advance current_stage only in linear mode. In DAG mode the scheduler owns
+    # ordering, so advancing the single pointer would thrash with concurrent lanes.
+    if not dag_mode():
+        # Advance to the next pending stage AFTER the one that just completed.
+        # Using the first pending stage anywhere would let a skipped/left-pending
+        # earlier stage drag current_stage backward, wedging the next guard.
+        completed_idx = next(
+            (i for i, s in enumerate(state.stages) if s.name == stage_name), -1
+        )
+        next_pending = next(
+            (s for s in state.stages[completed_idx + 1:] if s.status == "pending"), None
+        )
+        if next_pending is not None:
+            state.current_stage = next_pending.name
+        elif completed_idx + 1 < len(state.stages):
+            # No PENDING stage remains but later (already-completed) stages exist
+            # (a re-run). Advance FORWARD so the next stage's guard passes.
+            state.current_stage = state.stages[completed_idx + 1].name
     state.updated_at = ts
     save_job(job_dir, state)
-
-    _logger = EventLogger(job_dir / EVENT_LOG)
-    _logger.log(
-        "STAGE_COMPLETED",
-        {
-            "job_id": state.job_id,
-            "stage": stage_name,
-            "output": str(output.relative_to(job_dir)),
-        },
-    )
-    if not any(s.status == "pending" for s in state.stages):
-        _logger.log("JOB_COMPLETED", {"job_id": state.job_id})
+    return state

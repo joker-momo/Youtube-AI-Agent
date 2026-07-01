@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Any
 
 ALLOWED_LAYOUTS = {
@@ -53,10 +54,20 @@ def _supported_text(scene: dict[str, Any]) -> str:
     ).lower()
 
 
+def _normalize(text: str) -> str:
+    """Lower-case, strip accents, and flatten punctuation/whitespace — so a bullet the
+    model paraphrased only in accents/case/punctuation ("Proteína." vs "proteina") still
+    matches its narration. Does NOT loosen grounding: the words must still be present."""
+    t = unicodedata.normalize("NFKD", str(text or "").lower())
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    t = re.sub(r"[^\w\s]", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
 def _is_supported(scene: dict[str, Any], text: str) -> bool:
     if not text:
         return False
-    return str(text).lower() in _supported_text(scene)
+    return _normalize(text) in _normalize(_supported_text(scene))
 
 
 def has_warning_intent(scene: dict[str, Any]) -> bool:

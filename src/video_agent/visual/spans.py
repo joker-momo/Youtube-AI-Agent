@@ -41,7 +41,15 @@ SCHEMA_VERSION = 1
 # to ChatGPT images. ``hook`` joined them 2026-06-29 (user request): a designed,
 # attention-grabbing gen-image hook reads better + avoids the weak-stock-match
 # QA block that a generic hook visual_prompt kept tripping.
-GRAPHIC_LAYOUTS = frozenset({"hook", "checklist", "warning", "quote", "cta"})
+# 2026-07-01: the distinct-card batch (stat/steps/comparison/myth) and the
+# photo-forward batch (plate_map/recipe_snapshot/quote_portrait/evidence_nugget/
+# do_dont) join too — this frozenset is the single render contract that decides
+# which scenes get a ChatGPT card + isolation (graphic_images.py, schedule.py).
+GRAPHIC_LAYOUTS = frozenset({
+    "hook", "checklist", "warning", "quote", "cta",
+    "stat", "steps", "comparison", "myth",
+    "plate_map", "recipe_snapshot", "quote_portrait", "evidence_nugget", "do_dont",
+})
 
 
 # --------------------------------------------------------------------------- #

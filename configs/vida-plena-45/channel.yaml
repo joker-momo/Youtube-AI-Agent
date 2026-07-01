@@ -209,11 +209,11 @@ render:
   subtitles:
     enabled: true
     mode: "word_highlight"
-    words_per_page: 10
+    words_per_page: 6
     max_lines: 2
     position: "bottom"
     offset_sec: 0
-    font_size: 54
+    font_size: 40
     active_scale: 1.08
     background_opacity: 0.58
   audio_loudness:

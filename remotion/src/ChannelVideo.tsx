@@ -1,5 +1,5 @@
 import React from 'react';
-import {AbsoluteFill, Audio, Img, interpolate, Sequence, useCurrentFrame, useVideoConfig} from 'remotion';
+import {AbsoluteFill, Audio, Easing, Img, interpolate, Sequence, useCurrentFrame, useVideoConfig} from 'remotion';
 import {Video as MediaVideo} from '@remotion/media';
 import {LayoutPayload, SceneLayout, SubtitleConfig, WordSegment} from './render-props';
 import {mediaSrc, RenderProps, Scene} from './render-props';
@@ -11,14 +11,18 @@ const FADE_OUT = 18;         // 0.6 s fade-out per scene (final scene → black)
 const SCENE_XFADE = 15;      // 0.5 s cross-dissolve overlap between consecutive scenes
 const BRIDGE_FRAMES = 18;    // 0.6 s bridge between intro/main/outro
 
+// Subtle film grain (data-uri feTurbulence) — cinematic texture over the living bg.
+const GRAIN =
+  "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E\")";
+
 const defaultSubtitles: Required<SubtitleConfig> = {
   enabled: true,
   mode: 'word_highlight',
-  words_per_page: 10,
+  words_per_page: 6,
   max_lines: 2,
   position: 'bottom',
   offset_sec: 0,
-  font_size: 54,
+  font_size: 40,
   active_scale: 1.08,
   background_opacity: 0.58,
 };
@@ -120,7 +124,7 @@ const SubtitleOverlay: React.FC<{
         position: 'absolute',
         left: 120,
         right: 120,
-        bottom: 86,
+        bottom: 40,
         zIndex: 30,
         display: 'flex',
         justifyContent: 'center',
@@ -130,12 +134,12 @@ const SubtitleOverlay: React.FC<{
       <div
         style={{
           maxWidth: 1280,
-          padding: '24px 34px',
-          borderRadius: 22,
+          padding: '6px 10px',
+          borderRadius: 12,
           background: `rgba(8, 12, 10, ${subtitles.background_opacity})`,
           boxShadow: '0 18px 52px rgba(0,0,0,0.38)',
           textAlign: 'center',
-          lineHeight: 1.18,
+          lineHeight: 1.16,
         }}
       >
         {words.map((word, index) => {
@@ -475,6 +479,19 @@ const SceneView: React.FC<{
         {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'},
       )
     : 1;
+  // Card entrance: gentle rise (32px) + soft zoom (0.95->1) over ~0.6s, ease-out.
+  // On the image ONLY (not the bg video). Calm/premium for the 45+ wellness brand.
+  const cardEntranceFrames = Math.round(fps * 0.6);
+  const cardEntrance = {easing: Easing.out(Easing.cubic), extrapolateRight: 'clamp' as const};
+  const cardRise = isHybridGraphic ? interpolate(localFrame, [0, cardEntranceFrames], [32, 0], cardEntrance) : 0;
+  const cardScale = isHybridGraphic ? interpolate(localFrame, [0, cardEntranceFrames], [0.95, 1], cardEntrance) : 1;
+  // Living bg for graphic scenes: the scene's OWN matched b-roll (already fetched from
+  // its visual_prompt), else the brand-gradient fallback. Blurred + darkened behind the
+  // card so it feels alive without a Ken Burns move (calm/premium for 45+).
+  const livingBgSrc =
+    scene.asset_refs?.background && scene.asset_refs.background.endsWith('.mp4')
+      ? scene.asset_refs.background
+      : hybridCardBg;
   const layoutVariant = sceneIndex % 3;
   const headlineLeft = layoutVariant === 2 ? undefined : 56;
   const headlineRight = layoutVariant === 2 ? 56 : undefined;
@@ -493,15 +510,23 @@ const SceneView: React.FC<{
           // shrunk, centered, rounded with a soft drop shadow (bg motion shows
           // around the edges). Kills the "static slideshow" feel of graphic scenes.
           <>
-            <MediaVideo
-              src={mediaSrc(hybridCardBg)}
-              muted
-              style={{position: 'absolute', width: '100%', height: '100%', objectFit: 'cover'}}
-            />
+            {/* Living bg: per-scene b-roll, fixed slight overscale (blur edges off-frame),
+                natural color, NO Ken Burns — the footage itself plays. */}
+            <AbsoluteFill style={{transform: 'scale(1.08)', filter: 'blur(4px) brightness(0.62) saturate(1.14)'}}>
+              <MediaVideo
+                src={mediaSrc(livingBgSrc ?? hybridCardBg)}
+                muted
+                style={{position: 'absolute', width: '100%', height: '100%', objectFit: 'cover'}}
+              />
+            </AbsoluteFill>
+            <AbsoluteFill style={{background: 'radial-gradient(ellipse at 50% 40%, rgba(0,0,0,0) 46%, rgba(0,0,0,0.48) 100%)'}} />
+            <AbsoluteFill style={{backgroundImage: GRAIN, backgroundSize: '180px 180px', opacity: 0.06, mixBlendMode: 'overlay'}} />
+            {/* Card TRULY centered in the frame; sized (65%) so a 2-line subtitle clears it.
+                Entrance-only (rise+zoom+fade), then locked. */}
             <AbsoluteFill style={{display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: cardOpacity}}>
               <Img
                 src={mediaSrc(scene.graphic.image_ref)}
-                style={{width: '78%', height: 'auto', objectFit: 'contain', borderRadius: 28, boxShadow: '0 30px 80px rgba(0,0,0,0.45)'}}
+                style={{width: '76%', height: 'auto', objectFit: 'contain', borderRadius: 28, boxShadow: '0 18px 46px rgba(0,0,0,0.4)', transform: `translateY(${cardRise}px) scale(${cardScale})`}}
               />
             </AbsoluteFill>
           </>

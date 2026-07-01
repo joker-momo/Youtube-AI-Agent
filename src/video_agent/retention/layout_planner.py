@@ -3,8 +3,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
-ALLOWED_LAYOUTS = {"hook", "subtitle", "checklist", "warning", "quote", "cta"}
-PATTERN_BREAK_LAYOUTS = {"hook", "checklist", "warning", "quote"}
+ALLOWED_LAYOUTS = {"hook", "subtitle", "checklist", "warning", "quote", "cta", "stat", "steps", "comparison", "myth"}
+PATTERN_BREAK_LAYOUTS = {"hook", "checklist", "warning", "quote", "stat", "steps", "comparison", "myth"}
 WARNING_MARKERS = {
     "error", "errores", "evita", "evitar", "no hagas", "cuidado", "riesgo",
     "problema", "peligro", "demasiado", "extremo", "saltarte", "culpa",
@@ -84,6 +84,32 @@ def has_valid_cta(scene: dict[str, Any], *, is_last: bool, script: dict[str, Any
     return is_last and bool(cta)
 
 
+def has_valid_stat(scene: dict[str, Any]) -> bool:
+    payload = normalize_payload(scene.get("layout_payload"))
+    text = payload.get("title")
+    return bool(text) and word_count(text) <= 8 and _is_supported(scene, text)
+
+
+def has_valid_steps(scene: dict[str, Any]) -> bool:
+    # Same shape as a checklist (2-4 supported items) — rendered as an ordered flow.
+    return has_valid_bullets(scene)
+
+
+def has_valid_comparison(scene: dict[str, Any]) -> bool:
+    payload = normalize_payload(scene.get("layout_payload"))
+    bullets = payload["bullets"]
+    if len(bullets) >= 2 and all(_is_supported(scene, b) for b in bullets[:2]):
+        return True
+    title, body = payload.get("title"), payload.get("body")
+    return bool(title) and bool(body) and _is_supported(scene, title) and _is_supported(scene, body)
+
+
+def has_valid_myth(scene: dict[str, Any]) -> bool:
+    payload = normalize_payload(scene.get("layout_payload"))
+    title, body = payload.get("title"), payload.get("body")
+    return bool(title) and bool(body) and _is_supported(scene, title) and _is_supported(scene, body)
+
+
 def downgrade(scene: dict[str, Any], reason: str) -> None:
     scene["layout"] = "subtitle"
     add_warning(scene, reason)
@@ -159,6 +185,14 @@ def apply_retention_layouts(
             downgrade(scene, "Quote downgraded to subtitle: missing short supported quote text.")
         elif layout == "cta" and not has_valid_cta(scene, is_last=is_last, script=script):
             downgrade(scene, "CTA downgraded to subtitle: CTA is allowed only on final scene and requires CTA text.")
+        elif layout == "stat" and not has_valid_stat(scene):
+            downgrade(scene, "Stat downgraded to subtitle: missing a supported number/short phrase in title.")
+        elif layout == "steps" and not has_valid_steps(scene):
+            downgrade(scene, "Steps downgraded to subtitle: missing 2-4 supported ordered steps.")
+        elif layout == "comparison" and not has_valid_comparison(scene):
+            downgrade(scene, "Comparison downgraded to subtitle: missing two supported sides.")
+        elif layout == "myth" and not has_valid_myth(scene):
+            downgrade(scene, "Myth downgraded to subtitle: missing supported myth + reality text.")
 
     first = scenes[0]
     if (
@@ -184,6 +218,21 @@ def apply_retention_layouts(
         apply_pattern_break_rhythm(scenes)
         if [scene.get("layout") for scene in scenes] == before:
             break
+
+    # Dedup: two graphic cards with the same headline read as repetitive (e.g. two
+    # scenes titled "Evita los dos extremos") — downgrade the later duplicate to subtitle.
+    seen_titles: set[str] = set()
+    for scene in scenes:
+        if scene.get("layout") in ("subtitle", "cta"):
+            continue
+        title = normalize_payload(scene.get("layout_payload")).get("title", "").strip().lower()
+        if not title:
+            continue
+        if title in seen_titles:
+            downgrade(scene, f"Duplicate graphic headline downgraded to subtitle: {title!r}.")
+        else:
+            seen_titles.add(title)
+
     for scene in scenes:
         scene.pop("_proposed_layout", None)
     return scenes

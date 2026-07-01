@@ -40,6 +40,9 @@ _PROMPT_PREFIX = (
     "adults 45+. Calm, trustworthy, warm palette, clean modern typography. This image "
     "is shown FULL-SCREEN as-is with NO captions added afterwards, so all on-screen "
     "text must be rendered directly INTO the image. "
+    "Anatomy must look natural: avoid close-up hands, fingers, or utensils held mid-air; "
+    "keep hands relaxed, partially out of frame or softly out of focus; absolutely no "
+    "malformed hands, extra fingers, or distorted faces. "
 )
 
 
@@ -107,29 +110,115 @@ def _load_channel_name(channel_path: Path | None) -> str:
 def _brand_style(style: dict[str, Any]) -> str:
     """A brand-style directive (palette hex + mood + layout) so ChatGPT renders the
     card ON-brand — warm editorial, not the generic navy/white/yellow clickbait look."""
-    p = (style or {}).get("palette") or _DEFAULT_STYLE["palette"]
-    bg, primary, sec = p.get("background", "#F6F1E8"), p.get("primary", "#2F6B57"), p.get("secondary", "#D98C5F")
-    accent, text = p.get("accent", "#F5C24B"), p.get("text", "#26332F")
+    # Colours come entirely from the channel palette (no hardcoded hex or colour names);
+    # fall back to the default-style palette so this works for ANY channel's brand.
+    dp = _DEFAULT_STYLE["palette"]
+    p = (style or {}).get("palette") or dp
+    bg = p.get("background", dp["background"])
+    primary = p.get("primary", dp["primary"])
+    sec = p.get("secondary", dp["secondary"])
+    accent = p.get("accent", dp["accent"])
+    text = p.get("text", dp["text"])
     mood = ", ".join((style or {}).get("visual_mood") or _DEFAULT_STYLE["visual_mood"])
     return (
         f"Brand style — {mood} editorial for a wellness channel for adults 45+ (NOT clickbait). "
-        f"Use ONLY this palette: warm cream {bg}, deep green {primary}, terracotta {sec}, warm "
-        f"yellow {accent}, dark green {text}. Set the text block on a SOFT panel/card in the brand "
-        f"green {primary} (or cream {bg}) with high-contrast brand text — cream {bg} on the green, "
-        f"or dark green {text} on cream — using yellow {accent} or terracotta {sec} ONLY as a small "
-        "accent (one word or an underline/check-mark). Do NOT use navy, pure black, stark white "
-        "blocks, neon, or a harsh full-bleed gradient. Lay it out as a calm, premium wellness-"
-        "magazine card with generous padding, rounded corners and a clear text hierarchy. "
+        f"Use ONLY this brand palette (hex): background {bg}, primary panel {primary}, secondary "
+        f"{sec}, accent {accent}, text {text}. Set the text block on a SOFT panel/card in the "
+        f"primary colour {primary} (or the background {bg}) with high-contrast brand text — "
+        f"background {bg} on the primary {primary}, or text {text} on the background {bg} — using "
+        f"the accent {accent} or secondary {sec} ONLY as a small accent (one word, an underline, or "
+        "a marker icon). Do NOT use navy, pure black, stark white blocks, neon, or a harsh full-"
+        "bleed gradient. Lay it out as a calm, premium wellness-magazine card with generous "
+        "padding, rounded corners and a clear text hierarchy. "
     )
 
 
 _CARD_KIND = {
-    "hook": "a bold, full-bleed, attention-grabbing hook title card with the headline very large",
-    "checklist": "a clean checklist card",
-    "quote": "an editorial quote card",
-    "cta": "a call-to-action card",
-    "warning": "a cautionary highlight card",
+    "hook": "a bold full-bleed hook title card, headline set VERY large, no bullet list and no check-marks",
+    "checklist": "a clean checklist card, each item on its own row led by a small check-mark in the brand accent colour",
+    "quote": "an editorial quote card: one large centered sentence in quotation marks, no check-marks, no bullet list",
+    "cta": "a call-to-action card with a clear button",
+    "warning": "a cautionary card using cross / caution markers in the brand secondary colour (not check-marks), with an 'avoid this' tone",
+    "stat": "a bold statistic card built around ONE very large number as the focal point, minimal supporting text",
+    "steps": "a numbered step-by-step timeline card: ordered items 1, 2, 3 connected by arrows or chevrons, no check-marks",
+    "comparison": "a two-column comparison card: two options side by side separated by a clear central divider",
+    "myth": "a myth-versus-fact card: two contrasting rows, a secondary-cross 'Mito' row above an accent-check 'Realidad' row",
 }
+
+
+def _content_lines(layout: str, title: str, body: str, bullets: list[str], cta: str) -> list[str]:
+    """Structural render instructions per layout — each type gets a DISTINCT shape so the
+    cards stop collapsing into a universal check-mark list (the old behaviour)."""
+    items = "; ".join(f'"{b}"' for b in bullets)
+    lines: list[str] = []
+    if layout == "stat":
+        if title:
+            lines.append(f'ONE very large focal number/stat dominating the card: "{title}".')
+        if body:
+            lines.append(f'A short label beneath the number: "{body}".')
+        return lines
+    if layout == "steps":
+        if title:
+            lines.append(f'Heading: "{title}".')
+        if bullets:
+            lines.append(
+                "An ordered, numbered step-by-step flow (1, 2, 3 …) connected by arrows or "
+                f"chevrons, NOT check-marks: {items}."
+            )
+        if body:
+            lines.append(f'Closing line: "{body}".')
+        return lines
+    if layout == "comparison":
+        if title:
+            lines.append(f'Heading: "{title}".')
+        if len(bullets) >= 2:
+            lines.append(
+                "TWO side-by-side columns separated by a central divider — "
+                f'left: "{bullets[0]}", right: "{bullets[1]}".'
+            )
+        elif title and body:
+            lines.append(
+                f'TWO side-by-side columns separated by a central divider — left: "{title}", right: "{body}".'
+            )
+        return lines
+    if layout == "myth":
+        if title:
+            lines.append(f'Top row labelled "Mito" with a cross icon in the brand secondary (caution) colour: "{title}".')
+        if body:
+            lines.append(f'Bottom row labelled "Realidad" with a check icon in the brand accent colour: "{body}".')
+        return lines
+    if layout == "warning":
+        if title:
+            lines.append(f'Heading: "{title}".')
+        if bullets:
+            lines.append(
+                "Each item on its own row led by a cross / caution icon in the brand secondary "
+                f"colour (not a check-mark): {items}."
+            )
+        if body:
+            lines.append(f'Supporting line: "{body}".')
+        return lines
+    if layout == "quote":
+        quote = body or title
+        if quote:
+            lines.append(f'ONE large centered sentence in quotation marks, no bullets and no check-marks: "{quote}".')
+        return lines
+    if layout == "hook":
+        if title:
+            lines.append(f'ONE very large headline, no bullet list and no check-marks: "{title}".')
+        if body:
+            lines.append(f'At most one short support line beneath it: "{body}".')
+        return lines
+    # checklist + cta + default: the classic heading + accent-coloured check-mark rows.
+    if title:
+        lines.append(f'Heading: "{title}".')
+    if bullets:
+        lines.append(f"Checklist items, each on its own row with a small check-mark icon in the brand accent colour: {items}.")
+    if body:
+        lines.append(f'Supporting line: "{body}".')
+    if cta and layout == "cta":
+        lines.append(f'Call-to-action button labelled: "{cta}".')
+    return lines
 
 
 def _graphic_prompt(
@@ -151,16 +240,7 @@ def _graphic_prompt(
     bullets = [str(b).strip() for b in (lp.get("bullets") or []) if str(b).strip()]
     cta = str(lp.get("cta") or "").strip()
 
-    lines: list[str] = []
-    if title:
-        lines.append(f'Heading: "{title}".')
-    if bullets:
-        items = "; ".join(f'"{b}"' for b in bullets)
-        lines.append(f"Checklist items, each on its own row with a check-mark icon: {items}.")
-    if body:
-        lines.append(f'Supporting line: "{body}".')
-    if cta:
-        lines.append(f'Call-to-action button labelled: "{cta}".')
+    lines = _content_lines(layout, title, body, bullets, cta)
 
     parts: list[str] = []
     if visual:
@@ -230,7 +310,9 @@ async def run_graphic_images_stage(job_dir: Path, channel_path: Path | None, ima
     logger = EventLogger(job_dir / EVENT_LOG)
     assets_dir = job_dir / "assets"
     style = _load_style_dna(channel_path)
-    font = str((style.get("typography") or {}).get("headline") or "Manrope").strip() or "Manrope"
+    # Card typography is locked to Montserrat to match the Remotion subtitle font
+    # (one typeface across the whole video). Overrides any style-DNA headline font.
+    font = "Montserrat"
     brand = _brand_style(style)
     channel_name = _load_channel_name(channel_path)
 

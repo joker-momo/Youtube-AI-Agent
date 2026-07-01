@@ -193,3 +193,70 @@ def test_final_scene_promotes_to_cta_from_script_without_mid_video_cta():
     assert planned[0]["layout"] != "cta"
     assert planned[1]["layout"] == "cta"
     assert planned[1]["layout_payload"]["cta"] == "Prueba esta rutina esta noche."
+
+
+def test_stat_requires_supported_number():
+    good = _scene(
+        layout="stat",
+        narration="Solo necesitas 3 pasos para armar un buen desayuno.",
+        layout_payload={"title": "3 pasos", "body": "para el desayuno"},
+    )
+    [planned] = apply_retention_layouts([good])
+    assert planned["layout"] == "stat"
+
+    bad = _scene(layout="stat", narration="Un desayuno equilibrado.", layout_payload={"title": "999 cosas", "body": "x"})
+    [planned_bad] = apply_retention_layouts([bad])
+    assert planned_bad["layout"] == "subtitle"
+
+
+def test_steps_requires_supported_ordered_items():
+    good = _scene(
+        layout="steps",
+        narration="Empieza con un plato simple: proteína, verduras y agua.",
+        layout_payload={"title": "Tu plato", "bullets": ["Proteína", "Verduras", "Agua"]},
+    )
+    [planned] = apply_retention_layouts([good])
+    assert planned["layout"] == "steps"
+
+
+def test_comparison_requires_two_supported_sides():
+    good = _scene(
+        layout="comparison",
+        narration="Compara una cena ligera con una cena abundante antes de dormir.",
+        layout_payload={"title": "Cena", "bullets": ["cena ligera", "cena abundante"]},
+    )
+    [planned] = apply_retention_layouts([good])
+    assert planned["layout"] == "comparison"
+
+    bad = _scene(layout="comparison", narration="Solo una idea.", layout_payload={"title": "x", "bullets": ["una"]})
+    [planned_bad] = apply_retention_layouts([bad])
+    assert planned_bad["layout"] == "subtitle"
+
+
+def test_myth_requires_supported_myth_and_reality():
+    good = _scene(
+        layout="myth",
+        narration="El mito de saltarse comidas frente a la realidad de comer equilibrado.",
+        layout_payload={"title": "saltarse comidas", "body": "comer equilibrado"},
+    )
+    [planned] = apply_retention_layouts([good])
+    assert planned["layout"] == "myth"
+
+
+def test_duplicate_graphic_headline_downgraded():
+    a = _scene(
+        id="scene-01",
+        layout="warning",
+        narration="Evita los dos extremos al comer de noche.",
+        layout_payload={"title": "Evita los dos extremos", "bullets": ["Evita los dos extremos al comer de noche", "Evita los dos extremos al comer de noche"]},
+    )
+    mid = _scene(id="scene-02", layout="subtitle")
+    c = _scene(
+        id="scene-03",
+        layout="warning",
+        narration="Evita los dos extremos otra vez al cenar.",
+        layout_payload={"title": "Evita los dos extremos", "bullets": ["Evita los dos extremos otra vez al cenar", "Evita los dos extremos otra vez al cenar"]},
+    )
+    planned = apply_retention_layouts([a, mid, c])
+    assert planned[0]["layout"] == "warning"
+    assert planned[2]["layout"] == "subtitle"  # duplicate headline downgraded

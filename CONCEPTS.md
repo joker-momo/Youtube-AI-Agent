@@ -178,3 +178,8 @@
   effort to difficulty (see `.wolf/cerebrum.md`).
 - **buglog** — `.wolf/buglog.json`, the structured bug/fix database. Grep it
   before fixing; dedup before appending (see `.wolf/OPENWOLF.md`).
+- **Agent Bridge** — file-based Codex ↔ Claude Code handoff mechanism. Codex
+  writes bug/audit tasks into `.agent/bridge/claude/inbox/` via
+  `scripts/agent_bridge.py`; Claude replies to `.agent/bridge/codex/inbox/`
+  with fix status and verification evidence. Contract documented in
+  `docs/agent_bridge.md` and `.claude/rules/agent-bridge.md`.

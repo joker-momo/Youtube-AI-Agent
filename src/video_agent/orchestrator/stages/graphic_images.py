@@ -66,32 +66,43 @@ def _wants_graphic(scene: dict[str, Any]) -> bool:
     return True
 
 
+# NEUTRAL, deliberately UN-branded fallback. Real brand colours live in
+# ``configs/<channel>/style-dna.json`` (the single source of truth); this default is
+# only used when that file is missing/invalid, and a loud warning fires so the operator
+# notices instead of the pipeline silently reusing stale hardcoded brand hex.
 _DEFAULT_STYLE: dict[str, Any] = {
     "palette": {
-        "background": "#F6F1E8",
-        "primary": "#2F6B57",
-        "secondary": "#D98C5F",
-        "accent": "#F5C24B",
-        "text": "#26332F",
+        "background": "#ECECEC",
+        "primary": "#3A3A3A",
+        "secondary": "#8A8A8A",
+        "accent": "#B8B8B8",
+        "text": "#1A1A1A",
     },
-    "typography": {"headline": "Manrope"},
-    "visual_mood": ["calm", "warm", "trustworthy", "practical"],
+    "typography": {"headline": "Montserrat"},
+    "visual_mood": ["calm", "clean", "editorial"],
 }
 
 
 def _load_style_dna(channel_path: Path | None) -> dict[str, Any]:
     """The channel brand DNA (``style-dna.json`` beside channel.yaml) — palette,
-    typography, mood. Drives the gen-image colors/font so graphics match the
-    channel + Remotion video style. Falls back to the known brand default."""
+    typography, mood — the SINGLE source for the gen-image colours/font. Falls back to
+    a neutral, un-branded default (with a warning) so a missing style file is obvious
+    rather than silently reusing stale brand hex baked into code."""
     if channel_path is None:
         return _DEFAULT_STYLE
     try:
         sp = Path(channel_path).parent / "style-dna.json"
         if sp.exists():
             data = read_json(sp)
-            return data if isinstance(data, dict) and data.get("palette") else _DEFAULT_STYLE
-    except Exception:
-        pass
+            if isinstance(data, dict) and data.get("palette"):
+                return data
+        print(
+            f"[graphic_images] WARNING: style-dna.json missing/invalid at {sp} — using the "
+            "neutral fallback palette; cards will look UN-branded until style-dna.json is fixed.",
+            flush=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[graphic_images] WARNING: failed to load style-dna.json ({exc}); neutral fallback palette.", flush=True)
     return _DEFAULT_STYLE
 
 

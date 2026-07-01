@@ -238,6 +238,28 @@ _actual_listener_pid() {
   lsof -ti "TCP:${port}" -sTCP:LISTEN 2>/dev/null | head -1
 }
 
+_reap_duplicate_processes() {
+  # Kill every process matching this exact service command EXCEPT keep_pid.
+  # The pidfile-based reconcile in start_proc only ever knows about ONE prior
+  # pid (whatever it last wrote) — it can't see orphans left over from manual
+  # restarts that bypassed run.sh entirely (nohup uvicorn ... & run directly,
+  # e.g. while iterating on a fix). pgrep -f against the full launch command
+  # (not just a loose port grep) catches ALL of them without over-matching
+  # unrelated processes that merely mention the port number somewhere.
+  local keep_pid="$1"
+  shift
+  local cmd_pattern="$*"
+  local pid
+  for pid in $(pgrep -f -- "${cmd_pattern}" 2>/dev/null); do
+    if [[ "${pid}" != "${keep_pid}" ]]; then
+      echo -e "${YELLOW}  reaping orphaned duplicate (pid ${pid}): ${cmd_pattern}${NC}"
+      kill "${pid}" 2>/dev/null || true
+      sleep 0.3
+      kill -9 "${pid}" 2>/dev/null || true
+    fi
+  done
+}
+
 start_proc() {
   local name="$1" port="$2"
   shift 2
@@ -261,6 +283,7 @@ start_proc() {
       listener="$(_actual_listener_pid "${port}")"
       if [[ "${listener}" == "${old_pid}" ]]; then
         echo -e "${GREEN}${name} already running (pid ${old_pid}, listening on :${port})${NC}"
+        _reap_duplicate_processes "${old_pid}" "$@"
         return 0
       fi
       echo -e "${YELLOW}${name} pidfile (pid ${old_pid}) is alive but not listening on :${port} — stale orphan, stopping it.${NC}"
@@ -270,6 +293,7 @@ start_proc() {
       if [[ -n "${listener}" && "${listener}" != "${old_pid}" ]]; then
         echo -e "${GREEN}${name} already running (pid ${listener}, listening on :${port}) — adopting into pidfile${NC}"
         echo "${listener}" > "${pidfile}"
+        _reap_duplicate_processes "${listener}" "$@"
         return 0
       fi
     fi
@@ -278,8 +302,13 @@ start_proc() {
 
   echo -e "${CYAN}Starting ${name}...${NC}"
   nohup "$@" >>"${logfile}" 2>&1 &
-  echo $! > "${pidfile}"
+  local new_pid=$!
+  echo "${new_pid}" > "${pidfile}"
   echo -e "${GREEN}✅ ${name} pid $(cat "${pidfile}")  log: ${logfile}${NC}"
+  if [[ -n "${port}" ]]; then
+    sleep 1
+    _reap_duplicate_processes "${new_pid}" "$@"
+  fi
 }
 
 wait_for_url() {

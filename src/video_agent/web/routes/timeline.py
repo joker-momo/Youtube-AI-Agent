@@ -350,8 +350,13 @@ def job_timeline(
         "stages": items,
         "approvals": approvals,
         "required_approvals": list(APPROVAL_REQUIRED_STAGES),
-        "approval_blocked_by": approval_block_for_current_stage(
-            state.get("current_stage"), approvals
+        # A failed job is not waiting on an approval — suppress the block so the
+        # dashboard surfaces the real failure instead of a phantom approval gate
+        # on an already-completed stage (bug-424).
+        "approval_blocked_by": (
+            None
+            if queue_status == "failed"
+            else approval_block_for_current_stage(state.get("current_stage"), approvals)
         ),
         "stop_requested": stop_requested,
     }

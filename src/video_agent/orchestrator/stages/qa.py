@@ -26,7 +26,7 @@ from video_agent.orchestrator.stages._shared import (
     dag_mode,
 )
 from video_agent.storage.atomic import atomic_write_text
-from video_agent.utils.json_io import read_yaml
+from video_agent.utils.json_io import read_json, read_yaml
 from video_agent.utils.json_io import write_json as _write_json
 
 SessionFn = Callable[[Sequence[str]], Awaitable[str]]
@@ -376,6 +376,49 @@ def _reset_promote_and_qa(job_dir: Path, artifact: str) -> None:
     save_job(job_dir, state)
 
 
+def _load_current_artifact_json(job_dir: Path, artifact: str) -> dict | None:
+    """Load the last-good promoted artifact JSON (``json/<artifact>.json``).
+
+    The rework message MUST embed this so ChatGPT always receives the source it
+    is asked to correct — never relying on the persistent tab still holding the
+    prior turn (an aged/crashed session loses it and returns MISSING_SOURCE_ARTIFACT
+    with an empty payload). See bug-423.
+    """
+    for path in (job_dir / "json" / f"{artifact}.json", job_dir / f"{artifact}.json"):
+        if path.exists():
+            try:
+                return read_json(path)
+            except Exception:
+                continue
+    return None
+
+
+def _rework_response_is_usable(artifact: str, raw: str) -> bool:
+    """Reject an error-object / empty-payload rework response.
+
+    Guards against the death spiral where ChatGPT returns
+    ``{"error": {"code": "MISSING_SOURCE_ARTIFACT"}, "scenes": []}`` and the
+    promoter overwrites the last-good raw with it (bug-423). Returns True only
+    if at least one candidate object is a real artifact with content.
+    """
+    try:
+        objects = extract_json_objects(raw)
+    except Exception:
+        return False
+    for obj in objects:
+        if not isinstance(obj, dict):
+            continue
+        if isinstance(obj.get("error"), dict):
+            continue  # explicit error object — not a usable artifact
+        if artifact == "scenes":
+            scenes = obj.get("scenes")
+            if isinstance(scenes, list) and len(scenes) > 0:
+                return True
+        else:
+            return True
+    return False
+
+
 async def auto_rework_artifact(
     artifact: str,
     job_dir: Path,
@@ -427,6 +470,21 @@ async def auto_rework_artifact(
             "- visual_prompt debe estar en inglés, preferiblemente ASCII, porque se usa para búsqueda en Pexels.\n"
             "- No uses palabras españolas dentro de visual_prompt."
         )
+    # Embed the last-good artifact as the source to correct. Never rely on the
+    # persistent ChatGPT tab still holding the prior turn — an aged/crashed
+    # session loses it and returns MISSING_SOURCE_ARTIFACT + empty payload (bug-423).
+    source_block = ""
+    current_artifact = _load_current_artifact_json(job_dir, artifact)
+    if current_artifact is not None:
+        source_block = (
+            f"\n\n## Artefacto `{artifact}` actual (fuente a corregir)\n"
+            "Este es el JSON completo de tu intento anterior. Corrige SOLO los "
+            "puntos indicados sobre ESTE contenido y devuélvelo completo. "
+            "Conserva su job_id, channel_id, esquema, narraciones y captions.\n"
+            "```json\n"
+            f"{json.dumps(current_artifact, ensure_ascii=False)}\n"
+            "```"
+        )
     rework_msg = (
         f"# Rework del artefacto `{artifact}`\n"
         f"Tu artefacto anterior recibió verdict NEEDS_REWORK del revisor "
@@ -436,7 +494,8 @@ async def auto_rework_artifact(
         f"## Issues detectadas\n{issue_lines}\n\n"
         f"## Cambios requeridos\n{change_lines}\n\n"
         f"{validation_block}"
-        f"{artifact_rules}\n\n"
+        f"{artifact_rules}"
+        f"{source_block}\n\n"
         f"Devuelve UN SOLO objeto JSON válido del artefacto `{artifact}` "
         f"completo (no solo el diff). Sin markdown ni comentarios."
     )
@@ -445,6 +504,15 @@ async def auto_rework_artifact(
     if not isinstance(new_raw, str) or not new_raw.strip():
         raise StageInputMissingError(
             f"browser-worker returned an empty rework response for {artifact}"
+        )
+    # Reject an error-object / empty-payload response BEFORE promoting: the
+    # promoter overwrites the last-good raw first, so accepting garbage here
+    # corrupts the artifact and death-spirals every retry (bug-423).
+    if not _rework_response_is_usable(artifact, new_raw):
+        raise StageInputMissingError(
+            f"Rework for {artifact} returned an unusable response "
+            f"(error object or empty payload); not promoting to preserve the "
+            f"last-good artifact."
         )
 
     # Late facade import: promoters (promote_script_stage etc.) live in other submodules

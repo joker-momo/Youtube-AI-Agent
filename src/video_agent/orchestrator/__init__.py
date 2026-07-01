@@ -3,6 +3,7 @@ from video_agent.orchestrator.job_state import (
     JobState,
     StageStatus,
     load_job,
+    mark_stage_failed,
     save_job,
 )
 from video_agent.orchestrator.orchestrator import (
@@ -21,5 +22,6 @@ __all__ = [
     "advance",
     "create_job",
     "load_job",
+    "mark_stage_failed",
     "save_job",
 ]

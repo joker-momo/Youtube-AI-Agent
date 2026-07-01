@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 from video_agent.storage.atomic import atomic_write_json
+
+
+def _iso_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 JOB_FILE = "job.json"
 
@@ -90,3 +95,29 @@ def load_job(job_dir: Path) -> JobState:
     path = job_dir / JOB_FILE
     payload = json.loads(path.read_text(encoding="utf-8"))
     return JobState.from_dict(payload)
+
+
+def mark_stage_failed(job_dir: Path, stage_name: str, error: str) -> None:
+    """Persist a failed stage + error into job.json.
+
+    Without this, a run_all failure only surfaces in the HTTP 409 response and
+    Telegram — job.json keeps the stage at ``pending`` and any reader (dashboard,
+    timeline API) shows a stale in-progress job forever (bug-421). Recording the
+    failed status + error is what lets status derivation report the real halt
+    instead of a false approval block (bug-424).
+    """
+    try:
+        state = load_job(job_dir)
+    except (FileNotFoundError, json.JSONDecodeError, KeyError):
+        return
+    try:
+        entry = state.stage(stage_name)
+    except KeyError:
+        entry = None
+    if entry is not None:
+        entry.status = "failed"
+        entry.error = str(error)[:2000]
+        entry.completed_at = _iso_now()
+    state.current_stage = stage_name
+    state.updated_at = _iso_now()
+    save_job(job_dir, state)

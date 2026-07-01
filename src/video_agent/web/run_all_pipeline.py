@@ -15,7 +15,7 @@ from video_agent.notifications.telegram import (
     notify_job_failed,
     notify_stage_done,
 )
-from video_agent.orchestrator import load_job
+from video_agent.orchestrator import load_job, mark_stage_failed
 from video_agent.orchestrator.briefing import build_initial_briefing
 from video_agent.orchestrator.browser_client import (
     BrowserClient,
@@ -248,6 +248,8 @@ async def _execute_run_all_locked(
                 await auto_idea_research_stage(job_dir, channel_path),
             )
         except StageInputMissingError as exc:
+            state = load_job(job_dir)
+            mark_stage_failed(job_dir, state.current_stage, str(exc))
             state = load_job(job_dir)
             raise HTTPException(
                 status_code=409,
@@ -709,6 +711,12 @@ async def _execute_run_all_locked(
                     "Shorts autopilot auto-trigger failed (non-fatal)", exc_info=True
                 )
     except StageInputMissingError as exc:
+        state = load_job(job_dir)
+        # Persist the failure so job.json reflects the real halt — otherwise the
+        # stage stays 'pending' and dashboard/timeline show a stale in-progress
+        # job forever (bug-421), and status derivation misreports it as an
+        # approval block (bug-424).
+        mark_stage_failed(job_dir, state.current_stage, str(exc))
         state = load_job(job_dir)
         await notify_job_failed(
             state.job_id,

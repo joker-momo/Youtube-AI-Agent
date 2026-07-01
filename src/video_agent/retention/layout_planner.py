@@ -129,6 +129,10 @@ def has_valid_myth(scene: dict[str, Any]) -> bool:
 
 def downgrade(scene: dict[str, Any], reason: str) -> None:
     scene["layout"] = "subtitle"
+    # Clear the card payload: a downgraded scene renders as a plain subtitle (no card),
+    # so a retained rich payload is dead data that QA flags as "rich payload despite
+    # downgraded". Emptying it keeps the artifact consistent with the layout.
+    scene["layout_payload"] = {"title": "", "body": "", "bullets": [], "cta": ""}
     add_warning(scene, reason)
 
 

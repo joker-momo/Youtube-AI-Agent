@@ -71,7 +71,9 @@ def test_checklist_allows_safe_shortened_bullets_without_inventing_content():
     [planned_unsafe] = apply_retention_layouts([unsafe])
 
     assert planned_unsafe["layout"] == "subtitle"
-    assert planned_unsafe["layout_payload"]["bullets"] == ["Proteína", "Verduras"]
+    # Downgraded scenes render as plain subtitles, so the planner clears the card payload
+    # (no invented content is added — the bullets are emptied, not rewritten).
+    assert planned_unsafe["layout_payload"]["bullets"] == []
 
 
 def test_warning_requires_warning_intent():

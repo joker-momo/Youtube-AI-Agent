@@ -234,18 +234,22 @@ def job_timeline(
     # parallel DAG scheduler (post-scenes stages run as concurrent resource lanes,
     # see run_all_pipeline.py set_dag_mode). During a DAG run the pointer freezes
     # at whatever stage was current when DAG mode kicked in (e.g. "visual_spans")
-    # even while render/graphic_images/etc. are actually in_progress or done.
-    # Prefer the stage actually marked in_progress — that reflects DAG-mode
-    # reality — and only fall back to the stale pointer when nothing is running.
-    in_progress_stage = next(
-        (
-            s.get("name")
-            for s in state.get("stages", [])
-            if str(s.get("status") or "") == "in_progress"
-        ),
-        None,
+    # and NEVER moves again — not while render/graphic_images/etc. are actually
+    # in_progress, and not even once the job fully completes (an in_progress-only
+    # fallback still returns the frozen pointer once nothing is in_progress
+    # anymore). Derive current_stage from the stage list itself instead: the
+    # LAST stage in pipeline order that isn't still "pending" is, by
+    # definition, the furthest the run has actually reached — in_progress,
+    # completed, or failed — which is correct for a live DAG run, a finished
+    # job, and a linear (non-DAG) run alike.
+    non_pending_stages = [
+        s.get("name")
+        for s in state.get("stages", [])
+        if str(s.get("status") or "pending") != "pending"
+    ]
+    current_stage = (non_pending_stages[-1] if non_pending_stages else None) or state.get(
+        "current_stage"
     )
-    current_stage = in_progress_stage or state.get("current_stage")
     queue_status = _queue_status(jobs_root, job_id, job_dir)
     current_stage_active = queue_status == "running" or job_has_in_progress_stage(state)
     for raw_stage in state.get("stages", []):
@@ -387,17 +391,17 @@ def job_timeline(
         "approvals": approvals,
         "required_approvals": list(APPROVAL_REQUIRED_STAGES),
         # approval_blocked_by means "the job is paused, waiting on you" — that
-        # can't be true while it is actively running. approval_block_for_current_stage
-        # only compares stage ORDER, so an approval-gated stage the job already
-        # advanced past (e.g. a run started with enforce_approvals=False, which
-        # never flips the approval flag to True but proceeds anyway) still reads
-        # as unapproved and gets reported as blocking a job that plainly isn't
-        # blocked (bug: "approval_blocked_by=idea_research" on a running job).
-        # Also suppress on a failed job — it isn't waiting on an approval either,
-        # it needs the real failure surfaced instead (bug-424).
+        # can't be true while it is actively running, already finished, or
+        # failed. approval_block_for_current_stage only compares stage ORDER,
+        # so an approval-gated stage the job already advanced past (e.g. a run
+        # started with enforce_approvals=False, which never flips the approval
+        # flag to True but proceeds anyway) still reads as unapproved and gets
+        # reported as blocking a job that plainly isn't blocked — both while
+        # running AND after it has fully completed (bug:
+        # "approval_blocked_by=idea_research" on a running AND on a completed job).
         "approval_blocked_by": (
             None
-            if queue_status == "failed" or current_stage_active
+            if queue_status in ("failed", "completed") or current_stage_active
             else approval_block_for_current_stage(current_stage, approvals)
         ),
         "stop_requested": stop_requested,

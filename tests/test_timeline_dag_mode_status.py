@@ -51,6 +51,35 @@ def _make_job(tmp_path: Path, job_id: str = "job-active") -> Path:
     return job_dir
 
 
+def _make_completed_job(tmp_path: Path, job_id: str = "job-done") -> Path:
+    job_dir = tmp_path / job_id
+    job_dir.mkdir(parents=True)
+    (job_dir / "json").mkdir()
+    # DAG-mode run that finished: EVERY stage completed, so nothing is
+    # in_progress anymore. state.current_stage is still frozen at "visual_spans"
+    # (the pointer never advances under DAG mode — see _make_job above). An
+    # in-progress-only fallback would keep returning the stale pointer forever,
+    # even for a fully finished job (bug found after fb5684c's initial fix:
+    # Codex confirmed the API still showed current_stage=visual_spans and
+    # approval_blocked_by=idea_research on a completed job after a dashboard
+    # restart, ruling out "stale process" as the cause).
+    stages = [
+        StageStatus(name=name, status="completed", completed_at="2026-07-01T13:58:34+00:00")
+        for name in DEFAULT_STAGES
+    ]
+    state = JobState(
+        job_id=job_id,
+        channel_id="vida-plena-45",
+        idea_path="idea.json",
+        created_at="2026-07-01T11:00:00+00:00",
+        updated_at="2026-07-01T13:58:34+00:00",
+        current_stage="visual_spans",
+        stages=stages,
+    )
+    save_job(job_dir, state)
+    return job_dir
+
+
 @pytest.fixture
 def jobs_root(tmp_path: Path) -> Path:
     return tmp_path
@@ -131,3 +160,26 @@ def test_shorts_autopilot_shows_in_progress_once_review_completes(jobs_root: Pat
     shorts_stage = next((s for s in result["stages"] if s.get("name") == "shorts_autopilot"), None)
     assert shorts_stage is not None
     assert shorts_stage["status"] == "in_progress"
+
+
+def test_completed_dag_job_reports_last_stage_not_frozen_pointer(jobs_root: Path):
+    job_dir = _make_completed_job(jobs_root)
+    queue = JobQueue(jobs_root / "queue.db")
+    queue.enqueue(job_id="job-done", command="run_all", enforce_approvals=False)
+    queue.mark_running("job-done")
+    queue.mark_completed("job-done")
+
+    result = job_timeline("job-done", jobs_root)
+    assert result["current_stage"] == DEFAULT_STAGES[-1]
+    assert result["current_stage"] != "visual_spans"
+
+
+def test_completed_dag_job_approval_blocked_by_is_none(jobs_root: Path):
+    job_dir = _make_completed_job(jobs_root)
+    queue = JobQueue(jobs_root / "queue.db")
+    queue.enqueue(job_id="job-done", command="run_all", enforce_approvals=False)
+    queue.mark_running("job-done")
+    queue.mark_completed("job-done")
+
+    result = job_timeline("job-done", jobs_root)
+    assert result["approval_blocked_by"] is None

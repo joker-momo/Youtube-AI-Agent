@@ -129,20 +129,21 @@ def _brand_style(style: dict[str, Any]) -> str:
         f"the accent {accent} or secondary {sec} ONLY as a small accent (one word, an underline, or "
         "a marker icon). Do NOT use navy, pure black, stark white blocks, neon, or a harsh full-"
         "bleed gradient. Lay it out as a calm, premium wellness-magazine card with generous "
-        "padding, rounded corners and a clear text hierarchy. "
+        "padding, rounded corners and a clear text hierarchy. Give the panel a soft drop shadow "
+        "and gentle depth so it feels premium and tactile, never flat. "
     )
 
 
 _CARD_KIND = {
-    "hook": "a bold full-bleed hook title card, headline set VERY large, no bullet list and no check-marks",
-    "checklist": "a clean checklist card, each item on its own row led by a small check-mark in the brand accent colour",
-    "quote": "an editorial quote card: one large centered sentence in quotation marks, no check-marks, no bullet list",
+    "hook": "a bold full-bleed hook TITLE BANNER — headline set VERY large across the whole frame with minimal panel, no bullet list and no check-marks",
+    "checklist": "a clean checklist card on a soft side panel, each item on its own row led by a small check-mark in the brand accent colour",
+    "quote": "an editorial quote card: one large centered sentence in quotation marks on a soft LIGHT background-colour panel (NOT the primary-colour panel), no check-marks, no bullet list",
     "cta": "a call-to-action card with a clear button",
     "warning": "a cautionary card using cross / caution markers in the brand secondary colour (not check-marks), with an 'avoid this' tone",
-    "stat": "a bold statistic card built around ONE very large number as the focal point, minimal supporting text",
-    "steps": "a numbered step-by-step timeline card: ordered items 1, 2, 3 connected by arrows or chevrons, no check-marks",
-    "comparison": "a two-column comparison card: two options side by side separated by a clear central divider",
-    "myth": "a myth-versus-fact card: two contrasting rows, a secondary-cross 'Mito' row above an accent-check 'Realidad' row",
+    "stat": "a bold statistic card built around ONE ENORMOUS number as the hero, the number filling roughly half the card with only a small label — center or left aligned",
+    "steps": "a numbered step-by-step timeline card on a side panel: ordered items 1, 2, 3 connected by arrows or chevrons, no check-marks",
+    "comparison": "a two-column comparison card: two options side by side, each on its own half, separated by a clear central divider",
+    "myth": "a myth-versus-fact card: two stacked contrasting rows, a secondary-colour-cross 'Mito' row above an accent-check 'Realidad' row",
 }
 
 
@@ -153,9 +154,9 @@ def _content_lines(layout: str, title: str, body: str, bullets: list[str], cta: 
     lines: list[str] = []
     if layout == "stat":
         if title:
-            lines.append(f'ONE very large focal number/stat dominating the card: "{title}".')
+            lines.append(f'ONE ENORMOUS focal number/stat as the hero, filling about half the card: "{title}".')
         if body:
-            lines.append(f'A short label beneath the number: "{body}".')
+            lines.append(f'A small label beneath the number, MUCH smaller than the number: "{body}".')
         return lines
     if layout == "steps":
         if title:

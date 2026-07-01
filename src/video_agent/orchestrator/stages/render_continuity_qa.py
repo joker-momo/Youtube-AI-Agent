@@ -19,7 +19,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Sequence
 
-from video_agent.contracts import ARTIFACT_SCENES
+from video_agent.contracts import ARTIFACT_SCENES, ARTIFACT_VIDEO
 from video_agent.orchestrator.job_state import load_job
 from video_agent.orchestrator.stages._shared import (
     StageInputMissingError,
@@ -157,7 +157,12 @@ def _sample_luma(
 
 
 def _find_rendered_video(job_dir: Path) -> Path | None:
-    candidate = job_dir / "video.mp4"
+    # ARTIFACT_VIDEO ("outputs/video.mp4") is where the renderer actually writes
+    # the final file (same source of truth render_review.py uses). This used to
+    # check only the legacy root job_dir/video.mp4 and a non-recursive top-level
+    # glob, missing outputs/video.mp4 entirely — the stage silently PASS-skipped
+    # a completed render because it never found the video that existed.
+    candidate = _resolve_artifact(job_dir, ARTIFACT_VIDEO, "video.mp4")
     if candidate.exists():
         return candidate
     mp4s = [p for p in job_dir.glob("*.mp4") if p.is_file()]

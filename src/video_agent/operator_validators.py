@@ -38,7 +38,10 @@ SCENE_ID_PATTERN = re.compile(r"^scene-\d{2}$")
 SPANISH_SPECIFIC_CHARS = set("ñ¿¡üÑÜ")
 ALLOWED_ASSET_REF_KEYS = {"background", "primary", "secondary", "bg", "overlay"}
 FORBIDDEN_QA_VALUES = {"PASS", "PASSED", "TRUE", "OK", "APPROVED", "VERIFIED"}
-ALLOWED_LAYOUTS = {"hook", "subtitle", "checklist", "warning", "quote", "cta", "stat", "steps", "comparison", "myth"}
+ALLOWED_LAYOUTS = {
+    "hook", "subtitle", "checklist", "warning", "quote", "cta", "stat", "steps", "comparison", "myth",
+    "plate_map", "recipe_snapshot", "quote_portrait", "evidence_nugget", "do_dont",
+}
 
 
 def load_operator_channel_config(channel_path: Path | None, parsed: dict[str, Any]) -> dict[str, Any]:

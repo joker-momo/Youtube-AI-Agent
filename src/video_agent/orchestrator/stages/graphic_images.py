@@ -155,6 +155,11 @@ _CARD_KIND = {
     "steps": "a numbered step-by-step timeline card on a side panel: ordered items 1, 2, 3 connected by arrows or chevrons, no check-marks",
     "comparison": "a two-column comparison card: two options side by side, each on its own half, separated by a clear central divider",
     "myth": "a myth-versus-fact card: two stacked contrasting rows, a secondary-colour-cross 'Mito' row above an accent-check 'Realidad' row",
+    "plate_map": "a top-down 'healthy plate' card: ONE round plate of real food, each component labelled DIRECTLY on/beside its section with a short marker line in the brand colours",
+    "recipe_snapshot": "a recipe-snapshot card: 2-3 real food photos as clean side-by-side tiles, each with a short label — a practical example, not a text list",
+    "quote_portrait": "a magazine-style quote-portrait card: ONE large quotation beside a warm candid portrait of an adult 60+, editorial cover feel, no boxed text panel",
+    "evidence_nugget": "an evidence-nugget card: ONE number/fact as a large documentary-style lower-third over a real photo, serious and credible, minimal extra text",
+    "do_dont": "a do-versus-don't card: TWO real photos side by side — the worse choice desaturated with a cross marker, the better choice bright with a check marker",
 }
 
 
@@ -198,6 +203,37 @@ def _content_lines(layout: str, title: str, body: str, bullets: list[str], cta: 
             lines.append(f'Top row labelled "Mito" with a cross icon in the brand secondary (caution) colour: "{title}".')
         if body:
             lines.append(f'Bottom row labelled "Realidad" with a check icon in the brand accent colour: "{body}".')
+        return lines
+    if layout == "plate_map":
+        if title:
+            lines.append(f'Small heading: "{title}".')
+        if bullets:
+            lines.append(f"Label each plate component DIRECTLY on/beside its portion with a short marker line (brand colours): {items}.")
+        return lines
+    if layout == "recipe_snapshot":
+        if title:
+            lines.append(f'Small heading: "{title}".')
+        if bullets:
+            lines.append(f"Show {len(bullets)} real food-photo tiles side by side, each with its short label: {items}.")
+        return lines
+    if layout == "quote_portrait":
+        quote = body or title
+        if quote:
+            lines.append(f'ONE large magazine-style quotation in quote marks beside a warm candid portrait of an adult 60+: "{quote}". No bullet list.')
+        return lines
+    if layout == "evidence_nugget":
+        if title:
+            lines.append(f'ONE bold number/fact as a large documentary lower-third over a real photo: "{title}".')
+        if body:
+            lines.append(f'A small context line beneath it: "{body}".')
+        return lines
+    if layout == "do_dont":
+        bad = bullets[0] if len(bullets) >= 1 else title
+        good = bullets[1] if len(bullets) >= 2 else body
+        if bad:
+            lines.append(f'LEFT photo (the WORSE choice): desaturated, with a cross marker in the brand secondary colour — "{bad}".')
+        if good:
+            lines.append(f'RIGHT photo (the BETTER choice): bright, with a check marker in the brand accent colour — "{good}".')
         return lines
     if layout == "warning":
         if title:

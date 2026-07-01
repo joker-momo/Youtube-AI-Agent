@@ -260,3 +260,28 @@ def test_duplicate_graphic_headline_downgraded():
     planned = apply_retention_layouts([a, mid, c])
     assert planned[0]["layout"] == "warning"
     assert planned[2]["layout"] == "subtitle"  # duplicate headline downgraded
+
+
+def test_new_batch_types_keep_when_supported():
+    cases = [
+        ("plate_map", "Completa el plato con proteína, vegetal y fibra.", {"title": "Tu plato", "bullets": ["proteína", "vegetal", "fibra"]}),
+        ("recipe_snapshot", "Prueba yogur, avena y fruta en el desayuno.", {"title": "Desayuno", "bullets": ["yogur", "avena", "fruta"]}),
+        ("quote_portrait", "Come para vivir, no vivas para comer.", {"body": "Come para vivir, no vivas para comer"}),
+        ("evidence_nugget", "Después de los 60 pierdes masa muscular.", {"title": "después de los 60", "body": "masa muscular"}),
+        ("do_dont", "Evita la cena pesada, mejor una cena ligera.", {"bullets": ["cena pesada", "cena ligera"]}),
+    ]
+    for lay, narr, pay in cases:
+        [out] = apply_retention_layouts([_scene(layout=lay, narration=narr, layout_payload=pay)])
+        assert out["layout"] == lay, f"{lay} should stay (got {out['layout']})"
+
+
+def test_new_batch_types_downgrade_when_unsupported():
+    cases = [
+        ("plate_map", {"bullets": ["xxx", "yyy"]}),
+        ("quote_portrait", {"body": "texto totalmente no soportado"}),
+        ("evidence_nugget", {"title": "999 zzz"}),
+        ("do_dont", {"bullets": ["aaa", "bbb"]}),
+    ]
+    for lay, pay in cases:
+        [out] = apply_retention_layouts([_scene(layout=lay, narration="Narración sin relación alguna.", layout_payload=pay)])
+        assert out["layout"] == "subtitle", f"{lay} should downgrade (got {out['layout']})"

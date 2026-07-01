@@ -3,8 +3,14 @@ from __future__ import annotations
 import re
 from typing import Any
 
-ALLOWED_LAYOUTS = {"hook", "subtitle", "checklist", "warning", "quote", "cta", "stat", "steps", "comparison", "myth"}
-PATTERN_BREAK_LAYOUTS = {"hook", "checklist", "warning", "quote", "stat", "steps", "comparison", "myth"}
+ALLOWED_LAYOUTS = {
+    "hook", "subtitle", "checklist", "warning", "quote", "cta", "stat", "steps", "comparison", "myth",
+    "plate_map", "recipe_snapshot", "quote_portrait", "evidence_nugget", "do_dont",
+}
+PATTERN_BREAK_LAYOUTS = {
+    "hook", "checklist", "warning", "quote", "stat", "steps", "comparison", "myth",
+    "plate_map", "recipe_snapshot", "quote_portrait", "evidence_nugget", "do_dont",
+}
 WARNING_MARKERS = {
     "error", "errores", "evita", "evitar", "no hagas", "cuidado", "riesgo",
     "problema", "peligro", "demasiado", "extremo", "saltarte", "culpa",
@@ -193,6 +199,16 @@ def apply_retention_layouts(
             downgrade(scene, "Comparison downgraded to subtitle: missing two supported sides.")
         elif layout == "myth" and not has_valid_myth(scene):
             downgrade(scene, "Myth downgraded to subtitle: missing supported myth + reality text.")
+        elif layout == "plate_map" and not has_valid_bullets(scene):
+            downgrade(scene, "Plate map downgraded to subtitle: missing 2-4 supported plate components.")
+        elif layout == "recipe_snapshot" and not has_valid_bullets(scene):
+            downgrade(scene, "Recipe snapshot downgraded to subtitle: missing 2-4 supported items.")
+        elif layout == "quote_portrait" and not has_valid_quote_text(scene):
+            downgrade(scene, "Quote portrait downgraded to subtitle: missing short supported quote text.")
+        elif layout == "evidence_nugget" and not has_valid_stat(scene):
+            downgrade(scene, "Evidence nugget downgraded to subtitle: missing a supported number/fact in title.")
+        elif layout == "do_dont" and not has_valid_comparison(scene):
+            downgrade(scene, "Do/Don't downgraded to subtitle: missing two supported sides (worse vs better).")
 
     first = scenes[0]
     if (

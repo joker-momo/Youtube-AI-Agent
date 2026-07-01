@@ -230,9 +230,17 @@ export BROWSER_TRACE_RETENTION_DAYS="${BROWSER_TRACE_RETENTION_DAYS:-3}"
 export BROWSER_TRACE_MAX_MB="${BROWSER_TRACE_MAX_MB:-512}"
 export PYTORCH_ENABLE_MPS_FALLBACK="${PYTORCH_ENABLE_MPS_FALLBACK:-1}"
 
+_actual_listener_pid() {
+  # PID actually bound to a TCP port, or empty if nothing is listening.
+  # Distinct from a pidfile-recorded PID, which can be alive-but-not-listening
+  # (an orphan left over from a bypassed/manual restart) — see reconcile below.
+  local port="$1"
+  lsof -ti "TCP:${port}" -sTCP:LISTEN 2>/dev/null | head -1
+}
+
 start_proc() {
-  local name="$1"
-  shift
+  local name="$1" port="$2"
+  shift 2
   local logfile="logs/${name}.log"
   local pidfile="${PIDFILE_DIR}/${name}.pid"
 
@@ -240,8 +248,30 @@ start_proc() {
     local old_pid
     old_pid="$(cat "${pidfile}")"
     if kill -0 "${old_pid}" 2>/dev/null; then
-      echo -e "${GREEN}${name} already running (pid ${old_pid})${NC}"
-      return 0
+      # For port-bound services, "alive" alone isn't enough — a manual/bypassed
+      # restart can leave the OLD pid alive but no longer holding the port
+      # (some other pid now listens, or nothing does). Trusting kill -0 alone
+      # here previously reported "already running" on a dead, CPU-burning
+      # orphan and skipped starting the real replacement.
+      if [[ -z "${port}" ]]; then
+        echo -e "${GREEN}${name} already running (pid ${old_pid})${NC}"
+        return 0
+      fi
+      local listener
+      listener="$(_actual_listener_pid "${port}")"
+      if [[ "${listener}" == "${old_pid}" ]]; then
+        echo -e "${GREEN}${name} already running (pid ${old_pid}, listening on :${port})${NC}"
+        return 0
+      fi
+      echo -e "${YELLOW}${name} pidfile (pid ${old_pid}) is alive but not listening on :${port} — stale orphan, stopping it.${NC}"
+      kill "${old_pid}" 2>/dev/null || true
+      sleep 0.5
+      kill -9 "${old_pid}" 2>/dev/null || true
+      if [[ -n "${listener}" && "${listener}" != "${old_pid}" ]]; then
+        echo -e "${GREEN}${name} already running (pid ${listener}, listening on :${port}) — adopting into pidfile${NC}"
+        echo "${listener}" > "${pidfile}"
+        return 0
+      fi
     fi
     rm -f "${pidfile}"
   fi
@@ -271,7 +301,7 @@ wait_for_url() {
 # Auto-prune always-safe rác on every launch so disk never silently fills.
 prune_rac
 
-start_proc dashboard \
+start_proc dashboard 8000 \
   uvicorn video_agent.web.app:app --host 127.0.0.1 --port 8000
 
 if [[ "${RUN_MODE}" == "dashboard" ]]; then
@@ -289,10 +319,10 @@ fi
 bash "${REPO_DIR}/scripts/launch_chromium_mac.sh" || \
   echo -e "${YELLOW}Chromium launch returned non-zero (may already be running).${NC}"
 
-start_proc browser-worker \
+start_proc browser-worker 8001 \
   uvicorn video_agent.browser_worker.app:app --host 127.0.0.1 --port 8001
 
-start_proc worker \
+start_proc worker "" \
   "${REPO_DIR}/.venv/bin/python" -m video_agent.cli worker --db-path jobs/queue.db
 
 wait_for_url "dashboard" "http://127.0.0.1:8000/health" 60 || true

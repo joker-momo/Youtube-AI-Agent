@@ -71,3 +71,4 @@ configs/*/assets/elena/
 remotion/public/assets/elena/
 remotion/public/test_fixtures/
 /tools
+.render_tmp/

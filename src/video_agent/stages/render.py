@@ -25,6 +25,30 @@ class RemotionSubprocessError(RuntimeError):
     """Remotion failed; message includes the subprocess output tail."""
 
 
+def _render_tmp_dir() -> Path:
+    """Dedicated Remotion temp on the repo's (large) volume, NOT the system /tmp.
+
+    Remotion buffers decoded frames + asset segments in os.tmpdir(); on macOS that
+    is the small, OS-shared ``/var/folders`` volume, which a long 1080p render can
+    fill → ENOSPC mid-render (bug 2026-07-01). The repo lives on the large data
+    volume, so a sibling ``.render_tmp`` there has far more headroom.
+    """
+    d = repo_root() / ".render_tmp"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _assert_render_disk_space(min_gb: float = 15.0) -> None:
+    """Fail fast (before the long render) if the temp volume is low on space."""
+    free_gb = shutil.disk_usage(_render_tmp_dir()).free / 1e9
+    if free_gb < min_gb:
+        raise RuntimeError(
+            f"Only {free_gb:.1f} GB free on the render temp volume ({_render_tmp_dir()}); "
+            f"need >= {min_gb:.0f} GB. Free space (old jobs/, composed clips, demos) before "
+            "rendering to avoid an ENOSPC crash mid-render."
+        )
+
+
 def _audio_loudness_config(render_props_path: Path) -> dict:
     props = read_json(render_props_path)
     render_cfg = props.get("render", {}) or {}
@@ -271,6 +295,10 @@ def _run_with_progress(
     if stop_request_path is not None and stop_request_path.exists():
         raise RuntimeError("Stop requested by operator.")
     output_tail: list[str] = []
+    # Redirect Remotion's temp (decoded-frame / asset buffers) onto the repo's large
+    # volume instead of the small, macOS-shared system /var/folders — a long 1080p
+    # render otherwise fills the system volume and dies with ENOSPC mid-render.
+    render_env = {**os.environ, "TMPDIR": str(_render_tmp_dir())}
     with subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -278,6 +306,7 @@ def _run_with_progress(
         text=True,
         cwd=repo_root(),
         start_new_session=True,
+        env=render_env,
     ) as proc:
         if pid_file_path is not None:
             try:
@@ -495,6 +524,7 @@ def render_with_remotion(
         job_dir = job_dir.parent
 
     expected_duration_sec = validate_render_duration_matches_scene_sum(render_props_path)
+    _assert_render_disk_space()  # fail fast instead of ENOSPC at ~98%
     commands = build_remotion_commands(render_props_path, video_path)
     progress_path = job_dir / "json" / "render_progress.json"
     render_pid_path = job_dir / "json" / ".render.pid"

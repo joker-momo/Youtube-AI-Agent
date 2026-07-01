@@ -210,19 +210,22 @@ def get_render_progress(
     jobs_root: Path = Depends(get_jobs_root),
 ) -> dict:
     """Return current Remotion render progress. Polling-friendly — always 200."""
+    import json as _json
+
     job_dir = _safe_job_dir(jobs_root, job_id)
     progress_path = job_dir / "json" / "render_progress.json"
     if not progress_path.exists():
         progress_path = job_dir / "render_progress.json"
-    if not progress_path.exists():
-        return {"percent": 0, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""}
-    try:
-        import json as _json
-        data = _json.loads(progress_path.read_text(encoding="utf-8"))
-    except Exception:
-        data = {"percent": 0, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""}
-    # Before Remotion emits frames, the render stage is in prepare_assets — surface
-    # its per-scene B-roll progress (``audio_progress.json`` → "visuals (scene N/M)").
+    data = {"percent": 0, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""}
+    if progress_path.exists():
+        try:
+            data = _json.loads(progress_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    # Before Remotion emits frames — incl. while prepare_assets runs and the Remotion
+    # progress file does NOT exist yet — surface per-scene B-roll progress
+    # (``audio_progress.json`` → "visuals (scene N/M)") so the UI isn't stuck on a
+    # static "Fetching B-roll…" label during the (long) B-roll fetch.
     if not data.get("frame"):
         ap = job_dir / "json" / "audio_progress.json"
         if ap.exists():

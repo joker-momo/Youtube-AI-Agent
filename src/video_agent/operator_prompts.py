@@ -469,6 +469,7 @@ def _chatgpt_scenes_batch_prompt(
         "- Scene IDs must exactly match the requested range.",
         "- Every scene must include: id, duration_sec, narration, on_screen_text, caption, visual_prompt, motion, asset_refs, layout, layout_payload, layout_reason.",
         "- asset_refs must be {}.",
+        "- All card payload text (title/body/bullets) must be COPIED from the narration/caption using the SAME words (you may shorten to a short phrase, but do NOT paraphrase or invent) — Python downgrades any layout whose payload text is not found in the scene's narration/caption/on_screen_text.",
         "- ⚠️ visual_prompt MANDATORY ENGLISH ONLY. NEVER Spanish. Fed directly to Pexels (English keyword search). Spanish visual_prompt = rejected, you will be asked to regenerate. Example: 'Mature adult woman drinking herbal tea on a sofa at night, warm tungsten lighting, medium shot'.",
         "- narration must reproduce the approved script content for this scene range FAITHFULLY: keep every concrete detail, example, step, and explanation from the matching script sections. Do NOT summarize, shorten, or drop content.",
         "- If a script section is long, split it across MORE scenes (35–60 words each) rather than cutting content.",

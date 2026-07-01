@@ -506,6 +506,13 @@ const SceneView: React.FC<{
           video clip or photo. Suppressed when the compiled timeline owns the layer. */}
       {hideBackground ? null : scene.graphic?.image_ref ? (
         hybridCardBg ? (
+          scene.layout === 'cta' ? (
+            // CTA end-card: FULL-SCREEN (no shrink) for an impactful subscribe frame.
+            <Img
+              src={mediaSrc(scene.graphic.image_ref)}
+              style={{position: 'absolute', width: '100%', height: '100%', objectFit: 'cover', opacity: cardOpacity}}
+            />
+          ) : (
           // Hybrid: fixed brand-gradient bg video full-bleed + the generated card
           // shrunk, centered, rounded with a soft drop shadow (bg motion shows
           // around the edges). Kills the "static slideshow" feel of graphic scenes.
@@ -530,6 +537,7 @@ const SceneView: React.FC<{
               />
             </AbsoluteFill>
           </>
+          )
         ) : (
           <Img
             src={mediaSrc(scene.graphic.image_ref)}

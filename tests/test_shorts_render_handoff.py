@@ -210,7 +210,9 @@ def test_prepared_short_operator_render_skips_asset_preparation_and_writes_final
         raise AssertionError("prepare_assets must not run for prepared shorts")
 
     monkeypatch.setattr("video_agent.pipeline.prepare_assets", fail_prepare_assets)
-    monkeypatch.setattr("video_agent.pipeline.create_visual_contact_sheet", lambda *a, **k: None)
+    # create_visual_contact_sheet was removed by the faceless-render refactor
+    # (f671050) — _write_visual_review now sets contact_sheet to the artifact
+    # constant directly, no separate generator call to monkeypatch.
     monkeypatch.setattr(
         "video_agent.pipeline._write_visual_review",
         lambda *a, **k: {

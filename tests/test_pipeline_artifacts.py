@@ -64,9 +64,18 @@ def test_operator_render_writes_review_page_without_render(tmp_path, monkeypatch
     monkeypatch.delenv("PEXELS_API_KEY", raising=False)
     monkeypatch.delenv("PIXABAY_API_KEY", raising=False)
     channel_config = read_yaml(ROOT / "configs/vida-plena-45/channel.yaml")
+    # Real local image so scene-01 resolves normally instead of falling back
+    # to generated_placeholder, which _validate_visual_review hard-blocks
+    # (PLACEHOLDER_USED=error) — this test is about the review-page artifact,
+    # not visual QA.
+    image_library = tmp_path / "image-library"
+    image_library.mkdir()
+    from PIL import Image
+
+    Image.new("RGB", (64, 64), color=(40, 60, 50)).save(image_library / "scene-01.jpg")
     channel_config["visuals"] = {
         "strategy": "local_directory",
-        "source_dir": str(tmp_path / "missing-image-library"),
+        "source_dir": str(image_library),
         "scene_count_target": 1,
     }
     channel_config["tts"] = {"provider": "mock-local", "sample_rate": 24000}
@@ -152,9 +161,19 @@ def test_operator_render_prepares_kokoro_audio_in_subprocess(tmp_path, monkeypat
     monkeypatch.delenv("PEXELS_API_KEY", raising=False)
     monkeypatch.delenv("PIXABAY_API_KEY", raising=False)
     channel_config = read_yaml(ROOT / "configs/vida-plena-45/channel.yaml")
+    # A genuinely empty library makes EVERY scene fall back to
+    # generated_placeholder, which _validate_visual_review now hard-blocks
+    # (PLACEHOLDER_USED=error — the project's "never ship a blank scene"
+    # rule). This test is about the kokoro audio subprocess path, not visual
+    # QA, so give scene-01 a real local image to resolve normally.
+    image_library = tmp_path / "image-library"
+    image_library.mkdir()
+    from PIL import Image
+
+    Image.new("RGB", (64, 64), color=(40, 60, 50)).save(image_library / "scene-01.jpg")
     channel_config["visuals"] = {
         "strategy": "local_directory",
-        "source_dir": str(tmp_path / "missing-image-library"),
+        "source_dir": str(image_library),
         "scene_count_target": 1,
     }
     channel_config["tts"] = {

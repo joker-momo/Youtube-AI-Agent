@@ -869,17 +869,38 @@ def _render_segments(
             frame_range=(start, end),
             seamless_concat=True,
         )
-        _run_with_progress(
-            commands.video,
-            progress_path,
-            stop_request_path=stop_request_path,
-            pid_file_path=render_pid_path,
-            progress_overrides={
-                "segment_index": index,
-                "segment_total": segment_total,
-                "segments_done": index - 1,
-            },
-        )
+        for seg_attempt in range(2):
+            try:
+                _run_with_progress(
+                    commands.video,
+                    progress_path,
+                    stop_request_path=stop_request_path,
+                    pid_file_path=render_pid_path,
+                    progress_overrides={
+                        "segment_index": index,
+                        "segment_total": segment_total,
+                        "segments_done": index - 1,
+                    },
+                )
+                break
+            except RemotionSubprocessError as exc:
+                # The bundle's public dir is a SYMLINK to remotion/public
+                # (Remotion CLI: symlinkPublicDir for ephemeral bundles), and
+                # assets are fetched lazily DURING the render — so anything
+                # that touches remotion/public/jobs/<job>/ mid-render (a
+                # concurrent asset re-sync, another agent session) 404s the
+                # segment at a random frame (bug-451: narration.wav 404 at
+                # frame 1408). The asset is usually back by the time we
+                # retry; one retry converts a lost render into a lost couple
+                # of minutes.
+                if seg_attempt == 0 and "status code of 404" in str(exc):
+                    print(
+                        f"[render] segment {index}: asset 404 mid-render "
+                        "(public symlink target mutated?) — retrying once",
+                        flush=True,
+                    )
+                    continue
+                raise
         if not _segment_is_valid(seg_path, start=start, end=end, fps=fps):
             expected_sec = (end - start + 1) / fps
             raise RemotionSubprocessError(

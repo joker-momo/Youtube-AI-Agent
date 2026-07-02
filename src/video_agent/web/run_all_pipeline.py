@@ -62,6 +62,20 @@ def stop_request_path(job_dir: Path) -> Path:
     return job_dir / STOP_REQUEST_FILE
 
 
+def _actual_failed_stage(state) -> str:
+    """The stage that actually failed, for failure bookkeeping.
+
+    ``current_stage`` is a linear pointer that FREEZES once the parallel DAG
+    takes over (set_dag_mode) — so a render failure used to be recorded on
+    whatever stage the pointer froze at (observed: 'visual_spans' marked
+    failed with a render error while 'render' stayed in_progress forever;
+    bug-446/bug-451). The stage genuinely running is the LAST in_progress one
+    in pipeline order; fall back to the pointer for linear-mode runs where
+    nothing is in_progress."""
+    in_progress = [s.name for s in state.stages if s.status == "in_progress"]
+    return in_progress[-1] if in_progress else state.current_stage
+
+
 def is_run_locked(job_dir: Path) -> bool:
     lock_path = job_dir / ".run.lock"
     if not lock_path.exists():
@@ -249,7 +263,7 @@ async def _execute_run_all_locked(
             )
         except StageInputMissingError as exc:
             state = load_job(job_dir)
-            mark_stage_failed(job_dir, state.current_stage, str(exc))
+            mark_stage_failed(job_dir, _actual_failed_stage(state), str(exc))
             state = load_job(job_dir)
             raise HTTPException(
                 status_code=409,
@@ -723,7 +737,7 @@ async def _execute_run_all_locked(
         # stage stays 'pending' and dashboard/timeline show a stale in-progress
         # job forever (bug-421), and status derivation misreports it as an
         # approval block (bug-424).
-        mark_stage_failed(job_dir, state.current_stage, str(exc))
+        mark_stage_failed(job_dir, _actual_failed_stage(state), str(exc))
         state = load_job(job_dir)
         await notify_job_failed(
             state.job_id,

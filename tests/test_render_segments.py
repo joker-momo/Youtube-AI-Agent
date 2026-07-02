@@ -403,3 +403,85 @@ def test_render_with_remotion_reuses_valid_existing_video_without_rerendering(tm
     render_mod.render_with_remotion(render_props, video_path, notify_telegram=False)
 
     assert video_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Regression: segment 404 retry (bug-451) — the bundle's public dir is a
+# symlink to remotion/public; a mid-render mutation of the target 404s the
+# segment at a random frame. One retry recovers it.
+# ---------------------------------------------------------------------------
+
+def test_segment_retries_once_on_asset_404(tmp_path, monkeypatch):
+    import video_agent.stages.render as render_mod
+
+    job_dir = tmp_path / "job"
+    (job_dir / "json").mkdir(parents=True)
+    render_props = job_dir / "json" / "render_props.json"
+    render_props.write_text(
+        json.dumps({"render": {"fps": 30, "segment_seconds": 1, "duration_in_frames": 30}}),
+        encoding="utf-8",
+    )
+    # duration_in_frames == segment span -> single segment; use 2 segments
+    render_props.write_text(
+        json.dumps({"render": {"fps": 30, "segment_seconds": 1, "duration_in_frames": 60}}),
+        encoding="utf-8",
+    )
+    video_path = job_dir / "outputs" / "video.mp4"
+
+    calls = {"n": 0}
+
+    def flaky_run_with_progress(cmd, progress_path, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RemotionSubprocessError(
+                "Remotion subprocess exited with code 1. Last output:\n"
+                "Error: Received a status code of 404 while downloading file "
+                "http://localhost:3000/public/jobs/x/assets/narration.wav."
+            )
+        out_path = Path(cmd[7])
+        _make_clip(out_path, seconds=1.0, fps=30)
+
+    monkeypatch.setattr(render_mod, "_run_with_progress", flaky_run_with_progress)
+
+    segment_paths = render_mod._render_segments(
+        render_props,
+        video_path,
+        stop_request_path=None,
+        progress_path=job_dir / "json" / "render_progress.json",
+        render_pid_path=job_dir / "json" / ".render.pid",
+    )
+
+    assert len(segment_paths) == 2
+    # 1 failed attempt + 1 retry for segment 1, then 1 attempt for segment 2.
+    assert calls["n"] == 3
+    assert video_path.exists()
+
+
+def test_segment_does_not_retry_non_404_failures(tmp_path, monkeypatch):
+    import video_agent.stages.render as render_mod
+
+    job_dir = tmp_path / "job"
+    (job_dir / "json").mkdir(parents=True)
+    render_props = job_dir / "json" / "render_props.json"
+    render_props.write_text(
+        json.dumps({"render": {"fps": 30, "segment_seconds": 1, "duration_in_frames": 60}}),
+        encoding="utf-8",
+    )
+
+    calls = {"n": 0}
+
+    def always_crash(cmd, progress_path, **kwargs):
+        calls["n"] += 1
+        raise RemotionSubprocessError("Remotion subprocess exited with code 1. browser crashed")
+
+    monkeypatch.setattr(render_mod, "_run_with_progress", always_crash)
+
+    with pytest.raises(RemotionSubprocessError, match="browser crashed"):
+        render_mod._render_segments(
+            render_props,
+            job_dir / "outputs" / "video.mp4",
+            stop_request_path=None,
+            progress_path=job_dir / "json" / "render_progress.json",
+            render_pid_path=job_dir / "json" / ".render.pid",
+        )
+    assert calls["n"] == 1  # no retry for non-404 failures

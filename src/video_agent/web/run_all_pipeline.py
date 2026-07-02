@@ -532,7 +532,14 @@ async def _execute_run_all_locked(
             _check_stop_requested()
             await _record_gate_and_stop(
                 "scenes_promote",
-                await auto_scenes_stage(job_dir, channel_path, chatgpt_fn),
+                await auto_scenes_stage(
+                    job_dir,
+                    channel_path,
+                    chatgpt_fn,
+                    # Prewarm Gemini QA per saved batch while ChatGPT keeps
+                    # generating; scenes_qa then reuses the fresh verdicts.
+                    qa_session_fn=qa_fn if "scenes_qa" in remaining else None,
+                ),
             )
         if "scenes_qa" in remaining:
             _check_stop_requested()

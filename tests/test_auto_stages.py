@@ -1020,6 +1020,34 @@ def test_browser_client_wraps_transport_errors_as_retryable_502():
 # ---------- /run-all -------------------------------------------------------
 
 
+def _assert_pipeline_stage_order(stages: list[str], expected: list[str]) -> None:
+    """Same stages completed, honouring only the orderings the DAG guarantees.
+
+    With ``pipeline.parallel_dag: true`` the ChatGPT lane and the local
+    (cpu/mps) lane interleave, so the exact position of visual_spans /
+    whisper_timestamps / visual_schedule relative to the ChatGPT stages is
+    scheduling-dependent. Assert set equality plus the invariant orderings.
+    """
+    assert sorted(stages) == sorted(expected), stages
+    idx = stages.index
+    chatgpt_lane = [
+        s
+        for s in (
+            "script_promote", "script_qa", "scenes_promote", "scenes_qa",
+            "seo_promote", "seo_qa", "graphic_images", "thumbnail_image",
+        )
+        if s in stages
+    ]
+    assert [s for s in stages if s in chatgpt_lane] == chatgpt_lane
+    if "visual_spans" in stages and "visual_schedule" in stages:
+        assert idx("visual_spans") < idx("visual_schedule")
+    for dep in ("thumbnail_image", "whisper_timestamps", "visual_schedule"):
+        if dep in stages and "render" in stages:
+            assert idx(dep) < idx("render")
+    if "render" in stages:
+        assert idx("render") < idx("render_continuity_qa") < idx("review")
+
+
 def test_http_run_all_success(
     http_client: TestClient,
     monkeypatch,
@@ -1119,23 +1147,27 @@ def test_http_run_all_success(
     assert r.status_code == 200, r.text
     body = r.json()
     stages = [c["stage"] for c in body["completed"]]
-    assert stages == [
-        "idea_research",
-        "script_promote",
-        "script_qa",
-        "scenes_promote",
-        "scenes_qa",
-        "visual_spans",
-        "seo_promote",
-        "seo_qa",
-        "graphic_images",
-        "thumbnail_image",
-        "whisper_timestamps",
-        "visual_schedule",
-        "render",
-        "render_continuity_qa",
-        "review",
-    ]
+    _assert_pipeline_stage_order(
+        stages,
+        [
+            "idea_research",
+            "script_promote",
+            "script_qa",
+            "scenes_promote",
+            "scenes_qa",
+            "visual_spans",
+            "seo_promote",
+            "seo_qa",
+            "graphic_images",
+            "thumbnail_image",
+            "whisper_timestamps",
+            "visual_schedule",
+            "render",
+            "render_continuity_qa",
+            "review",
+        ],
+    )
+    assert stages[0] == "idea_research"
     assert all(s["status"] == "completed" for s in body["state"]["stages"])
     # 2 briefing sends + 3 ChatGPT task sends + 3 Gemini task sends = 8
     assert len(fake.calls) == 8
@@ -1351,20 +1383,23 @@ def test_http_run_all_resumes_from_current_pending_stage(
 
     assert r.status_code == 200, r.text
     stages = [c["stage"] for c in r.json()["completed"]]
-    assert stages == [
-        "scenes_promote",
-        "scenes_qa",
-        "visual_spans",
-        "seo_promote",
-        "seo_qa",
-        "graphic_images",
-        "thumbnail_image",
-        "whisper_timestamps",
-        "visual_schedule",
-        "render",
-        "render_continuity_qa",
-        "review",
-    ]
+    _assert_pipeline_stage_order(
+        stages,
+        [
+            "scenes_promote",
+            "scenes_qa",
+            "visual_spans",
+            "seo_promote",
+            "seo_qa",
+            "graphic_images",
+            "thumbnail_image",
+            "whisper_timestamps",
+            "visual_schedule",
+            "render",
+            "render_continuity_qa",
+            "review",
+        ],
+    )
     assert len(fake.calls) == 6
 
 
@@ -2262,3 +2297,378 @@ def test_http_run_batch_empty_list(http_client: TestClient):
     assert body["total"] == 0
     assert body["succeeded"] == 0
     assert body["failed"] == 0
+
+
+def test_auto_qa_with_rework_dag_mode_does_not_repromote_completed_promote(
+    tmp_path: Path,
+    channel_path: Path,
+    valid_seo_payload: dict,
+):
+    """DAG mode: when seo_promote is already completed, the QA retry loop
+    must not re-run the promoter. The old unconditional ``dag_mode() or …``
+    gate re-promoted on every attempt, emitting duplicate STAGE_COMPLETED
+    events for seo_promote (one from auto_seo_stage, one from the loop)."""
+    from video_agent.orchestrator.stages import auto_qa_with_rework
+    from video_agent.orchestrator.stages._shared import set_dag_mode
+
+    job_dir = tmp_path / "job-auto"
+    payload = dict(valid_seo_payload, job_id="job-auto")
+    _seed_at_stage(job_dir, "seo_qa", {"seo.json": payload})
+    # Raw response on disk, as after a normal auto_seo_stage run — the buggy
+    # path used it to re-promote unconditionally whenever dag_mode() was on.
+    raw_path = job_dir / "operator" / "chatgpt" / "seo.raw.txt"
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    raw_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    fake = FakeBrowserClient(queue=[json.dumps(_qa_pass_payload())])
+
+    set_dag_mode(True)
+    try:
+        output = asyncio.run(
+            auto_qa_with_rework(
+                "seo",
+                job_dir,
+                channel_path,
+                chatgpt_fn=lambda msgs: fake.run_session("chatgpt", msgs),
+                qa_session_fn=lambda msgs: fake.run_session("gemini", msgs),
+            )
+        )
+    finally:
+        set_dag_mode(False)
+
+    assert output == job_dir / "operator" / "gemini" / "seo_qa.json"
+    # Only the QA session ran; no rework chat, no re-promotion.
+    assert len(fake.calls) == 1
+    events = [
+        json.loads(line)
+        for line in (job_dir / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    promote_completions = [
+        e
+        for e in events
+        if e["event"] == "STAGE_COMPLETED"
+        and e["data"].get("stage") == "seo_promote"
+    ]
+    assert promote_completions == []
+
+
+def test_auto_scenes_sharded_retries_wrong_batch_index_before_failing(
+    tmp_path: Path,
+    channel_path: Path,
+    idea_payload: dict,
+    valid_script_payload: dict,
+    valid_scenes_payload: dict,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """ChatGPT re-answering a previous batch (wrong batch_index) must trigger
+    a repair-prompt retry, not fail the whole scenes_promote stage (the
+    'Expected batch_index 13, got 12' production failure)."""
+    job_dir = tmp_path / "job-auto"
+    _seed_script(job_dir, channel_path, idea_payload)
+    run_script_stage(job_dir, channel_path)
+    promote_script_stage(
+        job_dir,
+        channel_path,
+        raw_response=json.dumps(valid_script_payload, ensure_ascii=False),
+    )
+    _fake_pass_qa(job_dir, "script")
+    plan = {
+        "artifact_type": "scenes_plan",
+        "schema_version": "2026-05-json-shards-v1",
+        "job_id": "job-auto",
+        "channel_id": "vida-plena-45",
+        "status": "complete",
+        "batch_index": None,
+        "batch_total": None,
+        "data": {
+            "target_scene_count": 2,
+            "target_total_duration_sec": 48,
+            "batch_size": 2,
+            "batches": [
+                {
+                    "batch_index": 1,
+                    "scene_start": "scene-01",
+                    "scene_end": "scene-02",
+                    "purpose": "full test batch",
+                    "script_sections": ["section-01"],
+                }
+            ],
+        },
+        "warnings": [],
+    }
+    good_batch = {
+        "artifact_type": "scenes_batch",
+        "schema_version": "2026-05-json-shards-v1",
+        "job_id": "job-auto",
+        "channel_id": "vida-plena-45",
+        "status": "complete",
+        "batch_index": 1,
+        "batch_total": 1,
+        "data": {
+            "scene_start": "scene-01",
+            "scene_end": "scene-02",
+            "scenes": valid_scenes_payload["scenes"],
+        },
+        "warnings": [],
+    }
+    # Valid envelope shape, wrong batch_index — the model re-answered
+    # another batch, as in the production failure.
+    wrong_batch = dict(good_batch, batch_index=2)
+    fake = FakeBrowserClient(
+        queue=[json.dumps(plan), json.dumps(wrong_batch), json.dumps(good_batch)]
+    )
+    monkeypatch.setenv("SCENES_SHARDED_GENERATION", "1")
+
+    output = asyncio.run(
+        auto_scenes_stage(
+            job_dir, channel_path, lambda msgs: fake.run_session("chatgpt", msgs)
+        )
+    )
+
+    assert output == job_dir / "scenes.json"
+    scenes = json.loads((job_dir / "scenes.json").read_text(encoding="utf-8"))
+    assert [s["id"] for s in scenes["scenes"]] == ["scene-01", "scene-02"]
+    # plan + wrong batch + repaired batch = 3 sessions
+    assert len(fake.calls) == 3
+    events = [
+        json.loads(line)
+        for line in (job_dir / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    retries = [
+        e
+        for e in events
+        if e["event"] == "SCENES_PROMOTE_PROGRESS"
+        and e["data"].get("step") == "batch_retry"
+    ]
+    assert len(retries) == 1
+    assert "batch_index" in retries[0]["data"]["reason"] or "Expected" in retries[0]["data"]["reason"]
+
+
+def test_local_precheck_blocks_gemini_when_seo_language_wrong(
+    tmp_path: Path,
+    channel_path: Path,
+    valid_seo_payload: dict,
+):
+    """Mechanical failures must be caught locally and routed to ChatGPT
+    rework WITHOUT spending a Gemini QA round-trip: the first browser send
+    must be the chatgpt rework, and only the clean artifact reaches Gemini."""
+    from video_agent.orchestrator.stages import auto_qa_with_rework
+
+    job_dir = tmp_path / "job-auto"
+    bad = dict(valid_seo_payload, job_id="job-auto", language="es-MX")
+    fixed = dict(valid_seo_payload, job_id="job-auto", language="es-ES")
+    _seed_at_stage(job_dir, "seo_qa", {"seo.json": bad})
+    fake = FakeBrowserClient(
+        queue=[
+            json.dumps(fixed, ensure_ascii=False),  # chatgpt rework response
+            json.dumps(_qa_pass_payload()),          # gemini QA on clean artifact
+        ]
+    )
+
+    output = asyncio.run(
+        auto_qa_with_rework(
+            "seo",
+            job_dir,
+            channel_path,
+            chatgpt_fn=lambda msgs: fake.run_session("chatgpt", msgs),
+            qa_session_fn=lambda msgs: fake.run_session("gemini", msgs),
+        )
+    )
+
+    assert output == job_dir / "operator" / "gemini" / "seo_qa.json"
+    # Send order proves the gate: rework first (chatgpt), Gemini only after.
+    assert fake.events == ["send:chatgpt", "send:gemini"]
+    promoted = json.loads((job_dir / "seo.json").read_text(encoding="utf-8"))
+    assert promoted["language"] == "es-ES"
+
+
+def test_sharded_batch_prompt_carries_anti_drift_contract_header(
+    tmp_path: Path,
+    channel_path: Path,
+    idea_payload: dict,
+    valid_script_payload: dict,
+    valid_scenes_payload: dict,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Every sharded batch message must open with the current-batch contract
+    (bug-438 anti-drift guard)."""
+    job_dir = tmp_path / "job-auto"
+    _seed_script(job_dir, channel_path, idea_payload)
+    run_script_stage(job_dir, channel_path)
+    promote_script_stage(
+        job_dir,
+        channel_path,
+        raw_response=json.dumps(valid_script_payload, ensure_ascii=False),
+    )
+    _fake_pass_qa(job_dir, "script")
+    plan = {
+        "artifact_type": "scenes_plan",
+        "schema_version": "2026-05-json-shards-v1",
+        "job_id": "job-auto",
+        "channel_id": "vida-plena-45",
+        "status": "complete",
+        "batch_index": None,
+        "batch_total": None,
+        "data": {
+            "target_scene_count": 2,
+            "target_total_duration_sec": 48,
+            "batch_size": 2,
+            "batches": [
+                {
+                    "batch_index": 1,
+                    "scene_start": "scene-01",
+                    "scene_end": "scene-02",
+                    "purpose": "full test batch",
+                    "script_sections": ["section-01"],
+                }
+            ],
+        },
+        "warnings": [],
+    }
+    batch = {
+        "artifact_type": "scenes_batch",
+        "schema_version": "2026-05-json-shards-v1",
+        "job_id": "job-auto",
+        "channel_id": "vida-plena-45",
+        "status": "complete",
+        "batch_index": 1,
+        "batch_total": 1,
+        "data": {
+            "scene_start": "scene-01",
+            "scene_end": "scene-02",
+            "scenes": valid_scenes_payload["scenes"],
+        },
+        "warnings": [],
+    }
+    fake = FakeBrowserClient(queue=[json.dumps(plan), json.dumps(batch)])
+    monkeypatch.setenv("SCENES_SHARDED_GENERATION", "1")
+
+    asyncio.run(
+        auto_scenes_stage(
+            job_dir, channel_path, lambda msgs: fake.run_session("chatgpt", msgs)
+        )
+    )
+
+    batch_msg = fake.calls[1][0]
+    assert batch_msg.startswith("# LOTE ACTUAL: 1 de 1")
+    assert "batch_index=1" in batch_msg
+    assert "scene-01" in batch_msg and "scene-02" in batch_msg
+
+
+def test_scenes_qa_prewarm_overlaps_generation_and_qa_stage_reuses(
+    tmp_path: Path,
+    channel_path: Path,
+    idea_payload: dict,
+    valid_script_payload: dict,
+    valid_scenes_payload: dict,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """With qa_session_fn provided, sharded generation prewarms Gemini QA per
+    scene slice (hash-stamped envelope on disk); the scenes_qa stage then
+    reuses those verdicts without any further Gemini round-trip."""
+    job_dir = tmp_path / "job-auto"
+    _seed_script(job_dir, channel_path, idea_payload)
+    run_script_stage(job_dir, channel_path)
+    promote_script_stage(
+        job_dir,
+        channel_path,
+        raw_response=json.dumps(valid_script_payload, ensure_ascii=False),
+    )
+    _fake_pass_qa(job_dir, "script")
+    plan = {
+        "artifact_type": "scenes_plan",
+        "schema_version": "2026-05-json-shards-v1",
+        "job_id": "job-auto",
+        "channel_id": "vida-plena-45",
+        "status": "complete",
+        "batch_index": None,
+        "batch_total": None,
+        "data": {
+            "target_scene_count": 2,
+            "target_total_duration_sec": 48,
+            "batch_size": 2,
+            "batches": [
+                {
+                    "batch_index": 1,
+                    "scene_start": "scene-01",
+                    "scene_end": "scene-02",
+                    "purpose": "full test batch",
+                    "script_sections": ["section-01"],
+                }
+            ],
+        },
+        "warnings": [],
+    }
+    batch = {
+        "artifact_type": "scenes_batch",
+        "schema_version": "2026-05-json-shards-v1",
+        "job_id": "job-auto",
+        "channel_id": "vida-plena-45",
+        "status": "complete",
+        "batch_index": 1,
+        "batch_total": 1,
+        "data": {
+            "scene_start": "scene-01",
+            "scene_end": "scene-02",
+            "scenes": valid_scenes_payload["scenes"],
+        },
+        "warnings": [],
+    }
+    prewarm_qa = {
+        "artifact_type": "scenes_qa_batch",
+        "schema_version": "2026-05-json-shards-v1",
+        "job_id": "job-auto",
+        "channel_id": "vida-plena-45",
+        "status": "complete",
+        "batch_index": 1,
+        "batch_total": 1,
+        "data": {
+            "verdict": "PASS",
+            "youtube_policy": {"compliant": True, "risk_level": "none", "violations": []},
+            "scene_checks": [],
+            "issues": [],
+            "required_changes": [],
+            "scores": {"schema_fit": 5, "channel_fit": 5, "safety": 5, "clarity": 5, "youtube_policy": 5},
+        },
+        "warnings": [],
+    }
+    fake = FakeBrowserClient(
+        queue=[json.dumps(plan), json.dumps(batch), json.dumps(prewarm_qa)]
+    )
+    monkeypatch.setenv("SCENES_SHARDED_GENERATION", "1")
+
+    output = asyncio.run(
+        auto_scenes_stage(
+            job_dir,
+            channel_path,
+            lambda msgs: fake.run_session("chatgpt", msgs),
+            qa_session_fn=lambda msgs: fake.run_session("gemini", msgs),
+        )
+    )
+
+    assert output == job_dir / "scenes.json"
+    # plan + batch on chatgpt, prewarm QA on gemini.
+    assert fake.events == ["send:chatgpt", "send:chatgpt", "send:gemini"]
+    qa_batch_path = job_dir / "operator/gemini/scenes_qa_batches/scenes_qa_batch_01.json"
+    assert qa_batch_path.exists()
+    saved = json.loads(qa_batch_path.read_text(encoding="utf-8"))
+    assert saved.get("source_content_hash")
+
+    # scenes_qa stage must reuse the prewarmed verdict: empty queue proves
+    # no further Gemini round-trip happens.
+    fake_qa = FakeBrowserClient(queue=[])
+    output_qa = asyncio.run(
+        auto_scenes_qa_stage(
+            job_dir, channel_path, lambda msgs: fake_qa.run_session("gemini", msgs)
+        )
+    )
+    assert output_qa == job_dir / "operator/gemini/scenes_qa.json"
+    merged = json.loads(output_qa.read_text(encoding="utf-8"))
+    assert merged["verdict"] == "PASS"
+    assert fake_qa.calls == []

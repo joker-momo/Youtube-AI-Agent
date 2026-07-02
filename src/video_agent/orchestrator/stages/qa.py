@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
-from typing import Awaitable, Callable, Sequence
 
 from video_agent.contracts import ARTIFACT_SCENES, ARTIFACT_SCRIPT, ARTIFACT_SEO
 from video_agent.operator import (
@@ -533,6 +533,44 @@ def _max_retries_per_qa(channel_path: Path, default: int = 3) -> int:
         return default
 
 
+def _local_precheck_or_raise(artifact: str, job_dir: Path, channel_path: Path) -> None:
+    """Deterministic pre-QA gate: catch mechanical failures (language
+    contract, YouTube limits, Spanish visual_prompts) locally instead of
+    spending a Gemini round-trip discovering them. Writes the same
+    ``<artifact>_qa.json`` shape a failing Gemini QA would, so the existing
+    rework loop picks it up unchanged."""
+    from video_agent.orchestrator.stages.local_qa import local_artifact_issues
+
+    artifact_path = _resolve_artifact(job_dir, _QA_ARTIFACT_FILE[artifact])
+    if not artifact_path.exists():
+        return
+    try:
+        payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return
+    channel_config = read_yaml(channel_path) if channel_path.exists() else {}
+    issues = local_artifact_issues(artifact, payload, channel_config)
+    if not issues:
+        return
+    qa_path = job_dir / "operator" / "gemini" / f"{artifact}_qa.json"
+    qa_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_json(
+        qa_path,
+        {
+            "artifact": artifact,
+            "verdict": "NEEDS_REWORK",
+            "source": "local_precheck",
+            "issues": issues,
+            "required_changes": issues,
+            "scores": {},
+        },
+    )
+    raise StageInputMissingError(
+        f"Local pre-QA found {len(issues)} issue(s) for {artifact}: "
+        + " | ".join(issues[:3])
+    )
+
+
 async def auto_qa_with_rework(
     artifact: str,
     job_dir: Path,
@@ -557,7 +595,21 @@ async def auto_qa_with_rework(
         try:
             state = load_job(job_dir)
             promote_stage = f"{artifact}_promote"
-            if dag_mode() or state.current_stage == promote_stage:
+            if dag_mode():
+                # DAG mode freezes current_stage, so gate on the promote
+                # stage's own status. auto_seo_stage (attempt 0) and
+                # auto_rework_artifact (attempts > 0) both promote already;
+                # an unconditional re-promote here duplicated STAGE_COMPLETED
+                # events on every attempt.
+                try:
+                    needs_promote = (
+                        state.stage(promote_stage).status != "completed"
+                    )
+                except KeyError:
+                    needs_promote = False
+            else:
+                needs_promote = state.current_stage == promote_stage
+            if needs_promote:
                 raw_path = job_dir / _ARTIFACT_RAW_PATH[artifact]
                 if not raw_path.exists():
                     raise StageInputMissingError(
@@ -568,6 +620,7 @@ async def auto_qa_with_rework(
                     channel_path,
                     raw_path.read_text(encoding="utf-8"),
                 )
+            _local_precheck_or_raise(artifact, job_dir, channel_path)
             return await qa_fn(job_dir, channel_path, qa_session_fn)
         except StageInputMissingError as exc:
             last_exc = exc

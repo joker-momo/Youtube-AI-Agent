@@ -186,8 +186,11 @@ def _start_stage(job_dir: Path, stage_name: str) -> None:
         ts = _now()
         if stage.status not in {"completed", "skipped"} and stage.started_at is None:
             stage.started_at = ts
-        if stage.status == "pending":
+        if stage.status in {"pending", "failed"}:
+            # A failed stage being re-run must not keep reporting the stale
+            # failure on the dashboard while the retry is in flight.
             stage.status = "in_progress"
+            stage.error = None
         state.updated_at = ts
         save_job(job_dir, state)
 

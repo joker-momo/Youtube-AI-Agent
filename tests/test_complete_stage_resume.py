@@ -58,3 +58,27 @@ def test_pointer_advances_forward_when_next_stage_already_completed(tmp_path):
     )
     _complete_stage(tmp_path, "render_continuity_qa", tmp_path / "out.json")
     assert load_job(tmp_path).current_stage == "review"
+
+
+def test_start_stage_resets_failed_status_and_clears_stale_error(tmp_path):
+    """Re-running a failed stage must flip it to in_progress and drop the old
+    error, so the dashboard shows the live retry instead of the stale failure
+    (scenes_promote resume after 'Expected batch_index 13, got 12')."""
+    from video_agent.orchestrator.stages._shared import _start_stage
+
+    _job(
+        tmp_path,
+        [("scenes", "completed"), ("scenes_promote", "failed"), ("scenes_qa", "pending")],
+    )
+    state = load_job(tmp_path)
+    stage = state.stage("scenes_promote")
+    stage.error = "Expected batch_index 13, got 12"
+    save_job(tmp_path, state)
+
+    _start_stage(tmp_path, "scenes_promote")
+
+    reloaded = load_job(tmp_path)
+    promote = reloaded.stage("scenes_promote")
+    assert promote.status == "in_progress"
+    assert promote.error is None
+    assert promote.started_at is not None

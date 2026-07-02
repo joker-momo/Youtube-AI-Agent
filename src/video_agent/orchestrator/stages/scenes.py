@@ -89,12 +89,17 @@ async def auto_scenes_stage(
     job_dir: Path,
     channel_path: Path,
     session_fn,
+    qa_session_fn=None,
 ) -> Path:
     import os
 
     from video_agent.orchestrator import stages as stages_pkg
     if os.environ.get("SCENES_SHARDED_GENERATION", "").strip() == "1":
-        return await stages_pkg.auto_scenes_stage_sharded(job_dir, channel_path, session_fn)
+        # qa_session_fn enables the Gemini QA prewarm that overlaps batch
+        # generation; the non-sharded path below has no batches to overlap.
+        return await stages_pkg.auto_scenes_stage_sharded(
+            job_dir, channel_path, session_fn, qa_session_fn=qa_session_fn
+        )
     return await stages_pkg._auto_run_then_promote(
         job_dir=job_dir,
         channel_path=channel_path,

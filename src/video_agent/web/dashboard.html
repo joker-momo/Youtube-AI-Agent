@@ -846,6 +846,10 @@
   .ab-card .thumb-img { width: 100%; border-radius: 6px; display: block; margin-bottom: 8px; aspect-ratio: 16/9; object-fit: cover; background: #111; }
   .ab-title { font-size: 12px; font-weight: 700; line-height: 1.4; margin-bottom: 4px; color: #222; }
   .ab-hook { font-size: 11px; color: var(--muted); font-family: monospace; margin-bottom: 8px; letter-spacing: 0.03em; }
+  .graphics-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin: 14px 0; }
+  .graphic-card { border: 1px solid var(--line); border-radius: 8px; padding: 6px; background: #fff; }
+  .graphic-card img { width: 100%; border-radius: 6px; display: block; aspect-ratio: 16/9; object-fit: cover; background: #111; }
+  .graphic-card .graphic-caption { font-size: 11px; color: var(--muted); text-align: center; margin-top: 4px; font-family: monospace; }
   .events { margin-top: 22px; border: 1px solid var(--line); border-radius: 8px; background: #fff; overflow: hidden; }
   .events-head { min-height: 42px; padding: 0 14px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); cursor: pointer; }
   .events-head h3 { margin: 0; font-size: 13px; }
@@ -2405,6 +2409,35 @@ async function renderStageExtras(jobId, s) {
       if (!hasOutput('operator/gemini/seo_qa.json')) return;
       insight.innerHTML = renderQaInsight(await fetchArtifactJson(jobId, 'operator/gemini/seo_qa.json'));
       rendered = true;
+    } else if (s.name === 'graphic_images') {
+      // scenes.json is written incrementally as each graphic lands (see
+      // graphic_images.py), so this reflects generation progress live —
+      // whatever's done so far shows up, not just the final result.
+      let scenesDoc = null;
+      try {
+        scenesDoc = await fetchArtifactJson(jobId, 'scenes.json');
+      } catch (e) {}
+      const toRelArtifactPath = (p) => {
+        if (!p) return null;
+        const idx = p.indexOf('/assets/');
+        return idx !== -1 ? p.slice(idx + 1) : p;
+      };
+      const graphicImages = ((scenesDoc && scenesDoc.scenes) || [])
+        .filter(sc => sc.graphic && sc.graphic.image_ref)
+        .map(sc => ({ id: sc.id, path: toRelArtifactPath(sc.graphic.image_ref) }));
+      if (!graphicImages.length) return;
+      insight.innerHTML = `
+        <div class="insight">
+          <div class="insight-section">Graphic images (${graphicImages.length})</div>
+          <div class="graphics-grid">
+            ${graphicImages.map(g => `
+              <div class="graphic-card">
+                <img src="/jobs/${encodeURIComponent(jobId)}/artifact?path=${encodeURIComponent(g.path)}" alt="${escapeHtml(g.id)}" loading="lazy">
+                <div class="graphic-caption">${escapeHtml(g.id)}</div>
+              </div>`).join('')}
+          </div>
+        </div>`;
+      rendered = true;
     } else if (s.name === 'thumbnail_image') {
       if (!hasOutput('thumbnail_bg.png') && !hasOutput('thumbnail_1.jpg') && !hasOutput('thumbnail_2.jpg') && !hasOutput('thumbnail_3.jpg') && !hasOutput('thumbnail.jpg')) return;
       if (hasOutput('thumbnail_1.jpg') || hasOutput('thumbnail_2.jpg') || hasOutput('thumbnail_3.jpg') || hasOutput('thumbnail.jpg')) {
@@ -2659,8 +2692,6 @@ async function renderFinal(t) {
           </div>
         </div>
       </div>
-      
-      
     </div>
   `;
 }

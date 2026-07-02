@@ -362,6 +362,7 @@ async def run_graphic_images_stage(job_dir: Path, channel_path: Path | None, ima
                 "SCENE_GRAPHIC_GENERATED",
                 {"scene_id": scene_id, "image_ref": graphic["image_ref"], "reused": True},
             )
+            atomic_write_json(scenes_path, scene_doc)
             continue
         try:
             await image_fn(
@@ -379,6 +380,10 @@ async def run_graphic_images_stage(job_dir: Path, channel_path: Path | None, ima
         scene["graphic"] = graphic
         generated += 1
         logger.log("SCENE_GRAPHIC_GENERATED", {"scene_id": scene_id, "image_ref": graphic["image_ref"]})
+        # Persist after each image (not just at loop end) so a live dashboard
+        # can show cards as they land, and a hard crash mid-stage doesn't lose
+        # already-generated image_refs.
+        atomic_write_json(scenes_path, scene_doc)
 
     atomic_write_json(scenes_path, scene_doc)
     logger.log("GRAPHIC_IMAGES_DONE", {"generated": generated, "failed": failed})

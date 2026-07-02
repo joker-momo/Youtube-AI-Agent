@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import re
-import signal
-import datetime
 import shutil
+import signal
 import subprocess
 import time
 from dataclasses import dataclass
@@ -38,15 +38,39 @@ def _render_tmp_dir() -> Path:
     return d
 
 
-def _assert_render_disk_space(min_gb: float = 15.0) -> None:
-    """Fail fast (before the long render) if the temp volume is low on space."""
-    free_gb = shutil.disk_usage(_render_tmp_dir()).free / 1e9
-    if free_gb < min_gb:
-        raise RuntimeError(
-            f"Only {free_gb:.1f} GB free on the render temp volume ({_render_tmp_dir()}); "
-            f"need >= {min_gb:.0f} GB. Free space (old jobs/, composed clips, demos) before "
-            "rendering to avoid an ENOSPC crash mid-render."
-        )
+def _assert_render_disk_space(
+    min_gb: float = 15.0, output_path: Path | None = None
+) -> None:
+    """Fail fast (before the long render) if any involved volume is low.
+
+    Three volumes matter and can all differ: the Remotion buffer dir
+    (.render_tmp on the data volume), the render output dir, and the OS temp
+    dir that Chromium/ffmpeg still use for scratch. bug-441: a render died
+    with ENOSPC at 53% even though the .render_tmp-only check had passed —
+    render is not resumable, so a mid-encode ENOSPC costs the whole render.
+    """
+    import tempfile
+
+    targets: dict[str, Path] = {
+        "render temp": _render_tmp_dir(),
+        "system temp": Path(tempfile.gettempdir()),
+    }
+    if output_path is not None:
+        parent = output_path.parent
+        parent.mkdir(parents=True, exist_ok=True)
+        targets["render output"] = parent
+    for label, target in targets.items():
+        # System temp only holds light scratch; the render buffers and the
+        # growing video need the full headroom.
+        required = 5.0 if label == "system temp" else min_gb
+        free_gb = shutil.disk_usage(target).free / 1e9
+        print(f"[render] preflight: {free_gb:.1f} GB free on {label} ({target})", flush=True)
+        if free_gb < required:
+            raise RuntimeError(
+                f"Only {free_gb:.1f} GB free on the {label} volume ({target}); "
+                f"need >= {required:.0f} GB. Free space (old jobs/, composed clips, "
+                "demos) before rendering to avoid an ENOSPC crash mid-render."
+            )
 
 
 def _audio_loudness_config(render_props_path: Path) -> dict:
@@ -414,7 +438,7 @@ def _mark_render_stage_completed(job_dir: Path) -> None:
         return
     try:
         data = json.loads(state_path.read_text(encoding="utf-8"))
-        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        now = datetime.datetime.now(datetime.UTC).isoformat()
         stages = data.get("stages") or []
 
         def _backfill_started_at(stage: dict) -> None:
@@ -524,7 +548,7 @@ def render_with_remotion(
         job_dir = job_dir.parent
 
     expected_duration_sec = validate_render_duration_matches_scene_sum(render_props_path)
-    _assert_render_disk_space()  # fail fast instead of ENOSPC at ~98%
+    _assert_render_disk_space(output_path=video_path)  # fail fast, not ENOSPC mid-render
     commands = build_remotion_commands(render_props_path, video_path)
     progress_path = job_dir / "json" / "render_progress.json"
     render_pid_path = job_dir / "json" / ".render.pid"

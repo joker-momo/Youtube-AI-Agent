@@ -487,6 +487,40 @@ shorts:
     pinned_comment_template: |
       Si quieres ver la guía completa paso a paso, mira el vídeo largo del canal 👇
       {long_video_url}
+  visual_timeline:
+    enabled: true
+    mode: "report_only"
+    schedule_schema_version: 2
+    on_invalid_schedule: "fail"
+    rollback:
+      allow_legacy_renderer: false
+      reason: ""
+    span_planning:
+      isolate_hook: true
+      isolate_cta: true
+      isolate_graphic_scenes: true
+      max_scenes_per_span: 3
+      max_span_sec: 10.0
+    continuous_clip:
+      enabled: true
+      playback_rate: 1.0
+      allow_loop: false
+      image_max_hold_sec: 2.5
+      near_static_max_hold_sec: 3.5
+      low_motion_max_hold_sec: 5.0
+      normal_motion_max_hold_sec: 8.0
+    candidate_budget:
+      queries_per_span: 4
+      results_per_query: 8
+      metadata_shortlist: 10
+      preview_downloads: 5
+      final_candidates_retained: 2
+      max_plan_variants: 3
+    qa:
+      local_only: true
+      semantic_model_enabled: false
+      object_detector_enabled: false
+      fail_closed_for_critical: true
 music_library:
   tracks:
     shorts_movement:

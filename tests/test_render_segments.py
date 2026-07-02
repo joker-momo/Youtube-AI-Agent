@@ -45,6 +45,31 @@ def _make_clip(path: Path, *, seconds: float, fps: int = 30) -> None:
     )
 
 
+def _make_wav(path: Path, *, seconds: float) -> None:
+    """Silent WAV standing in for the full-composition audio render."""
+    subprocess.run(
+        [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", f"anullsrc=r=48000:cl=stereo:d={seconds}",
+            "-c:a", "pcm_s16le",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+
+def _fake_render_dispatch(cmd, *, segment_seconds: float, audio_seconds: float) -> Path:
+    """Stand-in for _run_with_progress in flow tests: writes a WAV for the
+    full-composition audio command, a real clip for a segment command."""
+    out_path = Path(cmd[7])
+    if out_path.suffix == ".wav":
+        _make_wav(out_path, seconds=audio_seconds)
+    else:
+        _make_clip(out_path, seconds=segment_seconds)
+    return out_path
+
+
 # ---------------------------------------------------------------------------
 # Segment planning
 # ---------------------------------------------------------------------------
@@ -113,16 +138,34 @@ def test_frame_range_adds_frames_flag(tmp_path):
     assert commands.video[commands.video.index("--frames") + 1] == "0-2999"
 
 
-def test_seamless_concat_adds_flag_only_when_requested(tmp_path):
+def test_muted_flag_only_on_segment_renders(tmp_path):
+    """Segments render video-only (--muted); audio is a single full-length
+    track muxed in after concat (bug-454: per-segment audio accumulated AAC
+    padding at every raw-concat boundary → progressive narration desync)."""
     props = tmp_path / "render_props.json"
     props.write_text("{}", encoding="utf-8")
     plain = build_remotion_commands(props, tmp_path / "v.mp4")
-    assert "--for-seamless-aac-concatenation" not in plain.video
+    assert "--muted" not in plain.video
 
-    seamless = build_remotion_commands(
-        props, tmp_path / "v.mp4", frame_range=(0, 99), seamless_concat=True
+    segment = build_remotion_commands(
+        props, tmp_path / "v.mp4", frame_range=(0, 99), muted=True
     )
-    assert "--for-seamless-aac-concatenation" in seamless.video
+    assert "--muted" in segment.video
+    # The Remotion seamless-AAC flag only works with Remotion's own
+    # offset-trimming combiner — it must never reappear on our plain-concat path.
+    assert "--for-seamless-aac-concatenation" not in segment.video
+
+
+def test_audio_command_renders_full_composition_wav(tmp_path):
+    from video_agent.stages.render import build_remotion_audio_command
+
+    props = tmp_path / "render_props.json"
+    props.write_text("{}", encoding="utf-8")
+    cmd = build_remotion_audio_command(props, tmp_path / "audio.wav")
+    joined = " ".join(cmd)
+    assert "--codec wav" in joined
+    assert "--frames" not in joined  # full composition, not a chunk
+    assert str(tmp_path / "audio.wav") in joined
 
 
 # ---------------------------------------------------------------------------
@@ -237,8 +280,9 @@ def test_render_segments_never_deletes_current_or_previous_segments_own_tmp_dir(
     created_dirs: list[Path] = []
 
     def fake_run_with_progress(cmd, progress_path, **kwargs):
-        out_path = Path(cmd[7])
-        _make_clip(out_path, seconds=1.0, fps=30)
+        out_path = _fake_render_dispatch(cmd, segment_seconds=1.0, audio_seconds=3.0)
+        if out_path.suffix == ".wav":
+            return  # audio render doesn't create a per-invocation bundle here
         # Simulate Remotion creating its own per-invocation bundle dir.
         bundle = fake_tmp / f"bundle-{len(created_dirs)}"
         bundle.mkdir()
@@ -348,14 +392,11 @@ def test_render_segments_returns_paths_without_deleting_them(tmp_path, monkeypat
 
     def fake_run_with_progress(cmd, progress_path, **kwargs):
         call_count["n"] += 1
-        # cmd targets the segment output path (last positional-ish arg before
-        # --props in build_remotion_commands' video command list).
-        out_path = Path(cmd[7])  # base(4) + render/entry/composition -> index 7 is video_path
-        _make_clip(out_path, seconds=1.0, fps=30)
+        _fake_render_dispatch(cmd, segment_seconds=1.0, audio_seconds=3.0)
 
     monkeypatch.setattr(render_mod, "_run_with_progress", fake_run_with_progress)
 
-    segment_paths = render_mod._render_segments(
+    returned_paths = render_mod._render_segments(
         render_props,
         video_path,
         stop_request_path=None,
@@ -363,9 +404,14 @@ def test_render_segments_returns_paths_without_deleting_them(tmp_path, monkeypat
         render_pid_path=job_dir / "json" / ".render.pid",
     )
 
-    assert len(segment_paths) == 3  # 90 frames / 30fps segment = 3 one-second segments
-    assert all(p.exists() for p in segment_paths), "segments must still be on disk after concat"
+    # 3 one-second segments + the full-composition audio track.
+    assert len(returned_paths) == 4
+    assert sum(1 for p in returned_paths if p.suffix == ".wav") == 1
+    assert all(p.exists() for p in returned_paths), "checkpoints must survive concat"
     assert video_path.exists()
+    # Muxed output must carry BOTH streams at the full timeline length.
+    from video_agent.stages.render import validate_rendered_video_duration
+    validate_rendered_video_duration(video_path, expected_duration_sec=3.0)
 
 
 def test_render_with_remotion_reuses_valid_existing_video_without_rerendering(tmp_path, monkeypatch):
@@ -428,22 +474,25 @@ def test_segment_retries_once_on_asset_404(tmp_path, monkeypatch):
     )
     video_path = job_dir / "outputs" / "video.mp4"
 
-    calls = {"n": 0}
+    calls = {"n": 0, "segment_calls": 0}
 
     def flaky_run_with_progress(cmd, progress_path, **kwargs):
         calls["n"] += 1
-        if calls["n"] == 1:
+        if Path(cmd[7]).suffix == ".wav":
+            _make_wav(Path(cmd[7]), seconds=2.0)
+            return
+        calls["segment_calls"] += 1
+        if calls["segment_calls"] == 1:
             raise RemotionSubprocessError(
                 "Remotion subprocess exited with code 1. Last output:\n"
                 "Error: Received a status code of 404 while downloading file "
                 "http://localhost:3000/public/jobs/x/assets/narration.wav."
             )
-        out_path = Path(cmd[7])
-        _make_clip(out_path, seconds=1.0, fps=30)
+        _make_clip(Path(cmd[7]), seconds=1.0, fps=30)
 
     monkeypatch.setattr(render_mod, "_run_with_progress", flaky_run_with_progress)
 
-    segment_paths = render_mod._render_segments(
+    returned_paths = render_mod._render_segments(
         render_props,
         video_path,
         stop_request_path=None,
@@ -451,9 +500,10 @@ def test_segment_retries_once_on_asset_404(tmp_path, monkeypatch):
         render_pid_path=job_dir / "json" / ".render.pid",
     )
 
-    assert len(segment_paths) == 2
-    # 1 failed attempt + 1 retry for segment 1, then 1 attempt for segment 2.
-    assert calls["n"] == 3
+    assert len(returned_paths) == 3  # 2 segments + audio track
+    # audio + (1 failed attempt + 1 retry for segment 1) + 1 for segment 2.
+    assert calls["n"] == 4
+    assert calls["segment_calls"] == 3
     assert video_path.exists()
 
 
@@ -468,13 +518,17 @@ def test_segment_does_not_retry_non_404_failures(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    calls = {"n": 0}
+    calls = {"n": 0, "segment_calls": 0}
 
-    def always_crash(cmd, progress_path, **kwargs):
+    def segments_crash(cmd, progress_path, **kwargs):
         calls["n"] += 1
+        if Path(cmd[7]).suffix == ".wav":
+            _make_wav(Path(cmd[7]), seconds=2.0)
+            return
+        calls["segment_calls"] += 1
         raise RemotionSubprocessError("Remotion subprocess exited with code 1. browser crashed")
 
-    monkeypatch.setattr(render_mod, "_run_with_progress", always_crash)
+    monkeypatch.setattr(render_mod, "_run_with_progress", segments_crash)
 
     with pytest.raises(RemotionSubprocessError, match="browser crashed"):
         render_mod._render_segments(
@@ -484,4 +538,71 @@ def test_segment_does_not_retry_non_404_failures(tmp_path, monkeypatch):
             progress_path=job_dir / "json" / "render_progress.json",
             render_pid_path=job_dir / "json" / ".render.pid",
         )
-    assert calls["n"] == 1  # no retry for non-404 failures
+    assert calls["segment_calls"] == 1  # no retry for non-404 failures
+
+
+# ---------------------------------------------------------------------------
+# Regression bug-454: an MP4 whose AUDIO track is longer than its video
+# timeline (accumulated per-segment AAC padding) must be REJECTED — both by
+# final validation and by the resume fast-path.
+# ---------------------------------------------------------------------------
+
+def _make_desynced_clip(path: Path, *, video_seconds: float, audio_seconds: float) -> None:
+    subprocess.run(
+        [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", f"color=c=black:s=320x180:r=30:d={video_seconds}",
+            "-f", "lavfi", "-i", f"anullsrc=r=48000:cl=stereo:d={audio_seconds}",
+            "-c:v", "libx264", "-c:a", "aac",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+
+def test_validation_rejects_audio_longer_than_video(tmp_path):
+    from video_agent.stages.render import validate_rendered_video_duration
+
+    bad = tmp_path / "video.mp4"
+    _make_desynced_clip(bad, video_seconds=2.0, audio_seconds=4.0)
+
+    with pytest.raises(ValueError, match="AUDIO duration"):
+        validate_rendered_video_duration(bad, expected_duration_sec=2.0)
+
+
+def test_fast_path_never_reuses_audio_desynced_video(tmp_path, monkeypatch):
+    """The production bug-454 artifact (frame-exact video, ~2s-long audio)
+    must NOT be reused by the resume fast-path — it must fall through to a
+    full re-render."""
+    import video_agent.stages.render as render_mod
+
+    job_dir = tmp_path / "job"
+    (job_dir / "json").mkdir(parents=True)
+    (job_dir / "outputs").mkdir(parents=True)
+    render_props = job_dir / "json" / "render_props.json"
+    render_props.write_text(
+        json.dumps({
+            "render": {"fps": 30, "duration_sec": 2.0, "segmented": False},
+            "scenes": [{"id": "s01", "duration_sec": 2.0}],
+            "branding": {},
+        }),
+        encoding="utf-8",
+    )
+    video_path = job_dir / "outputs" / "video.mp4"
+    _make_desynced_clip(video_path, video_seconds=2.0, audio_seconds=4.0)
+
+    rerendered = {"called": False}
+
+    def fake_run(cmd, progress_path, **kwargs):
+        rerendered["called"] = True
+        _make_clip(Path(cmd[7]), seconds=2.0, fps=30)
+
+    monkeypatch.setattr(render_mod, "_run_with_progress", fake_run)
+    monkeypatch.setattr(render_mod, "_normalize_video_audio", lambda *a, **k: None)
+    monkeypatch.setattr(render_mod, "_notify_render_done", lambda *a, **k: None)
+    (job_dir / "outputs" / "thumbnail_1.jpg").write_bytes(b"jpg")
+
+    render_mod.render_with_remotion(render_props, video_path, notify_telegram=False)
+
+    assert rerendered["called"], "desynced artifact must trigger a re-render, not fast-path reuse"

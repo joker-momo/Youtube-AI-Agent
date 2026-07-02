@@ -305,12 +305,47 @@ def probe_video_duration_sec(video_path: Path) -> float | None:
         return None
 
 
+def probe_audio_duration_sec(video_path: Path) -> float | None:
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "a:0",
+                "-show_entries",
+                "stream=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(video_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        out = result.stdout.strip()
+        if out and out != "N/A":
+            return float(out)
+    except (subprocess.SubprocessError, ValueError):
+        pass
+    return None
+
+
 def validate_rendered_video_duration(
     video_path: Path,
     *,
     expected_duration_sec: float,
     tolerance_sec: float = 0.3,
 ) -> float:
+    """Validate BOTH streams of the delivered MP4 against the timeline.
+
+    Video via exact frame math (nb_frames / r_frame_rate); audio via its own
+    stream duration. bug-454: validating only frame count let a file ship
+    whose audio track was ~2s longer than the video (accumulated per-segment
+    AAC padding from raw concat) — audible as progressively-late narration.
+    A correct artifact (single-piece audio muxed over concatenated muted
+    video) satisfies both checks; a desynced one fails the audio check."""
     actual = probe_video_duration_sec(video_path)
     if actual is None:
         raise ValueError(f"Could not probe MP4 duration for {video_path}.")
@@ -318,6 +353,15 @@ def validate_rendered_video_duration(
         raise ValueError(
             f"MP4 duration {float(actual):.1f}s does not match render.duration_sec "
             f"{float(expected_duration_sec):.1f}s (tolerance {float(tolerance_sec):.1f}s)."
+        )
+    audio_actual = probe_audio_duration_sec(video_path)
+    if audio_actual is not None and abs(audio_actual - float(expected_duration_sec)) > float(
+        tolerance_sec
+    ):
+        raise ValueError(
+            f"MP4 AUDIO duration {audio_actual:.1f}s does not match "
+            f"render.duration_sec {float(expected_duration_sec):.1f}s "
+            f"(tolerance {float(tolerance_sec):.1f}s) — audio/video desync."
         )
     return float(actual)
 
@@ -327,7 +371,7 @@ def build_remotion_commands(
     video_path: Path,
     *,
     frame_range: tuple[int, int] | None = None,
-    seamless_concat: bool = False,
+    muted: bool = False,
 ) -> RemotionCommands:
     remotion_root = repo_root() / "remotion"
     entry = remotion_root / "src/index.ts"
@@ -372,12 +416,48 @@ def build_remotion_commands(
     if frame_range is not None:
         start, end = frame_range
         video_cmd += ["--frames", f"{start}-{end}"]
-    if seamless_concat:
-        # Trims audio to the nearest AAC frame so segment mp4s can be joined
-        # via ffmpeg concat demuxer (-c copy) with no boundary click/gap —
-        # Remotion's own flag for exactly this chunked-render use case.
-        video_cmd += ["--for-seamless-aac-concatenation"]
+    if muted:
+        # Segmented renders produce video-only chunks; audio is rendered ONCE
+        # for the full composition and muxed in after concat. Per-segment
+        # audio (even with --for-seamless-aac-concatenation) accumulated AAC
+        # padding at every raw-concat boundary — bug-454: narration drifted
+        # progressively late, ~1.9s behind the burned-in subtitles by the end
+        # of a 15-segment render. Remotion's seamless flag only works with
+        # Remotion's own offset-trimming combiner, not a plain ffmpeg concat.
+        video_cmd += ["--muted"]
     return RemotionCommands(video=video_cmd)
+
+
+def build_remotion_audio_command(render_props_path: Path, audio_path: Path) -> list[str]:
+    """Full-composition audio-only render (WAV: sample-exact, no AAC padding).
+
+    One continuous audio track for the whole timeline — muxed over the
+    concatenated muted video segments, so there is no per-segment audio to
+    misalign (bug-454)."""
+    remotion_root = repo_root() / "remotion"
+    entry = remotion_root / "src/index.ts"
+    public_dir = remotion_root / "public"
+    props = read_json(render_props_path)
+    composition = props.get("render", {}).get("composition", "ChannelVideoStandard")
+    concurrency = str(_render_concurrency(render_props_path))
+    return [
+        "npx",
+        "--prefix",
+        str(remotion_root),
+        "remotion",
+        "render",
+        str(entry),
+        composition,
+        str(audio_path),
+        "--props",
+        _input_props_arg(render_props_path),
+        "--codec",
+        "wav",
+        "--public-dir",
+        str(public_dir),
+        "--concurrency",
+        concurrency,
+    ]
 
 
 def _blank_progress(phase: str) -> dict:
@@ -781,10 +861,10 @@ def _clear_render_tmp_entries(names: set[str]) -> None:
 
 
 def _concat_segments(segment_paths: list[Path], output_path: Path) -> None:
-    """Losslessly join segment mp4s (stream copy, no re-encode) via the ffmpeg
-    concat demuxer. Safe for both streams: video segments each start on a
-    keyframe by construction of ``--frames``, and audio was trimmed to the AAC
-    frame grid at render time (``--for-seamless-aac-concatenation``)."""
+    """Losslessly join VIDEO-ONLY segment mp4s (stream copy, no re-encode)
+    via the ffmpeg concat demuxer. Segments are rendered ``--muted``; video
+    PTS runs continuously across keyframe-aligned ``--frames`` chunks, and
+    with no per-segment audio there is nothing left to drift (bug-454)."""
     list_path = output_path.with_name(f"{output_path.stem}.concat.txt")
     lines = [f"file '{p.resolve().as_posix()}'" for p in segment_paths]
     list_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -818,6 +898,45 @@ def _write_render_progress(progress_path: Path, phase: str, **fields) -> None:
         pass
 
 
+def _audio_track_is_valid(audio_path: Path, expected_duration_sec: float) -> bool:
+    """Reusable full-composition audio track from a previous attempt."""
+    if not audio_path.exists() or audio_path.stat().st_size == 0:
+        return False
+    actual = probe_audio_duration_sec(audio_path)
+    if actual is None:
+        return False
+    return abs(actual - expected_duration_sec) <= 0.15
+
+
+def _mux_video_audio(video_only_path: Path, audio_path: Path, output_path: Path) -> None:
+    """Mux the concatenated video-only stream with the single full-length
+    audio track. Video is stream-copied (zero quality loss); audio encodes to
+    AAC here and gets loudness-normalized by the existing loudnorm step."""
+    result = subprocess.run(
+        [
+            "ffmpeg", "-y",
+            "-i", str(video_only_path),
+            "-i", str(audio_path),
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-ar", "48000",
+            "-shortest",
+            "-movflags", "+faststart",
+            str(output_path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RemotionSubprocessError(
+            f"ffmpeg mux of video+audio failed (code {result.returncode}): "
+            f"{result.stderr[-2000:]}"
+        )
+
+
 def _render_segments(
     render_props_path: Path,
     video_path: Path,
@@ -836,6 +955,40 @@ def _render_segments(
     segment_frames = max(1, round(_segment_seconds(render_props_path) * fps))
     plan = _segment_plan(total_frames, segment_frames)
     segment_total = len(plan)
+    expected_duration_sec = total_frames / fps
+
+    # Full-composition audio track, rendered ONCE (WAV: sample-exact, no AAC
+    # padding). Segments render --muted; this single track gets muxed over
+    # the concatenated video, so no per-segment audio exists to drift
+    # (bug-454: raw-concat of per-segment AAC accumulated padding at every
+    # boundary — narration ended ~1.9s late on a 15-segment render).
+    audio_path = _segments_dir(job_dir) / "audio.wav"
+    if not _audio_track_is_valid(audio_path, expected_duration_sec):
+        _assert_render_disk_space(output_path=video_path)
+        _write_render_progress(
+            progress_path,
+            "rendering_audio",
+            segment_total=segment_total,
+            segments_done=0,
+        )
+        _run_with_progress(
+            build_remotion_audio_command(render_props_path, audio_path),
+            progress_path,
+            stop_request_path=stop_request_path,
+            pid_file_path=render_pid_path,
+            progress_overrides={
+                "segment_index": 0,
+                "segment_total": segment_total,
+                "segments_done": 0,
+                "note": "audio track",
+            },
+        )
+        if not _audio_track_is_valid(audio_path, expected_duration_sec):
+            actual = probe_audio_duration_sec(audio_path)
+            raise RemotionSubprocessError(
+                f"Full-composition audio track failed verification: got "
+                f"{actual}s, expected ~{expected_duration_sec:.1f}s."
+            )
 
     segment_paths: list[Path] = []
     # .render_tmp cleanup is deferred by one full segment cycle: prev_tmp_before
@@ -867,7 +1020,7 @@ def _render_segments(
             render_props_path,
             seg_path,
             frame_range=(start, end),
-            seamless_concat=True,
+            muted=True,
         )
         for seg_attempt in range(2):
             try:
@@ -924,13 +1077,18 @@ def _render_segments(
         segments_done=segment_total,
     )
     _assert_render_disk_space(output_path=video_path)
-    _concat_segments(segment_paths, video_path)
-    # Segments are NOT deleted here — the caller only deletes them once the
-    # concatenated output has passed final duration validation. Deleting
-    # right after concat (the original design) destroyed the only resumable
-    # checkpoints in exactly the case that matters: when the final artifact
-    # turns out to be wrong and needs re-diagnosis or re-concatenation.
-    return segment_paths
+    video_only_path = _segments_dir(job_dir) / "video_only.mp4"
+    try:
+        _concat_segments(segment_paths, video_only_path)
+        _mux_video_audio(video_only_path, audio_path, video_path)
+    finally:
+        video_only_path.unlink(missing_ok=True)
+    # Segments + audio track are NOT deleted here — the caller only deletes
+    # them once the muxed output has passed final duration validation.
+    # Deleting right after concat (the original design) destroyed the only
+    # resumable checkpoints in exactly the case that matters: when the final
+    # artifact turns out to be wrong and needs re-diagnosis or re-assembly.
+    return [*segment_paths, audio_path]
 
 
 def render_with_remotion(
@@ -952,11 +1110,17 @@ def render_with_remotion(
     # video.mp4 (already loudness-normalized) that only failed the OLD,
     # buggy duration check (bug: format=duration drifts after concat even
     # though the real frame content is exact — see probe_video_duration_sec).
-    # Re-validating against the now-fixed probe avoids re-rendering every
-    # segment (and re-running loudnorm) for a file that was already correct.
+    # Re-validating avoids re-rendering everything for a file that was
+    # already correct. Uses the FULL validation (video frames + audio stream)
+    # so an artifact with desynced audio (bug-454) is never reused.
     if video_path.exists():
-        existing_duration = probe_video_duration_sec(video_path)
-        if existing_duration is not None and abs(existing_duration - expected_duration_sec) <= 0.3:
+        try:
+            validate_rendered_video_duration(
+                video_path, expected_duration_sec=expected_duration_sec
+            )
+        except ValueError:
+            pass
+        else:
             _write_render_progress(progress_path, "done", percent=100)
             _finish_render_artifact(job_dir, video_path, notify_telegram=notify_telegram)
             return

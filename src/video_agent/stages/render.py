@@ -226,6 +226,41 @@ def validate_render_duration_matches_scene_sum(
 
 
 def probe_video_duration_sec(video_path: Path) -> float | None:
+    """Probe the true playable duration of ``video_path``.
+
+    Reads the VIDEO STREAM's own duration, not the container-level
+    ``format=duration``. For a normal single-pass render the two are
+    identical, but after an ffmpeg concat-demuxer join (segmented render)
+    ``format=duration`` drifts — observed 1739.9s vs. an exact 1738.0s
+    (52140 frames @ 30fps) on a 15-segment render, i.e. the container
+    metadata reported ~2s more than the video stream actually contains.
+    ``nb_frames``/stream duration stayed exactly correct throughout — the
+    real content was never wrong, only this measurement was.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(video_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        stream_out = result.stdout.strip()
+        if stream_out and stream_out != "N/A":
+            return float(stream_out)
+    except (subprocess.SubprocessError, ValueError):
+        pass
+    # Fallback for containers that don't populate stream-level duration.
     try:
         result = subprocess.run(
             [
@@ -751,7 +786,7 @@ def _render_segments(
     stop_request_path: Path | None,
     progress_path: Path,
     render_pid_path: Path,
-) -> None:
+) -> list[Path]:
     job_dir = render_props_path.parent
     if job_dir.name == "json":
         job_dir = job_dir.parent
@@ -817,10 +852,12 @@ def _render_segments(
     )
     _assert_render_disk_space(output_path=video_path)
     _concat_segments(segment_paths, video_path)
-    # Segments are fully absorbed into video_path now — free the space and
-    # leave nothing for a future resume to (wrongly) think is still needed.
-    for p in segment_paths:
-        p.unlink(missing_ok=True)
+    # Segments are NOT deleted here — the caller only deletes them once the
+    # concatenated output has passed final duration validation. Deleting
+    # right after concat (the original design) destroyed the only resumable
+    # checkpoints in exactly the case that matters: when the final artifact
+    # turns out to be wrong and needs re-diagnosis or re-concatenation.
+    return segment_paths
 
 
 def render_with_remotion(
@@ -835,9 +872,23 @@ def render_with_remotion(
         job_dir = job_dir.parent
 
     expected_duration_sec = validate_render_duration_matches_scene_sum(render_props_path)
-    _assert_render_disk_space(output_path=video_path)  # fail fast, not ENOSPC mid-render
     progress_path = job_dir / "json" / "render_progress.json"
     render_pid_path = job_dir / "json" / ".render.pid"
+
+    # Resume fast-path: a previous attempt may have produced a fully correct
+    # video.mp4 (already loudness-normalized) that only failed the OLD,
+    # buggy duration check (bug: format=duration drifts after concat even
+    # though the real frame content is exact — see probe_video_duration_sec).
+    # Re-validating against the now-fixed probe avoids re-rendering every
+    # segment (and re-running loudnorm) for a file that was already correct.
+    if video_path.exists():
+        existing_duration = probe_video_duration_sec(video_path)
+        if existing_duration is not None and abs(existing_duration - expected_duration_sec) <= 0.3:
+            _write_render_progress(progress_path, "done", percent=100)
+            _finish_render_artifact(job_dir, video_path, notify_telegram=notify_telegram)
+            return
+
+    _assert_render_disk_space(output_path=video_path)  # fail fast, not ENOSPC mid-render
 
     fps = float((read_json(render_props_path).get("render", {}) or {}).get("fps") or 30)
     total_frames = _total_render_frames(render_props_path)
@@ -846,8 +897,9 @@ def render_with_remotion(
     # unchanged — segmentation only kicks in where it can actually help.
     use_segments = _segmented_render_enabled(render_props_path) and total_frames > segment_frames
 
+    segment_paths: list[Path] | None = None
     if use_segments:
-        _render_segments(
+        segment_paths = _render_segments(
             render_props_path,
             video_path,
             stop_request_path=stop_request_path,
@@ -881,16 +933,20 @@ def render_with_remotion(
             lra=loudness["lra"],
         )
     validate_rendered_video_duration(video_path, expected_duration_sec=expected_duration_sec)
-    # Mark 100% on completion.
-    try:
-        atomic_write_json(
-            progress_path,
-            dict(_blank_progress("done"), percent=100),
-            indent=0,
-        )
-    except OSError:
-        pass
+    # Validation passed: segments are no longer needed for resume/diagnosis.
+    # Deleting only NOW (not right after concat) means a validation failure
+    # leaves the checkpoints intact for re-diagnosis or a cheap re-concat.
+    if segment_paths is not None:
+        for p in segment_paths:
+            p.unlink(missing_ok=True)
+    _write_render_progress(progress_path, "done", percent=100)
+    _finish_render_artifact(job_dir, video_path, notify_telegram=notify_telegram)
 
+
+def _finish_render_artifact(job_dir: Path, video_path: Path, *, notify_telegram: bool) -> None:
+    """Shared tail for both the fast-path (reused existing video.mp4) and the
+    freshly-rendered path: verify the ChatGPT thumbnail, mark stages
+    completed, notify."""
     # ------------------------------------------------------------------
     # Thumbnail step: the ChatGPT-generated thumbnail (auto_thumbnail_image_stage)
     # is now the ONLY thumbnail source. The legacy Remotion-still fallback was

@@ -200,3 +200,143 @@ def test_clear_render_tmp_cache_empties_directory_without_deleting_it(monkeypatc
 
     assert fake_tmp.exists()
     assert list(fake_tmp.iterdir()) == []
+
+
+# ---------------------------------------------------------------------------
+# Regression: ffmpeg concat-demuxer format=duration drift (real incident)
+#
+# 15-segment production render measured "MP4 duration 1739.9s does not match
+# render.duration_sec 1737.9s" even though the video stream held EXACTLY the
+# right frame count (52140, matching duration_in_frames). format=duration
+# drifts after a concat-demuxer -c copy join; the video STREAM's own
+# duration stays exact. probe_video_duration_sec must read stream duration,
+# not container format=duration, so segmented renders don't get rejected
+# for content that was never wrong.
+# ---------------------------------------------------------------------------
+
+def test_probe_duration_uses_stream_not_container_after_concat(tmp_path):
+    from video_agent.stages.render import probe_video_duration_sec
+
+    segs = [tmp_path / f"seg_{i}.mp4" for i in range(1, 4)]
+    for seg in segs:
+        _make_clip(seg, seconds=1.0, fps=30)
+
+    output = tmp_path / "video.mp4"
+    _concat_segments(segs, output)
+
+    # format=duration is the buggy, drifted signal we must NOT trust.
+    import subprocess as _subprocess
+    container_duration = float(
+        _subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(output)],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+    )
+
+    probed = probe_video_duration_sec(output)
+    assert probed is not None
+    # The fixed probe must land on the exact 3.0s content duration (30fps *
+    # 3 one-second segments = 90 frames), not the drifted container value.
+    assert abs(probed - 3.0) < 0.05
+    # Only meaningful if this ffmpeg/build combination actually reproduces
+    # the drift; skip the contrast assertion silently if it doesn't.
+    if abs(container_duration - 3.0) > 0.01:
+        assert abs(probed - container_duration) > 0.01
+
+
+def test_probe_duration_matches_format_duration_for_non_concat_file(tmp_path):
+    """For a normal (non-concatenated) file, stream and container duration
+    agree — confirms the fix doesn't change behavior on the single-shot
+    render path."""
+    from video_agent.stages.render import probe_video_duration_sec
+
+    seg = tmp_path / "plain.mp4"
+    _make_clip(seg, seconds=2.0, fps=30)
+
+    probed = probe_video_duration_sec(seg)
+    assert probed is not None
+    assert abs(probed - 2.0) < 0.05
+
+
+# ---------------------------------------------------------------------------
+# Regression: segments must survive until final validation passes; a valid
+# existing video.mp4 must short-circuit re-rendering entirely (avoids
+# re-rendering 15 segments + re-running loudnorm for output that was
+# already correct — this exact incident cost ~20 minutes before the fix).
+# ---------------------------------------------------------------------------
+
+def test_render_segments_returns_paths_without_deleting_them(tmp_path, monkeypatch):
+    """_render_segments must hand segments back to the caller instead of
+    deleting them right after concat — deletion is the CALLER's job, done
+    only once final duration validation has passed."""
+    import video_agent.stages.render as render_mod
+
+    job_dir = tmp_path / "job"
+    (job_dir / "json").mkdir(parents=True)
+    render_props = job_dir / "json" / "render_props.json"
+    render_props.write_text(
+        json.dumps({"render": {"fps": 30, "segment_seconds": 1, "duration_in_frames": 90}}),
+        encoding="utf-8",
+    )
+    video_path = job_dir / "outputs" / "video.mp4"
+
+    call_count = {"n": 0}
+
+    def fake_run_with_progress(cmd, progress_path, **kwargs):
+        call_count["n"] += 1
+        # cmd targets the segment output path (last positional-ish arg before
+        # --props in build_remotion_commands' video command list).
+        out_path = Path(cmd[7])  # base(4) + render/entry/composition -> index 7 is video_path
+        _make_clip(out_path, seconds=1.0, fps=30)
+
+    monkeypatch.setattr(render_mod, "_run_with_progress", fake_run_with_progress)
+
+    segment_paths = render_mod._render_segments(
+        render_props,
+        video_path,
+        stop_request_path=None,
+        progress_path=job_dir / "json" / "render_progress.json",
+        render_pid_path=job_dir / "json" / ".render.pid",
+    )
+
+    assert len(segment_paths) == 3  # 90 frames / 30fps segment = 3 one-second segments
+    assert all(p.exists() for p in segment_paths), "segments must still be on disk after concat"
+    assert video_path.exists()
+
+
+def test_render_with_remotion_reuses_valid_existing_video_without_rerendering(tmp_path, monkeypatch):
+    """If video.mp4 already exists and its (correctly-measured) duration
+    matches, render_with_remotion must skip straight to completion instead
+    of re-rendering — this is what should have happened for the real
+    incident instead of burning another ~20 minutes."""
+    import video_agent.stages.render as render_mod
+
+    job_dir = tmp_path / "job"
+    (job_dir / "json").mkdir(parents=True)
+    (job_dir / "outputs").mkdir(parents=True)
+    render_props = job_dir / "json" / "render_props.json"
+    render_props.write_text(
+        json.dumps({
+            "render": {"fps": 30, "duration_sec": 2.0},
+            "scenes": [{"id": "s01", "duration_sec": 2.0}],
+            "branding": {},
+        }),
+        encoding="utf-8",
+    )
+    video_path = job_dir / "outputs" / "video.mp4"
+    _make_clip(video_path, seconds=2.0, fps=30)
+    (job_dir / "outputs" / "thumbnail_1.jpg").write_bytes(b"jpg")
+
+    def fail_if_called(*a, **k):
+        raise AssertionError("should not re-render when the existing video.mp4 is already valid")
+
+    monkeypatch.setattr(render_mod, "_render_segments", fail_if_called)
+    monkeypatch.setattr(render_mod, "build_remotion_commands", fail_if_called)
+    monkeypatch.setattr(render_mod, "_run_with_progress", fail_if_called)
+    monkeypatch.setattr(render_mod, "_normalize_video_audio", fail_if_called)
+    monkeypatch.setattr(render_mod, "_notify_render_done", lambda *a, **k: None)
+
+    render_mod.render_with_remotion(render_props, video_path, notify_telegram=False)
+
+    assert video_path.exists()

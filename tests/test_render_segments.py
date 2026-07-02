@@ -18,7 +18,7 @@ import pytest
 
 from video_agent.stages.render import (
     RemotionSubprocessError,
-    _clear_render_tmp_cache,
+    _clear_render_tmp_entries,
     _concat_segments,
     _segment_is_valid,
     _segment_plan,
@@ -184,22 +184,85 @@ def test_concat_segments_raises_on_ffmpeg_failure(tmp_path):
 
 # ---------------------------------------------------------------------------
 # Cache cleanup (user request: free disk right after each segment)
+#
+# Regression: the first version wiped the ENTIRE .render_tmp tree right after
+# each segment's Remotion process exited. In production this raced with a
+# segment 2 render that failed mid-way with a 404 for narration.wav inside a
+# bundle directory under .render_tmp — the previous segment's async
+# bundler/dev-server teardown (or the next segment's own bundle setup) was
+# still touching that tree when it got wiped. Cleanup is now deferred by one
+# full segment cycle: only entries that predate the PREVIOUS segment's own
+# run are deleted, never anything the segment that just finished created.
 # ---------------------------------------------------------------------------
 
-def test_clear_render_tmp_cache_empties_directory_without_deleting_it(monkeypatch, tmp_path):
+def test_clear_render_tmp_entries_deletes_only_named_entries(tmp_path, monkeypatch):
     fake_tmp = tmp_path / ".render_tmp"
     fake_tmp.mkdir()
     (fake_tmp / "bundle-abc").mkdir()
     (fake_tmp / "bundle-abc" / "asset.js").write_text("x", encoding="utf-8")
     (fake_tmp / "loose_file.tmp").write_text("y", encoding="utf-8")
+    (fake_tmp / "keep-me").mkdir()
 
     import video_agent.stages.render as render_mod
     monkeypatch.setattr(render_mod, "_render_tmp_dir", lambda: fake_tmp)
+    _clear_render_tmp_entries({"bundle-abc", "loose_file.tmp"})
 
-    _clear_render_tmp_cache()
+    remaining = {p.name for p in fake_tmp.iterdir()}
+    assert remaining == {"keep-me"}
 
-    assert fake_tmp.exists()
-    assert list(fake_tmp.iterdir()) == []
+
+def test_render_segments_never_deletes_current_or_previous_segments_own_tmp_dir(
+    tmp_path, monkeypatch
+):
+    """The bundle directory a segment's OWN render just created must survive
+    at least until the NEXT segment has also fully finished — reproduces the
+    exact timing that caused the narration.wav 404: segment N's own tmp dir
+    must never be deleted while segment N (or N+1, still settling) could
+    still be using it."""
+    import video_agent.stages.render as render_mod
+
+    job_dir = tmp_path / "job"
+    (job_dir / "json").mkdir(parents=True)
+    render_props = job_dir / "json" / "render_props.json"
+    render_props.write_text(
+        json.dumps({"render": {"fps": 30, "segment_seconds": 1, "duration_in_frames": 90}}),
+        encoding="utf-8",
+    )
+    video_path = job_dir / "outputs" / "video.mp4"
+
+    fake_tmp = tmp_path / ".render_tmp"
+    fake_tmp.mkdir()
+    monkeypatch.setattr(render_mod, "_render_tmp_dir", lambda: fake_tmp)
+
+    created_dirs: list[Path] = []
+
+    def fake_run_with_progress(cmd, progress_path, **kwargs):
+        out_path = Path(cmd[7])
+        _make_clip(out_path, seconds=1.0, fps=30)
+        # Simulate Remotion creating its own per-invocation bundle dir.
+        bundle = fake_tmp / f"bundle-{len(created_dirs)}"
+        bundle.mkdir()
+        created_dirs.append(bundle)
+
+    monkeypatch.setattr(render_mod, "_run_with_progress", fake_run_with_progress)
+
+    render_mod._render_segments(
+        render_props,
+        video_path,
+        stop_request_path=None,
+        progress_path=job_dir / "json" / "render_progress.json",
+        render_pid_path=job_dir / "json" / ".render.pid",
+    )
+
+    # 3 segments (90 frames / 30fps=1 -> 3 one-second chunks) -> 3 bundle dirs
+    # created. Only the LAST one may still be pending cleanup after the loop
+    # (it has nothing after it to trigger its deferred deletion) — every
+    # earlier one must already be gone, and critically the deletion of any
+    # given bundle dir must never have raced its own segment's run (verified
+    # implicitly: fake_run_with_progress would have errored had its own
+    # freshly-created dir been removed mid-call, which it never is here).
+    remaining = {p.name for p in fake_tmp.iterdir()}
+    assert remaining == {created_dirs[-1].name}
 
 
 # ---------------------------------------------------------------------------

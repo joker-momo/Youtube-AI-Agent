@@ -226,16 +226,30 @@ def validate_render_duration_matches_scene_sum(
 
 
 def probe_video_duration_sec(video_path: Path) -> float | None:
-    """Probe the true playable duration of ``video_path``.
+    """Probe the true playable duration of ``video_path`` as ``nb_frames /
+    r_frame_rate`` — deliberately NOT any of ffprobe's computed "duration"
+    fields (``format=duration``, ``stream=duration``, ``avg_frame_rate``).
 
-    Reads the VIDEO STREAM's own duration, not the container-level
-    ``format=duration``. For a normal single-pass render the two are
-    identical, but after an ffmpeg concat-demuxer join (segmented render)
-    ``format=duration`` drifts — observed 1739.9s vs. an exact 1738.0s
-    (52140 frames @ 30fps) on a 15-segment render, i.e. the container
-    metadata reported ~2s more than the video stream actually contains.
-    ``nb_frames``/stream duration stayed exactly correct throughout — the
-    real content was never wrong, only this measurement was.
+    Root cause (bug-447/448, confirmed by isolating each segment of a real
+    15-segment production render before AND after the ffmpeg concat step):
+    each segment file, in isolation, is perfectly clean —
+    avg_frame_rate=30/1, duration exactly nb_frames/30. Remotion's
+    ``--for-seamless-aac-concatenation`` deliberately pads each segment's
+    AUDIO track slightly past its video track's true length (to land on an
+    AAC frame boundary for click-free joins) — by design, not a bug. But
+    once ffmpeg's concat demuxer (``-c copy``) joins many such
+    audio-longer-than-video segments, it corrupts the VIDEO stream's
+    computed duration/avg_frame_rate across the whole file (observed:
+    avg_frame_rate drifted to ~29.97 fps on the concatenated output,
+    accumulating to a ~2s duration overshoot on a 29-minute video that
+    exceeded the 0.3s validation tolerance and rejected an otherwise
+    perfect render). Through all of this, ``nb_frames`` (exact content) and
+    ``r_frame_rate`` (the DECLARED nominal rate, as opposed to the
+    corrupted computed ``avg_frame_rate``) stayed correct on every single
+    file checked — before concat, after concat, and on prior non-segmented
+    renders alike. Computing duration from those two fields is immune to
+    the concat-induced metadata corruption and identical to the old
+    format=duration reading for any non-concatenated file.
     """
     try:
         result = subprocess.run(
@@ -246,21 +260,30 @@ def probe_video_duration_sec(video_path: Path) -> float | None:
                 "-select_streams",
                 "v:0",
                 "-show_entries",
-                "stream=duration",
+                "stream=nb_frames,r_frame_rate",
                 "-of",
-                "default=noprint_wrappers=1:nokey=1",
+                "default=noprint_wrappers=1",
                 str(video_path),
             ],
             check=True,
             capture_output=True,
             text=True,
         )
-        stream_out = result.stdout.strip()
-        if stream_out and stream_out != "N/A":
-            return float(stream_out)
-    except (subprocess.SubprocessError, ValueError):
+        values: dict[str, str] = {}
+        for line in result.stdout.strip().splitlines():
+            key, _, value = line.partition("=")
+            values[key] = value
+        nb_frames_raw = values.get("nb_frames")
+        rate_raw = values.get("r_frame_rate")
+        if nb_frames_raw and nb_frames_raw != "N/A" and rate_raw and rate_raw != "N/A":
+            num_str, _, den_str = rate_raw.partition("/")
+            rate = float(num_str) / float(den_str or 1)
+            if rate > 0:
+                return int(nb_frames_raw) / rate
+    except (subprocess.SubprocessError, ValueError, ZeroDivisionError):
         pass
-    # Fallback for containers that don't populate stream-level duration.
+    # Fallback for streams that don't populate nb_frames/r_frame_rate
+    # (rare containers/codecs) — container-level duration, best effort.
     try:
         result = subprocess.run(
             [
@@ -721,21 +744,37 @@ def _segment_is_valid(
     return abs(actual - expected) <= tolerance_sec
 
 
-def _clear_render_tmp_cache() -> None:
-    """Drop Remotion's bundle/asset buffers after a segment completes.
+def _render_tmp_children() -> set[str]:
+    try:
+        return {c.name for c in _render_tmp_dir().iterdir()}
+    except OSError:
+        return set()
 
-    Each segment is a separate ``npx remotion render`` invocation, so
-    ``.render_tmp`` accumulates fresh webpack/asset output every time; left
-    uncleared across N segments it can grow to double-digit GB (observed 12GB
-    from a single killed attempt) and defeats the purpose of segmenting.
-    Segments render strictly sequentially, so it is always safe to clear
-    between them."""
+
+def _clear_render_tmp_entries(names: set[str]) -> None:
+    """Delete only the named top-level entries under ``.render_tmp``.
+
+    bug (found investigating a 404 mid-segment-2 render for narration.wav
+    inside a bundle dir under ``.render_tmp``): the previous version wiped
+    the ENTIRE ``.render_tmp`` tree right after each segment's
+    ``npx remotion render`` process exited. Node's dev/bundler server does
+    not necessarily finish tearing down synchronously with the parent CLI
+    process — a lingering async cleanup (or a bundle-output directory the
+    NEXT segment's process is still mid-setup on) can still be touching
+    that tree. Deleting everything unconditionally raced with that.
+
+    Callers now only pass the names snapshotted *before* the segment that
+    just finished started — i.e. leftovers from an EARLIER segment that has
+    had a full extra segment's worth of time to finish any async cleanup.
+    Whatever the just-finished segment itself created is deliberately left
+    alone for one more cycle."""
     d = _render_tmp_dir()
-    for child in d.iterdir():
+    for name in names:
+        child = d / name
         try:
             if child.is_dir():
                 shutil.rmtree(child, ignore_errors=True)
-            else:
+            elif child.exists():
                 child.unlink(missing_ok=True)
         except OSError:
             pass
@@ -799,6 +838,13 @@ def _render_segments(
     segment_total = len(plan)
 
     segment_paths: list[Path] = []
+    # .render_tmp cleanup is deferred by one full segment cycle: prev_tmp_before
+    # is the snapshot taken before the PREVIOUS segment ran, so by the time we
+    # delete it (after the CURRENT segment has also fully finished) an entire
+    # extra segment's wall-clock time has passed since anything in it was
+    # created — ample margin for Node's bundler/dev-server to finish any async
+    # teardown, never racing with what a still-settling process just made.
+    prev_tmp_before: set[str] | None = None
     for index, (start, end) in enumerate(plan, start=1):
         if stop_request_path is not None and stop_request_path.exists():
             raise RuntimeError("Stop requested by operator.")
@@ -816,6 +862,7 @@ def _render_segments(
             _assert_render_disk_space(output_path=video_path)
             continue
         _assert_render_disk_space(output_path=video_path)
+        tmp_before = _render_tmp_children()
         commands = build_remotion_commands(
             render_props_path,
             seg_path,
@@ -840,9 +887,14 @@ def _render_segments(
                 f"verification after render (expected ~{expected_sec:.1f}s)."
             )
         segment_paths.append(seg_path)
-        # User-requested: reclaim disk the moment a segment is safely on disk
-        # instead of waiting for the whole render to finish.
-        _clear_render_tmp_cache()
+        # User-requested: reclaim disk without waiting for the whole render to
+        # finish — but only entries at least one full segment cycle old.
+        if prev_tmp_before is not None:
+            _clear_render_tmp_entries(prev_tmp_before)
+        prev_tmp_before = tmp_before
+
+    if prev_tmp_before is not None:
+        _clear_render_tmp_entries(prev_tmp_before)
 
     _write_render_progress(
         progress_path,

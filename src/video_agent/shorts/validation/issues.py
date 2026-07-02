@@ -35,6 +35,16 @@ SUPPORTED_GRAPHIC_LAYOUTS = {
     "graphic_label_callout",
     "graphic_comparison",
     "graphic_routine_split",
+    # Ported from the long-form graphic card vocabulary (operator_prompts /
+    # orchestrator/stages/graphic_images.py): stat, myth, do_dont,
+    # recipe_snapshot, quote_portrait, evidence_nugget, warning.
+    "graphic_stat",
+    "graphic_myth",
+    "graphic_do_dont",
+    "graphic_recipe_snapshot",
+    "graphic_quote_portrait",
+    "graphic_evidence_nugget",
+    "graphic_warning",
 }
 
 SUPPORTED_SHORT_LAYOUTS = {
@@ -62,6 +72,13 @@ LAYOUT_DURATION_TARGETS = {
     "graphic_comparison": (3.5, 5.0, 5.0),
     "graphic_plate_ratio": (3.0, 4.5, 5.0),
     "graphic_routine_split": (3.5, 5.0, 5.0),
+    "graphic_stat": (2.5, 3.5, 4.0),
+    "graphic_myth": (3.0, 4.0, 4.5),
+    "graphic_do_dont": (3.5, 4.5, 5.0),
+    "graphic_recipe_snapshot": (3.0, 4.5, 5.0),
+    "graphic_quote_portrait": (2.5, 4.0, 4.5),
+    "graphic_evidence_nugget": (2.5, 3.5, 4.0),
+    "graphic_warning": (3.0, 4.0, 4.5),
 }
 
 

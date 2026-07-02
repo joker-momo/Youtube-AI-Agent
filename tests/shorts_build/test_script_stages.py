@@ -76,7 +76,11 @@ def test_phase15_graphic_layouts_are_in_scene_and_qa_prompts():
 
     assert "productlabel" in scene_prompt
     assert "callouts" in scene_prompt
-    assert "six allowed graphic" in qa_prompt
+    assert "allowed graphic_* layouts above" in qa_prompt
+    # Long-form graphic-card ports must be taught to both prompts too.
+    for layout in ("graphic_stat", "graphic_myth", "graphic_do_dont", "graphic_warning"):
+        assert layout in scene_prompt
+        assert layout in qa_prompt
 
 
 def test_graphic_prompt_tuning_rules_are_in_scene_and_qa_prompts():

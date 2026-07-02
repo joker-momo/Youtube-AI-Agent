@@ -533,8 +533,11 @@ def validate_scene_structure(
                 repair_hint=(
                     "Convert the highest-value list/proof/payoff beat to a graphic_* layout: "
                     "use graphic_checklist for action lists, graphic_plate_ratio for plate/portion/"
-                    "component ratios, graphic_label_callout for label facts, or graphic_comparison "
-                    "for two-choice comparisons. Keep hook and CTA as realistic short_* scenes."
+                    "component ratios, graphic_label_callout for label facts, graphic_comparison "
+                    "for two-choice comparisons, graphic_stat for one memorable number, "
+                    "graphic_myth for mito/realidad corrections, graphic_do_dont for worse-vs-better "
+                    "choices, or graphic_warning for mistakes to avoid. Keep hook and CTA as "
+                    "realistic short_* scenes."
                 ),
             )
         )
@@ -547,9 +550,11 @@ def validate_scene_structure(
                 severity="repairable_error",
                 detail="A short_* scene contains compact visual structure that should be a ChatGPT-generated graphic.",
                 repair_hint=(
-                    "Convert the best structured scene to graphic_checklist, graphic_plate_ratio, "
-                    "graphic_label_callout, or graphic_comparison. Do not render this structure as "
-                    "generic lifestyle footage only."
+                    "Convert the best structured scene to the matching graphic_* layout "
+                    "(graphic_checklist, graphic_plate_ratio, graphic_label_callout, "
+                    "graphic_comparison, graphic_stat, graphic_myth, graphic_do_dont, or "
+                    "graphic_warning). Do not render this structure as generic lifestyle "
+                    "footage only."
                 ),
             )
         )

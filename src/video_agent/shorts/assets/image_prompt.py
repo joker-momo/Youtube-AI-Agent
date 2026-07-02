@@ -8,7 +8,96 @@ Shorts-only and must not import ``video_agent.stages.*``.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
+
+# Anatomy/typography guard ported from the long-form graphic_images stage
+# (orchestrator/stages/graphic_images.py). The generated card is shown full-bleed
+# with no Remotion text overlay, so the image must carry legible baked-in text
+# and must never show malformed hands/faces.
+_GRAPHIC_QUALITY_GUARD = (
+    "Anatomy must look natural: avoid close-up hands, fingers, or utensils held mid-air; "
+    "keep hands relaxed, partially out of frame or softly out of focus; absolutely no "
+    "malformed hands, extra fingers, or distorted faces. "
+    "Set every word in Montserrat (or a near-identical clean geometric bold sans-serif). "
+    "Lay the text out with a clear visual hierarchy; make each line LARGE and BOLD with HIGH "
+    "CONTRAST so it is crisp and easy to read, never faint or washed out. "
+    "Spell everything exactly with correct Spanish accents; add no other text."
+)
+
+# NEUTRAL, deliberately UN-branded fallback (mirrors the long-form stage). Real
+# brand colours live in ``configs/<channel>/style-dna.json`` — the single source
+# of truth; this default only applies when that file is missing/invalid.
+_DEFAULT_STYLE: dict[str, Any] = {
+    "palette": {
+        "background": "#ECECEC",
+        "primary": "#3A3A3A",
+        "secondary": "#8A8A8A",
+        "accent": "#B8B8B8",
+        "text": "#1A1A1A",
+    },
+    "visual_mood": ["calm", "clean", "editorial"],
+}
+
+
+def _brand_style_text(style: dict[str, Any]) -> str:
+    """A brand-style directive (palette hex + mood + panel layout) ported from the
+    long-form ``_brand_style`` so shorts cards render ON-brand instead of the
+    generic navy/white/yellow template look."""
+    dp = _DEFAULT_STYLE["palette"]
+    p = (style or {}).get("palette") or dp
+    bg = p.get("background", dp["background"])
+    primary = p.get("primary", dp["primary"])
+    sec = p.get("secondary", dp["secondary"])
+    accent = p.get("accent", dp["accent"])
+    text = p.get("text", dp["text"])
+    mood = ", ".join((style or {}).get("visual_mood") or _DEFAULT_STYLE["visual_mood"])
+    return (
+        f"Brand style — {mood} editorial for a wellness channel for adults 45+ (NOT clickbait). "
+        f"Use ONLY this brand palette (hex): background {bg}, primary panel {primary}, secondary "
+        f"{sec}, accent {accent}, text {text}. Set any text block on a SOFT panel/card in the "
+        f"primary colour {primary} (or the background {bg}) with high-contrast brand text — "
+        f"background {bg} on the primary {primary}, or text {text} on the background {bg} — using "
+        f"the accent {accent} or secondary {sec} ONLY as a small accent (one word, an underline, or "
+        "a marker icon). Do NOT use navy, pure black, stark white blocks, neon, or a harsh full-"
+        "bleed gradient. Lay it out as a calm, premium wellness-magazine card with generous "
+        "padding, rounded corners and a clear text hierarchy. Give any panel a soft drop shadow "
+        "and gentle depth so it feels premium and tactile, never flat."
+    )
+
+
+def load_brand_style(channel_id: str | None) -> str:
+    """Brand-style prompt directive for ``channel_id`` from its style-dna.json.
+
+    Falls back to a neutral, un-branded palette (with a loud warning) so a
+    missing style file is obvious rather than silently off-brand."""
+    style: dict[str, Any] = _DEFAULT_STYLE
+    if channel_id:
+        sp = Path("configs") / str(channel_id) / "style-dna.json"
+        try:
+            if sp.exists():
+                data = json.loads(sp.read_text(encoding="utf-8"))
+                if isinstance(data, dict) and data.get("palette"):
+                    style = data
+                else:
+                    print(
+                        f"[shorts.image_prompt] WARNING: style-dna.json invalid at {sp} — "
+                        "using the neutral fallback palette (cards will look UN-branded).",
+                        flush=True,
+                    )
+            else:
+                print(
+                    f"[shorts.image_prompt] WARNING: style-dna.json missing at {sp} — "
+                    "using the neutral fallback palette (cards will look UN-branded).",
+                    flush=True,
+                )
+        except Exception as exc:  # noqa: BLE001
+            print(
+                f"[shorts.image_prompt] WARNING: failed to load style-dna.json ({exc}); "
+                "neutral fallback palette.",
+                flush=True,
+            )
+    return _brand_style_text(style)
 
 
 def _compact_payload_text(value: Any) -> str:
@@ -135,15 +224,143 @@ def _graphic_layout_contract(layout: str, payload: dict[str, Any]) -> str:
                 lines.append(line)
         lines.append("Do not add unrelated nutrition values, brand logos, warning stamps, or tiny legal-style copy.")
         return "\n".join(lines)
+    if layout == "graphic_step_list":
+        steps = payload.get("steps") or []
+        lines = [
+            "Layout contract: graphic_step_list.",
+            "Create a numbered step-by-step timeline card: ordered items 1, 2, 3 connected by arrows or chevrons, NOT check-marks.",
+            "Show only these steps, in this order:",
+        ]
+        for step in steps if isinstance(steps, list) else []:
+            if isinstance(step, dict):
+                lines.append(
+                    f"- {str(step.get('label') or '').strip()}: {str(step.get('text') or '').strip()}"
+                )
+        lines.append("Do not add extra steps, check-marks, tiny footnotes, or dense paragraphs.")
+        return "\n".join(lines)
+    if layout == "graphic_routine_split":
+        blocks = payload.get("blocks") or []
+        total = str(payload.get("totalLabel") or "").strip()
+        lines = [
+            "Layout contract: graphic_routine_split.",
+            "Create a calm time-block routine card: each block on its own row with its time budget clearly visible.",
+        ]
+        if total:
+            lines.append(f"Total time label: {total}")
+        lines.append("Use only these time blocks, in this order:")
+        for block in blocks if isinstance(blocks, list) else []:
+            if isinstance(block, dict):
+                lines.append(
+                    f"- {str(block.get('time') or '').strip()}: {str(block.get('text') or '').strip()}"
+                )
+        lines.append("Do not add extra blocks, alarm-clock urgency, or perfectionist wording.")
+        return "\n".join(lines)
+    if layout == "graphic_stat":
+        title = str(payload.get("title") or "").strip()
+        body = str(payload.get("body") or "").strip()
+        lines = [
+            "Layout contract: graphic_stat.",
+            "Create a bold statistic card built around ONE ENORMOUS number as the hero, "
+            "the number filling roughly half the card with only a small label — no bullet list.",
+        ]
+        if title:
+            lines.append(f'The enormous focal number/stat, exactly: "{title}"')
+        if body:
+            lines.append(f'A small label beneath the number, MUCH smaller than the number: "{body}"')
+        lines.append("Do not add extra numbers, percentages, charts, or invented statistics.")
+        return "\n".join(lines)
+    if layout == "graphic_myth":
+        title = str(payload.get("title") or "").strip()
+        body = str(payload.get("body") or "").strip()
+        lines = [
+            "Layout contract: graphic_myth.",
+            "Create a myth-versus-fact card: two stacked contrasting rows — a 'Mito' row with a "
+            "soft cross icon in the brand secondary colour above a 'Realidad' row with a check "
+            "icon in the brand accent colour.",
+        ]
+        if title:
+            lines.append(f'"Mito" row text, exactly: "{title}"')
+        if body:
+            lines.append(f'"Realidad" row text, exactly: "{body}"')
+        lines.append("Do not add fear language, medical symbols, or extra claims.")
+        return "\n".join(lines)
+    if layout == "graphic_do_dont":
+        bad = str(payload.get("bad") or "").strip()
+        good = str(payload.get("good") or "").strip()
+        lines = [
+            "Layout contract: graphic_do_dont.",
+            "Create a do-versus-don't card: TWO real photos side by side — the worse choice "
+            "desaturated with a soft cross marker in the brand secondary colour, the better "
+            "choice bright with a check marker in the brand accent colour.",
+        ]
+        if bad:
+            lines.append(f'LEFT photo (the WORSE choice), label exactly: "{bad}"')
+        if good:
+            lines.append(f'RIGHT photo (the BETTER choice), label exactly: "{good}"')
+        lines.append("Do not add moral shaming, red warning stamps, or invented claims.")
+        return "\n".join(lines)
+    if layout == "graphic_recipe_snapshot":
+        items = [str(item).strip() for item in (payload.get("items") or []) if str(item).strip()]
+        lines = [
+            "Layout contract: graphic_recipe_snapshot.",
+            f"Create a recipe-snapshot card: {len(items) or 2}-3 real food photos as clean "
+            "side-by-side tiles, each with a short label — a practical example, not a text list.",
+            "Show only these foods, in this order:",
+        ]
+        lines.extend(f"- {item}" for item in items)
+        lines.append("Do not add calorie math, grams, extra ingredients, or medical claims.")
+        return "\n".join(lines)
+    if layout == "graphic_quote_portrait":
+        quote = str(payload.get("title") or "").strip()
+        lines = [
+            "Layout contract: graphic_quote_portrait.",
+            "Create a magazine-style quote-portrait card: ONE large quotation in quote marks "
+            "beside a warm candid portrait of a mature adult 50+, editorial cover feel, "
+            "no boxed text panel, no bullet list.",
+        ]
+        if quote:
+            lines.append(f'The quotation, exactly: "{quote}"')
+        lines.append("Do not add attribution names, extra sentences, or stocky posed smiles.")
+        return "\n".join(lines)
+    if layout == "graphic_evidence_nugget":
+        title = str(payload.get("title") or "").strip()
+        body = str(payload.get("body") or "").strip()
+        lines = [
+            "Layout contract: graphic_evidence_nugget.",
+            "Create an evidence-nugget card: ONE number/fact as a large documentary-style "
+            "lower-third over a real photo, serious and credible, minimal extra text.",
+        ]
+        if title:
+            lines.append(f'The bold number/fact, exactly: "{title}"')
+        if body:
+            lines.append(f'A small context line beneath it: "{body}"')
+        lines.append("Do not invent citations, journal names, percentages, or extra statistics.")
+        return "\n".join(lines)
+    if layout == "graphic_warning":
+        items = [str(item).strip() for item in (payload.get("items") or []) if str(item).strip()]
+        lines = [
+            "Layout contract: graphic_warning.",
+            "Create a cautionary card with an 'avoid this' tone: each item on its own row led by "
+            "a soft cross / caution icon in the brand secondary colour (NOT check-marks).",
+            "Show only these items, in this order:",
+        ]
+        lines.extend(f"- {item}" for item in items)
+        lines.append(
+            "Keep the tone calm and helpful, never alarmist: no red danger stamps, skulls, "
+            "sirens, or fear language."
+        )
+        return "\n".join(lines)
     return f"Layout contract: {layout}.\nUse the payload exactly; do not invent extra teaching points."
 
 
-def build_scene_image_prompt(scene: dict[str, Any], query: str) -> str:
+def build_scene_image_prompt(scene: dict[str, Any], query: str, brand_style: str = "") -> str:
     """Build the ChatGPT image prompt for AI fallback scenes.
 
     For former ``graphic_*`` scenes the generated image must carry the same
     teaching content as the graphic payload, but as a richer editorial visual
-    instead of a rigid renderer card.
+    instead of a rigid renderer card. ``brand_style`` (see ``load_brand_style``)
+    injects the channel palette/mood directive ported from the long-form
+    graphic_images stage so cards render ON-brand.
     """
     layout = str(scene.get("layout") or "")
     payload = scene.get("layout_payload") or {}
@@ -187,12 +404,15 @@ def build_scene_image_prompt(scene: dict[str, Any], query: str) -> str:
 
     if is_graphic:
         layout_contract = _graphic_layout_contract(graphic_layout, payload if isinstance(payload, dict) else {})
+        brand_block = f"{brand_style.strip()}\n" if brand_style.strip() else ""
         return (
             "Create a premium vertical editorial image for a Spanish wellness Short for adults 45+. "
             "Replace a flat renderer card with a natural, polished visual that still carries the teaching content exactly. "
             "Use warm Mediterranean light, realistic textures, tasteful magazine-style composition, and large legible Spanish typography inside mobile safe margins. "
             "Make the first frame useful and readable without zooming. "
             "Do not use a plain beige card, generic icons, stock-photo collage, watermark, tiny text, extra claims, or English wording.\n"
+            f"{brand_block}"
+            f"{_GRAPHIC_QUALITY_GUARD}\n"
             f"Scene layout: {graphic_layout}\n"
             f"Scene visual idea: {visual_prompt}\n"
             f"Main headline to include exactly: {on_screen or title}\n"

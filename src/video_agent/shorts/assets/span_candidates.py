@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from video_agent.assets.stock_core import StockSearchCore, _stock_filters
-from video_agent.shorts.assets.image_prompt import build_scene_image_prompt
+from video_agent.shorts.assets.image_prompt import build_scene_image_prompt, load_brand_style
 from video_agent.shorts.visual_acquisition import compile_span_search_queries
 from video_agent.shorts.visual_candidate_scoring import (
     artifact_candidate_record,
@@ -222,7 +222,9 @@ class ShortSpanAssetService:
         """Last-resort tier: render an AI image from the scene's visual_prompt."""
         import hashlib
 
-        prompt = build_scene_image_prompt(scene, query).strip()
+        prompt = build_scene_image_prompt(
+            scene, query, brand_style=load_brand_style(channel_id)
+        ).strip()
         if not prompt:
             return None
 

@@ -34,6 +34,7 @@ __all__ = [
     "_ROUTINE_TOTAL_MAX",
     "_ROUTINE_TIME_MAX",
     "_ROUTINE_TEXT_MAX",
+    "_CARD_BODY_MAX",
     "FORBIDDEN_HEALTH_MARKETING_WORDS",
 ]
 
@@ -42,8 +43,15 @@ _GRAPHIC_KEEP_PRIORITY = [
     "graphic_label_callout",  # "primer ingrediente"
     "graphic_comparison",  # "fibra / azúcar / jarabes"
     "graphic_plate_ratio",
+    "graphic_do_dont",  # worse-vs-better contrast (long-form port)
+    "graphic_stat",  # one memorable number (long-form port)
+    "graphic_evidence_nugget",  # credible age/health fact (long-form port)
     "graphic_routine_split",
     "graphic_step_list",
+    "graphic_recipe_snapshot",  # practical meal example (long-form port)
+    "graphic_myth",  # mito/realidad (long-form port)
+    "graphic_warning",  # avoid-this list (long-form port)
+    "graphic_quote_portrait",  # emotional accent — convert early (long-form port)
     "graphic_checklist",  # setup/recap — convert first
 ]
 ALLOWED_GRAPHIC_VARIANTS = {
@@ -84,6 +92,13 @@ GRAPHIC_LAYOUT_DURATION_TARGETS = {
     "graphic_label_callout": (3.5, 5.0, 5.0),
     "graphic_comparison": (3.5, 4.5, 5.0),
     "graphic_routine_split": (3.5, 5.0, 5.0),
+    "graphic_stat": (2.5, 3.5, 4.0),
+    "graphic_myth": (3.0, 4.0, 4.5),
+    "graphic_do_dont": (3.5, 4.5, 5.0),
+    "graphic_recipe_snapshot": (3.0, 4.5, 5.0),
+    "graphic_quote_portrait": (2.5, 4.0, 4.5),
+    "graphic_evidence_nugget": (2.5, 3.5, 4.0),
+    "graphic_warning": (3.0, 4.0, 4.5),
 }
 PASSIVE_CTA_TEXTS = {
     "CHECKLIST GUARDADA",
@@ -126,6 +141,8 @@ _COMPARISON_BADGE_MAX = 28
 _ROUTINE_TOTAL_MAX = 16
 _ROUTINE_TIME_MAX = 16
 _ROUTINE_TEXT_MAX = 52
+# Body line for the long-form-ported single-body cards (stat/myth/evidence_nugget).
+_CARD_BODY_MAX = 90
 FORBIDDEN_HEALTH_MARKETING_WORDS = (
     "veneno",
     "prohibido",

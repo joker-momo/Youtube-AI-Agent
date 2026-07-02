@@ -102,6 +102,14 @@ SUPPORTED_GRAPHIC_LAYOUTS = (
     "graphic_label_callout",
     "graphic_comparison",
     "graphic_routine_split",
+    # Long-form graphic card ports (see orchestrator/stages/graphic_images.py).
+    "graphic_stat",
+    "graphic_myth",
+    "graphic_do_dont",
+    "graphic_recipe_snapshot",
+    "graphic_quote_portrait",
+    "graphic_evidence_nugget",
+    "graphic_warning",
 )
 
 # Backward-compat adapter (spec v6 §10). Legacy long-form layout names map to

@@ -91,7 +91,7 @@ class ShortSceneResolver:
 
     def _is_key_scene(self, scene: dict[str, Any]) -> bool:
         layout = scene.get("layout") or ""
-        if layout in {"short_hook", "short_cta", "graphic_label_callout", "graphic_comparison", "graphic_checklist"}:
+        if layout in {"short_hook", "short_cta"} or str(layout).startswith("graphic_"):
             return True
         if scene.get("retention_function") in {"hook", "proof", "payoff", "cta"}:
             return True

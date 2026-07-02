@@ -192,6 +192,18 @@ def validate_short_graphic_scenes(scenes: list[dict[str, Any]]) -> list[str]:
             _validate_comparison(payload, sid)
         elif layout == "graphic_routine_split":
             _validate_routine_split(payload, sid, warnings)
+        elif layout in {"graphic_stat", "graphic_evidence_nugget"}:
+            _validate_title_body_card(payload, sid, layout, warnings, body_required=True)
+        elif layout == "graphic_myth":
+            _validate_title_body_card(payload, sid, layout, warnings, body_required=True)
+        elif layout == "graphic_do_dont":
+            _validate_do_dont(payload, sid)
+        elif layout == "graphic_recipe_snapshot":
+            _validate_recipe_snapshot(payload, sid, warnings)
+        elif layout == "graphic_quote_portrait":
+            pass  # title (the quotation) already validated by _validate_title
+        elif layout == "graphic_warning":
+            _validate_warning(payload, sid, warnings)
 
         _validate_graphic_duration(scene, sid, layout, warnings)
 
@@ -301,6 +313,9 @@ def _validate_title(payload: dict, sid: Any, layout: str) -> None:
             "graphic_label_callout",
             "graphic_comparison",
             "graphic_routine_split",
+            # Long-form ports whose title carries a full sentence (mito / quotation).
+            "graphic_myth",
+            "graphic_quote_portrait",
         }
         else 48
     )
@@ -408,7 +423,7 @@ def _check_forbidden_language(value: Any, sid: Any, field: str) -> None:
     for word in FORBIDDEN_HEALTH_MARKETING_WORDS:
         if word in lower:
             raise ValueError(
-                f"graphic_comparison scene {sid} contains forbidden health-marketing word "
+                f"graphic scene {sid} contains forbidden health-marketing word "
                 f"'{word}' in {field}."
             )
 
@@ -448,3 +463,63 @@ def _validate_routine_split(payload: dict, sid: Any, warnings: list[str]) -> Non
             raise ValueError(f"graphic_routine_split scene {sid} has a non-object block.")
         _require_short_string(block.get("time"), _ROUTINE_TIME_MAX, "block.time", sid)
         _require_short_string(block.get("text"), _ROUTINE_TEXT_MAX, "block.text", sid)
+
+
+# --- Long-form graphic card ports (stat/myth/do_dont/recipe_snapshot/ -------
+# --- quote_portrait/evidence_nugget/warning) --------------------------------
+
+
+def _validate_title_body_card(
+    payload: dict, sid: Any, layout: str, warnings: list[str], *, body_required: bool
+) -> None:
+    """title+body cards ported from long-form: graphic_stat (number + label),
+    graphic_myth (mito + realidad), graphic_evidence_nugget (fact + context)."""
+    body = payload.get("body")
+    if body_required and (not isinstance(body, str) or not body.strip()):
+        raise ValueError(f"{layout} scene {sid} requires a non-empty body.")
+    _warn_if_long(body, _CARD_BODY_MAX, "body", sid, warnings)
+    _check_forbidden_language(payload.get("title"), sid, "title")
+    _check_forbidden_language(body, sid, "body")
+
+
+def _validate_do_dont(payload: dict, sid: Any) -> None:
+    """graphic_do_dont: a worse choice (bad) vs a clearly better one (good)."""
+    _require_short_string(payload.get("bad"), _COMPARISON_TEXT_MAX, "bad", sid)
+    _require_short_string(payload.get("good"), _COMPARISON_TEXT_MAX, "good", sid)
+    for field in ("title", "bad", "good", "footer"):
+        _check_forbidden_language(payload.get(field), sid, field)
+
+
+def _validate_recipe_snapshot(payload: dict, sid: Any, warnings: list[str]) -> None:
+    """graphic_recipe_snapshot: 2-3 real foods as labelled photo tiles."""
+    items = payload.get("items")
+    if not isinstance(items, list) or not (2 <= len(items) <= 3):
+        got = len(items) if isinstance(items, list) else "missing"
+        raise ValueError(
+            f"graphic_recipe_snapshot scene {sid} items must contain 2-3 foods, got {got}."
+        )
+    for item in items:
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError(f"graphic_recipe_snapshot scene {sid} has an empty item.")
+        if len(item) > _CHECKLIST_ITEM_MAX:
+            warnings.append(
+                f"Scene {sid} recipe item exceeds {_CHECKLIST_ITEM_MAX} chars: '{item}'."
+            )
+
+
+def _validate_warning(payload: dict, sid: Any, warnings: list[str]) -> None:
+    """graphic_warning: 2-4 things to avoid, calm tone, no fear language."""
+    items = payload.get("items")
+    if not isinstance(items, list) or not (2 <= len(items) <= 4):
+        got = len(items) if isinstance(items, list) else "missing"
+        raise ValueError(f"graphic_warning scene {sid} items must contain 2-4 items, got {got}.")
+    for item in items:
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError(f"graphic_warning scene {sid} has an empty item.")
+        if len(item) > _CHECKLIST_ITEM_MAX:
+            warnings.append(
+                f"Scene {sid} warning item exceeds {_CHECKLIST_ITEM_MAX} chars: '{item}'."
+            )
+        _check_forbidden_language(item, sid, "items")
+    _check_forbidden_language(payload.get("title"), sid, "title")
+    _check_forbidden_language(payload.get("footer"), sid, "footer")

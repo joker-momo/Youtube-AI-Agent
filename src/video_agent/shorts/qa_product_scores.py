@@ -159,6 +159,16 @@ def normalize_gemini_scenes_qa(
         "graphic_label_callout",
         "graphic_comparison",
         "graphic_checklist",
+        "graphic_plate_ratio",
+        "graphic_step_list",
+        "graphic_routine_split",
+        "graphic_stat",
+        "graphic_myth",
+        "graphic_do_dont",
+        "graphic_recipe_snapshot",
+        "graphic_quote_portrait",
+        "graphic_evidence_nugget",
+        "graphic_warning",
     ]
 
     def is_missing_graphic_requirement(text: str, issue_type: str = "") -> bool:

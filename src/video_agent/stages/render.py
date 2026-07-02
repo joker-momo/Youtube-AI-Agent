@@ -889,6 +889,115 @@ def _concat_segments(segment_paths: list[Path], output_path: Path) -> None:
         list_path.unlink(missing_ok=True)
 
 
+def _can_use_fast_audio_track(render_props: dict) -> bool:
+    """Whether the audio graph is simple enough to assemble directly with
+    ffmpeg (no Chromium at all).
+
+    ChannelVideo.tsx's ONLY audio sources are: intro.mp4's own embedded
+    track, the narration <Audio>, and outro.mp4's own embedded track — no
+    background-music mixing today. If music is ever configured
+    (``audio.music`` non-null), that assumption no longer holds and this
+    MUST fall back to a real Remotion render — hardcoding a second, richer
+    audio graph here would silently drift from whatever the composition
+    actually plays."""
+    return not (render_props.get("audio") or {}).get("music")
+
+
+def _build_fast_audio_track(render_props_path: Path, audio_path: Path) -> None:
+    """Assemble the full-composition audio track directly with ffmpeg — no
+    Chromium. A Remotion audio-only render still evaluates the whole
+    timeline frame-by-frame just to place these same pieces (~14fps
+    observed, the same order as real pixel rendering, for a job that
+    should take seconds).
+
+    Three pieces, concatenated in order, exactly matching what
+    ChannelVideo.tsx actually composes (verified by reading the source,
+    not assumed):
+      1. intro.mp4's OWN embedded audio (real content — a branding
+         jingle/music bed, confirmed via ffprobe; ChannelVideo's intro
+         <MediaVideo> has no ``muted`` prop, unlike scene backgrounds).
+      2. narration.wav, trimmed/padded to exactly the content span's
+         duration (content starts at frame 0 of narration in every
+         case, so no intro-offset shift is needed here at all).
+      3. outro.mp4's OWN embedded audio, same as intro.
+
+    Every duration used is read fresh from render_props — intro_sec/
+    outro_sec are themselves probed from the real intro/outro video files
+    upstream (_probe_duration_sec), never hardcoded here. Swapping either
+    branding video for a different length changes this automatically."""
+    props = read_json(render_props_path)
+    branding = props.get("branding") or {}
+    fps = float((props.get("render", {}) or {}).get("fps") or 30)
+    intro_sec = float(branding.get("intro_sec") or 0.0)
+    outro_sec = float(branding.get("outro_sec") or 0.0)
+    intro_frames = round(intro_sec * fps)
+    outro_frames = round(outro_sec * fps)
+    total_frames = _total_render_frames(render_props_path)
+    content_frames = max(0, total_frames - intro_frames - outro_frames)
+    content_sec = content_frames / fps
+
+    narration_rel = (props.get("audio") or {}).get("narration")
+    if not narration_rel:
+        raise RemotionSubprocessError("render_props.audio.narration is missing.")
+    narration_path = repo_root() / narration_rel
+    if not narration_path.exists():
+        raise RemotionSubprocessError(f"Narration audio not found: {narration_path}")
+
+    public_dir = repo_root() / "remotion" / "public"
+    inputs: list[Path] = []
+    if intro_frames > 0 and branding.get("intro_video_path"):
+        intro_path = public_dir / branding["intro_video_path"]
+        if intro_path.exists() and _has_audio_stream(intro_path):
+            inputs.append(intro_path)
+    inputs.append(narration_path)
+    if outro_frames > 0 and branding.get("outro_video_path"):
+        outro_path = public_dir / branding["outro_video_path"]
+        if outro_path.exists() and _has_audio_stream(outro_path):
+            inputs.append(outro_path)
+
+    narration_index = inputs.index(narration_path)
+    cmd = ["ffmpeg", "-y"]
+    for p in inputs:
+        cmd += ["-i", str(p)]
+    # Only the narration piece needs shaping (pad/trim to the content span's
+    # exact duration); intro/outro play their own audio as-is.
+    filters = []
+    labels = []
+    for i in range(len(inputs)):
+        if i == narration_index:
+            filters.append(f"[{i}:a]apad,atrim=0:{content_sec:.6f}[a{i}]")
+        else:
+            filters.append(f"[{i}:a]anull[a{i}]")
+        labels.append(f"[a{i}]")
+    filters.append(f"{''.join(labels)}concat=n={len(inputs)}:v=0:a=1[out]")
+    cmd += [
+        "-filter_complex", ";".join(filters),
+        "-map", "[out]",
+        "-c:a", "pcm_s16le",
+        str(audio_path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RemotionSubprocessError(
+            f"ffmpeg fast audio-track assembly failed (code {result.returncode}): "
+            f"{result.stderr[-2000:]}"
+        )
+
+
+def _has_audio_stream(video_path: Path) -> bool:
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "error",
+            "-select_streams", "a",
+            "-show_entries", "stream=index",
+            "-of", "csv=p=0",
+            str(video_path),
+        ],
+        capture_output=True, text=True,
+    )
+    return bool(result.stdout.strip())
+
+
 def _write_render_progress(progress_path: Path, phase: str, **fields) -> None:
     payload = _blank_progress(phase)
     payload.update(fields)
@@ -957,7 +1066,7 @@ def _render_segments(
     segment_total = len(plan)
     expected_duration_sec = total_frames / fps
 
-    # Full-composition audio track, rendered ONCE (WAV: sample-exact, no AAC
+    # Full-composition audio track, built ONCE (WAV: sample-exact, no AAC
     # padding). Segments render --muted; this single track gets muxed over
     # the concatenated video, so no per-segment audio exists to drift
     # (bug-454: raw-concat of per-segment AAC accumulated padding at every
@@ -971,18 +1080,27 @@ def _render_segments(
             segment_total=segment_total,
             segments_done=0,
         )
-        _run_with_progress(
-            build_remotion_audio_command(render_props_path, audio_path),
-            progress_path,
-            stop_request_path=stop_request_path,
-            pid_file_path=render_pid_path,
-            progress_overrides={
-                "segment_index": 0,
-                "segment_total": segment_total,
-                "segments_done": 0,
-                "note": "audio track",
-            },
-        )
+        if _can_use_fast_audio_track(props):
+            # Narration + intro/outro's own embedded audio only (no mixed
+            # background music): assemble directly with ffmpeg — no
+            # Chromium. A Remotion audio-only render still evaluates the
+            # whole timeline frame-by-frame just to place these same
+            # pieces (~14fps observed, same order as real pixel rendering,
+            # for a job that should take seconds).
+            _build_fast_audio_track(render_props_path, audio_path)
+        else:
+            _run_with_progress(
+                build_remotion_audio_command(render_props_path, audio_path),
+                progress_path,
+                stop_request_path=stop_request_path,
+                pid_file_path=render_pid_path,
+                progress_overrides={
+                    "segment_index": 0,
+                    "segment_total": segment_total,
+                    "segments_done": 0,
+                    "note": "audio track",
+                },
+            )
         if not _audio_track_is_valid(audio_path, expected_duration_sec):
             actual = probe_audio_duration_sec(audio_path)
             raise RemotionSubprocessError(

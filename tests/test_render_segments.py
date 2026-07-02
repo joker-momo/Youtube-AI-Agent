@@ -268,7 +268,13 @@ def test_render_segments_never_deletes_current_or_previous_segments_own_tmp_dir(
     (job_dir / "json").mkdir(parents=True)
     render_props = job_dir / "json" / "render_props.json"
     render_props.write_text(
-        json.dumps({"render": {"fps": 30, "segment_seconds": 1, "duration_in_frames": 90}}),
+        json.dumps({
+            "render": {"fps": 30, "segment_seconds": 1, "duration_in_frames": 90},
+            # music forces the slow (Remotion) audio path so this test's
+            # fake _run_with_progress covers the audio call too — this test
+            # is about .render_tmp cleanup timing, not audio assembly.
+            "audio": {"music": "assets/music/track.mp3"},
+        }),
         encoding="utf-8",
     )
     video_path = job_dir / "outputs" / "video.mp4"
@@ -383,7 +389,13 @@ def test_render_segments_returns_paths_without_deleting_them(tmp_path, monkeypat
     (job_dir / "json").mkdir(parents=True)
     render_props = job_dir / "json" / "render_props.json"
     render_props.write_text(
-        json.dumps({"render": {"fps": 30, "segment_seconds": 1, "duration_in_frames": 90}}),
+        json.dumps({
+            "render": {"fps": 30, "segment_seconds": 1, "duration_in_frames": 90},
+            # music forces the slow (Remotion) audio path so this test's
+            # fake _run_with_progress covers the audio call too — this test
+            # is about segment/checkpoint mechanics, not audio assembly.
+            "audio": {"music": "assets/music/track.mp3"},
+        }),
         encoding="utf-8",
     )
     video_path = job_dir / "outputs" / "video.mp4"
@@ -469,7 +481,13 @@ def test_segment_retries_once_on_asset_404(tmp_path, monkeypatch):
     )
     # duration_in_frames == segment span -> single segment; use 2 segments
     render_props.write_text(
-        json.dumps({"render": {"fps": 30, "segment_seconds": 1, "duration_in_frames": 60}}),
+        json.dumps({
+            "render": {"fps": 30, "segment_seconds": 1, "duration_in_frames": 60},
+            # music forces the slow (Remotion) audio path so this test's
+            # fake covers the audio call — this test is about the 404-retry
+            # loop, not audio assembly.
+            "audio": {"music": "assets/music/track.mp3"},
+        }),
         encoding="utf-8",
     )
     video_path = job_dir / "outputs" / "video.mp4"
@@ -514,7 +532,10 @@ def test_segment_does_not_retry_non_404_failures(tmp_path, monkeypatch):
     (job_dir / "json").mkdir(parents=True)
     render_props = job_dir / "json" / "render_props.json"
     render_props.write_text(
-        json.dumps({"render": {"fps": 30, "segment_seconds": 1, "duration_in_frames": 60}}),
+        json.dumps({
+            "render": {"fps": 30, "segment_seconds": 1, "duration_in_frames": 60},
+            "audio": {"music": "assets/music/track.mp3"},
+        }),
         encoding="utf-8",
     )
 
@@ -606,3 +627,134 @@ def test_fast_path_never_reuses_audio_desynced_video(tmp_path, monkeypatch):
     render_mod.render_with_remotion(render_props, video_path, notify_telegram=False)
 
     assert rerendered["called"], "desynced artifact must trigger a re-render, not fast-path reuse"
+
+
+# ---------------------------------------------------------------------------
+# Fast audio assembly (no Chromium): a Remotion audio-only render still
+# evaluates the whole timeline frame-by-frame just to place these pieces —
+# measured ~14fps in production, same order as real pixel rendering, for a
+# job that should take seconds. When there's no mixed background music,
+# assemble intro.mp4's own audio + narration (trimmed to the content span,
+# no offset needed) + outro.mp4's own audio directly with ffmpeg. Every
+# duration comes from render_props (itself probed upstream from the real
+# intro/outro video files and the pinned frame count) — nothing here is
+# hardcoded, so a longer/shorter intro or outro video stays correct with no
+# code change.
+# ---------------------------------------------------------------------------
+
+def _make_video_with_audio(path: Path, *, video_seconds: float, audio_seconds: float) -> None:
+    """A real branding-clip stand-in: video track of one length, audio track
+    of a (slightly) different length — matches production intro/outro
+    assets, whose audio track can be a few ms shorter than the video."""
+    subprocess.run(
+        [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", f"color=c=blue:s=320x180:r=30:d={video_seconds}",
+            "-f", "lavfi", "-i", f"sine=frequency=440:duration={audio_seconds}",
+            "-c:v", "libx264", "-c:a", "aac",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+
+def test_can_use_fast_audio_track_true_when_no_music():
+    from video_agent.stages.render import _can_use_fast_audio_track
+
+    assert _can_use_fast_audio_track({"audio": {"narration": "x", "music": None}}) is True
+    assert _can_use_fast_audio_track({"audio": {"narration": "x"}}) is True
+
+
+def test_can_use_fast_audio_track_false_when_music_configured():
+    from video_agent.stages.render import _can_use_fast_audio_track
+
+    assert _can_use_fast_audio_track(
+        {"audio": {"narration": "x", "music": "assets/music/track.mp3"}}
+    ) is False
+
+
+def test_fast_audio_track_includes_intro_and_outro_own_audio(tmp_path, monkeypatch):
+    """The core bug this design fixes: intro.mp4/outro.mp4 carry real
+    embedded audio (a branding jingle) in this composition — ChannelVideo's
+    intro/outro <MediaVideo> have no ``muted`` prop, unlike scene
+    backgrounds. An assembly that only knows about narration would silently
+    drop that audio. Duration-check here proves all three pieces landed:
+    intro(1.0s) + content(2.0s, narration trimmed) + outro(0.8s) = 3.8s."""
+    import video_agent.stages.render as render_mod
+    from video_agent.stages.render import _build_fast_audio_track, probe_audio_duration_sec
+
+    monkeypatch.setattr(render_mod, "repo_root", lambda: tmp_path)
+
+    public_dir = tmp_path / "remotion" / "public"
+    (public_dir / "branding" / "chan").mkdir(parents=True)
+    _make_video_with_audio(
+        public_dir / "branding" / "chan" / "intro.mp4", video_seconds=1.0, audio_seconds=1.0
+    )
+    _make_video_with_audio(
+        public_dir / "branding" / "chan" / "outro.mp4", video_seconds=0.8, audio_seconds=0.79
+    )
+
+    narration_path = tmp_path / "jobs" / "job-1" / "assets" / "narration.wav"
+    narration_path.parent.mkdir(parents=True)
+    _make_wav(narration_path, seconds=2.5)  # slightly longer than the content span
+
+    fps = 30
+    intro_frames = 30    # 1.0s
+    outro_frames = 24    # 0.8s
+    content_frames = 60  # 2.0s
+    total_frames = intro_frames + content_frames + outro_frames
+
+    render_props = tmp_path / "render_props.json"
+    render_props.write_text(
+        json.dumps({
+            "render": {"fps": fps, "duration_in_frames": total_frames},
+            "branding": {
+                "intro_sec": intro_frames / fps,
+                "outro_sec": outro_frames / fps,
+                "intro_video_path": "branding/chan/intro.mp4",
+                "outro_video_path": "branding/chan/outro.mp4",
+            },
+            "audio": {"narration": "jobs/job-1/assets/narration.wav", "music": None},
+        }),
+        encoding="utf-8",
+    )
+    audio_path = tmp_path / "audio.wav"
+
+    _build_fast_audio_track(render_props, audio_path)
+
+    actual = probe_audio_duration_sec(audio_path)
+    assert actual is not None
+    # intro's real audio (1.0s) + content trimmed to exactly 2.0s + outro's
+    # real audio (0.79s, slightly short of its own 0.8s video — like the
+    # real branding assets) = 3.79s. NOT 3.8s (which is what a naive
+    # frame-count-only assembly would wrongly assume).
+    assert abs(actual - 3.79) < 0.05
+
+
+def test_fast_audio_track_without_intro_or_outro_video(tmp_path, monkeypatch):
+    """No branding clips configured (intro_sec/outro_sec = 0): the assembly
+    must reduce to narration alone, trimmed to the full timeline."""
+    import video_agent.stages.render as render_mod
+    from video_agent.stages.render import _build_fast_audio_track, probe_audio_duration_sec
+
+    monkeypatch.setattr(render_mod, "repo_root", lambda: tmp_path)
+    narration_path = tmp_path / "jobs" / "job-1" / "assets" / "narration.wav"
+    narration_path.parent.mkdir(parents=True)
+    _make_wav(narration_path, seconds=3.0)
+
+    render_props = tmp_path / "render_props.json"
+    render_props.write_text(
+        json.dumps({
+            "render": {"fps": 30, "duration_in_frames": 90},  # 3.0s, no intro/outro
+            "branding": {"intro_sec": 0, "outro_sec": 0},
+            "audio": {"narration": "jobs/job-1/assets/narration.wav", "music": None},
+        }),
+        encoding="utf-8",
+    )
+    audio_path = tmp_path / "audio.wav"
+    _build_fast_audio_track(render_props, audio_path)
+
+    actual = probe_audio_duration_sec(audio_path)
+    assert actual is not None
+    assert abs(actual - 3.0) < 0.05

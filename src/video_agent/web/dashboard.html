@@ -1752,15 +1752,33 @@ function startRenderProgressPolling(jobId) {
       if (p.eta) parts.push('ETA ' + p.eta);
       const metaStr = parts.join(' · ');
 
+      // Segmented render (render.segmented in channel.yaml): the video is split
+      // into frame-range chunks so a mid-render crash only loses one segment.
+      // segment_total > 1 means this job is on that path — surface which chunk
+      // is live so "prepare visual gì nữa?" never comes up again.
+      const segmented = (p.segment_total || 0) > 1;
+      const segmentTxt = segmented ? `Segment ${p.segment_index || 0}/${p.segment_total}` : '';
+
+      const PHASE_LABEL = {
+        preparing: 'Preparing render…',
+        bundling: 'Bundling…',
+        rendering: 'Rendering…',
+        encoding: 'Encoding…',
+        concatenating: 'Joining segments…',
+        normalizing_audio: 'Normalizing audio…',
+        done: 'Render done',
+      };
+
       // "Preparing" until Remotion emits real frame counts — the render stage is
       // in_progress during the long prepare_assets phase BEFORE the first frame, and
       // render_progress.json may still hold a stale value. Show a clear preparing
       // state instead of a frozen/stale percent so the bar is never misleading.
-      const preparing = !(p.frame > 0 && p.total_frames > 0);
-      const labelTxt = preparing ? 'Preparing render…' : 'Rendering…';
+      const preparing = !(p.frame > 0 && p.total_frames > 0) && !['concatenating', 'normalizing_audio', 'done'].includes(p.phase);
+      let labelTxt = PHASE_LABEL[p.phase] || (preparing ? 'Preparing render…' : 'Rendering…');
+      if (segmentTxt && ['rendering', 'encoding'].includes(p.phase)) labelTxt += ' · ' + segmentTxt;
       const metaTxt = preparing
         ? (p.prepare_stage ? `Preparing: ${p.prepare_stage}` : 'Fetching B-roll & bundling…')
-        : metaStr;
+        : (segmentTxt && !['rendering', 'encoding'].includes(p.phase) ? segmentTxt + (metaStr ? ' · ' + metaStr : '') : metaStr);
 
       // Save into global cache FIRST — so DOM rebuild in fetchTimeline reads this value
       RENDER_PROGRESS_CACHE = { pct: preparing ? 0 : (p.percent || 0), meta: metaTxt, eta: preparing ? '' : (p.eta || ''), label: labelTxt, preparing };

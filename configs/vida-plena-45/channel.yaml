@@ -206,6 +206,13 @@ render:
   #   threads=4 + conc=4 → 22.8 fps  (−16%: confirms concurrency=auto/8 is optimal)
   # Sweet spot = 4. Pure speed; never touches render.concurrency (stays "auto").
   offthreadvideo_threads: 4
+  # Segmented render (bug-441): split into segment_seconds-long chunks, each
+  # its own Remotion invocation, then joined losslessly via ffmpeg concat
+  # (stream copy). A crash mid-render (ENOSPC, network change, etc.) only
+  # loses the CURRENT segment on the next attempt — completed segments are
+  # verified on disk and reused. Never touches render.concurrency above.
+  segmented: true
+  segment_seconds: 120
   subtitles:
     enabled: true
     mode: "word_highlight"

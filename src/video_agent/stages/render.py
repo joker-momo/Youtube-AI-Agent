@@ -264,7 +264,13 @@ def validate_rendered_video_duration(
     return float(actual)
 
 
-def build_remotion_commands(render_props_path: Path, video_path: Path) -> RemotionCommands:
+def build_remotion_commands(
+    render_props_path: Path,
+    video_path: Path,
+    *,
+    frame_range: tuple[int, int] | None = None,
+    seamless_concat: bool = False,
+) -> RemotionCommands:
     remotion_root = repo_root() / "remotion"
     entry = remotion_root / "src/index.ts"
     public_dir = remotion_root / "public"
@@ -305,6 +311,14 @@ def build_remotion_commands(render_props_path: Path, video_path: Path) -> Remoti
     ot_threads = _render_offthreadvideo_threads(render_props_path)
     if ot_threads:
         video_cmd += ["--offthreadvideo-video-threads", str(ot_threads)]
+    if frame_range is not None:
+        start, end = frame_range
+        video_cmd += ["--frames", f"{start}-{end}"]
+    if seamless_concat:
+        # Trims audio to the nearest AAC frame so segment mp4s can be joined
+        # via ffmpeg concat demuxer (-c copy) with no boundary click/gap —
+        # Remotion's own flag for exactly this chunked-render use case.
+        video_cmd += ["--for-seamless-aac-concatenation"]
     return RemotionCommands(video=video_cmd)
 
 
@@ -372,8 +386,15 @@ def _run_with_progress(
     *,
     stop_request_path: Path | None = None,
     pid_file_path: Path | None = None,
+    progress_overrides: dict | None = None,
 ) -> None:
-    """Run a subprocess, streaming stdout and writing Remotion progress to a JSON file."""
+    """Run a subprocess, streaming stdout and writing Remotion progress to a JSON file.
+
+    ``progress_overrides`` is merged into the progress dict once at start (e.g.
+    segment_index/segment_total for a segmented render) and stays present for
+    every subsequent write since ``_update_progress_from_line`` only sets its
+    own known keys, never replaces the dict.
+    """
     if stop_request_path is not None and stop_request_path.exists():
         raise RuntimeError("Stop requested by operator.")
     output_tail: list[str] = []
@@ -396,6 +417,8 @@ def _run_with_progress(
             except OSError:
                 pass
         progress: dict = _blank_progress("preparing")
+        if progress_overrides:
+            progress.update(progress_overrides)
         if progress_path is not None:
             # Overwrite any leftovers from a previous attempt immediately so
             # a stale frame count never masquerades as live progress while
@@ -587,6 +610,219 @@ def _notify_render_done(job_dir: Path) -> None:
         print(f"[render] telegram notify skipped: {exc}", flush=True)
 
 
+# ---------------------------------------------------------------------------
+# Segmented render: split a long video into frame-range chunks so a crash
+# (ENOSPC, network change, etc.) mid-render only loses the current segment
+# instead of the whole render. bug-441 lost 90 minutes to a crash at 53%.
+# ---------------------------------------------------------------------------
+
+DEFAULT_SEGMENT_SECONDS = 120.0
+
+
+def _segment_seconds(render_props_path: Path) -> float:
+    props = read_json(render_props_path)
+    raw = (props.get("render", {}) or {}).get("segment_seconds")
+    try:
+        value = float(raw) if raw is not None else DEFAULT_SEGMENT_SECONDS
+    except (TypeError, ValueError):
+        value = DEFAULT_SEGMENT_SECONDS
+    return value if value > 0 else DEFAULT_SEGMENT_SECONDS
+
+
+def _segmented_render_enabled(render_props_path: Path) -> bool:
+    props = read_json(render_props_path)
+    # Default ON: segmented rendering is strictly safer for long videos and
+    # degrades to a single "segment" for anything shorter than segment_seconds,
+    # so it is a no-op for Shorts / short long-form renders.
+    return bool((props.get("render", {}) or {}).get("segmented", True))
+
+
+def _total_render_frames(render_props_path: Path) -> int:
+    props = read_json(render_props_path)
+    render_cfg = props.get("render", {}) or {}
+    frames = render_cfg.get("duration_in_frames")
+    if isinstance(frames, int) and frames > 0:
+        return frames
+    fps = float(render_cfg.get("fps") or 30)
+    duration = float(render_cfg.get("duration_sec") or 0)
+    return max(1, round(fps * duration))
+
+
+def _segment_plan(total_frames: int, segment_frames: int) -> list[tuple[int, int]]:
+    """Inclusive [start, end] 0-indexed frame ranges covering ``total_frames``."""
+    if segment_frames <= 0:
+        segment_frames = total_frames
+    plan: list[tuple[int, int]] = []
+    start = 0
+    while start < total_frames:
+        end = min(start + segment_frames, total_frames) - 1
+        plan.append((start, end))
+        start = end + 1
+    return plan
+
+
+def _segments_dir(job_dir: Path) -> Path:
+    d = job_dir / "outputs" / ".render_segments"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _segment_path(job_dir: Path, index: int) -> Path:
+    return _segments_dir(job_dir) / f"seg_{index:04d}.mp4"
+
+
+def _segment_is_valid(
+    path: Path, *, start: int, end: int, fps: float, tolerance_sec: float = 0.15
+) -> bool:
+    """A segment is trustworthy for reuse iff its probed duration matches the
+    planned frame range. A process killed mid-write leaves a short/partial mp4
+    that fails this check and gets re-rendered."""
+    if not path.exists() or path.stat().st_size == 0:
+        return False
+    expected = (end - start + 1) / fps
+    actual = probe_video_duration_sec(path)
+    if actual is None:
+        return False
+    return abs(actual - expected) <= tolerance_sec
+
+
+def _clear_render_tmp_cache() -> None:
+    """Drop Remotion's bundle/asset buffers after a segment completes.
+
+    Each segment is a separate ``npx remotion render`` invocation, so
+    ``.render_tmp`` accumulates fresh webpack/asset output every time; left
+    uncleared across N segments it can grow to double-digit GB (observed 12GB
+    from a single killed attempt) and defeats the purpose of segmenting.
+    Segments render strictly sequentially, so it is always safe to clear
+    between them."""
+    d = _render_tmp_dir()
+    for child in d.iterdir():
+        try:
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                child.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _concat_segments(segment_paths: list[Path], output_path: Path) -> None:
+    """Losslessly join segment mp4s (stream copy, no re-encode) via the ffmpeg
+    concat demuxer. Safe for both streams: video segments each start on a
+    keyframe by construction of ``--frames``, and audio was trimmed to the AAC
+    frame grid at render time (``--for-seamless-aac-concatenation``)."""
+    list_path = output_path.with_name(f"{output_path.stem}.concat.txt")
+    lines = [f"file '{p.resolve().as_posix()}'" for p in segment_paths]
+    list_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-f", "concat", "-safe", "0",
+                "-i", str(list_path),
+                "-c", "copy",
+                str(output_path),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RemotionSubprocessError(
+                f"ffmpeg concat of {len(segment_paths)} segments failed (code "
+                f"{result.returncode}): {result.stderr[-2000:]}"
+            )
+    finally:
+        list_path.unlink(missing_ok=True)
+
+
+def _write_render_progress(progress_path: Path, phase: str, **fields) -> None:
+    payload = _blank_progress(phase)
+    payload.update(fields)
+    try:
+        atomic_write_json(progress_path, payload, indent=0)
+    except OSError:
+        pass
+
+
+def _render_segments(
+    render_props_path: Path,
+    video_path: Path,
+    *,
+    stop_request_path: Path | None,
+    progress_path: Path,
+    render_pid_path: Path,
+) -> None:
+    job_dir = render_props_path.parent
+    if job_dir.name == "json":
+        job_dir = job_dir.parent
+
+    props = read_json(render_props_path)
+    fps = float((props.get("render", {}) or {}).get("fps") or 30)
+    total_frames = _total_render_frames(render_props_path)
+    segment_frames = max(1, round(_segment_seconds(render_props_path) * fps))
+    plan = _segment_plan(total_frames, segment_frames)
+    segment_total = len(plan)
+
+    segment_paths: list[Path] = []
+    for index, (start, end) in enumerate(plan, start=1):
+        if stop_request_path is not None and stop_request_path.exists():
+            raise RuntimeError("Stop requested by operator.")
+        seg_path = _segment_path(job_dir, index)
+        if _segment_is_valid(seg_path, start=start, end=end, fps=fps):
+            segment_paths.append(seg_path)
+            _write_render_progress(
+                progress_path,
+                "rendering",
+                segment_index=index,
+                segment_total=segment_total,
+                segments_done=index,
+                note="reused from previous attempt",
+            )
+            _assert_render_disk_space(output_path=video_path)
+            continue
+        _assert_render_disk_space(output_path=video_path)
+        commands = build_remotion_commands(
+            render_props_path,
+            seg_path,
+            frame_range=(start, end),
+            seamless_concat=True,
+        )
+        _run_with_progress(
+            commands.video,
+            progress_path,
+            stop_request_path=stop_request_path,
+            pid_file_path=render_pid_path,
+            progress_overrides={
+                "segment_index": index,
+                "segment_total": segment_total,
+                "segments_done": index - 1,
+            },
+        )
+        if not _segment_is_valid(seg_path, start=start, end=end, fps=fps):
+            expected_sec = (end - start + 1) / fps
+            raise RemotionSubprocessError(
+                f"Segment {index}/{segment_total} ({seg_path.name}) failed "
+                f"verification after render (expected ~{expected_sec:.1f}s)."
+            )
+        segment_paths.append(seg_path)
+        # User-requested: reclaim disk the moment a segment is safely on disk
+        # instead of waiting for the whole render to finish.
+        _clear_render_tmp_cache()
+
+    _write_render_progress(
+        progress_path,
+        "concatenating",
+        segment_total=segment_total,
+        segments_done=segment_total,
+    )
+    _assert_render_disk_space(output_path=video_path)
+    _concat_segments(segment_paths, video_path)
+    # Segments are fully absorbed into video_path now — free the space and
+    # leave nothing for a future resume to (wrongly) think is still needed.
+    for p in segment_paths:
+        p.unlink(missing_ok=True)
+
+
 def render_with_remotion(
     render_props_path: Path,
     video_path: Path,
@@ -600,15 +836,32 @@ def render_with_remotion(
 
     expected_duration_sec = validate_render_duration_matches_scene_sum(render_props_path)
     _assert_render_disk_space(output_path=video_path)  # fail fast, not ENOSPC mid-render
-    commands = build_remotion_commands(render_props_path, video_path)
     progress_path = job_dir / "json" / "render_progress.json"
     render_pid_path = job_dir / "json" / ".render.pid"
-    _run_with_progress(
-        commands.video,
-        progress_path,
-        stop_request_path=stop_request_path,
-        pid_file_path=render_pid_path,
-    )
+
+    fps = float((read_json(render_props_path).get("render", {}) or {}).get("fps") or 30)
+    total_frames = _total_render_frames(render_props_path)
+    segment_frames = max(1, round(_segment_seconds(render_props_path) * fps))
+    # A video shorter than one segment renders on the plain single-shot path
+    # unchanged — segmentation only kicks in where it can actually help.
+    use_segments = _segmented_render_enabled(render_props_path) and total_frames > segment_frames
+
+    if use_segments:
+        _render_segments(
+            render_props_path,
+            video_path,
+            stop_request_path=stop_request_path,
+            progress_path=progress_path,
+            render_pid_path=render_pid_path,
+        )
+    else:
+        commands = build_remotion_commands(render_props_path, video_path)
+        _run_with_progress(
+            commands.video,
+            progress_path,
+            stop_request_path=stop_request_path,
+            pid_file_path=render_pid_path,
+        )
     loudness = _audio_loudness_config(render_props_path)
     if loudness["enabled"]:
         if stop_request_path is not None and stop_request_path.exists():

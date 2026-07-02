@@ -27,6 +27,7 @@ Usage: bash run.sh [--full|--dashboard|--stop|--shutdown] [--cleanup] [--reinsta
 
   --full           Start dashboard + browser-worker + worker + Chromium (default)
   --dashboard      Start only the dashboard (port 8000)
+  --status         Show active job, current stage, and live render phase
   --stop, --down   Stop all native processes
   --shutdown       Stop everything + prune caches (alias: --stop --cleanup)
   --cleanup        Prune logs, __pycache__, old browser traces, npm/pip caches
@@ -38,6 +39,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --full)         RUN_MODE="full"; shift ;;
     --dashboard|--app-only) RUN_MODE="dashboard"; shift ;;
+    --status)       RUN_MODE="status"; shift ;;
     --stop|--down)  RUN_MODE="stop"; shift ;;
     --shutdown)     RUN_MODE="stop"; DO_CLEANUP=true; shift ;;
     --cleanup)      DO_CLEANUP=true; shift ;;
@@ -46,6 +48,66 @@ while [[ $# -gt 0 ]]; do
     *) echo -e "${RED}Unknown option: $1${NC}"; usage; exit 2 ;;
   esac
 done
+
+
+if [[ "${RUN_MODE}" == "status" ]]; then
+  "${REPO_DIR}/.venv/bin/python" - <<'PY'
+import json, sqlite3, sys
+from pathlib import Path
+
+root = Path(".")
+try:
+    conn = sqlite3.connect(root / "jobs" / "queue.db")
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT job_id, status, attempts, started_at FROM job_queue "
+        "WHERE status IN ('running','pending') ORDER BY created_at DESC LIMIT 1"
+    ).fetchone()
+except Exception as exc:
+    print(f"queue.db unreadable: {exc}")
+    sys.exit(1)
+if row is None:
+    row = conn.execute(
+        "SELECT job_id, status, attempts, started_at FROM job_queue "
+        "ORDER BY completed_at DESC LIMIT 1"
+    ).fetchone()
+    if row is None:
+        print("Queue empty — no jobs yet.")
+        sys.exit(0)
+job_id = row["job_id"]
+print(f"job:    {job_id}")
+print(f"queue:  {row['status']} (attempt {row['attempts']}, started {row['started_at']})")
+job_dir = root / "jobs" / job_id
+try:
+    state = json.loads((job_dir / "job.json").read_text())
+    stages = state.get("stages", [])
+    done = sum(1 for s in stages if s.get("status") == "completed")
+    cur = state.get("current_stage")
+    print(f"stage:  {cur} ({done}/{len(stages)} completed)")
+    for s in stages:
+        if s.get("status") in ("failed", "in_progress"):
+            err = f" err={s['error']}" if s.get("error") else ""
+            print(f"        {s['name']}: {s['status']}{err}")
+except Exception:
+    print("stage:  job.json unreadable")
+prog_path = job_dir / "json" / "render_progress.json"
+if prog_path.exists():
+    try:
+        p = json.loads(prog_path.read_text())
+        phase = p.get("phase", "?")
+        if p.get("total_frames"):
+            print(
+                f"render: phase={phase} rendered={p.get('rendered_frame', p.get('frame', 0))}"
+                f"/{p['total_frames']} encoded={p.get('encoded_frame', 0)}/{p['total_frames']}"
+                f" ({p.get('percent', 0)}%) fps={p.get('fps', 0)} eta={p.get('eta') or '?'}"
+            )
+        else:
+            print(f"render: phase={phase} percent={p.get('percent', 0)}")
+    except Exception:
+        pass
+PY
+  exit 0
+fi
 
 # Fast, always-safe rác prune (no log/pip/npm churn). Removes superseded shorts
 # archives, stale/_v2 renders, orphaned ai_temp_* image-gen files, empty tmp

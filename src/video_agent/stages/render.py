@@ -308,6 +308,64 @@ def build_remotion_commands(render_props_path: Path, video_path: Path) -> Remoti
     return RemotionCommands(video=video_cmd)
 
 
+def _blank_progress(phase: str) -> dict:
+    return {
+        "phase": phase,
+        "percent": 0,
+        "frame": 0,
+        "rendered_frame": 0,
+        "encoded_frame": 0,
+        "total_frames": 0,
+        "fps": 0.0,
+        "eta": "",
+        "attempt_started_at": datetime.datetime.now(datetime.UTC).isoformat(),
+    }
+
+
+def _update_progress_from_line(progress: dict, line: str) -> bool:
+    """Fold one Remotion output line into ``progress``. Returns True if changed.
+
+    Remotion interleaves TWO counters — ``Rendered n/m`` (frames produced)
+    and ``Encoded n/m`` (encoder catching up). The old generic ``n/m`` regex
+    overwrote a single ``frame`` field with whichever counter printed last,
+    so the dashboard seesawed (e.g. 17433 → 885) and looked like a restart.
+    Track them separately and expose an explicit ``phase``.
+    """
+    changed = False
+    if re.search(r"\bbundling\b|\bbundled\b", line, re.IGNORECASE):
+        if progress.get("phase") in (None, "", "preparing"):
+            progress["phase"] = "bundling"
+            changed = True
+    m = re.search(r"\bRendered\s+(\d+)\s*/\s*(\d+)", line, re.IGNORECASE)
+    if m:
+        progress["rendered_frame"] = int(m.group(1))
+        progress["total_frames"] = int(m.group(2))
+        if progress.get("phase") != "encoding":
+            progress["phase"] = "rendering"
+        changed = True
+    m = re.search(r"\bEncoded\s+(\d+)\s*/\s*(\d+)", line, re.IGNORECASE)
+    if m:
+        progress["encoded_frame"] = int(m.group(1))
+        progress["total_frames"] = int(m.group(2))
+        progress["phase"] = "encoding"
+        changed = True
+    if not changed:
+        return False
+    total = max(int(progress.get("total_frames") or 0), 1)
+    # Completion percent follows the encoder once it starts (the true output);
+    # before that, rendered frames are the best signal. Legacy ``frame`` keeps
+    # feeding older dashboard readers with the same number percent uses.
+    lead_frame = progress.get("encoded_frame") or progress.get("rendered_frame") or 0
+    progress["frame"] = lead_frame
+    progress["percent"] = round(lead_frame / total * 100, 1)
+    eta_m = re.search(
+        r"time remaining:\s*([\dhms\s]+?s)\b", line, re.IGNORECASE
+    ) or re.search(r"ETA\s*([\d:]+)", line, re.IGNORECASE)
+    if eta_m:
+        progress["eta"] = eta_m.group(1).strip()
+    return True
+
+
 def _run_with_progress(
     cmd: list[str],
     progress_path: Path | None = None,
@@ -337,7 +395,15 @@ def _run_with_progress(
                 atomic_write_text(pid_file_path, str(proc.pid), encoding="utf-8")
             except OSError:
                 pass
-        progress: dict = {"percent": 0, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""}
+        progress: dict = _blank_progress("preparing")
+        if progress_path is not None:
+            # Overwrite any leftovers from a previous attempt immediately so
+            # a stale frame count never masquerades as live progress while
+            # Remotion is still bundling (bug-441 follow-up).
+            try:
+                atomic_write_json(progress_path, progress, indent=0)
+            except OSError:
+                pass
         last_frame_ts = time.monotonic()
         last_frame_count = 0
         try:
@@ -353,34 +419,19 @@ def _run_with_progress(
                 output_tail.append(line.rstrip())
                 if len(output_tail) > 80:
                     output_tail = output_tail[-80:]
-                m_frame = re.search(r"(\d+)\s*/\s*(\d+)", line)
-                if m_frame and progress_path:
-                    frame = int(m_frame.group(1))
-                    total = int(m_frame.group(2))
-                    pct = round(frame / max(total, 1) * 100, 1)
+                if progress_path and _update_progress_from_line(progress, line):
                     fps_m = re.search(r"([\d.]+)\s*fps", line, re.IGNORECASE)
-                    eta_m = re.search(
-                        r"time remaining:\s*([\dm\s]+\d+s)", line, re.IGNORECASE
-                    ) or re.search(r"ETA\s*([\d:]+)", line, re.IGNORECASE)
                     if fps_m:
-                        fps_value = float(fps_m.group(1))
+                        progress["fps"] = float(fps_m.group(1))
                     else:
                         now = time.monotonic()
+                        frame = int(progress.get("frame") or 0)
                         elapsed = now - last_frame_ts
                         delta_frames = frame - last_frame_count
                         if elapsed >= 0.5 and delta_frames > 0:
-                            fps_value = round(delta_frames / elapsed, 1)
+                            progress["fps"] = round(delta_frames / elapsed, 1)
                             last_frame_ts = now
                             last_frame_count = frame
-                        else:
-                            fps_value = progress.get("fps", 0.0)
-                    progress = {
-                        "percent": pct,
-                        "frame": frame,
-                        "total_frames": total,
-                        "fps": fps_value,
-                        "eta": eta_m.group(1).strip() if eta_m else "",
-                    }
                     try:
                         atomic_write_json(progress_path, progress, indent=0)
                     except OSError:
@@ -562,6 +613,14 @@ def render_with_remotion(
     if loudness["enabled"]:
         if stop_request_path is not None and stop_request_path.exists():
             raise RuntimeError("Stop requested by operator.")
+        try:
+            atomic_write_json(
+                progress_path,
+                dict(_blank_progress("normalizing_audio"), percent=99),
+                indent=0,
+            )
+        except OSError:
+            pass
         _normalize_video_audio(
             video_path,
             integrated_lufs=loudness["integrated_lufs"],
@@ -573,7 +632,7 @@ def render_with_remotion(
     try:
         atomic_write_json(
             progress_path,
-            {"percent": 100, "frame": 0, "total_frames": 0, "fps": 0.0, "eta": ""},
+            dict(_blank_progress("done"), percent=100),
             indent=0,
         )
     except OSError:

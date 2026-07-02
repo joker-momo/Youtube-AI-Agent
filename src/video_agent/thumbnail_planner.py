@@ -14,6 +14,8 @@ import re
 import unicodedata
 from typing import Any
 
+from video_agent.style_dna import is_valid_hex
+
 # ---------------------------------------------------------------------------
 # §6.1 Text normalization (accent-insensitive)
 # ---------------------------------------------------------------------------
@@ -799,7 +801,14 @@ def plan_thumbnail_prompts(seo: dict, channel_config: dict) -> list[dict]:
     """Build up to three deterministic prompt plans for a SEO record."""
     variants = normalize_thumbnail_variants(seo)
     plans: list[dict] = []
-    accent_color = resolve_thumbnail_accent_color(channel_config)
+    # Per-video topic accent (ChatGPT-chosen in the seo stage, constrained to
+    # harmonize with the brand palette) wins over the channel-wide default so
+    # each video's thumbnail gets its own highlight colour instead of every
+    # video reusing the same static brand accent.
+    topic_accent = (seo or {}).get("topic_accent_color")
+    accent_color = (
+        topic_accent if is_valid_hex(topic_accent) else resolve_thumbnail_accent_color(channel_config)
+    )
     punch_color = resolve_thumbnail_punch_color(channel_config)
     channel_description = (
         (channel_config or {}).get("description")

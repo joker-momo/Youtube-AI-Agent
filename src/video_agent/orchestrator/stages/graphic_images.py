@@ -18,7 +18,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from video_agent.contracts import ARTIFACT_SCENES, EVENT_LOG, repo_root
+from video_agent.contracts import ARTIFACT_SCENES, ARTIFACT_SEO, EVENT_LOG, repo_root
 from video_agent.orchestrator.job_state import load_job
 from video_agent.orchestrator.stages._shared import (
     StageInputMissingError,
@@ -28,6 +28,8 @@ from video_agent.orchestrator.stages._shared import (
     dag_mode,
 )
 from video_agent.storage.atomic import atomic_write_json
+from video_agent.style_dna import DEFAULT_STYLE as _DEFAULT_STYLE
+from video_agent.style_dna import is_valid_hex, load_style_dna
 from video_agent.utils.json_io import read_json, read_yaml
 from video_agent.utils.logging import EventLogger
 from video_agent.visual.spans import GRAPHIC_LAYOUTS
@@ -64,46 +66,6 @@ def _wants_graphic(scene: dict[str, Any]) -> bool:
     if isinstance(graphic, dict) and graphic.get("needed") is False:
         return False
     return True
-
-
-# NEUTRAL, deliberately UN-branded fallback. Real brand colours live in
-# ``configs/<channel>/style-dna.json`` (the single source of truth); this default is
-# only used when that file is missing/invalid, and a loud warning fires so the operator
-# notices instead of the pipeline silently reusing stale hardcoded brand hex.
-_DEFAULT_STYLE: dict[str, Any] = {
-    "palette": {
-        "background": "#ECECEC",
-        "primary": "#3A3A3A",
-        "secondary": "#8A8A8A",
-        "accent": "#B8B8B8",
-        "text": "#1A1A1A",
-    },
-    "typography": {"headline": "Montserrat"},
-    "visual_mood": ["calm", "clean", "editorial"],
-}
-
-
-def _load_style_dna(channel_path: Path | None) -> dict[str, Any]:
-    """The channel brand DNA (``style-dna.json`` beside channel.yaml) — palette,
-    typography, mood — the SINGLE source for the gen-image colours/font. Falls back to
-    a neutral, un-branded default (with a warning) so a missing style file is obvious
-    rather than silently reusing stale brand hex baked into code."""
-    if channel_path is None:
-        return _DEFAULT_STYLE
-    try:
-        sp = Path(channel_path).parent / "style-dna.json"
-        if sp.exists():
-            data = read_json(sp)
-            if isinstance(data, dict) and data.get("palette"):
-                return data
-        print(
-            f"[graphic_images] WARNING: style-dna.json missing/invalid at {sp} — using the "
-            "neutral fallback palette; cards will look UN-branded until style-dna.json is fixed.",
-            flush=True,
-        )
-    except Exception as exc:  # noqa: BLE001
-        print(f"[graphic_images] WARNING: failed to load style-dna.json ({exc}); neutral fallback palette.", flush=True)
-    return _DEFAULT_STYLE
 
 
 def _load_channel_name(channel_path: Path | None) -> str:
@@ -357,7 +319,17 @@ async def run_graphic_images_stage(job_dir: Path, channel_path: Path | None, ima
     scene_doc = read_json(scenes_path) or {}
     logger = EventLogger(job_dir / EVENT_LOG)
     assets_dir = job_dir / "assets"
-    style = _load_style_dna(channel_path)
+    style = load_style_dna(channel_path)
+    # Per-video topic accent (chosen by ChatGPT in the seo stage, constrained to
+    # harmonize with the brand palette above) replaces ONLY the accent swatch so
+    # every video's cards still read as the same channel but each topic gets its
+    # own highlight colour instead of every video reusing one static brand accent.
+    seo_path = _resolve_artifact(job_dir, ARTIFACT_SEO, "seo.json")
+    if seo_path.exists():
+        seo_doc = read_json(seo_path) or {}
+        topic_accent = seo_doc.get("topic_accent_color")
+        if is_valid_hex(topic_accent):
+            style = {**style, "palette": {**(style.get("palette") or {}), "accent": topic_accent}}
     # Card typography is locked to Montserrat to match the Remotion subtitle font
     # (one typeface across the whole video). Overrides any style-DNA headline font.
     font = "Montserrat"

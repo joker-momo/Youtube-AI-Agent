@@ -20,6 +20,7 @@ from video_agent.orchestrator.stages._shared import (
     dag_mode,
 )
 from video_agent.storage.public_jobs import prepare_public_job_dir
+from video_agent.style_dna import load_style_dna
 from video_agent.utils.json_io import read_yaml
 from video_agent.utils.json_io import write_json as _write_json
 from video_agent.utils.logging import EventLogger
@@ -442,8 +443,11 @@ async def auto_thumbnail_image_stage(
     channel_config = read_yaml(channel_path)
 
     title = seo.get("title") or ""
-    palette = (channel_config.get("style") or {}).get("palette") or {}
-    accent_color = palette.get("accent", "#F2C94C")
+    # Brand-wide fallback accent (used only when the seo stage didn't produce a
+    # valid per-video topic_accent_color) comes from style-dna.json, the single
+    # source of truth for this channel's brand palette — not a hardcoded hex.
+    brand_style = load_style_dna(channel_path)
+    accent_color = (brand_style.get("palette") or {}).get("accent", "#F2C94C")
 
     # English channel context for ChatGPT image prompt. The raw `channel.description`
     # is Spanish (Vida Plena 45+); injecting it into an English prompt confuses

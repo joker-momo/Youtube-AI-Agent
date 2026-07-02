@@ -8,11 +8,18 @@ from __future__ import annotations
 _POWER_WORDS = {
     "secreto", "mejor", "peor", "error", "nunca", "siempre",
     "cómo", "qué", "gratis", "rápido", "fácil", "verdad", "clave", "por qué",
+    "oculto", "oculta", "inesperado", "inesperada", "decisivo", "decisiva",
+    "sorprendente", "silencioso", "silenciosa", "señal", "señales",
+    "hábito", "hábitos", "riesgo", "advertencia", "cambia", "cambio",
+    "descubre", "revela", "evita", "ignoras", "sabías", "realidad",
 }
 
 _EMOTION_WORDS = {
     "DUERME", "INSOMNIO", "DOLOR", "SECRETO", "NUNCA", "AHORA", "MEJOR",
     "PEOR", "HOY", "YA", "FATAL", "VERDAD", "ALERTA", "CUIDADO",
+    "OCULTO", "OCULTA", "INESPERADO", "SORPRENDENTE", "SILENCIOSO",
+    "RIESGO", "ADVERTENCIA", "CAMBIA", "DESCUBRE", "REVELA", "EVITA",
+    "SEÑAL", "SEÑALES", "REALIDAD", "ERROR", "CLAVE",
 }
 
 

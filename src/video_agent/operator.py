@@ -9,6 +9,7 @@ from typing import Any
 
 from video_agent.contracts import repo_root
 from video_agent.operator_validators import load_operator_channel_config, validate_operator_artifact
+from video_agent.style_dna import is_valid_hex, load_style_dna
 from video_agent.utils.json_io import read_json, read_yaml, write_json
 from video_agent.storage.atomic import atomic_write_text
 from video_agent.utils.validation import validate_json
@@ -440,6 +441,7 @@ def _normalize_seo_candidate(
     channel_config: dict[str, Any] | None = None,
     scene_doc: dict[str, Any] | None = None,
     script: dict[str, Any] | None = None,
+    brand_palette: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Backfill SEO fields for compatibility with older model/test payloads.
 
@@ -487,6 +489,15 @@ def _normalize_seo_candidate(
                     variant["thumbnail_text"] = " ".join(variant["thumbnail_text"].split())
 
     parsed = _score_and_sort_seo_variants(parsed)
+
+    # ChatGPT is asked to pick a per-video topic_accent_color harmonized with the
+    # brand palette (see _chatgpt_seo_prompt); if it's missing/malformed, fall back
+    # to the channel's brand-default accent rather than silently rendering with no
+    # accent or an invalid hex.
+    if not is_valid_hex(parsed.get("topic_accent_color")):
+        brand_accent = ((brand_palette or {}).get("palette") or {}).get("accent")
+        if is_valid_hex(brand_accent):
+            parsed["topic_accent_color"] = brand_accent
 
     # Backfill thumbnail_path if empty
     if not parsed.get("thumbnail_path"):
@@ -580,8 +591,9 @@ def write_operator_prompts(
             if scenes is None:
                 raise FileNotFoundError(f"{_resolve_operator_path(job_dir, 'scenes.json')} is required before writing SEO prompts.")
             seo = _read_optional_json(_resolve_operator_path(job_dir, "seo.json"))
+            brand_palette = load_style_dna(channel_path)
             paths_and_text = [
-                (chatgpt_dir / "seo_prompt.md", _chatgpt_seo_prompt(channel_config, script, scenes)),
+                (chatgpt_dir / "seo_prompt.md", _chatgpt_seo_prompt(channel_config, script, scenes, brand_palette)),
                 (gemini_dir / "seo_qa_prompt.md", _gemini_qa_prompt("seo", seo, channel_config)),
             ]
         else:
@@ -625,6 +637,7 @@ def promote_operator_artifact(
                 channel_config=load_operator_channel_config(channel_path, candidate),
                 scene_doc=_read_optional_json(_resolve_operator_path(job_dir, "scenes.json")),
                 script=_read_optional_json(_resolve_operator_path(job_dir, "script.json")),
+                brand_palette=load_style_dna(channel_path),
             )
         try:
             validate_json(candidate, schema_path)

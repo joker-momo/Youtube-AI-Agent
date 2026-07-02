@@ -580,7 +580,12 @@ def _gemini_scenes_qa_batch_prompt(
     )
 
 
-def _chatgpt_seo_prompt(channel_config: dict[str, Any], script: dict[str, Any], scenes: dict[str, Any]) -> str:
+def _chatgpt_seo_prompt(
+    channel_config: dict[str, Any],
+    script: dict[str, Any],
+    scenes: dict[str, Any],
+    brand_palette: dict[str, Any] | None = None,
+) -> str:
     locale = _locale_guidance(channel_config)
     seo_language = locale["language"]
     is_spain = seo_language == "es-ES"
@@ -589,6 +594,17 @@ def _chatgpt_seo_prompt(channel_config: dict[str, Any], script: dict[str, Any], 
         if is_spain
         else "- tags: 5-8 concise Spanish wellness search terms matching the configured audience locale"
     )
+    palette = (brand_palette or {}).get("palette") or {}
+    brand_palette_line = (
+        "Brand palette (hex) — background {bg}, primary {primary}, secondary {secondary}, "
+        "default accent {accent}, text {text}."
+    ).format(
+        bg=palette.get("background", "#F6F1E8"),
+        primary=palette.get("primary", "#2F6B57"),
+        secondary=palette.get("secondary", "#D98C5F"),
+        accent=palette.get("accent", "#F5C24B"),
+        text=palette.get("text", "#26332F"),
+    )
     return "\n".join(
         [
             "You are exporting an SEO artifact as a JSON file for a YouTube channel pipeline.",
@@ -596,10 +612,11 @@ def _chatgpt_seo_prompt(channel_config: dict[str, Any], script: dict[str, Any], 
             _json_file_directive("seo.json"),
             "",
             "Required JSON schema:",
-            "- job_id, title, description, tags, language, ai_disclosure, thumbnail_path, thumbnail_text, suggested_pinned_comments",
+            "- job_id, title, description, tags, language, ai_disclosure, thumbnail_path, thumbnail_text, suggested_pinned_comments, topic_accent_color",
             "- title_variants: array of EXACTLY 3 objects, each: {title, thumbnail_text}",
             "  • title: 7-12 words, CTR-FIRST — OPEN with a curiosity or contrarian HOOK, then the topic keyword after a colon or comma. The searchable keyword may come second but MUST appear somewhere. Spanish.",
-            "    - Allowed CTR devices (use them, but keep honest): curiosity-gap ('el error que casi nadie corrige', 'lo que pasa después de…'), contrarian ('(no es lo que crees)', 'no es el pan'), a concrete number ('5 errores', '3 señales'), or ONE power word (silencioso, sorprendente, sencillo, rápido).",
+            "    - Allowed CTR devices (use them, but keep honest): curiosity-gap (a hidden mistake/step tied to THIS video's actual topic, e.g. patterns like 'el [X] que casi nadie [verbo]', 'lo que pasa cuando/después de [Y]', 'por qué [Z] no funciona como crees'), contrarian (a specific myth from THIS topic framed as '(no es [culprit del video])' or 'no es lo que piensas sobre [tema]'), a concrete number tied to the actual content ('N errores', 'N señales', 'N hábitos'), or ONE power word (silencioso, sorprendente, sencillo, rápido, oculto, inesperado, decisivo).",
+            "    - ⚠️ VARIETY: these are PATTERNS, not scripts — invent the specific wording from THIS video's script/topic each time. NEVER reuse a previous video's exact hook phrase; if you default to a generic filler word (nadie, siempre, nunca), swap it for something concrete drawn from the script content.",
             "    - The 3 title_variants MUST each use a DIFFERENT device: variant 1 = curiosity-gap (most CTR, hook first); variant 2 = contrarian '(no es…)'; variant 3 = keyword-first searchable (SEO safety net).",
             "    - ⚠️ HONEST CTR ONLY: NO fake authority/credentials ('cardiólogo advierte', 'enfermera revela'), NO fear or death claims ('detiene tu corazón', 'te está matando'), NO 'milagro/cura/garantiza'. The curiosity MUST be payable by the actual video content.",
             "  • thumbnail_text: 3-5 words ALL-CAPS Spanish emotional hook (e.g. 'ADIÓS AL INSOMNIO')",
@@ -610,6 +627,11 @@ def _chatgpt_seo_prompt(channel_config: dict[str, Any], script: dict[str, Any], 
             "  • Do NOT repeat the same hook with minor word swaps",
             "- title: copy from the best title_variants entry",
             "- thumbnail_text: copy from the best title_variants entry",
+            "- topic_accent_color: ONE hex color (#RRGGBB) that is this SPECIFIC video's topic accent — not the channel's generic default.",
+            f"    - {brand_palette_line}",
+            "    - HARMONY RULE: the color must stay believably part of this brand — similar warm/earthy, muted-editorial family, comparable saturation and lightness to the brand palette above. Do NOT pick a jarring, neon, or unrelated hue.",
+            "    - TOPIC RULE: within that harmony, shift hue/tone to fit THIS video's specific theme/emotion (e.g. a sleep/calm topic can lean toward a muted indigo or deep teal within the brand's tonal range; a food/energy topic can lean toward a warmer ochre/terracotta; a movement/stiffness topic can lean toward a grounded olive or clay). Base the choice on the actual script content, not a fixed rule.",
+            "    - Must be DIFFERENT from the channel's default accent hex above (do not just copy it) unless the topic genuinely calls for the same tone.",
             "- description: YouTube video description in Spanish. It MUST follow this Golden Structure (structured into 6 distinct sections/paragraphs separated by blank lines):",
             "  1. Section 1 (Hook & SEO): 2-3 short sentences. Start with the primary keyword within the first 25 characters (e.g. 'Si después de los 45...').",
             "  2. Section 2 (Detailed Summary): 2-3 short paragraphs detailing what the video covers and what the viewer will learn, incorporating secondary/LSI keywords naturally.",

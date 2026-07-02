@@ -24,6 +24,11 @@
       "type": "string",
       "description": "3-5 word ALL-CAPS Spanish hook for YouTube thumbnail overlay. Short, high-emotion, readable at thumbnail size. Example: 'DUERME MEJOR HOY'"
     },
+    "topic_accent_color": {
+      "type": "string",
+      "pattern": "^#[0-9A-Fa-f]{6}$",
+      "description": "Per-video accent hex color harmonized with the channel's brand palette but distinct to this video's topic/mood. Used for thumbnail and graphic-card highlights instead of a single channel-wide accent."
+    },
     "title_variants": {
       "type": "array",
       "description": "3 scored title+thumbnail_text variants, sorted best-first",

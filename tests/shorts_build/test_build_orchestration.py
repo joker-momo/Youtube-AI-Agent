@@ -41,9 +41,9 @@ def test_build_short_pass_renders_and_writes_artifacts(tmp_path: Path):
     sd = paths.short_dir(job, "short-01")
     for f in ("short_script.json", "short_scenes.json", "short_source_map.json", "short_seo.json", "short_script_qa.json", "short_scenes_qa.json"):
         assert (sd / "json" / f).exists(), f
-    for f in ("short.mp4", "short_cover.jpg"):
+    for f in ("short.mp4",):
         assert (sd / "outputs" / f).exists(), f
-    assert calls == ["background", "tts", "mix", "render", "cover"]
+    assert calls == ["background", "tts", "mix", "render"]
     assert res["music_track"] == "shorts_sleep_stress"
 
 

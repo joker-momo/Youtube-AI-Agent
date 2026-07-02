@@ -125,14 +125,7 @@ def _stub_io(calls: list[str]) -> dict:
         out.write_bytes(b"v")
         return out
 
-    def cover_fn(short_dir, channel_config):
-        calls.append("cover")
-        (short_dir / "outputs").mkdir(parents=True, exist_ok=True)
-        out = short_dir / "outputs" / "short_cover.jpg"
-        out.write_bytes(b"j")
-        return out
-
-    return {"background_fn": background_fn, "tts_fn": tts_fn, "mix_fn": mix_fn, "render_fn": render_fn, "cover_fn": cover_fn}
+    return {"background_fn": background_fn, "tts_fn": tts_fn, "mix_fn": mix_fn, "render_fn": render_fn}
 
 
 def test_build_short_writes_quality_artifacts_and_background_stage(tmp_path: Path):
@@ -169,8 +162,6 @@ def test_build_short_writes_quality_artifacts_and_background_stage(tmp_path: Pat
     assert bg_stage["status"] == "completed"
     assert [s["scene_id"] for s in bg_stage["per_scene"]]  # per-scene source report present
     assert "background" in calls
-    assert status["cover_path"] == "shorts/short-01/outputs/short_cover.jpg"
-    assert "cover" in calls
 
 
 def test_anti_ai_fail_blocks_render_and_updates_performance_memory(tmp_path: Path):

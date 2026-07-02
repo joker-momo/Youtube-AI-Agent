@@ -73,7 +73,6 @@ def _make_ctx(tmp_path: Path) -> BuildContext:
         tts_fn=_noop,
         mix_fn=_noop,
         render_fn=_noop,
-        cover_fn=_noop,
         status=status,
         recorder=None,  # unused on the failure path
         update_stage=_update_stage,

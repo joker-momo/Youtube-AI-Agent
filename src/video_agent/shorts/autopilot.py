@@ -336,7 +336,6 @@ def _manifest_entry(short_plan: dict, res: dict) -> dict:
         "source_scene_ids": res.get("source_scene_ids") or short_plan.get("source_scene_ids") or [],
         "music_track": res.get("music_track"),
         "video_path": res.get("video_path"),
-        "cover_path": res.get("cover_path"),
     }
 
 

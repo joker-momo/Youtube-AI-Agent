@@ -30,7 +30,6 @@ class BuildContext:
     tts_fn: Callable[..., Path]
     mix_fn: Callable[..., Path]
     render_fn: Callable[..., Path]
-    cover_fn: Callable[..., Path]
 
     # Shared mutable orchestration state
     status: dict[str, Any]

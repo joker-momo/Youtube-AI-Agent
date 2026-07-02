@@ -63,7 +63,6 @@ SHORT_VISUAL_PERFORMANCE_REPORT_FILE = "visual_performance_report.json"
 SHORT_VISUAL_MANUAL_REVIEW_FILE = "visual_manual_review.json"
 SHORT_YOUTUBE_METRICS_FILE = "youtube_metrics.json"
 SHORT_LLM_HISTORY_FILE = "llm_history.jsonl"  # all ChatGPT + Gemini prompts/responses
-SHORT_COVER_FILE = "short_cover.jpg"
 SHORT_THUMBNAIL_FILE = "thumbnail.jpg"
 SHORT_VIDEO_FILE = "short.mp4"
 SHORT_REPORT_FILE = "short_report.md"

@@ -376,7 +376,7 @@ def _run_short_render_job(job: dict, *, job_dir: Path, channel_path: Path) -> No
 
     from video_agent.shorts import manifest as manifest_mod
     from video_agent.shorts import paths
-    from video_agent.shorts.renderer import render_short_cover, render_short_video
+    from video_agent.shorts.renderer import render_short_video
     from video_agent.utils.json_io import read_yaml
 
     payload: dict = {}
@@ -514,9 +514,7 @@ def _run_short_render_job(job: dict, *, job_dir: Path, channel_path: Path) -> No
     update_stage("render", "in_progress")
     try:
         check_stop()
-        video_path = render_short_video(short_dir, channel_config)
-        check_stop()
-        cover_path = render_short_cover(short_dir, channel_config)
+        render_short_video(short_dir, channel_config)
         update_stage("render", "completed")
         status.update(
             {
@@ -524,7 +522,6 @@ def _run_short_render_job(job: dict, *, job_dir: Path, channel_path: Path) -> No
                 "status": "rendered",
                 "rendered": True,
                 "video_path": f"shorts/{short_id}/{paths.SHORT_VIDEO_FILE}",
-                "cover_path": f"shorts/{short_id}/{paths.SHORT_COVER_FILE}",
             }
         )
     except Exception as exc:
@@ -533,6 +530,12 @@ def _run_short_render_job(job: dict, *, job_dir: Path, channel_path: Path) -> No
         manifest_mod.write_short_status(job_dir, short_id, status)
         raise exc
     manifest_mod.write_short_status(job_dir, short_id, status)
+
+    # Phone-publishing handoff: ship short.mp4 + cover + copy-paste SEO to
+    # Telegram so the operator can post from mobile. Best-effort, never raises.
+    from video_agent.notifications.telegram import notify_short_rendered_sync
+
+    notify_short_rendered_sync(job_dir, short_id)
 
     manifest_path = paths.manifest_path(job_dir)
     if manifest_path.exists():
@@ -544,7 +547,6 @@ def _run_short_render_job(job: dict, *, job_dir: Path, channel_path: Path) -> No
                 entry["qa_verdict"] = status.get("qa_verdict", "PASS")
                 entry["requires_render_confirmation"] = False
                 entry["video_path"] = f"shorts/{short_id}/{paths.SHORT_VIDEO_FILE}"
-                entry["cover_path"] = f"shorts/{short_id}/{paths.SHORT_COVER_FILE}"
                 break
         rendered_count = sum(1 for entry in manifest.get("shorts") or [] if entry.get("status") == "rendered")
         ready_count = sum(1 for entry in manifest.get("shorts") or [] if entry.get("status") == "ready_for_render")

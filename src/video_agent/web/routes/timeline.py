@@ -154,7 +154,6 @@ def _shorts_timeline_stage(job_dir: Path) -> dict | None:
                 "qa_verdict": qa,
                 "hook": entry.get("hook", ""),
                 "video_path": entry.get("video_path", ""),
-                "cover_path": entry.get("cover_path", ""),
                 "steps": steps,
                 "background_live": background_live,
             }

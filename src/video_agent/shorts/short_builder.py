@@ -36,7 +36,6 @@ from video_agent.shorts.builder.context import BuildContext
 # video_agent.shorts.short_builder.<name>.
 from video_agent.shorts.builder.defaults import (
     _default_background_fn,
-    _default_cover_fn,
     _default_llm_fn,
     _default_mix_fn,
     _default_render_fn,
@@ -179,7 +178,6 @@ __all__ = [
     "_default_tts_fn",
     "_default_mix_fn",
     "_default_render_fn",
-    "_default_cover_fn",
     "HARD_SCENE_VALIDATION_TYPES",
     "_HARD_QA_ISSUE_MARKERS",
     "_scene_qa_has_hard_fail",
@@ -250,7 +248,6 @@ def build_short(
     tts_fn: Callable[..., Path] = _default_tts_fn,
     mix_fn: Callable[..., Path] = _default_mix_fn,
     render_fn: Callable[..., Path] = _default_render_fn,
-    cover_fn: Callable[..., Path] = _default_cover_fn,
     long_video_url: str = "",
     require_render_confirmation: bool = False,
     source_artifacts: dict | None = None,
@@ -269,7 +266,6 @@ def build_short(
             tts_fn=tts_fn,
             mix_fn=mix_fn,
             render_fn=render_fn,
-            cover_fn=cover_fn,
             long_video_url=long_video_url,
             require_render_confirmation=require_render_confirmation,
             source_artifacts=source_artifacts,
@@ -304,7 +300,6 @@ def _build_short_impl(
     tts_fn: Callable[..., Path] = _default_tts_fn,
     mix_fn: Callable[..., Path] = _default_mix_fn,
     render_fn: Callable[..., Path] = _default_render_fn,
-    cover_fn: Callable[..., Path] = _default_cover_fn,
     long_video_url: str = "",
     require_render_confirmation: bool = False,
     source_artifacts: dict | None = None,
@@ -628,7 +623,6 @@ def _build_short_impl(
         tts_fn=tts_fn,
         mix_fn=mix_fn,
         render_fn=render_fn,
-        cover_fn=cover_fn,
         status=status,
         recorder=_recorder,
         update_stage=update_stage,
@@ -854,7 +848,6 @@ def _build_short_impl(
                     "requires_user_review": False,
                     "requires_render_confirmation": True,
                     "video_path": None,
-                    "cover_path": None,
                 }
             )
             write_short_status(long_job_dir, short_id, status)

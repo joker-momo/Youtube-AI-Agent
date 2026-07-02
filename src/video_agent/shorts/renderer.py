@@ -1,8 +1,9 @@
-"""Render a Short to vertical ``short.mp4`` + ``short_cover.jpg``.
+"""Render a Short to vertical ``short.mp4``.
 
 A Short folder is materialized into a self-contained mini-job (long-form-named
 aliases) so the existing Remotion render pipeline can render it vertically
-(1080x1920). The cover is a frame extracted from the rendered video.
+(1080x1920). Shorts have no cover deliverable — YouTube Shorts ignores custom
+thumbnails.
 """
 
 from __future__ import annotations
@@ -10,7 +11,6 @@ from __future__ import annotations
 import json
 import math
 import shutil
-import subprocess
 from pathlib import Path
 
 from video_agent.assets.materialize import materialize_media
@@ -108,7 +108,7 @@ def materialize_short_job_aliases(short_dir: Path, channel_config: dict | None =
                 "tags": short_seo.get("tags") or short_seo.get("hashtags") or ["shorts"],
                 "language": short_seo.get("language", "es-ES"),
                 "ai_disclosure": bool(short_seo.get("ai_disclosure", True)),
-                "thumbnail_path": "outputs/short_cover.jpg",
+                "thumbnail_path": "outputs/thumbnail_1.jpg",
                 "thumbnail_text": (title[:25] or "SHORT").upper(),
                 "suggested_pinned_comments": short_seo.get("pinned_comment", ""),
             },
@@ -121,54 +121,6 @@ def materialize_short_job_aliases(short_dir: Path, channel_config: dict | None =
         )
 
     _mirror_short_assets_to_public(short_dir)
-
-
-def _is_portrait_image(image_path: Path) -> bool:
-    """Best-effort aspect check using ffprobe. Returns True only when we can
-    confirm height > width. Errors → False so the caller falls back to a
-    fresh Remotion render instead of trusting a possibly wrong asset."""
-    try:
-        result = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "stream=width,height",
-                "-of",
-                "csv=p=0",
-                str(image_path),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        parts = result.stdout.strip().split(",")
-        if len(parts) >= 2:
-            w = int(parts[0])
-            h = int(parts[1])
-            return h > w
-    except (subprocess.SubprocessError, ValueError):
-        pass
-    return False
-
-
-def build_cover_extract_command(video_path: Path, out_path: Path, frame_sec: float) -> list[str]:
-    return [
-        "ffmpeg",
-        "-y",
-        "-ss",
-        str(frame_sec),
-        "-i",
-        str(video_path),
-        "-frames:v",
-        "1",
-        "-q:v",
-        "2",
-        str(out_path),
-    ]
 
 
 def _channel_path(channel_config: dict) -> Path:
@@ -224,75 +176,10 @@ def render_short_video(
     return out
 
 
-def build_remotion_short_cover_command(
-    entry: Path,
-    render_props: Path,
-    out_path: Path,
-) -> list[str]:
-    """Pure command builder for the Remotion ShortCover still."""
-    return [
-        "npx",
-        "--prefix",
-        str(entry.parent.parent),
-        "remotion",
-        "still",
-        str(entry),
-        "ShortCover",
-        str(out_path),
-        "--props",
-        str(render_props),
-        "--image-format",
-        "jpeg",
-    ]
-
-
-def render_short_cover(short_dir: Path, channel_config: dict) -> Path:
-    """ChatGPT-generated thumbnail is the primary cover (from Stage 5b).
-
-    Bypasses Remotion completely. If the ChatGPT thumbnail is missing,
-    falls back to extracting a frame from the rendered video using ffmpeg.
-    """
-    outputs_dir = short_dir / paths.SHORT_OUTPUTS_SUBDIR
-    outputs_dir.mkdir(parents=True, exist_ok=True)
-    out = outputs_dir / paths.SHORT_COVER_FILE
-    # Find the ChatGPT-generated thumbnail (may be in outputs/ or at root)
-    thumb = outputs_dir / paths.SHORT_THUMBNAIL_FILE
-    if not thumb.exists():
-        thumb = short_dir / paths.SHORT_THUMBNAIL_FILE
-
-    if thumb.exists():
-        # Copy ChatGPT generated thumbnail as the cover image
-        shutil.copyfile(thumb, out)
-        try:
-            _save_friendly_copy(short_dir, out, ext=".jpg")
-        except Exception:
-            pass
-        return out
-
-    # Fallback: ffmpeg frame extraction from the rendered video.
-    cover_cfg = (channel_config.get("shorts") or {}).get("cover") or {}
-    frame_sec = float(cover_cfg.get("cover_frame_sec", 0.3))
-    video = outputs_dir / paths.SHORT_VIDEO_FILE
-    if not video.exists():
-        video = short_dir / paths.SHORT_VIDEO_FILE
-    if video.exists():
-        try:
-            subprocess.run(
-                build_cover_extract_command(video, out, frame_sec),
-                check=True,
-                capture_output=True,
-            )
-            _save_friendly_copy(short_dir, out, ext=".jpg")
-        except Exception:
-            pass
-    return out
-
-
 def _save_friendly_copy(short_dir: Path, source_file: Path, ext: str) -> None:
     import datetime
     import json
     import re
-    import shutil
     import unicodedata
 
     idea_path = paths.resolve_short_json(short_dir, paths.SHORT_IDEA_FILE)

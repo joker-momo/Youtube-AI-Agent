@@ -358,7 +358,6 @@ def get_shorts_studio_drafts(job_id: str, jobs_root: Path = Depends(get_jobs_roo
                     or []
                 ),
                 "video_path": status_doc.get("video_path"),
-                "cover_path": status_doc.get("cover_path"),
             }
             merged.update(status_doc)
             _decision = _read_json(
@@ -538,7 +537,6 @@ def get_short_detail(job_id: str, short_id: str, jobs_root: Path = Depends(get_j
     seo_doc = _read_json(short_dir_path / shorts_paths.SHORT_SEO_FILE)
     idea_doc = _read_json(short_dir_path / shorts_paths.SHORT_IDEA_FILE)
     video_exists = (short_dir_path / shorts_paths.SHORT_VIDEO_FILE).exists()
-    cover_exists = (short_dir_path / shorts_paths.SHORT_COVER_FILE).exists()
     return {
         "short_id": short_id,
         "job_id": job_id,
@@ -559,9 +557,7 @@ def get_short_detail(job_id: str, short_id: str, jobs_root: Path = Depends(get_j
         },
         "idea": idea_doc,
         "video_exists": video_exists,
-        "cover_exists": cover_exists,
         "video_path": f"/jobs/{job_id}/shorts/{short_id}/{shorts_paths.SHORT_VIDEO_FILE}" if video_exists else None,
-        "cover_path": f"/jobs/{job_id}/shorts/{short_id}/{shorts_paths.SHORT_COVER_FILE}" if cover_exists else None,
     }
 
 

@@ -201,7 +201,6 @@ def _update_manifest_for_archive(manifest_doc: dict[str, Any], idea_id: str, arc
                     "archived_at": _now(),
                     "archive_path": archive_path_by_short[short_id],
                     "video_path": None,
-                    "cover_path": None,
                 }
             )
             continue
@@ -298,7 +297,6 @@ def render_selected_short_ideas(
             "qa_verdict": None,
             "source_scene_ids": list(idea.get("source_scene_ids") or []),
             "video_path": None,
-            "cover_path": None,
         }
         active_entries.append(preliminary_entry)
         manifest_doc.update({
@@ -353,7 +351,6 @@ def render_selected_short_ideas(
                 "qa_scenes_product_attempts": result.get("qa_scenes_product_attempts"),
                 "source_scene_ids": list(idea.get("source_scene_ids") or []),
                 "video_path": result.get("video_path"),
-                "cover_path": result.get("cover_path"),
             }
         )
 

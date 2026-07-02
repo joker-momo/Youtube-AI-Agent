@@ -97,11 +97,7 @@ def _stub_io(calls):
         calls.append("render"); (short_dir / "outputs").mkdir(parents=True, exist_ok=True)
         out = short_dir / "outputs" / "short.mp4"
         out.write_bytes(b"v"); return out
-    def cover_fn(short_dir, channel_config):
-        calls.append("cover"); (short_dir / "outputs").mkdir(parents=True, exist_ok=True)
-        out = short_dir / "outputs" / "short_cover.jpg"
-        out.write_bytes(b"j"); return out
-    return dict(background_fn=background_fn, tts_fn=tts_fn, mix_fn=mix_fn, render_fn=render_fn, cover_fn=cover_fn)
+    return dict(background_fn=background_fn, tts_fn=tts_fn, mix_fn=mix_fn, render_fn=render_fn)
 
 
 def _three_graphic_scenes():

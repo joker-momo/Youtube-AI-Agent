@@ -43,9 +43,3 @@ def _default_render_fn(
     from video_agent.shorts.renderer import render_short_video
 
     return render_short_video(short_dir, channel_config, stop_request_path=stop_request_path)
-
-
-def _default_cover_fn(short_dir: Path, channel_config: dict) -> Path:
-    from video_agent.shorts.renderer import render_short_cover
-
-    return render_short_cover(short_dir, channel_config)

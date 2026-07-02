@@ -65,9 +65,9 @@ def _stage_retention_plan(ctx: BuildContext) -> dict[str, Any] | None:
 
 
 def _stage_render(ctx: BuildContext) -> None:
-    """Stage: render (video + cover).
+    """Stage: render (video only — Shorts have no cover deliverable).
 
-    On success, writes video_path / cover_path to ctx.extras.
+    On success, writes video_path to ctx.extras.
     On failure, updates status and re-raises.
     """
     short_id = ctx.short_plan["short_id"]
@@ -81,11 +81,8 @@ def _stage_render(ctx: BuildContext) -> None:
         except TypeError:
             # Injected render_fn without the kwarg (back-compat).
             video_path = ctx.render_fn(sd, ctx.channel_config)
-        ctx.check_stop()
-        cover_path = ctx.cover_fn(sd, ctx.channel_config)
         ctx.update_stage("render", "completed")
         ctx.extras["video_path"] = video_path
-        ctx.extras["cover_path"] = cover_path
     except Exception as exc:
         ctx.update_stage("render", "failed", error=str(exc))
         ctx.status["status"] = "failed"
@@ -193,11 +190,17 @@ def _stage_performance_memory(ctx: BuildContext) -> None:
             "requires_user_review": False,
             "requires_render_confirmation": False,
             "video_path": f"shorts/{short_id}/{paths.SHORT_OUTPUTS_SUBDIR}/{paths.SHORT_VIDEO_FILE}",
-            "cover_path": f"shorts/{short_id}/{paths.SHORT_OUTPUTS_SUBDIR}/{paths.SHORT_COVER_FILE}",
             "anti_ai_regeneration_attempts": anti_ai_regeneration_attempts,
         }
     )
     write_short_status(ctx.long_job_dir, short_id, ctx.status)
+
+    # Phone-publishing handoff: ship short.mp4 + cover + copy-paste SEO to
+    # Telegram so the operator can post from mobile. Best-effort, never raises.
+    from video_agent.notifications.telegram import notify_short_rendered_sync
+
+    notify_short_rendered_sync(ctx.long_job_dir, short_id)
+
     ctx.update_stage("performance_memory", "in_progress")
     performance_memory.write_performance_memory(
         ctx.long_job_dir,

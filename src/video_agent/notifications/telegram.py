@@ -460,6 +460,138 @@ async def notify_job_done_with_files(
     await _send_video_file(video, caption=f"🎬 {job_id}")
 
 
+async def _send_video_document(path: Path, caption: str = "") -> None:
+    """Send a video as a DOCUMENT — Telegram keeps the exact original bytes
+    (sendVideo re-encodes server-side; sendDocument does not). Used for Shorts,
+    where the file is the publish master, not a preview. NEVER compresses: a
+    file over the 50 MB Bot API cap gets a warning message with the disk path
+    instead of a degraded upload.
+    """
+    if _disabled():
+        return
+    chat_id = _chat_id()
+    bot = _bot()
+    if not bot or not chat_id or not path.exists():
+        return
+    size = path.stat().st_size
+    if size > _TELEGRAM_FILE_LIMIT:
+        mb = size / (1024 * 1024)
+        await send(
+            f"{caption}\n⚠️ File {mb:.0f} MB &gt; 50 MB (Bot API cap) — "
+            f"gửi bản gốc không được. Lấy file tại:\n<pre>{_esc(str(path))}</pre>"
+        )
+        return
+    try:
+        async def _send_once() -> None:
+            with path.open("rb") as fh:
+                await bot.send_document(
+                    chat_id=chat_id,
+                    document=fh,
+                    caption=caption,
+                    parse_mode="HTML",
+                    filename=path.name,
+                )
+        await _with_retries(_send_once, attempts=4)
+    except TelegramError as exc:
+        print(f"[telegram] sendDocument (original video) failed: {exc}", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[telegram] sendDocument (original video) failed (unexpected): {exc}", file=sys.stderr)
+
+
+def _short_seo_doc(short_dir: Path) -> dict:
+    """Best-effort read of the Short's SEO artifact (json/short_seo.json)."""
+    from video_agent.shorts import paths as short_paths
+
+    seo_path = short_paths.resolve_short_json(short_dir, short_paths.SHORT_SEO_FILE)
+    if not seo_path.exists():
+        return {}
+    try:
+        data = json.loads(seo_path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception as exc:  # noqa: BLE001
+        print(f"[telegram] short SEO read failed: {exc}", file=sys.stderr)
+        return {}
+
+
+def _short_publish_text(short_id: str, seo: dict) -> str:
+    """Copy-paste-ready publish package for phone posting.
+
+    Each field sits in its own <pre> block — Telegram renders those as
+    tap-to-copy monospace blocks on mobile, so the operator can paste
+    title/description/tags straight into the YouTube app.
+    """
+    title = str(seo.get("title") or "").strip()
+    description = str(seo.get("description") or "").strip()
+    tags = seo.get("tags") or seo.get("hashtags") or []
+    if isinstance(tags, str):
+        tags = [tags]
+    hashtags = " ".join(
+        t if str(t).startswith("#") else f"#{str(t).replace(' ', '')}" for t in tags if str(t).strip()
+    )
+    pinned = str(seo.get("pinned_comment") or seo.get("suggested_pinned_comments") or "").strip()
+
+    parts = [f"📱 <b>Publish package</b> — <code>{_esc(short_id)}</code>"]
+    if title:
+        parts.append(f"▸ <b>Título</b>\n<pre>{_esc(title)}</pre>")
+    if description or hashtags:
+        desc_block = description + (f"\n\n{hashtags}" if hashtags else "")
+        parts.append(f"▸ <b>Descripción</b>\n<pre>{_esc(desc_block.strip())}</pre>")
+    if hashtags:
+        parts.append(f"▸ <b>Hashtags</b>\n<pre>{_esc(hashtags)}</pre>")
+    if pinned:
+        parts.append(f"▸ <b>Comentario fijado</b>\n<pre>{_esc(pinned)}</pre>")
+    if len(parts) == 1:
+        parts.append("⚠️ short_seo.json missing — no publish metadata found.")
+    return "\n\n".join(parts)
+
+
+async def notify_short_rendered(long_job_dir: Path, short_id: str) -> None:
+    """Send the full publish package for one rendered Short.
+
+    Order: ORIGINAL video file as a document (caption = SEO title) →
+    copy-paste publish text (title/description/hashtags/pinned comment in
+    tap-to-copy blocks). No cover image — Shorts do not use one. Unlike the
+    long-form preview notification, the Short video is the PUBLISH MASTER: it
+    goes via sendDocument so Telegram never re-encodes it, and it is never
+    compressed. All sends are best-effort and never raise, so a Telegram
+    outage never fails the render job.
+    """
+    if _disabled():
+        return
+    from video_agent.shorts import paths as short_paths
+
+    short_dir = short_paths.short_dir(long_job_dir, short_id)
+    seo = _short_seo_doc(short_dir)
+    title = str(seo.get("title") or "").strip()
+
+    video = short_paths.resolve_short_output(short_dir, short_paths.SHORT_VIDEO_FILE)
+
+    caption = f"🎬 <b>Short rendered</b> — <code>{_esc(short_id)}</code>"
+    if title:
+        caption += f"\n{_esc(title)}"
+    if video.exists():
+        # Publish master: original bytes via document — no Telegram re-encode.
+        await _send_video_document(video, caption=caption + "\n📦 Bản gốc để đăng")
+    else:
+        await send(caption + "\n⚠️ short.mp4 not found on disk.")
+    await send(_short_publish_text(short_id, seo))
+
+
+def notify_short_rendered_sync(long_job_dir: Path, short_id: str) -> None:
+    """Sync wrapper for worker/builder contexts. Never raises."""
+    try:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None:
+            loop.create_task(notify_short_rendered(long_job_dir, short_id))
+        else:
+            asyncio.run(notify_short_rendered(long_job_dir, short_id))
+    except Exception as exc:  # noqa: BLE001
+        print(f"[telegram] notify_short_rendered_sync failed: {exc}", file=sys.stderr)
+
+
 async def notify_batch_done(
     *,
     total: int,

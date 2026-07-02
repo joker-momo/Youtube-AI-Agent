@@ -229,7 +229,6 @@ def test_render_selected_short_ideas_passes_source_artifacts_and_updates_run(tmp
                 "rendered": True,
                 "qa_verdict": "PASS",
                 "video_path": f"shorts/{short_plan['short_id']}/short.mp4",
-                "cover_path": f"shorts/{short_plan['short_id']}/short_cover.jpg",
             },
         )
         return {
@@ -239,7 +238,6 @@ def test_render_selected_short_ideas_passes_source_artifacts_and_updates_run(tmp
             "rendered": True,
             "qa_verdict": "PASS",
             "video_path": f"shorts/{short_plan['short_id']}/short.mp4",
-            "cover_path": f"shorts/{short_plan['short_id']}/short_cover.jpg",
             "source_scene_ids": short_plan["source_scene_ids"],
         }
 

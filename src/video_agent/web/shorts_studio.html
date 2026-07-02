@@ -1939,7 +1939,6 @@ function renderShortsTimelineStage(jobId, stage) {
 function renderShortPipelineCard(jobId, short) {
   const sid = short.short_id || '';
   const video = short.video_path ? '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(short.video_path) : '';
-  const cover = short.cover_path ? '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(short.cover_path) : '';
   const statusColor = short.status === 'rendered' ? '#166534' : (short.status === 'needs_review' ? '#b45309' : '#334155');
   const steps = short.steps || [];
   const qaScenesAttempts = renderQaScenesAttempts(short);
@@ -1947,8 +1946,8 @@ function renderShortPipelineCard(jobId, short) {
     <div style="display:grid;grid-template-columns:minmax(150px,190px) 1fr;gap:14px;padding:12px;border:1px solid var(--line-strong);border-radius:10px;background:var(--bg-soft)">
       <div style="width:100%;aspect-ratio:9/16;background:#0f172a;border-radius:9px;overflow:hidden;box-shadow:0 10px 24px rgba(15,23,42,.18)">
         ${video
-          ? `<video src="${video}" poster="${cover}" controls preload="metadata" style="width:100%;height:100%;object-fit:cover"></video>`
-          : (cover ? `<img src="${cover}" alt="${escapeHtml(sid)} cover" style="width:100%;height:100%;object-fit:cover">` : '')}
+          ? `<video src="${video}" controls preload="metadata" style="width:100%;height:100%;object-fit:cover"></video>`
+          : ''}
       </div>
       <div style="min-width:0">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
@@ -3447,7 +3446,6 @@ function renderShortsCards(jobId, data) {
   grid.innerHTML = shorts.map(s => {
     const sid = s.short_id;
     const base = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent('shorts/' + sid + '/');
-	    const cover = s.cover_path ? ('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(s.cover_path)) : '';
 	    const video = s.video_path ? ('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(s.video_path)) : '';
 	    const artifact = (name) => '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent('shorts/' + sid + '/' + name);
 	    const chipColor = s.status === 'rendered' ? '#1a7f37' : (s.status === 'needs_review' ? '#b35900' : '#666');
@@ -3456,7 +3454,6 @@ function renderShortsCards(jobId, data) {
     return `
       <div class="idea-card" style="display:flex;gap:10px">
         <div style="width:90px;height:160px;background:#111;border-radius:6px;overflow:hidden;flex:0 0 auto">
-          ${cover ? `<img src="${cover}" style="width:100%;height:100%;object-fit:cover">` : ''}
         </div>
         <div style="flex:1;min-width:0">
           <div style="font-weight:600">${escapeHtml(sid)}${s.title ? ` — ${escapeHtml(s.title)}` : ''} · ${escapeHtml(s.format || '')}
@@ -3996,8 +3993,7 @@ function renderShortStep(jobId, shortId, s, idx) {
   } else if (s.name === 'render') {
     inputs = [{path: `${jsonPrefix}short_render_props.json`, name: 'short_render_props.json'}];
     outputs = [
-      {path: `${outPrefix}short.mp4`, name: 'short.mp4'},
-      {path: `${outPrefix}short_cover.jpg`, name: 'short_cover.jpg'}
+      {path: `${outPrefix}short.mp4`, name: 'short.mp4'}
     ];
   } else if (s.name === 'performance_memory') {
     inputs = [{path: `${outPrefix}short.mp4`, name: 'short.mp4'}];
@@ -4038,7 +4034,7 @@ function renderShortStep(jobId, shortId, s, idx) {
     renderProgressHtml = `
       <div class="short-render-progress-container" style="margin:12px 0 4px;padding:10px;border:1px solid var(--line);border-radius:8px;background:#fafafa">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
-          <span style="font-size:12px;color:var(--muted);font-weight:600">Rendering video & cover…</span>
+          <span style="font-size:12px;color:var(--muted);font-weight:600">Rendering video…</span>
           <span class="short-render-progress-pct" style="font-size:13px;font-weight:700;color:var(--blue)">${Math.round(pct)}%</span>
         </div>
         <div style="height:6px;border-radius:4px;background:var(--line-strong);overflow:hidden">
@@ -4438,7 +4434,6 @@ function renderSingleCardHtml(jobId, d, idx, shortsSeoData, isOpen) {
     <div class="render-card-body">
       ${st === 'rendered' ? (() => {
         const shortVideoUrl = d.video_path ? ('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(d.video_path)) : '';
-        const shortCoverUrl = d.cover_path ? ('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(d.cover_path)) : '';
         const shortSeo = shortsSeoData[d.short_id] || d.seo || {};
         const shortTitle = shortSeo.title || d.title || d.short_id;
         const shortDesc = shortSeo.description || '';
@@ -4457,14 +4452,6 @@ function renderSingleCardHtml(jobId, d, idx, shortsSeoData, isOpen) {
               ? `<video src="${shortVideoUrl}" controls class="short-video-preview" preload="metadata"></video>
                  <a href="${shortVideoUrl}" download class="action-btn primary" style="justify-content:center;text-align:center;">⬇ Video MP4</a>`
               : `<div style="aspect-ratio:9/16;background:#0f172a;border-radius:10px;display:grid;place-items:center;font-size:12px;color:#64748b;">No video</div>`}
-            ${shortCoverUrl ? `
-              <div class="short-cover-row">
-                <img src="${shortCoverUrl}" alt="Cover" class="short-cover-thumb">
-                <div style="flex:1;min-width:0">
-                  <div style="font-size:11px;font-weight:650;color:var(--muted);margin-bottom:6px">Cover / Thumbnail</div>
-                  <a href="${shortCoverUrl}" download class="action-btn" style="width:100%;justify-content:center;text-align:center;">⬇ Cover JPG</a>
-                </div>
-              </div>` : ''}
           </div>
           <!-- Right: SEO copy -->
           <div class="short-seo-col">

@@ -289,14 +289,12 @@ def test_legacy_short_layouts_map_to_short_layouts_with_warning():
 
 
 # ---------------------------------------------------------------------------
-# §12 Cover primary = ChatGPT-generated thumbnail; ffmpeg frame fallback only
+# §12 Shorts have no cover deliverable — the cover chain must stay deleted
 # ---------------------------------------------------------------------------
 
-def test_short_cover_uses_chatgpt_thumbnail_primary_ffmpeg_fallback():
-    """renderer.render_short_cover must reuse the ChatGPT-generated
-    thumbnail.jpg as primary cover; ffmpeg frame extract is fallback only."""
-    import inspect
-    from video_agent.shorts import renderer, paths
-    src = inspect.getsource(renderer.render_short_cover)
-    assert "SHORT_THUMBNAIL_FILE" in src, "primary cover must reuse ChatGPT thumbnail.jpg"
-    assert "fallback" in src.lower() or "ffmpeg" in src.lower(), "ffmpeg path must be fallback only"
+def test_short_renderer_has_no_cover_chain():
+    """Shorts have no cover deliverable (YouTube Shorts ignores custom
+    thumbnails). render_short_cover and SHORT_COVER_FILE must not exist."""
+    from video_agent.shorts import paths, renderer
+    assert not hasattr(renderer, "render_short_cover")
+    assert not hasattr(paths, "SHORT_COVER_FILE")

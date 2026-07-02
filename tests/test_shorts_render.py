@@ -110,19 +110,6 @@ def test_materialize_short_job_aliases_mirrors_canonical_audio(tmp_path: Path, m
     assert mirrored.read_bytes() == b"mixed audio"
 
 
-def test_build_cover_extract_command_uses_frame_sec(tmp_path: Path):
-    from video_agent.shorts import renderer
-
-    video = tmp_path / "short.mp4"
-    out = tmp_path / "short_cover.jpg"
-    cmd = renderer.build_cover_extract_command(video, out, frame_sec=0.3)
-    assert cmd[0] == "ffmpeg"
-    s = " ".join(cmd)
-    assert "-ss" in s and "0.3" in s
-    assert "-frames:v 1" in s
-    assert str(video) in s and str(out) in s
-
-
 def test_short_render_resolution_is_vertical():
     from video_agent.shorts import renderer
 

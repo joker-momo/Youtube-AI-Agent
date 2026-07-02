@@ -355,18 +355,12 @@ def test_short_render_job_updates_draft_ready_manifest_and_run(tmp_path: Path, m
     )
 
     monkeypatch.setattr(worker, "render_short_video", lambda short_dir, channel_config: short_dir / "short.mp4", raising=False)
-    monkeypatch.setattr(worker, "render_short_cover", lambda short_dir, channel_config: short_dir / "short_cover.jpg", raising=False)
 
     def fake_video(short_dir, channel_config):
         (short_dir / "short.mp4").write_bytes(b"v")
         return short_dir / "short.mp4"
 
-    def fake_cover(short_dir, channel_config):
-        (short_dir / "short_cover.jpg").write_bytes(b"j")
-        return short_dir / "short_cover.jpg"
-
     monkeypatch.setattr("video_agent.shorts.renderer.render_short_video", fake_video)
-    monkeypatch.setattr("video_agent.shorts.renderer.render_short_cover", fake_cover)
 
     worker._run_short_render_job(
         {"job_id": "job-1", "payload": json.dumps({"short_id": "short-01"})},

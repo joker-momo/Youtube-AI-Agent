@@ -105,7 +105,10 @@ export type Scene = {
   on_screen_text: string;
   caption: string;
   motion: string;
-  asset_refs: {background: string};
+  // background_media_kind: 'video' = real footage; 'image' = a photo-backed
+  // encode (still wrapped in an .mp4 container). The renderer uses this to
+  // avoid treating static photos as living video backgrounds (bug-455).
+  asset_refs: {background: string; background_media_kind?: 'video' | 'image'};
   audio_offset_sec?: number;
   word_segments?: WordSegment[];
   layout?: SceneLayout;

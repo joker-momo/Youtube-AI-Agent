@@ -191,6 +191,10 @@ def prepare_assets(
         materialize_media(image_path, public_image_path)
         public_ref = f"jobs/{job_dir.name}/assets/{image_path.name}"
         scene["asset_refs"]["background"] = public_ref
+        # Whether the SOURCE was real footage or a photo-backed encode. The
+        # renderer must not treat a photo-backed .mp4 as a living background
+        # (bug-455: static Pexels photos masquerading as video at 14:00/25:00).
+        scene["asset_refs"]["background_media_kind"] = media_kind
 
         scene_asset = {
             "scene_id": scene["id"],

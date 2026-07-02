@@ -488,10 +488,14 @@ const SceneView: React.FC<{
   // Living bg for graphic scenes: the scene's OWN matched b-roll (already fetched from
   // its visual_prompt), else the brand-gradient fallback. Blurred + darkened behind the
   // card so it feels alive without a Ken Burns move (calm/premium for 45+).
-  const livingBgSrc =
-    scene.asset_refs?.background && scene.asset_refs.background.endsWith('.mp4')
-      ? scene.asset_refs.background
-      : hybridCardBg;
+  // bug-455: a photo-backed encode (media_kind 'image') still ships as .mp4 —
+  // checking the extension alone put a STATIC photo behind the card. Require
+  // real footage; otherwise the brand-gradient hybrid bg keeps the motion.
+  const bgIsRealVideo =
+    Boolean(scene.asset_refs?.background) &&
+    scene.asset_refs.background.endsWith('.mp4') &&
+    scene.asset_refs.background_media_kind !== 'image';
+  const livingBgSrc = bgIsRealVideo ? scene.asset_refs.background : hybridCardBg;
   const layoutVariant = sceneIndex % 3;
   const headlineLeft = layoutVariant === 2 ? undefined : 56;
   const headlineRight = layoutVariant === 2 ? 56 : undefined;
@@ -548,13 +552,20 @@ const SceneView: React.FC<{
         // WebCodecs <Media> Video (MediaVideo) — native HW decode, frame-accurate
         // for server-side rendering (benchmarked vs the old extract path: SSIM 0.987).
         // loop: short Pexels clips (3-30s) repeat to fill the full scene duration.
-        // No pan/zoom transform — the video itself has natural motion.
+        // Real footage plays as-is (its own natural motion). A photo-backed
+        // encode (background_media_kind 'image') has near-zero motion, so it
+        // gets the same Ken Burns transform as a plain photo — otherwise the
+        // scene reads as a frozen slideshow frame (bug-455).
         <MediaVideo
           src={mediaSrc(scene.asset_refs.background)}
           muted
           style={{
             position: 'absolute', width: '100%', height: '100%',
             objectFit: 'cover',
+            transform:
+              scene.asset_refs.background_media_kind === 'image'
+                ? motionTransform(scene.motion, progress)
+                : undefined,
             filter: 'contrast(1.05) saturate(1.03) sepia(0.04) brightness(0.96)',
           }}
         />

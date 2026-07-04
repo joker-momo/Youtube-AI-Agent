@@ -23,10 +23,19 @@ __pycache__/
 !.env.example
 .DS_Store
 browser_trace/
-/.claude
+# Agent tooling dirs are ignored wholesale EXCEPT the protocol/knowledge files
+# that CLAUDE.md/AGENTS.md tell every agent to read — those are tracked so a
+# fresh clone (e.g. the Ubuntu box) carries the operating rules + file map +
+# learnings. Volatile logs (memory.md, buglog.json, token-ledger.json),
+# machine-local settings, and the Antigravity skill mirror stay ignored.
+/.claude/*
+!/.claude/rules/
 /.codegraph
 /.cursor
-/.wolf
+/.wolf/*
+!/.wolf/OPENWOLF.md
+!/.wolf/anatomy.md
+!/.wolf/cerebrum.md
 /docs/superpowers
 /.cache
 /.remotion
@@ -43,7 +52,9 @@ remotion/src/*.js
 
 # Native runtime pidfiles (installers/run.sh)
 .run/
-/.agent
+/.agent/*
+!/.agent/AGENTS.md
+!/.agent/INSTALL.md
 .worktrees/
 /docs/plans
 queue.db

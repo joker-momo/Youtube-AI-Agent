@@ -23,13 +23,16 @@ __pycache__/
 !.env.example
 .DS_Store
 browser_trace/
-# Agent tooling dirs are ignored wholesale EXCEPT the protocol/knowledge files
-# that CLAUDE.md/AGENTS.md tell every agent to read — those are tracked so a
-# fresh clone (e.g. the Ubuntu box) carries the operating rules + file map +
-# learnings. Volatile logs (memory.md, buglog.json, token-ledger.json),
-# machine-local settings, and the Antigravity skill mirror stay ignored.
+# Agent tooling dirs are ignored wholesale EXCEPT the protocol/knowledge/skill
+# files that CLAUDE.md/AGENTS.md tell every agent to read — those are tracked so
+# a fresh clone (e.g. the Ubuntu box) carries the operating rules, project-local
+# skills, file map + learnings. Volatile logs (memory.md, buglog.json,
+# token-ledger.json) and machine-local settings stay ignored. Marketplace
+# PLUGINS (superpowers, caveman, agent-skills, …) live outside the repo in
+# ~/.claude/plugins and must be reinstalled per machine — see PORTING.md.
 /.claude/*
 !/.claude/rules/
+!/.claude/skills/
 /.codegraph
 /.cursor
 /.wolf/*
@@ -55,6 +58,9 @@ remotion/src/*.js
 /.agent/*
 !/.agent/AGENTS.md
 !/.agent/INSTALL.md
+!/.agent/skills/
+!/.agent/workflows/
+!/.agent/agents/
 .worktrees/
 /docs/plans
 queue.db

@@ -86,7 +86,46 @@ bash tools/setup-melo-venv.sh               # venv riêng cho MeloTTS (giọng E
    MeloTTS thật — pass là core pipeline sống).
 7. Chạy 1 job thật ngắn trước khi giao job dài.
 
-## 5. Bẫy đã biết (từ buglog)
+## 5. Skills & rules — cái gì đi theo git, cái gì phải cài lại
+
+Skill/rule đến từ **hai nguồn**. Chỉ nguồn A đi theo `git pull`.
+
+### A. Trong repo — tự có sau `git pull` (đã track)
+
+| Đường dẫn | Là gì |
+|---|---|
+| `.claude/rules/*` | Rule vận hành Claude Code đọc mỗi phiên (openwolf, skill-routing, agent-bridge) |
+| `.claude/skills/*` | 4 skill project-local của Claude Code (debug-issue, explore-codebase, refactor-safely, review-changes) |
+| `.agent/AGENTS.md`, `.agent/INSTALL.md` | Policy gốc + hướng dẫn setup Antigravity |
+| `.agent/skills/*`, `.agent/workflows/*`, `.agent/agents/*` | Toolbox Antigravity (brainstorming, systematic-debugging, TDD, review…) |
+| `.wolf/OPENWOLF.md`, `anatomy.md`, `cerebrum.md` | Protocol OpenWolf + file-map + learnings |
+
+### B. Marketplace plugins — KHÔNG trong repo, phải cài lại per máy
+
+Superpowers, caveman, v.v. nằm ở `~/.claude/plugins/` (per-user), git không mang
+theo. **`skill-routing.md` BẮT BUỘC superpowers** — thiếu là hỏng quy trình. Trên
+Ubuntu, trong Claude Code chạy `/plugin` → add marketplace → install từng cái, hoặc
+theo danh sách (bản đang dùng trên máy Mac tính đến 2026-07-04):
+
+| Plugin | Marketplace (GitHub) | Version | Vai trò |
+|---|---|---|---|
+| `superpowers` | `anthropics/claude-plugins-official` | 5.1.0 | **Bắt buộc** — workflow OS (brainstorming, TDD, systematic-debugging, code-review…) mà skill-routing.md dựa vào |
+| `agent-skills` | `addyosmani/agent-skills` | — | Toolbox checklist (frontend, security, performance, CI/CD…) |
+| `caveman` | `JuliusBrussee/caveman` | — | Chế độ trả lời terse (đang bật) |
+| `headroom` | `chopratejas/headroom` | 0.22.3 | Nén context |
+| `academic-research-skills` | `Imbad0202/academic-research-skills` (git url) | 3.9.3 | ARS (nghiên cứu học thuật) — tùy chọn, không liên quan pipeline video |
+
+> Chỉ **superpowers** là load-bearing cho quy trình sửa code (skill-routing bắt
+> buộc). Số còn lại là tiện ích — cài nếu muốn parity, bỏ qua vẫn chạy pipeline được.
+
+### C. MCP servers (tùy chọn dev tooling, cũng per-máy)
+
+CLAUDE.md/agent nhắc `codegraph`, `code-review-graph`, `rtk`, `serena`… — đây là
+MCP server / CLI cài riêng, không trong repo. Không có chúng thì agent tự rơi về
+Grep/Read/git thường (chậm hơn, vẫn hoạt động). Cài lại nếu tiếp tục dev nặng trên
+Ubuntu; không cần cho việc chỉ chạy pipeline.
+
+## 6. Bẫy đã biết (từ buglog)
 
 - **Disk chậm/USB**: bug-470 — asset validation từng quét SHA256 cả library. Đã
   fix (cache + score-first), nhưng máy mới nên để `asset_library/` trên SSD nội bộ.

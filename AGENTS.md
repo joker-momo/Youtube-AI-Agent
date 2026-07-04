@@ -70,6 +70,22 @@ canonical project policy and the harness-specific file as an adapter. Do not
 weaken the prime directive, OpenWolf protocol, skill-routing policy, dirty
 worktree safety, or verification requirements in any harness-specific adapter.
 
+## Bug Verification Gate
+
+When a bug is handed from Codex to Claude Code via `.agent/bridge`, Claude's
+`fixed` reply is not final completion. The bridge records Claude fixes as
+`fixed-pending-codex`; the bug counts as complete only after Codex independently
+verifies the evidence/artifacts/tests and runs:
+
+```bash
+rtk .venv/bin/python scripts/agent_bridge.py verify <task-id> \
+  --from codex --status verified \
+  --message "verified" --evidence "verification commands/artifact checks"
+```
+
+If verification fails, Codex reopens the task with `verify --status open` or
+`verify --status needs-info`. Do not treat `fixed-pending-codex` as done.
+
 ## Skill Orchestration Policy
 
 Use Superpowers as the operating system and `agent-skills` as the toolbox.

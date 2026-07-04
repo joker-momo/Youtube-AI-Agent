@@ -4,6 +4,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 from scripts import agent_bridge
 
 
@@ -79,11 +81,67 @@ def test_reply_updates_task_and_writes_codex_inbox(tmp_path: Path) -> None:
 
     assert rc == 0
     task = json.loads((tmp_path / ".agent/bridge/tasks" / f"{task_id}.json").read_text(encoding="utf-8"))
-    assert task["status"] == "fixed"
+    # Claude's "fixed" is not final -- the verification gate (bug-460) demotes
+    # it to fixed-pending-codex until the reporter verifies it.
+    assert task["status"] == "fixed-pending-codex"
+    assert task["awaiting_verification_by"] == task["reporter"]
     assert task["replies"][0]["from"] == "claude"
     replies = sorted((tmp_path / ".agent/bridge/codex/inbox").glob("*.md"))
     assert len(replies) == 1
     assert "pytest passed" in replies[0].read_text(encoding="utf-8")
+
+
+def test_verify_by_reporter_marks_task_verified(tmp_path: Path) -> None:
+    _run(tmp_path, "report-bug", "--title", "Audit failed", "--summary", "A test failed.")
+    task_id = next((tmp_path / ".agent/bridge/tasks").glob("*.json")).stem
+    _run(
+        tmp_path, "reply", task_id, "--from", "claude", "--status", "fixed",
+        "--message", "Fixed root cause.", "--evidence", "pytest passed",
+    )
+
+    rc = _run(
+        tmp_path, "verify", task_id, "--from", "codex", "--status", "verified",
+        "--message", "Confirmed the fix.", "--evidence", "re-ran the suite",
+    )
+
+    assert rc == 0
+    task = json.loads((tmp_path / ".agent/bridge/tasks" / f"{task_id}.json").read_text(encoding="utf-8"))
+    assert task["status"] == "verified"
+    assert task["verified_by"] == "codex"
+    assert "awaiting_verification_by" not in task
+    assert task["replies"][-1]["from"] == "codex"
+    assert task["replies"][-1]["status"] == "verified"
+
+
+def test_verify_by_non_reporter_is_rejected(tmp_path: Path) -> None:
+    _run(tmp_path, "report-bug", "--from", "codex", "--to", "claude",
+         "--title", "Audit failed", "--summary", "A test failed.")
+    task_id = next((tmp_path / ".agent/bridge/tasks").glob("*.json")).stem
+    _run(
+        tmp_path, "reply", task_id, "--from", "claude", "--status", "fixed",
+        "--message", "Fixed root cause.", "--evidence", "pytest passed",
+    )
+
+    with pytest.raises(SystemExit):
+        _run(
+            tmp_path, "verify", task_id, "--from", "claude", "--status", "verified",
+            "--message", "Self-verifying.", "--evidence", "n/a",
+        )
+
+    task = json.loads((tmp_path / ".agent/bridge/tasks" / f"{task_id}.json").read_text(encoding="utf-8"))
+    assert task["status"] == "fixed-pending-codex"  # unchanged -- rejected before mutation
+
+
+def test_assignee_cannot_self_verify_via_reply(tmp_path: Path) -> None:
+    _run(tmp_path, "report-bug", "--from", "codex", "--to", "claude",
+         "--title", "Audit failed", "--summary", "A test failed.")
+    task_id = next((tmp_path / ".agent/bridge/tasks").glob("*.json")).stem
+
+    with pytest.raises(SystemExit):
+        _run(
+            tmp_path, "reply", task_id, "--from", "claude", "--status", "verified",
+            "--message", "Marking verified myself.", "--evidence", "n/a",
+        )
 
 
 def test_audit_creates_claude_task_on_failure(tmp_path: Path) -> None:

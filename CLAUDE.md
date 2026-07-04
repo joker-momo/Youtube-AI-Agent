@@ -52,6 +52,17 @@ All coding agents working in this project must obey the same project contract:
 
 If an agent can read more than one entrypoint, treat root `AGENTS.md` as the canonical project policy and the harness-specific file as an adapter. Do not weaken the prime directive, OpenWolf protocol, skill-routing policy, dirty worktree safety, or verification requirements in any harness-specific adapter.
 
+## Bug Verification Gate
+
+When Claude Code fixes a bug assigned through `.agent/bridge`, `--status fixed`
+means "ready for Codex verification", not final completion. The bridge records
+that state as `fixed-pending-codex`. A bug is complete only after Codex runs
+`scripts/agent_bridge.py verify <task-id> --from codex --status verified` with
+independent verification evidence.
+
+If Codex reopens the task with `verify --status open` or `needs-info`, continue
+from that feedback. Do not mark your own bug fix `verified` or `closed`.
+
 ---
 
 # Agent Workflow Policy

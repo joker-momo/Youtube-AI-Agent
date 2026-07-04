@@ -1,0 +1,22 @@
+{
+  "topic": "Guía práctica para organizar la alimentación después de los 60 mediante combinaciones cotidianas de proteínas, calcio, vitamina D, grasas saludables, fibra y micronutrientes que pueden apoyar simultáneamente el mantenimiento de la masa muscular, la salud ósea y la función cognitiva.",
+  "angle": "En lugar de presentar una lista de alimentos supuestamente imprescindibles, el vídeo mostrará cómo construir desayuno, comida y cena con una fórmula sencilla: una fuente de proteína, un alimento vegetal variado y un complemento rico en calcio o grasas saludables. Incluirá un menú de ejemplo y alternativas económicas para España y Latinoamérica, aclarando que ningún alimento aislado protege por sí solo músculos, huesos o memoria.",
+  "target_duration_sec": 780,
+  "duration_mode": "auto",
+  "duration_reason": "El tema requiere explicar tres áreas de salud relacionadas pero distintas, corregir el enfoque alarmista del título, presentar combinaciones prácticas para varias comidas y añadir precauciones médicas sin convertir el vídeo en una exposición excesivamente larga.",
+  "key_points": [
+    "Explicar por qué, después de los 60, importa más repartir fuentes de proteína entre las comidas que concentrarlas únicamente en la cena; mostrar opciones como huevos, pescado, legumbres, yogur natural, queso fresco, pollo o tofu.",
+    "Enseñar una fórmula visual para montar cada plato: proteína de calidad, verduras o fruta de distintos colores, una fuente de energía rica en fibra y una pequeña porción de grasas saludables.",
+    "Relacionar calcio y vitamina D con el cuidado de los huesos sin reducir la estrategia únicamente a beber leche; incluir lácteos, pescados con espina comestible, alimentos enriquecidos y otras alternativas adecuadas.",
+    "Presentar alimentos que pueden apoyar una dieta favorable para la salud cerebral, como pescado azul, aceite de oliva, frutos secos, legumbres, verduras de hoja y frutos rojos, evitando afirmar que previenen por sí solos la pérdida de memoria.",
+    "Construir un menú completo de un día con sustituciones económicas y adaptables: desayuno con proteína, comida basada en legumbres o pescado y cena sencilla con verduras y otra fuente proteica.",
+    "Advertir que la alimentación no sustituye el ejercicio de fuerza, la actividad diaria, el descanso ni una evaluación clínica cuando existe pérdida involuntaria de peso, debilidad creciente, caídas, dolor óseo o cambios de memoria.",
+    "Recomendar consultar con un médico o dietista-nutricionista antes de aumentar mucho la proteína, tomar suplementos o modificar la dieta si hay enfermedad renal, problemas de deglución, medicación relevante o necesidades nutricionales especiales."
+  ],
+  "title_seed": "🚨 SI TIENES MÁS DE 60 AÑOS ESTOS ALIMENTOS SON IMPRESCINDIBLES 🥗🧠 PROTEGEN MÚSCULO, HUESOS Y MEMORIA",
+  "target_keyword": "alimentos para mayores de 60 músculos huesos memoria",
+  "viewer_pain": "La persona sabe que debería comer mejor después de los 60, pero recibe listas contradictorias y no entiende cómo combinar alimentos reales durante el día para cuidar fuerza, huesos y claridad mental sin recurrir a dietas estrictas ni suplementos innecesarios.",
+  "thumbnail_hook": "3 PLATOS PARA CUIDARTE",
+  "idea_format": "Guía visual de composición de platos con menú de un día, sustituciones económicas y señales que requieren consulta profesional.",
+  "source": "manual_title_expansion"
+}

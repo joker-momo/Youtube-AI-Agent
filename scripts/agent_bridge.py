@@ -13,14 +13,25 @@ import re
 import shlex
 import subprocess
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 SCHEMA_VERSION = "2026-07-agent-bridge-v1"
 DEFAULT_BRIDGE_DIR = Path(".agent/bridge")
 VALID_AGENTS = {"codex", "claude"}
-VALID_STATUS = {"open", "claimed", "needs-info", "fixed", "wont-fix", "closed"}
+VALID_STATUS = {
+    "open",
+    "claimed",
+    "needs-info",
+    "fixed",
+    "fixed-pending-codex",
+    "verified",
+    "wont-fix",
+    "closed",
+}
+CLAUDE_DONE_STATUS = "fixed-pending-codex"
+FINAL_STATUSES = {"verified", "wont-fix", "closed"}
 DEFAULT_TIMEOUT_SEC = 300
 
 
@@ -48,7 +59,7 @@ def _repo_root() -> Path:
 
 
 def _now() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _slug(text: str, *, limit: int = 48) -> str:
@@ -135,6 +146,13 @@ After fixing or deciding, run:
 rtk .venv/bin/python scripts/agent_bridge.py reply {task["id"]} --from {task["assignee"]} --status fixed --message "what changed" --evidence "tests or command output"
 ```
 
+`--status fixed` from the assignee means `fixed-pending-codex`, not complete.
+The reporter must verify with:
+
+```bash
+rtk .venv/bin/python scripts/agent_bridge.py verify {task["id"]} --from {task["reporter"]} --status verified --message "verified" --evidence "verification commands/artifact checks"
+```
+
 If blocked, use `--status needs-info` and explain the missing input.
 """
 
@@ -162,6 +180,20 @@ def _markdown_reply(task: dict[str, Any], reply: dict[str, Any]) -> str:
 """
 
 
+def _append_reply(
+    paths: BridgePaths,
+    task: dict[str, Any],
+    reply: dict[str, Any],
+    *,
+    recipient: str,
+) -> Path:
+    task.setdefault("replies", []).append(reply)
+    _save_task(paths, task)
+    reply_path = paths.inbox(recipient) / f"{task['id']}-reply-{_slug(reply['from'])}.md"
+    _atomic_write(reply_path, _markdown_reply(task, reply))
+    return reply_path
+
+
 def create_task(
     paths: BridgePaths,
     *,
@@ -181,7 +213,7 @@ def create_task(
     if assignee not in VALID_AGENTS:
         raise SystemExit(f"Invalid assignee: {assignee}")
     _ensure_dirs(paths)
-    task_id = f"{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}-{_slug(title)}"
+    task_id = f"{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{_slug(title)}"
     task = {
         "schema_version": SCHEMA_VERSION,
         "id": task_id,
@@ -306,6 +338,58 @@ def cmd_reply(args: argparse.Namespace) -> int:
     if args.status not in VALID_STATUS:
         raise SystemExit(f"Invalid status: {args.status}")
     task = _load_task(paths, args.task_id)
+    if args.from_agent == task.get("assignee") and args.status in {"verified", "closed"}:
+        raise SystemExit(
+            "Only the reporting agent may verify/close a task. "
+            "Assignee fixes must use --status fixed, which becomes fixed-pending-codex."
+        )
+    if args.from_agent not in {task.get("assignee"), task.get("reporter")}:
+        raise SystemExit(
+            f"{args.from_agent} is neither reporter nor assignee for task {task['id']}"
+        )
+    task_status = args.status
+    if args.from_agent == task.get("assignee") and args.status == "fixed":
+        # Claude's "fixed" means "ready for Codex verification", not final done.
+        # Final completion requires `agent_bridge.py verify ... --status verified`
+        # from the reporter/Codex side.
+        task_status = CLAUDE_DONE_STATUS
+        task["awaiting_verification_by"] = task.get("reporter")
+        task["fix_reported_at"] = _now()
+    reply = {
+        "from": args.from_agent,
+        "status": task_status,
+        "message": args.message.strip(),
+        "evidence": (args.evidence or "").strip(),
+        "created_at": _now(),
+    }
+    task["status"] = task_status
+    recipient = task["reporter"] if args.from_agent == task.get("assignee") else task["assignee"]
+    reply_path = _append_reply(paths, task, reply, recipient=recipient)
+    print(f"Reply written -> {reply_path.relative_to(paths.root)}")
+    if task_status == CLAUDE_DONE_STATUS:
+        print(
+            "Status is fixed-pending-codex. This bug is not complete until "
+            "Codex verifies it with `agent_bridge.py verify ... --status verified`."
+        )
+    return 0
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    paths = BridgePaths(args.root)
+    if args.from_agent not in VALID_AGENTS:
+        raise SystemExit(f"Invalid from agent: {args.from_agent}")
+    if args.status not in {"verified", "open", "needs-info"}:
+        raise SystemExit("Verification status must be one of: verified, open, needs-info")
+    task = _load_task(paths, args.task_id)
+    if args.from_agent != task.get("reporter"):
+        raise SystemExit(
+            f"Only reporter {task.get('reporter')} may verify task {task['id']}."
+        )
+    if task.get("status") not in {CLAUDE_DONE_STATUS, "fixed", "needs-info", "open"}:
+        raise SystemExit(
+            f"Task {task['id']} is {task.get('status')}; expected fixed-pending-codex "
+            "before verification."
+        )
     reply = {
         "from": args.from_agent,
         "status": args.status,
@@ -313,13 +397,15 @@ def cmd_reply(args: argparse.Namespace) -> int:
         "evidence": (args.evidence or "").strip(),
         "created_at": _now(),
     }
-    task.setdefault("replies", []).append(reply)
     task["status"] = args.status
-    _save_task(paths, task)
-    recipient = task["reporter"]
-    reply_path = paths.inbox(recipient) / f"{task['id']}-reply-{_slug(args.from_agent)}.md"
-    _atomic_write(reply_path, _markdown_reply(task, reply))
-    print(f"Reply written -> {reply_path.relative_to(paths.root)}")
+    if args.status == "verified":
+        task["verified_by"] = args.from_agent
+        task["verified_at"] = _now()
+        task.pop("awaiting_verification_by", None)
+    else:
+        task["awaiting_fix_by"] = task.get("assignee")
+    reply_path = _append_reply(paths, task, reply, recipient=task["assignee"])
+    print(f"Verification written -> {reply_path.relative_to(paths.root)}")
     return 0
 
 
@@ -373,6 +459,14 @@ def build_parser() -> argparse.ArgumentParser:
     reply.add_argument("--message", required=True)
     reply.add_argument("--evidence", default="")
     reply.set_defaults(func=cmd_reply)
+
+    verify = sub.add_parser("verify", help="Reporter verifies an assignee fix")
+    verify.add_argument("task_id")
+    verify.add_argument("--from", dest="from_agent", required=True, choices=sorted(VALID_AGENTS))
+    verify.add_argument("--status", required=True, choices=["verified", "open", "needs-info"])
+    verify.add_argument("--message", required=True)
+    verify.add_argument("--evidence", default="")
+    verify.set_defaults(func=cmd_verify)
 
     return parser
 

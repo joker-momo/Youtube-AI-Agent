@@ -22,7 +22,7 @@ from video_agent.orchestrator.browser_client import (
     BrowserClientError,
     LoginRequiredFromWorker,
 )
-from video_agent.orchestrator.dag import DagScheduler
+from video_agent.orchestrator.dag import STAGE_DEPS, DagScheduler
 from video_agent.orchestrator.stages import (
     StageInputMissingError,
     auto_assets_chatgpt_stage,
@@ -44,7 +44,7 @@ from video_agent.orchestrator.stages._shared import set_dag_mode
 
 # Legacy auto_shorts_* stages are deprecated and intentionally NOT imported.
 # Shorts are produced by the sequential Shorts Autopilot (video_agent.shorts).
-from video_agent.utils.json_io import read_yaml
+from video_agent.utils.json_io import read_json, read_yaml
 from video_agent.utils.logging import EventLogger
 from video_agent.web.approval_flow import (
     APPROVAL_REQUIRED_STAGES,
@@ -74,6 +74,70 @@ def _actual_failed_stage(state) -> str:
     nothing is in_progress."""
     in_progress = [s.name for s in state.stages if s.status == "in_progress"]
     return in_progress[-1] if in_progress else state.current_stage
+
+
+def _whisper_timestamps_artifact_invalid_reason(job_dir: Path) -> str | None:
+    """None when ``whisper_timestamps.json`` exists and carries real, nonempty
+    word_segments for at least one scene; otherwise a human-readable reason.
+
+    A stage can be marked ``completed`` in job.json without its output actually
+    being usable (e.g. a future regression writes an empty/stub artifact, or
+    the file is deleted after completion). Status alone isn't proof the
+    subtitle-timing data the renderer needs actually exists — Codex's
+    verification of the first bug-462 fix caught exactly this gap: a synthetic
+    job with every dep marked 'completed' but no real whisper artifact still
+    passed the (status-only) gate."""
+    for candidate in (job_dir / "json" / "whisper_timestamps.json", job_dir / "whisper_timestamps.json"):
+        if not candidate.exists():
+            continue
+        try:
+            data = read_json(candidate)
+        except Exception as exc:
+            return f"whisper_timestamps.json unreadable ({exc})"
+        scenes = (data or {}).get("scenes") or []
+        if not scenes:
+            return "whisper_timestamps.json has no scenes"
+        if not any(s.get("word_segments") for s in scenes if isinstance(s, dict)):
+            return "whisper_timestamps.json exists but every scene has empty word_segments"
+        return None
+    return "whisper_timestamps.json is missing"
+
+
+def _assert_stage_deps_satisfied(job_dir: Path, stage_name: str) -> None:
+    """Raise if any of ``stage_name``'s declared STAGE_DEPS isn't 'completed',
+    or (for ``whisper_timestamps`` specifically) isn't backed by a real,
+    nonempty artifact.
+
+    ``render`` depends on ``whisper_timestamps`` (among others) per
+    ``dag.STAGE_DEPS``, but render/render_continuity_qa/review run OUTSIDE
+    DagScheduler (only the parallel DAG lane's own subset enforces deps) —
+    they were previously gated only on "not yet completed" membership in
+    ``remaining``, with no check that their real dependencies actually
+    succeeded. A dependency that silently failed inside the DAG lane (bug-461)
+    let render proceed on stale/incomplete data (e.g. render_props.json with
+    zero word_segments because whisper_timestamps never got to write them).
+    Status alone is not sufficient proof of that (bug-462 verification gap) —
+    whisper_timestamps additionally needs its artifact content checked, since
+    ``pipeline.render_operator_job`` silently no-ops the word_segments merge
+    when the file is missing/empty rather than raising. Call this right before
+    dispatching a stage that has cross-lane deps."""
+    state = load_job(job_dir)
+    deps = STAGE_DEPS.get(stage_name, [])
+    unmet: list[str] = []
+    for dep in deps:
+        dep_state = next((s for s in state.stages if s.name == dep), None)
+        if dep_state is None:
+            continue
+        if dep_state.status != "completed":
+            unmet.append(f"{dep} (status={dep_state.status}, error={dep_state.error!r})")
+        elif dep == "whisper_timestamps":
+            reason = _whisper_timestamps_artifact_invalid_reason(job_dir)
+            if reason is not None:
+                unmet.append(f"{dep} (status=completed, but {reason})")
+    if unmet:
+        raise StageInputMissingError(
+            f"Cannot run {stage_name}: dependency not completed -- " + "; ".join(unmet)
+        )
 
 
 def is_run_locked(job_dir: Path) -> bool:
@@ -620,10 +684,23 @@ async def _execute_run_all_locked(
                 )
                 if s in remaining
             ]
-            await asyncio.gather(
+            _, _dag_results = await asyncio.gather(
                 _chatgpt_lane(),
                 DagScheduler().run(_local_subset, _run_local),
             )
+            # DagScheduler catches per-stage exceptions internally so ONE lane's
+            # failure never cancels an independent lane, but its result dict used
+            # to be discarded here -- a failed stage (e.g. whisper_timestamps
+            # timing out) stayed job.json-"pending" forever with no error
+            # recorded, and nothing downstream checked it before rendering
+            # anyway (bug-461). Persist the real outcome now.
+            for _stage_name, _outcome in _dag_results.items():
+                if _outcome == "failed":
+                    mark_stage_failed(
+                        job_dir, _stage_name,
+                        f"{_stage_name} failed inside the parallel DAG lane "
+                        "(see worker log 'DAG stage failed' for the traceback).",
+                    )
         else:
             if "visual_spans" in remaining:
                 _check_stop_requested()
@@ -695,6 +772,7 @@ async def _execute_run_all_locked(
                 )
         if "render" in remaining:
             _check_stop_requested()
+            _assert_stage_deps_satisfied(job_dir, "render")
             # Full pipeline ends with notify_job_done_with_files; skip per-render notify to avoid duplicates.
             await _record("render", run_render_stage(job_dir, channel_path, notify_telegram=False))
         if "render_continuity_qa" in remaining:
@@ -708,8 +786,8 @@ async def _execute_run_all_locked(
         if "review" in remaining:
             _check_stop_requested()
             await _record("review", run_review_stage(job_dir))
-            # Emit a machine-readable long-form review verdict so the Shorts
-            # autopilot trigger (after_review_passed) has a stable PASS signal.
+            # Emit a machine-readable long-form review verdict for explicit
+            # Shorts workflows without auto-enqueuing Shorts from run_all.
             try:
                 from video_agent.shorts.review_verdict import write_review_verdict
 
@@ -717,19 +795,6 @@ async def _execute_run_all_locked(
             except Exception:
                 logging.getLogger(__name__).warning(
                     "write_review_verdict failed (non-fatal)", exc_info=True
-                )
-            # Shorts autopilot auto-trigger (new jobs): only on long Review PASS
-            # and when enabled. Fire-and-forget so the long pipeline returns.
-            try:
-                from video_agent.shorts.trigger import should_run_autopilot_after_review
-
-                if should_run_autopilot_after_review(job_dir, channel_config):
-                    from video_agent.web.routes.shorts import enqueue_shorts_autopilot
-
-                    enqueue_shorts_autopilot(job_dir, channel_config, force=False, client=client)
-            except Exception:
-                logging.getLogger(__name__).warning(
-                    "Shorts autopilot auto-trigger failed (non-fatal)", exc_info=True
                 )
     except StageInputMissingError as exc:
         state = load_job(job_dir)

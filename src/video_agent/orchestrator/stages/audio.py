@@ -12,6 +12,7 @@ from video_agent.orchestrator.stages._shared import (
     _complete_stage,
     _resolve_artifact,
     _run_blocking_with_timeout,
+    _start_stage,
     dag_mode,
 )
 from video_agent.runtime.providers import SubprocessAudioTaskProvider
@@ -43,6 +44,17 @@ def run_whisper_timestamps_stage(job_dir: Path) -> Path:
         raise StageInputMissingError(
             f"Cannot run whisper_timestamps stage from current_stage={state.current_stage!r}"
         )
+    # bug-469: this stage never called _start_stage, so started_at was always
+    # left to _complete_stage's cross-stage fallback (guess = the nearest
+    # EARLIER stage's completed_at). That guess is fine when stages run
+    # strictly sequentially, but graphic_images/thumbnail_image/whisper_timestamps/
+    # visual_schedule are dispatched concurrently by the DAG scheduler -- if the
+    # much-slower graphic_images/thumbnail_image stages hadn't finished yet
+    # (still completed_at=None) by the time whisper_timestamps completed, the
+    # fallback walked past them to a genuinely stale, unrelated stage's
+    # completed_at (observed: seo_qa's timestamp from a PREVIOUS day's run),
+    # making a ~2min transcription look like it took ~17 hours on the dashboard.
+    _start_stage(job_dir, "whisper_timestamps")
     if os.environ.get(_AUDIO_SUBPROCESS_ENV) != "1":
         from video_agent.orchestrator import stages as stages_pkg
 

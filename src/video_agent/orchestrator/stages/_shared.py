@@ -255,6 +255,15 @@ def _apply_stage_completion(job_dir: Path, stage_name: str):
             # No PENDING stage remains but later (already-completed) stages exist
             # (a re-run). Advance FORWARD so the next stage's guard passes.
             state.current_stage = state.stages[completed_idx + 1].name
+    elif not any(s.status not in {"completed", "skipped"} for s in state.stages):
+        # DAG-mode finalization: nothing maintains current_stage while lanes run
+        # concurrently, so a completed run_all could retain a stale mid-pipeline
+        # pointer (e.g. render_continuity_qa left over from a reset) forever --
+        # confusing the dashboard/timeline/automation into thinking the job is
+        # still mid-flight. Once EVERY stage is completed/skipped (this fires
+        # exactly once, on the last completion, so it cannot thrash concurrent
+        # lanes), park the pointer on the final stage of the pipeline.
+        state.current_stage = state.stages[-1].name
     state.updated_at = ts
     save_job(job_dir, state)
     return state

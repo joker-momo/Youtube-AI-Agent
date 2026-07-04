@@ -1102,7 +1102,10 @@ def test_http_run_all_success(
 
     def fake_whisper(job_dir):
         out = job_dir / "whisper_timestamps.json"
-        out.write_text('{"scenes":[]}', encoding="utf-8")
+        out.write_text(
+            json.dumps({"scenes": [{"scene_id": "scene-01", "audio_offset_sec": 0.0, "word_segments": [{"text": "hola", "start": 0.0, "end": 0.4}]}]}),
+            encoding="utf-8",
+        )
         from video_agent.orchestrator.stages import _complete_stage
 
         _complete_stage(job_dir, "whisper_timestamps", out)
@@ -1226,7 +1229,10 @@ def test_http_run_all_requires_idea_research_confirmation(
 
     def fake_whisper(job_dir):
         out = job_dir / "whisper_timestamps.json"
-        out.write_text('{"scenes":[]}', encoding="utf-8")
+        out.write_text(
+            json.dumps({"scenes": [{"scene_id": "scene-01", "audio_offset_sec": 0.0, "word_segments": [{"text": "hola", "start": 0.0, "end": 0.4}]}]}),
+            encoding="utf-8",
+        )
         from video_agent.orchestrator.stages import _complete_stage
 
         _complete_stage(job_dir, "whisper_timestamps", out)
@@ -1348,7 +1354,10 @@ def test_http_run_all_resumes_from_current_pending_stage(
 
     def fake_whisper(job_dir):
         out = job_dir / "whisper_timestamps.json"
-        out.write_text('{"scenes":[]}', encoding="utf-8")
+        out.write_text(
+            json.dumps({"scenes": [{"scene_id": "scene-01", "audio_offset_sec": 0.0, "word_segments": [{"text": "hola", "start": 0.0, "end": 0.4}]}]}),
+            encoding="utf-8",
+        )
         from video_agent.orchestrator.stages import _complete_stage
 
         _complete_stage(job_dir, "whisper_timestamps", out)
@@ -1463,7 +1472,10 @@ def test_http_run_all_opens_writing_session_when_resuming_at_seo_qa_rework(
 
     def fake_whisper(job_dir):
         out = job_dir / "whisper_timestamps.json"
-        out.write_text('{"scenes":[]}', encoding="utf-8")
+        out.write_text(
+            json.dumps({"scenes": [{"scene_id": "scene-01", "audio_offset_sec": 0.0, "word_segments": [{"text": "hola", "start": 0.0, "end": 0.4}]}]}),
+            encoding="utf-8",
+        )
         from video_agent.orchestrator.stages import _complete_stage
 
         _complete_stage(job_dir, "whisper_timestamps", out)

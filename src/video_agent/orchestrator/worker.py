@@ -71,6 +71,19 @@ def _is_retryable_exception(exc: Exception) -> bool:
     return True
 
 
+def _maybe_trigger_shorts_autopilot(
+    *, job_id: str, job_dir: Path, channel_path: Path, client: BrowserClient, command: str
+) -> None:
+    """Long-form completion must not enqueue Shorts automatically.
+
+    Shorts generation remains available through the explicit Shorts routes and
+    queue commands. Keeping long ``run_all`` completion as the end of the long
+    pipeline prevents a finished long video from immediately starting another
+    browser/render workload under the same job id.
+    """
+    return
+
+
 def _dispatch_queue_job(
     job: dict,
     *,
@@ -648,6 +661,10 @@ def run_worker_loop(db_path: Path) -> None:
                     )
                     logger.info(f"Successfully finished job {job_id}.")
                     queue.mark_completed(job_id)
+                    _maybe_trigger_shorts_autopilot(
+                        job_id=job_id, job_dir=job_dir, channel_path=channel_path,
+                        client=client, command=command,
+                    )
                 except Exception as e:
                     logger.error(f"Job {job_id} failed with exception: {e}", exc_info=True)
                     if _is_retryable_exception(e) and queue.mark_retry(job_id, str(e)):

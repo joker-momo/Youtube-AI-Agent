@@ -247,14 +247,29 @@ async def _auto_run_then_promote(
             import logging
             logger = logging.getLogger("video_agent.orchestrator.stages")
             logger.warning(
-                "Promote attempt %d failed for %s, re-sending prompt. Error: %s",
+                "Promote attempt %d failed for %s, sending repair prompt. Error: %s",
                 attempt + 1,
                 promote_stage_name,
                 exc,
             )
 
-            # Re-send the prompt
-            raw_response = await session_fn([task])
+            # Send a targeted repair instead of blindly re-sending the identical
+            # task: the real job_id/channel_id are only stated ONCE, in the
+            # initial briefing, never repeated in the per-stage task prompt. If
+            # the model gets a field wrong (e.g. copying idea.source into
+            # job_id — bug-457), re-sending the same prompt just has it repeat
+            # its own prior wrong answer from conversation history every time,
+            # burning all retries on the identical mistake. Stating the exact
+            # failure plus the correct pinned values lets it self-correct.
+            repair_msg = (
+                f"Tu respuesta anterior para {promote_stage_name} tiene un error "
+                f"que bloquea la promoción:\n{exc}\n\n"
+                f'Usa EXACTAMENTE job_id="{state.job_id}" y channel_id="{state.channel_id}" '
+                "(no copies ningún otro valor del contexto, como el campo 'source' de la idea). "
+                "Reenvía el JSON COMPLETO corregido en un único bloque ```json, empezando por "
+                "la misma línea // FILE: de antes, con el resto del contenido igual salvo la corrección."
+            )
+            raw_response = await session_fn([repair_msg])
             if not isinstance(raw_response, str) or not raw_response.strip():
                 raise StageInputMissingError(
                     "browser-worker returned an empty response during retry for "

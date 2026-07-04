@@ -63,7 +63,7 @@ def test_stage_samples_video_at_intro_shifted_frames(tmp_path, monkeypatch):
 
     captured = {}
 
-    def _fake_sample(video, frames, total, *, frame_offset=0):
+    def _fake_sample(video, frames, total, *, frame_offset=0, fps=0.0):
         captured["frames"] = list(frames)
         captured["frame_offset"] = frame_offset
         # luma indexed by unshifted scene-layer frame; non-black everywhere.

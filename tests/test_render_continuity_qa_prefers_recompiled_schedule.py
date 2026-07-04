@@ -51,7 +51,7 @@ def _job(job_dir, job_id: str) -> None:
 def _capture_sample(monkeypatch) -> dict:
     captured: dict = {}
 
-    def _fake_sample(video, frames, total, *, frame_offset=0):
+    def _fake_sample(video, frames, total, *, frame_offset=0, fps=0.0):
         captured["frames"] = list(frames)
         captured["total"] = total
         return [128.0] * (total + 1)  # non-black everywhere

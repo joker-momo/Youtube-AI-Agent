@@ -105,50 +105,80 @@ def _intro_offset_frames(job_dir: Path) -> int:
     return 0
 
 
+def _render_fps(job_dir: Path) -> float:
+    """``render.fps`` from render_props.json, or 0 if unavailable."""
+    for candidate in (job_dir / "json" / "render_props.json", job_dir / "render_props.json"):
+        if not candidate.exists():
+            continue
+        try:
+            rp = read_json(candidate) or {}
+        except Exception:
+            return 0.0
+        return float(((rp.get("render") or {}).get("fps")) or 0.0)
+    return 0.0
+
+
 def _sample_luma(
-    video: Path, frames: list[int], total: int, *, frame_offset: int = 0
+    video: Path, frames: list[int], total: int, *, frame_offset: int = 0, fps: float = 0.0
 ) -> list[float] | None:
     """Mean luma for the requested SCENE-LAYER frame indices (others default to a
     non-black sentinel). The rendered video is sampled at ``index + frame_offset``
     (the intro shift) but values are stored at the unshifted scene-layer index, so
-    :func:`analyze_span_continuity` stays pure. Returns None when ffmpeg/PIL is
-    unavailable."""
-    if not frames or not shutil.which("ffmpeg"):
+    :func:`analyze_span_continuity` stays pure. Returns None when ffmpeg/PIL/fps is
+    unavailable, or when any requested frame can't be extracted (fail safe: skip
+    the QA rather than emit a verdict built on a wrong/missing frame).
+
+    Each frame is extracted with its own ffmpeg seek (fast input-seek `-ss` before
+    `-i`, falling back to a slower but reliable output-seek `-ss` after `-i` if the
+    fast path misses — same two-tier approach as ``video_agent.shorts.render_continuity_qa
+    .boundary_luma``) instead of one sequential ``select`` scan across the whole
+    file. A single scan forces ffmpeg to decode every frame from 0 up to the LAST
+    requested index — on a long video with late span-internal boundaries this
+    blew past ffmpeg's timeout and silently skipped the QA (bug-458). Per-frame
+    seeking is fps-independent of clip length: each requested frame costs one
+    (typically instant, since this project's render is all-intra / -g 1) seek."""
+    if not frames or fps <= 0 or not shutil.which("ffmpeg"):
         return None
     try:
         from PIL import Image  # optional dep
     except Exception:
         return None
     wanted = sorted(set(frames))
-    select = "+".join(f"eq(n\\,{f + frame_offset})" for f in wanted)
     tmp = video.parent / "_continuity_tmp"
     if tmp.exists():
         shutil.rmtree(tmp, ignore_errors=True)
     tmp.mkdir(parents=True, exist_ok=True)
+
+    def _extract(jpg: Path, ts: float, *, accurate: bool) -> bool:
+        if accurate:
+            cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                   "-i", str(video), "-ss", f"{ts:.5f}", "-frames:v", "1", str(jpg)]
+        else:
+            cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                   "-ss", f"{ts:.5f}", "-i", str(video), "-frames:v", "1", str(jpg)]
+        subprocess.run(cmd, capture_output=True, timeout=30)
+        return jpg.exists() and jpg.stat().st_size > 0
+
     try:
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", str(video), "-vf", f"select='{select}'",
-             "-vsync", "0", str(tmp / "%05d.png")],
-            check=True, capture_output=True, timeout=300,
-        )
-        pngs = sorted(tmp.glob("*.png"))
-        # The png -> frame mapping below is POSITIONAL: png[i] is assumed to be
-        # wanted[i]. That holds only when ffmpeg emitted exactly one frame per
-        # requested index (CFR render + every index in range). On any mismatch (a
-        # dropped/duplicated frame on VFR input, or an out-of-range request) the
-        # indices shift and every subsequent boundary would be read off the wrong
-        # frame -> silent false continuity verdict. Fail safe: skip the QA rather
-        # than emit a wrong verdict.
-        if len(pngs) != len(wanted):
-            return None
         luma = [128.0] * max(total, (max(wanted) + 1))
-        for idx, png in enumerate(pngs):
-            with Image.open(png) as im:
+        for f in wanted:
+            shifted = f + frame_offset
+            ts = max(0.0, shifted / fps)
+            jpg = tmp / f"f-{f}.png"
+            ok = _extract(jpg, ts, accurate=False)
+            if not ok:
+                # Fast input-seek can miss (approximate, especially near EOF);
+                # retry with an accurate output-seek before giving up on this frame.
+                jpg.unlink(missing_ok=True)
+                ok = _extract(jpg, ts, accurate=True)
+            if not ok:
+                return None
+            with Image.open(jpg) as im:
                 gray = im.convert("L")
                 hist = gray.histogram()
                 pixels = sum(hist) or 1
                 mean = sum(i * c for i, c in enumerate(hist)) / pixels
-            luma[wanted[idx]] = mean
+            luma[f] = mean
         return luma
     except Exception:
         return None
@@ -170,17 +200,36 @@ def _find_rendered_video(job_dir: Path) -> Path | None:
 
 
 def _qa_schedule(job_dir: Path, sched_path: Path) -> dict | None:
-    """The asset schedule the renderer actually consumed.
+    """The asset schedule to check continuity against.
 
-    Enforced renders recompile the schedule from the FINAL post-TTS scene
-    durations and embed it in ``render_props.json`` under ``visual_schedule``
-    (see ``pipeline._attach_enforced_visual_schedule``). The on-disk
-    ``compiled_asset_schedule.json`` is the ``visual_schedule`` stage output,
-    compiled *before* render-time duration sync, so its ``scene_boundaries`` are
-    stale by render time. Sampling luma at stale boundaries inspects the wrong
-    frames -> false continuity verdicts. Prefer the embedded schedule so QA reads
-    the same boundaries the renderer drew; fall back to the on-disk artifact
-    (report_only / legacy jobs / older runs without the embedded copy)."""
+    The on-disk ``compiled_asset_schedule.json`` (visual_schedule stage output)
+    is compiled *before* render-time TTS duration sync, so its
+    ``scene_boundaries`` are stale by render time — sampling luma at a stale
+    boundary inspects the wrong frame (false continuity verdict), and on
+    real TTS drift a late boundary can even point PAST THE END of the actual
+    rendered video, silently skipping the whole QA (bug-459).
+
+    Recompile a fresh schedule from the FINAL post-TTS ``scenes.json`` first,
+    using the same logic ``pipeline._attach_enforced_visual_schedule`` uses for
+    "enforced" mode renders (``pipeline._recompile_asset_schedule``) — this
+    works regardless of ``visual.span_planning.mode``, since all it needs
+    (``visual_spans.json`` + the final scenes) is on disk after any render.
+    Falls back to the render_props-embedded schedule (already recompiled, if an
+    enforced-mode render wrote one), then to the raw on-disk artifact (legacy
+    jobs / recompile-input missing) as a last resort."""
+    try:
+        scenes_doc = read_json(_resolve_artifact(job_dir, ARTIFACT_SCENES, "scenes.json"))
+        scenes = (scenes_doc or {}).get("scenes") or []
+        fps = _render_fps(job_dir)
+        if scenes and fps > 0:
+            from video_agent.pipeline import _recompile_asset_schedule
+
+            recompiled = _recompile_asset_schedule(job_dir, scenes, int(fps))
+            if recompiled and recompiled.get("scene_boundaries"):
+                return recompiled
+    except Exception:
+        pass
+
     for candidate in (job_dir / "json" / "render_props.json", job_dir / "render_props.json"):
         if not candidate.exists():
             continue
@@ -234,11 +283,11 @@ def run_render_continuity_qa_stage(job_dir: Path, channel_path: Path | None = No
     intro_offset = _intro_offset_frames(job_dir)
     luma = _sample_luma(
         video, frames, int(schedule.get("total_duration_in_frames") or 0),
-        frame_offset=intro_offset,
+        frame_offset=intro_offset, fps=_render_fps(job_dir),
     )
     if luma is None:
         result = {"verdict": "PASS", "skipped": True,
-                  "reason": "luma sampling unavailable (ffmpeg/PIL)"}
+                  "reason": "luma sampling unavailable (ffmpeg/PIL/fps, or a frame failed extraction)"}
     else:
         result = analyze_span_continuity(luma, schedule)
 

@@ -15,9 +15,18 @@ live browser provider. A single image failure is non-fatal: the scene keeps no
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import os
+import time
 from pathlib import Path
 from typing import Any
 
+from video_agent.color_mix import (
+    resolve_topic_accent_color,
+    resolve_topic_background_color,
+    resolve_topic_text_color,
+)
 from video_agent.contracts import ARTIFACT_SCENES, ARTIFACT_SEO, EVENT_LOG, repo_root
 from video_agent.orchestrator.job_state import load_job
 from video_agent.orchestrator.stages._shared import (
@@ -29,7 +38,7 @@ from video_agent.orchestrator.stages._shared import (
 )
 from video_agent.storage.atomic import atomic_write_json
 from video_agent.style_dna import DEFAULT_STYLE as _DEFAULT_STYLE
-from video_agent.style_dna import is_valid_hex, load_style_dna
+from video_agent.style_dna import load_style_dna
 from video_agent.utils.json_io import read_json, read_yaml
 from video_agent.utils.logging import EventLogger
 from video_agent.visual.spans import GRAPHIC_LAYOUTS
@@ -37,6 +46,15 @@ from video_agent.visual.spans import GRAPHIC_LAYOUTS
 __all__ = ["run_graphic_images_stage"]
 
 _STAGE = "graphic_images"
+
+
+def _late_recovery_window_sec() -> float:
+    """How long (seconds) after a client-side generation failure the
+    end-of-stage sweep keeps waiting for the browser-worker's late server-side
+    PNG write. Observed lag in production: 123s (scene-27, Codex
+    20260704-130051). Read at run time so tests can set
+    GRAPHIC_LATE_RECOVERY_WINDOW_SEC=0 to skip the wait."""
+    return float(os.environ.get("GRAPHIC_LATE_RECOVERY_WINDOW_SEC", "180"))
 _PROMPT_PREFIX = (
     "Premium editorial illustration for a Spanish-language wellness video aimed at "
     "adults 45+. Calm, trustworthy, warm palette, clean modern typography. This image "
@@ -96,14 +114,23 @@ def _brand_style(style: dict[str, Any]) -> str:
     return (
         f"Brand style — {mood} editorial for a wellness channel for adults 45+ (NOT clickbait). "
         f"Use ONLY this brand palette (hex): background {bg}, primary panel {primary}, secondary "
-        f"{sec}, accent {accent}, text {text}. Set the text block on a SOFT panel/card in the "
-        f"primary colour {primary} (or the background {bg}) with high-contrast brand text — "
-        f"background {bg} on the primary {primary}, or text {text} on the background {bg} — using "
-        f"the accent {accent} or secondary {sec} ONLY as a small accent (one word, an underline, or "
-        "a marker icon). Do NOT use navy, pure black, stark white blocks, neon, or a harsh full-"
-        "bleed gradient. Lay it out as a calm, premium wellness-magazine card with generous "
-        "padding, rounded corners and a clear text hierarchy. Give the panel a soft drop shadow "
-        "and gentle depth so it feels premium and tactile, never flat. "
+        f"{sec}, accent {accent}, text {text}. Set the text block on a SOFT, LIGHT panel/card in "
+        f"the background colour {bg} (preferred — keeps the card feeling airy, calm and premium) "
+        f"with text {text} on top, generous negative space around the words. Only use the darker "
+        f"primary colour {primary} for a SMALL secondary element (a slim tag, label chip, or thin "
+        "divider) — never as the dominant panel fill, so the card never reads as a heavy solid "
+        f"colour block. Give the card a REFINED, deliberate accent touch in {accent} — a slim "
+        "colour rule/underline beneath the heading, a fine border line around the panel, or a "
+        "small colour tag/label — occupying roughly 5-10% of the card, clearly visible as an "
+        "intentional per-topic highlight but NEVER a bold solid block, banner, or ribbon that "
+        f"dominates the composition. Use {sec} only for small supporting icons/dividers. Do NOT "
+        "use navy, pure black, stark white blocks, neon, or a harsh full-bleed gradient. Keep the "
+        "composition airy: the panel/card must stay compact and must NOT crop or crowd the "
+        "background photo or its subject — leave the photo's main subject clearly visible with "
+        "generous breathing room, like a premium magazine pull-quote overlay, not a full-width "
+        "banner. Lay it out as a calm, premium wellness-magazine card with generous padding, "
+        "rounded corners and a clear text hierarchy. Give the panel a soft drop shadow and gentle "
+        "depth so it feels premium and tactile, never flat. "
     )
 
 
@@ -119,7 +146,15 @@ _CARD_KIND = {
     "myth": "a myth-versus-fact card: two stacked contrasting rows, a secondary-colour-cross 'Mito' row above an accent-check 'Realidad' row",
     "plate_map": "a top-down 'healthy plate' card: ONE round plate of real food, each component labelled DIRECTLY on/beside its section with a short marker line in the brand colours",
     "recipe_snapshot": "a recipe-snapshot card: 2-3 real food photos as clean side-by-side tiles, each with a short label — a practical example, not a text list",
-    "quote_portrait": "a magazine-style quote-portrait card: ONE large quotation beside a warm candid portrait of an adult 60+, editorial cover feel, no boxed text panel",
+    "quote_portrait": (
+        "a magazine-style quote-portrait card: ONE large quotation beside a warm candid "
+        "portrait of an adult 60+, editorial cover feel, no boxed text panel — but the "
+        "accent colour still needs a real, sizable presence without a panel to put a "
+        "ribbon on: render the opening quotation mark OVERSIZED and solid in the accent "
+        "colour (large enough to read as a deliberate graphic element, not a small glyph), "
+        "AND add a bold accent-coloured rule/bar beneath the quote spanning at least half "
+        "its width"
+    ),
     "evidence_nugget": "an evidence-nugget card: ONE number/fact as a large documentary-style lower-third over a real photo, serious and credible, minimal extra text",
     "do_dont": "a do-versus-don't card: TWO real photos side by side — the worse choice desaturated with a cross marker, the better choice bright with a check marker",
 }
@@ -278,6 +313,14 @@ def _graphic_prompt(
     return " ".join(parts).strip() or title or visual
 
 
+def _prompt_hash(prompt: str) -> str:
+    """Short stable hash of the effective prompt, used to detect when a
+    cached graphic PNG was generated from a DIFFERENT prompt/palette than the
+    current run would produce (bug-465) — e.g. seo.topic_accent_color changed
+    between runs. Not a security hash, just cheap change-detection."""
+    return hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
+
+
 def _publish_graphic(job_id: str, out_path: Path) -> str:
     """Copy a generated graphic into ``remotion/public/jobs/<job_id>/assets/`` and
     return the public-resolvable ``image_ref`` (``jobs/<job_id>/assets/<name>``).
@@ -320,24 +363,80 @@ async def run_graphic_images_stage(job_dir: Path, channel_path: Path | None, ima
     logger = EventLogger(job_dir / EVENT_LOG)
     assets_dir = job_dir / "assets"
     style = load_style_dna(channel_path)
-    # Per-video topic accent (chosen by ChatGPT in the seo stage, constrained to
-    # harmonize with the brand palette above) replaces ONLY the accent swatch so
-    # every video's cards still read as the same channel but each topic gets its
-    # own highlight colour instead of every video reusing one static brand accent.
+    # Per-video topic accent (chosen by ChatGPT in the seo stage) used to replace
+    # the brand accent swatch OUTRIGHT — a topic colour that clashes with the
+    # channel palette could make graphics look off-brand or jarring (bug-466).
+    # Blend it into the channel's OWN accent (OKLab space) instead: every video
+    # still reads as the same channel (anchor dominates, default 70%) while each
+    # topic gets its own highlight shade (30%), and a colour that would clash
+    # raw gets pulled back toward brand-safe territory rather than used as-is.
+    brand_anchor_color = (style.get("palette") or {}).get("accent") or _DEFAULT_STYLE["palette"]["accent"]
+    brand_background_color = (style.get("palette") or {}).get("background") or _DEFAULT_STYLE["palette"]["background"]
+    brand_text_color = (style.get("palette") or {}).get("text") or _DEFAULT_STYLE["palette"]["text"]
+    raw_topic_accent_color = None
     seo_path = _resolve_artifact(job_dir, ARTIFACT_SEO, "seo.json")
     if seo_path.exists():
         seo_doc = read_json(seo_path) or {}
-        topic_accent = seo_doc.get("topic_accent_color")
-        if is_valid_hex(topic_accent):
-            style = {**style, "palette": {**(style.get("palette") or {}), "accent": topic_accent}}
+        raw_topic_accent_color = seo_doc.get("topic_accent_color")
+    color_resolution = resolve_topic_accent_color(brand_anchor_color, raw_topic_accent_color)
+    # Background/text also flex per-video, reusing the SAME topic accent hex
+    # (no separate SEO field) but blended much lighter (12% vs the accent's
+    # 30%) since they're large-area colours where a heavy blend would drift
+    # the card off the channel's recognisable cream/text tone and risks
+    # eroding text/background contrast.
+    background_resolution = resolve_topic_background_color(brand_background_color, raw_topic_accent_color)
+    text_resolution = resolve_topic_text_color(brand_text_color, raw_topic_accent_color)
+    style = {
+        **style,
+        "palette": {
+            **(style.get("palette") or {}),
+            "accent": color_resolution["resolved_accent_color"],
+            "background": background_resolution["resolved_background_color"],
+            "text": text_resolution["resolved_text_color"],
+        },
+    }
     # Card typography is locked to Montserrat to match the Remotion subtitle font
     # (one typeface across the whole video). Overrides any style-DNA headline font.
     font = "Montserrat"
     brand = _brand_style(style)
     channel_name = _load_channel_name(channel_path)
 
+    effective_palette = dict(style.get("palette") or {})
     generated = 0
     failed = 0
+    def _stamp_graphic(scene: dict, scene_id: str, out_path: Path, prompt_hash: str) -> dict:
+        """Persist the full per-scene graphic metadata block (image_ref, prompt
+        hash, resolved colour trail) — shared by the reuse, fresh-generation and
+        late-recovery paths so the three can never drift apart."""
+        existing = scene.get("graphic") if isinstance(scene.get("graphic"), dict) else {}
+        graphic = dict(existing)
+        graphic.pop("failed", None)
+        graphic.pop("error", None)
+        graphic["needed"] = True
+        graphic["image_ref"] = _publish_graphic(state.job_id, out_path)
+        graphic["prompt_hash"] = prompt_hash
+        graphic["effective_palette"] = effective_palette
+        graphic["raw_topic_accent_color"] = color_resolution["raw_topic_accent_color"]
+        graphic["brand_anchor_color"] = color_resolution["brand_anchor_color"]
+        graphic["resolved_accent_color"] = color_resolution["resolved_accent_color"]
+        graphic["mix_ratio"] = color_resolution["mix_ratio"]
+        graphic["brand_background_color"] = background_resolution["brand_background_color"]
+        graphic["resolved_background_color"] = background_resolution["resolved_background_color"]
+        graphic["background_mix_ratio"] = background_resolution["mix_ratio"]
+        graphic["brand_text_color"] = text_resolution["brand_text_color"]
+        graphic["resolved_text_color"] = text_resolution["resolved_text_color"]
+        graphic["text_mix_ratio"] = text_resolution["mix_ratio"]
+        scene["graphic"] = graphic
+        return graphic
+
+    # Failed generations kept for the end-of-stage late-recovery sweep. The
+    # browser-worker often finishes and writes the PNG a minute or two AFTER
+    # the client-side request already failed (observed: scene-27 request
+    # failed 09:50:40Z, valid PNG landed 09:52:43Z) — without the sweep that
+    # finished card is silently abandoned and the scene downgrades to a plain
+    # video background (Codex bridge 20260704-130051).
+    pending_failures: list[dict[str, Any]] = []
+
     for scene in scene_doc.get("scenes") or []:
         if not _wants_graphic(scene):
             continue
@@ -347,16 +446,31 @@ async def run_graphic_images_stage(job_dir: Path, channel_path: Path | None, ima
             failed += 1
             logger.log("SCENE_GRAPHIC_SKIPPED", {"scene_id": scene_id, "reason": "no_prompt"})
             continue
+        prompt_hash = _prompt_hash(prompt)
         out_path = assets_dir / f"graphic-{scene_id}.png"
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        # Idempotent / resumable: if a prior run already produced this image,
-        # record the ref and skip the (slow, paid) regeneration. Lets the stage
-        # resume after an interruption without re-generating every graphic.
-        if out_path.exists() and out_path.stat().st_size > 0:
-            graphic = scene.get("graphic") if isinstance(scene.get("graphic"), dict) else {}
-            graphic["needed"] = True
-            graphic["image_ref"] = _publish_graphic(state.job_id, out_path)
-            scene["graphic"] = graphic
+        existing_graphic = scene.get("graphic") if isinstance(scene.get("graphic"), dict) else {}
+        stored_hash = existing_graphic.get("prompt_hash")
+        # A cached PNG is stale when it was generated from a DIFFERENT prompt/
+        # palette than this run would produce (e.g. seo.topic_accent_color
+        # changed between runs, bug-465) — regenerate instead of silently
+        # shipping the OLD colour treatment. A MISSING stored hash counts as
+        # stale too (bug-468): a scene with no prompt_hash yet has no proof
+        # its cached PNG matches the CURRENT prompt logic, and this stage only
+        # ever re-runs on a job when a human deliberately resets it (job.json
+        # stages are otherwise skipped once "completed") -- so "no hash on
+        # record" here means "please verify/regenerate", never "leave
+        # untouched". Treating it as fresh silently shipped stale images with
+        # scenes.json metadata falsely claiming the NEW palette (real incident,
+        # 2026-07-03: all 22 graphics reused pre-bug-465 PNGs while resolved_*
+        # fields were overwritten with the current run's colours).
+        is_stale = stored_hash != prompt_hash
+        # Idempotent / resumable: if a prior run already produced this image
+        # from the SAME prompt, record the ref and skip the (slow, paid)
+        # regeneration. Lets the stage resume after an interruption without
+        # re-generating every graphic.
+        if out_path.exists() and out_path.stat().st_size > 0 and not is_stale:
+            graphic = _stamp_graphic(scene, scene_id, out_path, prompt_hash)
             generated += 1
             logger.log(
                 "SCENE_GRAPHIC_GENERATED",
@@ -364,6 +478,12 @@ async def run_graphic_images_stage(job_dir: Path, channel_path: Path | None, ima
             )
             atomic_write_json(scenes_path, scene_doc)
             continue
+        if is_stale:
+            logger.log(
+                "SCENE_GRAPHIC_STALE",
+                {"scene_id": scene_id, "reason": "prompt_hash_changed", "old_hash": stored_hash, "new_hash": prompt_hash},
+            )
+        pre_attempt_mtime_ns = out_path.stat().st_mtime_ns if out_path.exists() else None
         try:
             await image_fn(
                 prompt=_PROMPT_PREFIX + prompt,
@@ -371,18 +491,74 @@ async def run_graphic_images_stage(job_dir: Path, channel_path: Path | None, ima
                 out_path=str(out_path),
             )
         except Exception as exc:  # provider/transport error — non-fatal per scene
-            failed += 1
             logger.log("SCENE_GRAPHIC_FAILED", {"scene_id": scene_id, "error": str(exc)})
+            pending_failures.append({
+                "scene": scene,
+                "scene_id": scene_id,
+                "out_path": out_path,
+                "prompt_hash": prompt_hash,
+                "pre_attempt_mtime_ns": pre_attempt_mtime_ns,
+                "failed_at_monotonic": time.monotonic(),
+                "error": str(exc),
+            })
             continue
-        graphic = scene.get("graphic") if isinstance(scene.get("graphic"), dict) else {}
-        graphic["needed"] = True
-        graphic["image_ref"] = _publish_graphic(state.job_id, out_path)
-        scene["graphic"] = graphic
+        graphic = _stamp_graphic(scene, scene_id, out_path, prompt_hash)
         generated += 1
         logger.log("SCENE_GRAPHIC_GENERATED", {"scene_id": scene_id, "image_ref": graphic["image_ref"]})
         # Persist after each image (not just at loop end) so a live dashboard
         # can show cards as they land, and a hard crash mid-stage doesn't lose
         # already-generated image_refs.
+        atomic_write_json(scenes_path, scene_doc)
+
+    # ── Late-recovery sweep for failed generations (Codex 20260704-130051) ──
+    # A client-side "failed" request (timeout/5xx) often still completes
+    # server-side: the browser-worker downloads and writes the PNG minutes
+    # later. Adopt any such file that landed (fresh mtime) instead of
+    # abandoning a finished, paid-for card. Bounded wait: up to
+    # _LATE_RECOVERY_WINDOW_SEC after each failure, so a failure on the LAST
+    # scene still gets its chance without stalling the stage indefinitely.
+    for failure in pending_failures:
+        scene = failure["scene"]
+        scene_id = failure["scene_id"]
+        out_path: Path = failure["out_path"]
+
+        def _landed() -> bool:
+            if not out_path.exists() or out_path.stat().st_size == 0:
+                return False
+            if failure["pre_attempt_mtime_ns"] is None:
+                return True  # file did not exist before the attempt — any valid write is ours
+            return out_path.stat().st_mtime_ns > failure["pre_attempt_mtime_ns"]
+
+        deadline = failure["failed_at_monotonic"] + _late_recovery_window_sec()
+        while not _landed() and time.monotonic() < deadline:
+            await asyncio.sleep(10)
+
+        if _landed():
+            graphic = _stamp_graphic(scene, scene_id, out_path, failure["prompt_hash"])
+            generated += 1
+            logger.log(
+                "SCENE_GRAPHIC_RECOVERED_LATE",
+                {"scene_id": scene_id, "image_ref": graphic["image_ref"]},
+            )
+            atomic_write_json(scenes_path, scene_doc)
+            continue
+
+        failed += 1
+        # No recovery. If a PRE-EXISTING file is still sitting at out_path it
+        # is provably from a DIFFERENT prompt (it was stale — that is why we
+        # tried to regenerate) — delete it so audits never find an orphan PNG
+        # that scenes.json/render_props do not reference.
+        if out_path.exists() and failure["pre_attempt_mtime_ns"] is not None:
+            try:
+                out_path.unlink()
+                logger.log("SCENE_GRAPHIC_ORPHAN_REMOVED", {"scene_id": scene_id, "path": str(out_path)})
+            except OSError:
+                pass
+        # Stamp an explicit failure marker so downstream QA (visual_review)
+        # can flag the lost card instead of the scene silently downgrading
+        # to a plain video background.
+        existing = scene.get("graphic") if isinstance(scene.get("graphic"), dict) else {}
+        scene["graphic"] = {**existing, "needed": True, "failed": True, "error": failure["error"]}
         atomic_write_json(scenes_path, scene_doc)
 
     atomic_write_json(scenes_path, scene_doc)

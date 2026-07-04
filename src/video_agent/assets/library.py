@@ -43,6 +43,17 @@ class AssetLibrary:
         self.db_path = root / "metadata.db"
         self.root.mkdir(parents=True, exist_ok=True)
         self._init_db()
+        # bug-470: is_file_valid() used to re-hash the full file on EVERY call.
+        # Asset selection re-validates the same handful of popular library
+        # videos once per scene (85 scenes x up to 10 candidates), so the same
+        # file was being SHA256'd dozens of times per render -- a multi-hundred-MB
+        # library and 85 scenes turned this into 20+ minutes of pure re-hashing
+        # before Remotion even started. Cache the validation result per absolute
+        # path, keyed by (size, mtime_ns) so a genuine on-disk change (re-download,
+        # corruption, edit) still forces a real re-hash, but repeat checks of an
+        # unchanged file within this instance's lifetime (one asset-prep run) are
+        # instant.
+        self._valid_cache: dict[str, tuple[int, int, bool]] = {}
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.db_path)
@@ -216,7 +227,17 @@ class AssetLibrary:
 
     def is_file_valid(self, asset: dict[str, Any]) -> bool:
         path = self.root / asset["file_path"]
-        return path.exists() and _sha256(path) == asset["file_hash"]
+        try:
+            stat = path.stat()
+        except OSError:
+            return False
+        cache_key = str(path)
+        cached = self._valid_cache.get(cache_key)
+        if cached is not None and cached[0] == stat.st_size and cached[1] == stat.st_mtime_ns:
+            return cached[2]
+        is_valid = _sha256(path) == asset["file_hash"]
+        self._valid_cache[cache_key] = (stat.st_size, stat.st_mtime_ns, is_valid)
+        return is_valid
 
     def search_by_query(
         self,
@@ -253,12 +274,16 @@ class AssetLibrary:
             rows = db.execute(sql, params).fetchall()
 
         exclude = exclude_asset_ids or set()
+        # bug-470 follow-up: is_file_valid (full SHA256) used to run on EVERY
+        # non-excluded row BEFORE scoring -- the first search_by_query call in
+        # a run swept the entire library (1000+ videos, ~15GB) through the
+        # hasher and stalled asset prep for ~10 minutes on a USB disk. Score
+        # first (pure string work, no I/O), then validate only the ranked
+        # candidates top-down, stopping once `limit` valid ones are collected.
         scored: list[tuple[int, dict[str, Any]]] = []
         for row in rows:
             asset = dict(row)
             if asset["asset_id"] in exclude:
-                continue
-            if not self.is_file_valid(asset):
                 continue
             # Score: overlap between query terms and stored query + tags
             stored_text = " ".join(filter(None, [
@@ -271,7 +296,14 @@ class AssetLibrary:
                 scored.append((overlap, asset))
 
         scored.sort(key=lambda x: (-x[0], x[1]["use_count"]))
-        return [asset for _, asset in scored[:limit]]
+        results: list[dict[str, Any]] = []
+        for _, asset in scored:
+            if not self.is_file_valid(asset):
+                continue
+            results.append(asset)
+            if len(results) >= limit:
+                break
+        return results
 
     def store_photo(self, candidate: dict[str, Any], downloaded_path: Path, original_query: str) -> dict[str, Any]:
         provider = candidate["provider"]

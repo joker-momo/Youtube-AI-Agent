@@ -701,8 +701,22 @@ class StockSearchCore:
             try:
                 if self._candidate_budget_remaining(candidate_budget) <= 0:
                     break
-                exclude_ids = {asset_id for prov, asset_id in self.used_provider_ids if prov == provider}
+                # bug: used_provider_ids stores the LIBRARY-normalized provider
+                # name (e.g. "pexels", stripped of the "_video"/"_photo" search-
+                # endpoint suffix -- see _ensure_asset's "strip _video suffix for
+                # library lookup"), but `providers` here is the SEARCH-endpoint
+                # name (e.g. "pexels_video"). Comparing them directly always
+                # produced an empty exclude_ids, silently disabling the anti-
+                # repeat/diversity exclusion for every video-tier search --
+                # already-used clips could be (and were) picked again for a
+                # later scene in the SAME video.
+                normalized_provider = provider.replace("_video", "").replace("_photo", "")
+                exclude_ids = {
+                    asset_id for prov, asset_id in self.used_provider_ids
+                    if prov == provider or prov == normalized_provider
+                }
                 response = self.cache.get(provider, query, filters)
+                cached_unused_normalized: list[dict[str, Any]] | None = None
                 if response is not None:
                     normalized = self.stock_client.normalize(provider, response)
                     unused_normalized = [
@@ -711,6 +725,8 @@ class StockSearchCore:
                     ]
                     if not unused_normalized:
                         response = None
+                    else:
+                        cached_unused_normalized = unused_normalized
 
                 if response is None:
                     try:
@@ -721,8 +737,22 @@ class StockSearchCore:
                         else:
                             raise
                     self.cache.set(provider, query, filters, response, ttl_hours=ttl_hours)
+                # bug: a cache hit re-normalized the FULL cached response here,
+                # discarding the exclude_ids filtering done above (unused_normalized)
+                # -- an already-used asset (anti-repeat diversity) could win the
+                # ranking again and get reused across scenes in the SAME video.
+                # Reuse the already-filtered list on a cache hit; a fresh live
+                # search still needs normalizing (and its own exclude filter, in
+                # case the client doesn't honor exclude_ids server-side).
+                if cached_unused_normalized is not None:
+                    normalized = cached_unused_normalized
+                else:
+                    normalized = self.stock_client.normalize(provider, response)
+                    normalized = [
+                        c for c in normalized
+                        if str(c.get("provider_asset_id")) not in exclude_ids
+                    ]
                 provider_cap = int(self.asset_selection_config.get("max_asset_candidates_per_provider") or 12)
-                normalized = self.stock_client.normalize(provider, response)
                 cap = min(provider_cap, self._candidate_budget_remaining(candidate_budget))
                 candidates = self._rank_candidates(
                     query,

@@ -35,6 +35,7 @@ from video_agent.utils.validation import validate_json
 from video_agent.runtime.providers import AUDIO_SUBPROCESS_ENV, SubprocessAudioTaskProvider
 from video_agent.assets.materialize import materialize_media
 from video_agent.storage.atomic import atomic_write_text
+from video_agent.visual.spans import GRAPHIC_LAYOUTS
 
 _AUDIO_SUBPROCESS_ENV = AUDIO_SUBPROCESS_ENV
 
@@ -317,6 +318,52 @@ def _scene_visual_issues(scene: dict) -> list[dict]:
             }
         )
 
+    # Photo-backed background on a NON-graphic scene (bug-455 follow-up):
+    # the render already avoids treating this as a static slide (Ken Burns
+    # motion is applied), and the asset cascade already tries video before
+    # photo at every strictness tier, so this is not necessarily wrong — but
+    # the operator has no visibility into which scenes ended up on a still
+    # photo instead of real footage. Surface it as a warning (never blocks
+    # render) so it can be reviewed/re-selected if it recurs too often.
+    # Graphic-layout scenes are exempt: their living background is a
+    # secondary element behind a generated card, not the primary visual.
+    if scene.get("media_kind") == "image" and scene.get("layout") not in GRAPHIC_LAYOUTS:
+        issues.append(
+            {
+                "type": "PHOTO_BACKED_BACKGROUND",
+                "severity": "warning",
+                "message": (
+                    "Scene background resolved to a still photo, not real video "
+                    "footage (Ken Burns motion applied at render time, but no "
+                    "live b-roll)."
+                ),
+            }
+        )
+
+    # A graphic-layout scene whose designed card never materialized (image
+    # generation failed and the late-recovery sweep found nothing) silently
+    # downgrades to a plain video background — real footage, so not blocking,
+    # but the intended card treatment is lost quality the operator must see
+    # (Codex bridge 20260704-130051: scene-27 recipe_snapshot shipped without
+    # its card and QA still PASSed with zero signal).
+    graphic = scene.get("graphic") or {}
+    if (
+        scene.get("layout") in GRAPHIC_LAYOUTS
+        and graphic.get("needed") is not False
+        and not graphic.get("image_ref")
+    ):
+        detail = f" Generation error: {graphic.get('error')}" if graphic.get("failed") else ""
+        issues.append(
+            {
+                "type": "GRAPHIC_CARD_MISSING",
+                "severity": "warning",
+                "message": (
+                    f"Graphic-layout scene ({scene.get('layout')}) has no generated "
+                    f"card image — downgraded to a plain video background.{detail}"
+                ),
+            }
+        )
+
     asset_match_status = selection.get("asset_match_status") or (
         "weak_match" if selection.get("weak_match") else "unknown"
     )
@@ -452,6 +499,10 @@ def _write_visual_review(job_dir: Path, job_id: str, assets: dict, scene_doc: di
                 "provider_asset_id": scene_asset.get("provider_asset_id"),
                 "source_url": scene_asset.get("source_url"),
                 "asset_tier": scene_asset.get("asset_tier"),
+                "media_kind": scene_asset.get("media_kind"),
+                # Graphic-card outcome (image_ref / failed / error) so QA can
+                # flag a graphic-layout scene whose card never materialized.
+                "graphic": scene.get("graphic") if isinstance(scene.get("graphic"), dict) else None,
                 "asset_match_status": selection.get("asset_match_status"),
                 "query": selection.get("query"),
                 "selection": selection,
@@ -492,17 +543,34 @@ def _write_visual_review(job_dir: Path, job_id: str, assets: dict, scene_doc: di
     return review
 
 
-def _validate_visual_review(visual_review: dict) -> None:
-    has_critical_error = any(
-        issue.get("severity") == "error"
+def _validate_visual_review(visual_review: dict, *, render: bool = True) -> None:
+    # bug: this used to raise a single hardcoded message ("Weak match on
+    # critical scenes (hook/CTA)") regardless of which issue actually
+    # triggered the block -- e.g. a PLACEHOLDER_USED (no real asset found at
+    # all) got misreported as a weak-match problem, sending debugging down
+    # the wrong path entirely. Report every actual error-severity issue.
+    #
+    # The HARD GATE (user rule) is "never SHIP a video with a blank/placeholder
+    # scene" -- when render=False this run produces artifacts only (no video
+    # is ever rendered/shipped), so the gate has nothing to protect and must
+    # not block artifact-only/dry-run pipeline runs.
+    if not render:
+        return
+    error_issues = [
+        (scene.get("scene_id"), issue)
         for scene in visual_review.get("scenes", [])
         for issue in scene.get("qa", {}).get("issues", [])
-    )
-    if has_critical_error:
+        if issue.get("severity") == "error"
+    ]
+    if error_issues:
         from video_agent.orchestrator.stages import StageInputMissingError
 
+        details = "; ".join(
+            f"{scene_id}: {issue.get('type')} — {issue.get('message')}"
+            for scene_id, issue in error_issues
+        )
         raise StageInputMissingError(
-            "QA validation failed: Weak match on critical scenes (hook/CTA). "
+            f"QA validation failed: {details} "
             "Please check visual_review.json for details."
         )
 
@@ -779,7 +847,7 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
     write_json(job_dir / ARTIFACT_RENDER_PROPS, render_props)
     validate_json(render_props, root / "schemas/render-props.schema.json")
     visual_review = _write_visual_review(job_dir, job_id, assets, scene_doc)
-    _validate_visual_review(visual_review)
+    _validate_visual_review(visual_review, render=options.render)
 
     video_path = None
     if options.render:
@@ -1105,7 +1173,7 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
         validate_json(render_props, root / "schemas/render-props.schema.json")
 
         visual_review = _write_visual_review(job_dir, job_id, assets_manifest, scene_doc)
-        _validate_visual_review(visual_review)
+        _validate_visual_review(visual_review, render=options.render)
 
         video_path = None
         if options.render:
@@ -1201,7 +1269,7 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
     write_json(job_dir / ARTIFACT_RENDER_PROPS, render_props)
     validate_json(render_props, root / "schemas/render-props.schema.json")
     visual_review = _write_visual_review(job_dir, job_id, assets, scene_doc)
-    _validate_visual_review(visual_review)
+    _validate_visual_review(visual_review, render=options.render)
 
     video_path = None
     if options.render:

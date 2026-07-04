@@ -33,7 +33,10 @@ def test_pipeline_writes_structured_artifacts_without_render(tmp_path, monkeypat
     assert (result.job_dir / "json" / "scenes.json").exists()
     assert (result.job_dir / "json" / "assets_manifest.json").exists()
     assert (result.job_dir / "json" / "visual_review.json").exists()
-    assert (result.job_dir / "outputs" / "visual_contact_sheet.jpg").exists()
+    # visual_contact_sheet.jpg is no longer generated (create_visual_contact_sheet
+    # was removed from the render flow by the faceless-render refactor -- see
+    # test_shorts_render_handoff.py); visual_review["contact_sheet"] below is
+    # still just a path REFERENCE, not a promise the file exists.
     assert (result.job_dir / "json" / "render_props.json").exists()
     assert (result.job_dir / "json" / "seo.json").exists()
     assert (result.job_dir / "outputs" / "thumbnail.jpg").exists()

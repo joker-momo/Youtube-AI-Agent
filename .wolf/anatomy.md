@@ -1,7 +1,7 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-07-04T16:50:09.097Z
-> Files: 926 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-07-06T09:17:08.862Z
+> Files: 927 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../../../../Users/joker/.claude/
 
@@ -49,6 +49,10 @@
 ## ../../../../private/tmp/claude-501/-Volumes-DATA-YBT-Studio-Youtube-AI-Agent/2559679b-0a0a-49ff-ae6b-6848014498a8/scratchpad/
 
 - `carve_t3a.py` — T3a carve: move stateless stock helpers from service.py -> stock_core.py via AST. (~1165 tok)
+
+## ../../../../private/tmp/claude-501/-Volumes-DATA-YBT-Studio-Youtube-AI-Agent/314044c9-7442-40e0-8082-ba204e813db4/scratchpad/
+
+- `test_cta_only.py` — Isolated CTA test: run ONLY the short script stage (prompt + ChatGPT + (~806 tok)
 
 ## ../../../../private/tmp/claude-501/-Volumes-DATA-YBT-Studio-Youtube-AI-Agent/5150a21d-b4f6-4331-9e67-8115da2ce00c/scratchpad/
 
@@ -973,7 +977,7 @@
 - `operator_prompts.py` — Prompt template builders for operator ChatGPT/Gemini workflows. (~16636 tok)
 - `operator_validators.py` — class: is_valid, merge, format_report, load_operator_channel_config + 1 more (~4722 tok)
 - `operator.py` — Declares from (~12281 tok)
-- `pipeline.py` — Declares from (~15535 tok)
+- `pipeline.py` — Declares from (~16283 tok)
 - `style_dna.py` — Shared loader for ``configs/<channel>/style-dna.json`` — the single source of (~604 tok)
 - `thumbnail_planner.py` — Thumbnail prompt planner — spec v1.3. (~9686 tok)
 - `tts_melo_worker.py` — MeloTTS sidecar worker — runs inside the melo venv, driven over JSON-over-stdio. (~594 tok)
@@ -1058,7 +1062,7 @@
 - `llm_history.py` — Per-Short LLM call history recorder. (~3344 tok)
 - `llm.py` — Shorts AI role wiring (spec v6 §2 + §3). (~1754 tok)
 - `paths.py` — Canonical storage-layout paths for the Shorts autopilot. (~1728 tok)
-- `prompts.py` — Strict, JSON-only, Spain-first prompts for Short script / scene / QA generation. (~25366 tok)
+- `prompts.py` — Strict, JSON-only, Spain-first prompts for Short script / scene / QA generation. (~26481 tok)
 - `qa_common.py` — Shared QA classes, constants and leaf helpers. (~1986 tok)
 - `qa_normalize.py` — Normalize raw QA issues into structured NormalizedIssue records. (~9104 tok)
 - `qa_product_scores.py` — Product-score classification and Gemini scenes-QA normalization. (~3549 tok)
@@ -1126,7 +1130,7 @@
 - `issues.py` — Pre-acquisition validation for Shorts structured graphic intents (spec v7 §18). (~1167 tok)
 - `repairs.py` — repair_five_error_bread_payoff_layout, repair_missing_graphic_checklist_scene, repair_excess_graphic (~8097 tok)
 - `scene_structure.py` — Whole-short scene structure validation, repair plan & pacing. (~11273 tok)
-- `script_checks.py` — Script-level validation: word budget, candidate validation, checklist cap. (~3886 tok)
+- `script_checks.py` — Script-level validation: word budget, candidate validation, checklist cap. (~4800 tok)
 
 ## src/video_agent/stages/
 

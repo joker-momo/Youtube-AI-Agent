@@ -558,3 +558,9 @@ Short video gửi Telegram = PUBLISH MASTER: phải là file gốc (sendDocument
 
 ### 2026-07-02 (User Preference): Shorts không có cover
 Short KHÔNG có cover deliverable (YouTube Shorts bỏ qua custom thumbnail). Đã xoá toàn bộ chuỗi render_short_cover/SHORT_COVER_FILE/cover_fn/cover_path. Telegram package cho short = video gốc + SEO text, không ảnh. KHÔNG thêm lại cover cho short; thumbnail bypass (thumbnail_1.jpg + ShortCover comp trong render_props) vẫn giữ vì là contract nội bộ của render pipeline, không phải deliverable.
+
+### Key Learning (2026-07-06): bug-485 — placeholder gate vs enforced schedule + TREE WIPE warning
+- Render QA PLACEHOLDER_USED gate (pipeline.py) chặn theo per-scene BACKGROUND, nhưng shorts enforced-schedule render bằng TRACKS — background chỉ là lớp fallback ẩn. Scene được track thật phủ (schedule QA PASS + mode enforced) → hạ thành warning PLACEHOLDER_BACKGROUND_COVERED_BY_SPAN. Long-form/uncovered/report_only giữ hard gate. Đây là nguồn "render flaky" 4/7 lần (mỗi lần scene khác).
+- ⚠️ TREE WIPE incident: giữa session, pipeline.py bị reset về HEAD bởi tiến trình khác (mất cả fix bug-485 lẫn hunk cover_composition uncommitted của Codex). Bài học: commit NGAY sau khi verify — đừng để fix nằm uncommitted trên cây dùng chung nhiều agent.
+
+- Refinement (2026-07-06): CTA budget 8 tu la nguyen nhan fragment — nang funnel.cta_max_words=12 (config-driven moi site qua funnel_cta_max_words()); prompt ep beat cuoi noi dung cau cta. Verify bang isolated stage test (khong render) — user yeu cau: test co lap truoc, "dung ho ty la render".

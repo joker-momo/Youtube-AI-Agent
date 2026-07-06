@@ -17,7 +17,31 @@ FUNNEL = {
 def test_topic_resolves_from_pillar():
     assert funnel_topic_es({"pillar": "sleep"}) == "el sueño"
     assert funnel_topic_es({"pillar": "nutrition"}) == "la alimentación"
-    assert funnel_topic_es({"pillar": "unknown-x"}) == ""
+
+
+def test_topic_falls_back_to_keywords_when_pillar_missing():
+    """bug-484: many Short plans carry pillar=None; derive the topic from the
+    plan's text (title/hook/viewer_pain/narration) so the CTA still specializes."""
+    # olive-oil nutrition Short with NO pillar (the real failing case)
+    plan = {
+        "pillar": None,
+        "title": "Si te sienta mal, cambia",
+        "viewer_pain": "el aceite de oliva en ayunas le sienta mal",
+        "narration_seed": "Toma el aceite de oliva con comida.",
+    }
+    assert funnel_topic_es(plan) == "la alimentación"
+    # sleep Short, no pillar
+    assert funnel_topic_es({"hook_text": "No puedes dormir de noche"}) == "el sueño"
+    # a medical topic beats the generic 'la alimentación' when both hint
+    assert funnel_topic_es({"viewer_pain": "glucosa alta y diabetes"}) == "el azúcar"
+    # truly unknown -> empty (generic CTA)
+    assert funnel_topic_es({"title": "algo sin pistas claras"}) == ""
+
+
+def test_resolve_cta_specializes_without_pillar_via_keywords():
+    cta = resolve_funnel_cta(FUNNEL, {"pillar": None, "viewer_pain": "aceite de oliva"}, has_url=False)
+    assert cta == "Más sobre la alimentación en el canal."
+    assert len(cta.split()) <= 8
 
 
 def test_resolve_cta_substitutes_topic_within_word_budget():

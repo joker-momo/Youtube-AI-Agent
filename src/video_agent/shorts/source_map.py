@@ -27,14 +27,73 @@ _PILLAR_TOPIC_ES: dict[str, str] = {
 }
 
 
+# Keyword → topic fallback for when a Short plan carries no pillar (common —
+# bug-484). Accent-insensitive stems; scanned in order so a specific health topic
+# wins over generic "la alimentación", which is checked last.
+_TOPIC_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
+    ("la memoria", ("memoria", "cerebro", "olvid", "demencia", "alzheimer", "concentra")),
+    ("el sueno_ACCENT", ("dormir", "sueno", "insomnio", "descanso", "despertar", "de noche")),
+    ("la circulacion_ACCENT", ("circulaci", "presion", "corazon", "tension", "pantorrilla")),
+    ("el azucar_ACCENT", ("glucosa", "diabetes", "insulina", "prediabetes")),
+    ("la digestion_ACCENT", ("digesti", "intestino", "hinchazon", "estrenim", "fibra")),
+    ("el peso", ("adelgaz", "grasa", "cintura", "metabolismo", "barriga", "perder peso")),
+    ("las articulaciones", ("articulaci", "rodilla", "espalda", "cuello", "cadera", "rigidez")),
+    ("el musculo_ACCENT", ("musculo", "proteina", "sarcopenia", "fuerza")),
+    ("el movimiento", ("caminar", "movili", "ejercicio", "estirar", "andar", "paseo", "pasos")),
+    ("la energia_ACCENT", ("energia", "cansancio", "cansad", "fatiga", "agotam", "bajon")),
+    ("la calma", ("estres", "ansiedad", "calma", "nervios", "preocupa")),
+    ("la hidratacion_ACCENT", ("hidrata", "beber agua", "vaso de agua", "sed ")),
+    ("la alimentacion_ACCENT", (
+        "aceite", "oliva", "pan", "comer", "comida", "alimentaci", "plato",
+        "desayuno", "cena", "yogur", "fruta", "verdura", "dieta", "nutrici", "azucar",
+    )),
+]
+
+# Restore accents on the returned topic (kept accent-free above for readability).
+_TOPIC_ACCENTS = {
+    "el sueno_ACCENT": "el sueño",
+    "la circulacion_ACCENT": "la circulación",
+    "el azucar_ACCENT": "el azúcar",
+    "la digestion_ACCENT": "la digestión",
+    "el musculo_ACCENT": "el músculo",
+    "la energia_ACCENT": "la energía",
+    "la hidratacion_ACCENT": "la hidratación",
+    "la alimentacion_ACCENT": "la alimentación",
+}
+
+
+def _strip_accents(text: str) -> str:
+    import unicodedata
+
+    return "".join(
+        c for c in unicodedata.normalize("NFKD", str(text).lower())
+        if not unicodedata.combining(c)
+    )
+
+
 def funnel_topic_es(short_plan: dict) -> str:
-    """Resolve the Short's topic to a short Spanish noun, or '' when unknown."""
-    pillar = str(
-        (short_plan or {}).get("pillar")
-        or (short_plan or {}).get("detected_pillar")
-        or ""
-    ).strip().lower()
-    return _PILLAR_TOPIC_ES.get(pillar, "")
+    """Resolve the Short's topic to a short Spanish noun, or '' when unknown.
+
+    Prefers the explicit pillar; when it is missing/unmapped (bug-484), scans the
+    plan's text (title, hook, viewer pain, payoff, narration seed) for topic
+    keywords so the CTA still specializes."""
+    short_plan = short_plan or {}
+    pillar = str(short_plan.get("pillar") or short_plan.get("detected_pillar") or "").strip().lower()
+    if pillar in _PILLAR_TOPIC_ES:
+        return _PILLAR_TOPIC_ES[pillar]
+
+    haystack = _strip_accents(
+        " ".join(
+            str(short_plan.get(k) or "")
+            for k in ("title", "hook_text", "hook", "viewer_pain",
+                      "practical_payoff", "narration_seed", "topic")
+        )
+    )
+    if haystack.strip():
+        for topic, stems in _TOPIC_KEYWORDS:
+            if any(stem in haystack for stem in stems):
+                return _TOPIC_ACCENTS.get(topic, topic)
+    return ""
 
 
 def resolve_funnel_cta(funnel_cfg: dict, short_plan: dict, *, has_url: bool) -> str:

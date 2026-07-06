@@ -116,6 +116,19 @@ def test_script_prompt_forbids_content_repetition_and_enforces_pacing():
     assert "FORWARD MOMENTUM" in prompt
 
 
+def test_seo_prompt_thumbnail_text_uses_competitor_devices():
+    """Competitor thumbnail study (2026-07-06): imperative+age, negation command,
+    and count devices beat pure emotional hooks in the ES 45+/60+ niche."""
+    prompt = _chatgpt_seo_prompt(SPAIN_CONFIG, VALID_SCRIPT, VALID_SCENES)
+    assert "3-7 words" in prompt
+    assert "IMPERATIVE + AGE" in prompt
+    assert "NEGATION COMMAND" in prompt
+    assert "COUNT:" in prompt
+    assert "HAZ ESTO DESPUÉS DE LOS 50" in prompt
+    assert "use DIFFERENT devices" in prompt
+    assert "3-5 words ALL-CAPS Spanish emotional hook" not in prompt
+
+
 def test_script_prompt_varies_mechanism_opener():
     """The mechanism rule must not funnel every section into 'Esto ocurre porque'."""
     prompt = _chatgpt_script_prompt(SPAIN_CONFIG, {"topic": "dormir mejor"})

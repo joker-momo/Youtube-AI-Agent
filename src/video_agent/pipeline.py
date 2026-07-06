@@ -258,7 +258,7 @@ def _is_key_scene(scene: dict) -> bool:
     return False
 
 
-def _scene_visual_issues(scene: dict) -> list[dict]:
+def _scene_visual_issues(scene: dict, *, span_covered: bool = False) -> list[dict]:
     issues = []
     source = scene.get("source")
     provider = scene.get("provider")
@@ -271,17 +271,35 @@ def _scene_visual_issues(scene: dict) -> list[dict]:
     )
 
     if source == "generated_placeholder":
-        # HARD GATE (user rule): never ship a video with a blank/placeholder scene.
-        # A placeholder = no real asset was found → ERROR so _validate_visual_review
-        # blocks the render. Fix the asset (re-fetch) and re-render; do not render
-        # until EVERY scene has a real asset.
-        issues.append(
-            {
-                "type": "PLACEHOLDER_USED",
-                "severity": "error",
-                "message": "Scene fell back to a generated placeholder (no real asset) — render blocked.",
-            }
-        )
+        if span_covered:
+            # Shorts enforced-schedule path: a render-eligible background_media
+            # track (real native/AI asset, schedule QA PASS) fully covers this
+            # scene at render time, so the placeholder BACKGROUND is an unused
+            # fallback layer that never appears on screen. Blocking here was a
+            # false positive that killed otherwise-valid renders (bug-485).
+            issues.append(
+                {
+                    "type": "PLACEHOLDER_BACKGROUND_COVERED_BY_SPAN",
+                    "severity": "warning",
+                    "message": (
+                        "Background is a generated placeholder, but the enforced "
+                        "visual schedule covers this scene with a real asset track — "
+                        "the placeholder never renders."
+                    ),
+                }
+            )
+        else:
+            # HARD GATE (user rule): never ship a video with a blank/placeholder scene.
+            # A placeholder = no real asset was found → ERROR so _validate_visual_review
+            # blocks the render. Fix the asset (re-fetch) and re-render; do not render
+            # until EVERY scene has a real asset.
+            issues.append(
+                {
+                    "type": "PLACEHOLDER_USED",
+                    "severity": "error",
+                    "message": "Scene fell back to a generated placeholder (no real asset) — render blocked.",
+                }
+            )
         for error in scene.get("stock_errors") or []:
             issue_type = "STOCK_PROVIDER_ERROR"
             if "API_KEY is required" in error.get("message", ""):
@@ -454,11 +472,46 @@ def _is_contradictory(scene: dict, asset_selection: dict) -> bool:
     return False
 
 
-def _add_visual_qa(review: dict) -> dict:
+def _span_covered_scene_ids(job_dir: Path) -> set[str]:
+    """Scene ids fully covered by REAL background_media tracks of an ENFORCED,
+    QA-passed compiled visual schedule (Shorts only; long-form has no schedule).
+
+    Only these scenes may downgrade the placeholder-background gate: with the
+    enforced schedule the Remotion timeline renders the track assets, so the
+    per-scene background file is a hidden fallback layer.
+    """
+    schedule_path = job_dir / "json" / "compiled_asset_schedule.json"
+    qa_path = job_dir / "json" / "compiled_asset_schedule_qa.json"
+    if not schedule_path.exists() or not qa_path.exists():
+        return set()
+    try:
+        schedule = read_json(schedule_path)
+        schedule_qa = read_json(qa_path)
+    except Exception:
+        return set()
+    if str(schedule_qa.get("verdict")) != "PASS" or str(schedule_qa.get("mode")) != "enforced":
+        return set()
+    covered: set[str] = set()
+    for track in schedule.get("tracks") or []:
+        if str(track.get("track_type")) != "background_media":
+            continue
+        provider = str(track.get("provider") or "").lower()
+        asset_id = str(track.get("asset_id") or "").lower()
+        if provider == "graphic_fallback" or "placeholder" in asset_id:
+            continue
+        for sid in track.get("scene_ids") or []:
+            covered.add(str(sid))
+    return covered
+
+
+def _add_visual_qa(review: dict, *, span_covered_ids: set[str] | None = None) -> dict:
+    span_covered_ids = span_covered_ids or set()
     seen_assets = {}
     issue_count = 0
     for scene in review["scenes"]:
-        issues = _scene_visual_issues(scene)
+        issues = _scene_visual_issues(
+            scene, span_covered=str(scene.get("scene_id")) in span_covered_ids
+        )
         asset_key = scene.pop("asset_key", None)
         if asset_key:
             if asset_key in seen_assets:
@@ -537,7 +590,10 @@ def _write_visual_review(job_dir: Path, job_id: str, assets: dict, scene_doc: di
             "avg": round(sum(selection_scores) / len(selection_scores), 1),
             "max": max(selection_scores),
         }
-    review = _add_visual_qa({"job_id": job_id, "summary": summary, "scenes": scenes})
+    review = _add_visual_qa(
+        {"job_id": job_id, "summary": summary, "scenes": scenes},
+        span_covered_ids=_span_covered_scene_ids(job_dir),
+    )
     review["contact_sheet"] = ARTIFACT_VISUAL_CONTACT_SHEET
     write_json(job_dir / ARTIFACT_VISUAL_REVIEW, review)
     return review

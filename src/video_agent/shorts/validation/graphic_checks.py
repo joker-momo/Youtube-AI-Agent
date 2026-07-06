@@ -126,6 +126,64 @@ def graphic_repair_targets(
     return keep_ids, convert_ids
 
 
+def _repair_degenerate_graphic_payloads(
+    scenes: list[dict[str, Any]], warnings: list[str]
+) -> None:
+    """Deterministically repair layout/payload mismatches instead of killing the job.
+
+    The model occasionally picks a list layout for a single idea (bug-486: a
+    graphic_checklist with one item — valid content, wrong container — used to
+    raise and fail the whole Short after scenes QA had already passed). A single
+    valid entry downgrades the scene to ``graphic_quote_portrait`` (one featured
+    sentence); an oversized list is trimmed to the layout's maximum. Genuinely
+    empty/invalid payloads still fall through to the hard validators.
+    """
+    def _downgrade_to_quote(scene: dict, payload: dict, sid: Any, layout: str, text: str) -> None:
+        payload.pop("items", None)
+        payload.pop("steps", None)
+        payload["title"] = text.strip()[:_TITLE_MAX_PHASE15]
+        scene["layout"] = "graphic_quote_portrait"
+        warnings.append(
+            f"Scene {sid}: {layout} had a single entry — downgraded to "
+            "graphic_quote_portrait (one featured sentence)."
+        )
+
+    for index, scene in enumerate(scenes):
+        if not isinstance(scene, dict):
+            continue
+        sid = scene.get("id", index)
+        layout = scene.get("layout")
+        payload = scene.get("layout_payload")
+        if not isinstance(payload, dict):
+            continue
+
+        if layout == "graphic_checklist":
+            items = payload.get("items")
+            if isinstance(items, list):
+                valid = [i for i in items if isinstance(i, str) and i.strip()]
+                if len(valid) == 1:
+                    _downgrade_to_quote(scene, payload, sid, str(layout), valid[0])
+                elif len(valid) > 5:
+                    payload["items"] = valid[:5]
+                    warnings.append(
+                        f"Scene {sid}: checklist had {len(valid)} items — trimmed to 5."
+                    )
+        elif layout == "graphic_step_list":
+            steps = payload.get("steps")
+            if isinstance(steps, list):
+                valid_steps = [
+                    s for s in steps
+                    if isinstance(s, dict) and str(s.get("text") or "").strip()
+                ]
+                if len(valid_steps) == 1:
+                    _downgrade_to_quote(scene, payload, sid, str(layout), str(valid_steps[0].get("text")))
+                elif len(valid_steps) > 4:
+                    payload["steps"] = valid_steps[:4]
+                    warnings.append(
+                        f"Scene {sid}: step list had {len(valid_steps)} steps — trimmed to 4."
+                    )
+
+
 def validate_short_graphic_scenes(scenes: list[dict[str, Any]]) -> list[str]:
     """Validate graphic scenes in place. Raises ``ValueError`` on hard errors.
 
@@ -136,6 +194,7 @@ def validate_short_graphic_scenes(scenes: list[dict[str, Any]]) -> list[str]:
     warnings: list[str] = []
     graphic_count = 0
     is_bread_label_topic = _looks_like_bread_label_topic(scenes)
+    _repair_degenerate_graphic_payloads(scenes, warnings)
 
     for index, scene in enumerate(scenes):
         sid = scene.get("id", index)

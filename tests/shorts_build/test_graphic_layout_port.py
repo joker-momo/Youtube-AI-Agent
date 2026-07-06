@@ -148,3 +148,67 @@ def test_scene_prompt_v6_teaches_ported_layouts():
     src = inspect.getsource(short_scene_prompt_v6)
     for layout in PORTED_LAYOUTS:
         assert layout in src, f"short_scene_prompt_v6 must teach {layout}"
+
+
+# --- degenerate graphic payload repair (bug-486) -----------------------------
+
+def _scene(layout: str, payload: dict, sid: str = "s02") -> dict:
+    return {
+        "id": sid,
+        "layout": layout,
+        "visual_type": "graphic",
+        "duration_sec": 4.0,
+        "narration": "x",
+        "layout_payload": {
+            "variant": "warm_olive",
+            "visual_tone": "focus",
+            "background_mode": "video_blur",
+            "surface_style": "soft_card",
+            **payload,
+        },
+    }
+
+
+def test_one_item_checklist_downgrades_to_quote_instead_of_dying():
+    """The real failure (short-02 idea-02): model produced graphic_checklist with
+    a single item -> the validator raised and killed the whole job."""
+    from video_agent.shorts.validation.graphic_checks import validate_short_graphic_scenes
+
+    scene = _scene("graphic_checklist", {"title": "MIDE", "items": ["Mide tu cintura hoy"]})
+    warnings = validate_short_graphic_scenes([scene])
+    assert scene["layout"] == "graphic_quote_portrait"
+    assert scene["layout_payload"]["title"] == "Mide tu cintura hoy"
+    assert any("downgraded" in w.lower() for w in warnings)
+
+
+def test_oversized_checklist_trims_to_five():
+    from video_agent.shorts.validation.graphic_checks import validate_short_graphic_scenes
+
+    items = [f"Paso {i}" for i in range(1, 8)]
+    scene = _scene("graphic_checklist", {"title": "PASOS", "items": items})
+    warnings = validate_short_graphic_scenes([scene])
+    assert scene["layout"] == "graphic_checklist"
+    assert scene["layout_payload"]["items"] == items[:5]
+    assert any("trimmed" in w.lower() for w in warnings)
+
+
+def test_one_step_step_list_downgrades_to_quote():
+    from video_agent.shorts.validation.graphic_checks import validate_short_graphic_scenes
+
+    scene = _scene("graphic_step_list", {"title": "HOY", "steps": [{"label": "1", "text": "Camina diez minutos"}]})
+    validate_short_graphic_scenes([scene])
+    assert scene["layout"] == "graphic_quote_portrait"
+    assert scene["layout_payload"]["title"] == "Camina diez minutos"
+
+
+def test_valid_checklist_untouched_and_empty_still_raises():
+    from video_agent.shorts.validation.graphic_checks import validate_short_graphic_scenes
+
+    ok = _scene("graphic_checklist", {"title": "PASOS", "items": ["Uno", "Dos", "Tres"]})
+    validate_short_graphic_scenes([ok])
+    assert ok["layout"] == "graphic_checklist"
+    assert ok["layout_payload"]["items"] == ["Uno", "Dos", "Tres"]
+
+    empty = _scene("graphic_checklist", {"title": "PASOS", "items": []})
+    with pytest.raises(ValueError, match="requires 2-5 items"):
+        validate_short_graphic_scenes([empty])

@@ -500,6 +500,11 @@ shorts:
     cta_max_words: 8
     default_cta_without_url: "Vídeo completo en el canal."
     default_cta_with_url: "Mira la guía completa aquí."
+    # Topic-aware CTA: {tema} is filled from the Short's pillar so the spoken
+    # bridge names the long video's theme (falls back to the plain defaults above
+    # when the topic can't be resolved). Kept within cta_max_words.
+    cta_topic_template_without_url: "Más sobre {tema} en el canal."
+    cta_topic_template_with_url: "Guía de {tema}, míralo en el canal."
     pinned_comment_template: |
       Si quieres ver la guía completa paso a paso, mira el vídeo largo del canal 👇
       {long_video_url}

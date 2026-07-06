@@ -5,6 +5,56 @@ import json
 from pathlib import Path
 from typing import Any
 
+# Pillar → short Spanish topic noun for a spoken CTA that names the companion
+# long video's theme ("Más sobre el sueño en el canal.") instead of a generic
+# "Vídeo completo en el canal.". Kept short so the CTA stays within cta_max_words.
+_PILLAR_TOPIC_ES: dict[str, str] = {
+    "sleep": "el sueño", "sueño": "el sueño", "sueno": "el sueño", "rest": "el sueño",
+    "nutrition": "la alimentación", "nutricion": "la alimentación", "food": "la alimentación",
+    "movement": "el movimiento", "mobility": "el movimiento", "exercise": "el movimiento",
+    "walking": "el movimiento",
+    "stress": "la calma", "mind": "la calma", "anxiety": "la calma",
+    "energy": "la energía", "fatigue": "la energía",
+    "weight": "el peso", "metabolism": "el peso",
+    "digestion": "la digestión", "fiber": "la digestión",
+    "heart": "la circulación", "blood_pressure": "la circulación", "circulation": "la circulación",
+    "blood_sugar": "el azúcar", "diabetes": "el azúcar",
+    "memory": "la memoria", "brain": "la memoria", "cognition": "la memoria",
+    "joint": "las articulaciones", "joints": "las articulaciones", "pain": "las articulaciones",
+    "protein": "el músculo", "muscle": "el músculo",
+    "hydration": "la hidratación",
+    "routine": "el hábito", "habits": "el hábito",
+}
+
+
+def funnel_topic_es(short_plan: dict) -> str:
+    """Resolve the Short's topic to a short Spanish noun, or '' when unknown."""
+    pillar = str(
+        (short_plan or {}).get("pillar")
+        or (short_plan or {}).get("detected_pillar")
+        or ""
+    ).strip().lower()
+    return _PILLAR_TOPIC_ES.get(pillar, "")
+
+
+def resolve_funnel_cta(funnel_cfg: dict, short_plan: dict, *, has_url: bool) -> str:
+    """The spoken CTA that bridges a Short to its long video.
+
+    Prefers a topic-aware template (``cta_topic_template_with/without_url`` with a
+    ``{tema}`` placeholder) so the CTA names the theme; falls back to the plain
+    ``default_cta_with/without_url`` when no topic template is set or the topic
+    can't be resolved. Centralized here so the script prompt and this source-map
+    validator use the SAME expected CTA and never drift.
+    """
+    funnel_cfg = funnel_cfg or {}
+    tema = funnel_topic_es(short_plan or {})
+    tpl_key = "cta_topic_template_with_url" if has_url else "cta_topic_template_without_url"
+    tpl = str(funnel_cfg.get(tpl_key) or "")
+    if tema and "{tema}" in tpl:
+        return tpl.replace("{tema}", tema)
+    default_key = "default_cta_with_url" if has_url else "default_cta_without_url"
+    return str(funnel_cfg.get(default_key) or "Vídeo completo en el canal.")
+
 
 def _long_scene_index(long_job_dir: Path) -> dict[str, dict]:
     p = long_job_dir / "scenes.json"
@@ -50,7 +100,9 @@ def build_source_map(
             }
         )
     funnel_cfg = (channel_config.get("shorts") or {}).get("funnel") or {}
-    cta = short_script.get("cta") or funnel_cfg.get("default_cta_without_url", "Vídeo completo en el canal.")
+    cta = short_script.get("cta") or resolve_funnel_cta(
+        funnel_cfg, short_plan, has_url=bool(long_video_url)
+    )
     return {
         "short_id": short_plan.get("short_id"),
         "idea_id": short_plan.get("idea_id"),

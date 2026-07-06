@@ -41,6 +41,21 @@ def test_short_seo_prompt_uses_high_volume_keywords_with_spain_45_intent():
     assert "description must reuse" in low
 
 
+def test_short_seo_prompt_prefers_question_or_contrarian_title_device():
+    """Winning title formula (option B): question or contrarian, not flat 'El error'."""
+    from video_agent.shorts import prompts
+
+    p = prompts.short_seo_prompt(
+        _cfg(),
+        {"short_id": "short-01", "format": "pain_to_tip", "pillar": "sleep"},
+        {"hook": "El café sin azúcar y el sueño", "narration": "Cuidado con la tarde."},
+    )
+    assert "option B wins" in p
+    assert "QUESTION:" in p
+    assert "CONTRARIAN:" in p
+    assert "over a flat 'El error…' statement" in p
+
+
 def test_short_seo_normalizes_concatenated_hashtags_and_removes_nutricion45():
     from video_agent.shorts.short_seo_builder import _normalize_hashtags
 

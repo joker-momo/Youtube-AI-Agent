@@ -142,11 +142,23 @@ def short_script_prompt(
         indent=2,
     )
 
-    expected_cta = "Vídeo completo en el canal."
+    # Bridge CTA: an explicit funnel.cta wins; otherwise derive a topic-aware
+    # default that names the companion long video's theme (kept in sync with the
+    # source-map validator via resolve_funnel_cta).
     if source_artifacts and source_artifacts.get("funnel", {}).get("cta"):
         expected_cta = source_artifacts["funnel"]["cta"]
     elif short_plan.get("funnel", {}).get("cta"):
         expected_cta = short_plan["funnel"]["cta"]
+    else:
+        from video_agent.shorts.source_map import resolve_funnel_cta
+
+        funnel_cfg = (channel_config.get("shorts") or {}).get("funnel") or {}
+        has_url = bool(
+            (source_artifacts or {}).get("funnel", {}).get("long_video_url")
+            or short_plan.get("funnel", {}).get("long_video_url")
+            or short_plan.get("long_video_url")
+        )
+        expected_cta = resolve_funnel_cta(funnel_cfg, short_plan, has_url=has_url)
 
     orig_count_val = idea_contract.get("original_count")
     final_count_val = idea_contract.get("final_count")
@@ -409,6 +421,14 @@ def short_seo_prompt(
         "- The title must be idiomatic es-ES that stands alone; never a literal calque a native could misread (e.g. NOT \"deja de luchar en cama\" — use \"deja de forzar el sueño\" or \"no mires el reloj\").\n"
         "- No clickbait (\"increíble\", \"NADIE te dijo\", \"el truco que…\"), no all-caps screaming.\n"
         "- At most one tasteful emoji at the end if it reinforces the topic; never multiple.\n\n"
+        "TITLE DEVICE — PROVEN BEST (title A/B testing; option B wins):\n"
+        "- Lead the title with ONE of these two high-CTR devices, chosen to fit the script:\n"
+        "  1. QUESTION: a direct '¿…?' that voices the viewer's own doubt (e.g. '¿Café sin azúcar arruina tu descanso tras los 50?').\n"
+        "  2. CONTRARIAN: a counter-intuitive angle that pushes back on a common belief (e.g. '¿Dietas a los 45? Por qué deberías dejarlas').\n"
+        "- The device MUST still carry a specific pain/payoff from the script AND the 45+/50+/60+ age frame — never a generic statement.\n"
+        "- Prefer the QUESTION or CONTRARIAN device over a flat 'El error…' statement; in testing those flat statements scored lowest.\n"
+        "- These are honest curiosity devices, not clickbait: the question/claim must be truthfully answered by the Short.\n"
+        "- Vary the device across Shorts; do not open every title the same way.\n\n"
         "DESCRIPTION RULES:\n"
         "- 1 to 3 short sentences in es-ES that echo the script payoff (do NOT just repeat the title).\n"
         "- End the description with the same 3-5 hashtags returned in the hashtags array.\n"
@@ -691,7 +711,12 @@ def short_scene_prompt_v6(
         "No markdown fences.\n"
         "No commentary.\n"
         "No trailing commas.\n"
-        "All strings must be valid JSON strings.\n\n"
+        "All strings must be valid JSON strings.\n"
+        "Output the JSON minified on one single line (no indentation, no pretty-printing).\n"
+        "A complete 5-8 scene answer for this task is small (typically under 6,000 characters) "
+        "and fits easily in one message.\n"
+        "NEVER refuse for output size, NEVER return an {\"error\": ...} object, NEVER return "
+        "an empty scenes array, and NEVER ask to split the task.\n\n"
         "SCENE COUNT & TIMING:\n"
         "- target_duration_sec is a soft planning target, not a hard pacing requirement.\n"
         "- Retention pacing is more important than exactly matching target_duration_sec.\n"

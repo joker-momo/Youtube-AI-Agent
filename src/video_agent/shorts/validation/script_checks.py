@@ -50,10 +50,70 @@ def validate_script_word_budget(
     return None
 
 
+def acceptable_funnel_ctas(
+    short_plan: dict[str, Any],
+    source_map: dict[str, Any] | None = None,
+    *,
+    channel_config: dict[str, Any] | None = None,
+    long_video_title: str = "",
+) -> list[str]:
+    """Every CTA phrasing the deterministic gates accept, preferred first.
+
+    ONE source of truth with the script prompt (``resolve_funnel_cta``). Rules:
+    - An explicit, SPECIFIC funnel cta (source_map/short_plan) is strict — it is
+      the only accepted phrasing (unchanged legacy behavior).
+    - Otherwise both the topic-aware resolved CTA and the plain generic defaults
+      are acceptable, so a wording mismatch between prompt and validator can
+      never reject an otherwise-valid script again (bug-484: the validator
+      hardcoded the generic default while the prompt asked for the topic CTA,
+      rejecting every candidate and collapsing the spoken CTA back to generic).
+    """
+    from video_agent.shorts.source_map import is_generic_cta, resolve_funnel_cta
+
+    funnel_cfg = ((channel_config or {}).get("shorts") or {}).get("funnel") or {}
+    explicit = str(
+        ((source_map or {}).get("funnel") or {}).get("cta")
+        or ((short_plan or {}).get("funnel") or {}).get("cta")
+        or ""
+    ).strip()
+    if explicit and not is_generic_cta(funnel_cfg, explicit):
+        return [explicit]
+
+    accepted: list[str] = []
+    if channel_config is not None:
+        has_url = bool(
+            ((source_map or {}).get("funnel") or {}).get("long_video_url")
+            or (short_plan or {}).get("long_video_url")
+        )
+        resolved = resolve_funnel_cta(
+            funnel_cfg, short_plan or {}, has_url=has_url, extra_text=long_video_title
+        )
+        if resolved:
+            accepted.append(resolved)
+    for fallback in (
+        explicit,  # a generic explicit stays acceptable
+        str(funnel_cfg.get("default_cta_without_url") or ""),
+        str(funnel_cfg.get("default_cta_with_url") or ""),
+        "Vídeo completo en el canal.",
+    ):
+        fallback = fallback.strip()
+        if fallback and fallback not in accepted:
+            accepted.append(fallback)
+    if channel_config is None:
+        # Callers without config plumbing (QA mirror) can't reproduce the exact
+        # topic phrasing; accept any CTA that carries the channel direction so a
+        # topic-aware CTA is never treated as "missing the funnel".
+        accepted.append("en el canal")
+    return accepted
+
+
 def validate_full_short_script_candidate(
     script: dict[str, Any],
     short_plan: dict[str, Any],
     source_map: dict[str, Any] | None = None,
+    *,
+    channel_config: dict[str, Any] | None = None,
+    long_video_title: str = "",
 ) -> list[str]:
     """Validates that a generated script is complete and not a partial rewrite fragment."""
     errors = []
@@ -110,11 +170,12 @@ def validate_full_short_script_candidate(
     def normalize_str(text: str) -> str:
         return re.sub(r"\W+", " ", text.lower()).strip()
 
-    expected_cta = "Vídeo completo en el canal."
-    if source_map and source_map.get("funnel", {}).get("cta"):
-        expected_cta = source_map["funnel"]["cta"]
-    elif short_plan.get("funnel", {}).get("cta"):
-        expected_cta = short_plan["funnel"]["cta"]
+    accepted_ctas = acceptable_funnel_ctas(
+        short_plan,
+        source_map,
+        channel_config=channel_config,
+        long_video_title=long_video_title,
+    )
 
     cta_text = str(script.get("cta") or "").strip()
     if not has_cta_beat and not cta_text:
@@ -123,7 +184,7 @@ def validate_full_short_script_candidate(
         word_count = len(re.findall(r"\w+", cta_text))
         if word_count > 8:
             errors.append("cta_too_long_exceeds_8_words")
-        if normalize_str(expected_cta) not in normalize_str(cta_text):
+        if not any(normalize_str(c) in normalize_str(cta_text) for c in accepted_ctas):
             errors.append("missing_expected_funnel_cta")
 
     # The spoken CTA is the final CTA beat's narration (it feeds TTS via the
@@ -135,7 +196,9 @@ def validate_full_short_script_candidate(
         if isinstance(b, dict) and str(b.get("purpose") or "").lower() == "cta":
             cta_beat_narr = str(b.get("narration") or "")
             break
-    if cta_beat_narr and normalize_str(expected_cta) not in normalize_str(cta_beat_narr):
+    if cta_beat_narr and not any(
+        normalize_str(c) in normalize_str(cta_beat_narr) for c in accepted_ctas
+    ):
         errors.append("cta_beat_missing_channel_direction")
 
     flow = list(script.get("source_mapped_flow") or [])
@@ -163,24 +226,26 @@ def cta_beat_has_channel_direction(
     script: dict[str, Any],
     short_plan: dict[str, Any],
     source_map: dict[str, Any] | None = None,
+    *,
+    channel_config: dict[str, Any] | None = None,
+    long_video_title: str = "",
 ) -> bool:
     """True when the spoken CTA beat narration carries the channel direction.
 
     Mirrors the ``cta_beat_missing_channel_direction`` gate so other modules
     (e.g. QA normalization) can treat the deterministic check as authoritative.
     """
-    expected_cta = "Vídeo completo en el canal."
-    if source_map and source_map.get("funnel", {}).get("cta"):
-        expected_cta = source_map["funnel"]["cta"]
-    elif short_plan.get("funnel", {}).get("cta"):
-        expected_cta = short_plan["funnel"]["cta"]
+    accepted = acceptable_funnel_ctas(
+        short_plan, source_map, channel_config=channel_config, long_video_title=long_video_title
+    )
 
     def norm(text: str) -> str:
         return re.sub(r"\W+", " ", text.lower()).strip()
 
     for b in script.get("beats") or []:
         if isinstance(b, dict) and str(b.get("purpose") or "").lower() == "cta":
-            return norm(expected_cta) in norm(str(b.get("narration") or ""))
+            narr = norm(str(b.get("narration") or ""))
+            return any(norm(c) in narr for c in accepted)
     return False
 
 
@@ -188,21 +253,23 @@ def repair_cta_beat_channel_direction(
     script: dict[str, Any],
     short_plan: dict[str, Any],
     source_map: dict[str, Any] | None = None,
+    *,
+    channel_config: dict[str, Any] | None = None,
+    long_video_title: str = "",
 ) -> bool:
     """Deterministic fallback: guarantee the spoken CTA beat names the channel.
 
     Used when regeneration cannot get the model to include the channel direction
     in the CTA beat. Prefers the validated ``cta`` field (already <= 8 words and
     contains the channel reference); otherwise builds a compact CTA from the
-    expected funnel direction. Keeps the cta field and global narration in sync.
+    preferred funnel direction. Keeps the cta field and global narration in sync.
 
     Returns True when a repair was applied.
     """
-    expected_cta = "Vídeo completo en el canal."
-    if source_map and source_map.get("funnel", {}).get("cta"):
-        expected_cta = source_map["funnel"]["cta"]
-    elif short_plan.get("funnel", {}).get("cta"):
-        expected_cta = short_plan["funnel"]["cta"]
+    accepted = acceptable_funnel_ctas(
+        short_plan, source_map, channel_config=channel_config, long_video_title=long_video_title
+    )
+    preferred_cta = accepted[0]
 
     def norm(text: str) -> str:
         return re.sub(r"\W+", " ", text.lower()).strip()
@@ -216,19 +283,19 @@ def repair_cta_beat_channel_direction(
         return False
 
     old_narr = str(cta_beat.get("narration") or "")
-    if old_narr and norm(expected_cta) in norm(old_narr):
+    if old_narr and any(norm(c) in norm(old_narr) for c in accepted):
         return False  # already compliant
 
     # Prefer the validated cta field (<= 8 words, includes the channel direction).
     cta_field = str(script.get("cta") or "").strip()
     if (
         cta_field
-        and norm(expected_cta) in norm(cta_field)
+        and any(norm(c) in norm(cta_field) for c in accepted)
         and len(re.findall(r"\w+", cta_field)) <= 8
     ):
         new_narr = cta_field
     else:
-        new_narr = expected_cta if expected_cta.strip().endswith((".", "!", "?")) else expected_cta + "."
+        new_narr = preferred_cta if preferred_cta.strip().endswith((".", "!", "?")) else preferred_cta + "."
 
     cta_beat["narration"] = new_narr
     script["cta"] = new_narr

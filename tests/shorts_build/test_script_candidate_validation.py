@@ -168,3 +168,79 @@ def test_repair_keeps_global_narration_in_sync():
     repair_cta_beat_channel_direction(script, {})
     assert old_cta not in script["narration"]
     assert "Vídeo completo en el canal" in script["narration"]
+
+
+# --- bug-484: validator must accept the topic-aware funnel CTA -----------------
+
+_TOPIC_CFG = {
+    "shorts": {
+        "funnel": {
+            "default_cta_without_url": "Vídeo completo en el canal.",
+            "cta_topic_template_without_url": "Más sobre {tema} en el canal.",
+            "cta_max_words": 8,
+        }
+    }
+}
+_LONG_TITLE = "El error oculto: aceite de oliva en ayunas tras los 45"
+
+
+def _topic_script(cta: str) -> dict:
+    return {
+        "beats": [
+            {"time_sec": "0-3", "purpose": "hook", "narration": "¿Te pasa esto?"},
+            {"time_sec": "3-8", "purpose": "setup"},
+            {"time_sec": "8-15", "purpose": "payoff"},
+            {"time_sec": "15-20", "purpose": "payoff"},
+            {"time_sec": "20-25", "purpose": "cta", "narration": cta},
+        ],
+        "cta": cta,
+    }
+
+
+def test_validator_accepts_topic_cta_matching_prompt():
+    """The exact live rejection (bug-484): the prompt asked for the topic CTA,
+    the model obeyed, and the validator (sm=None at script time) hardcoded the
+    generic default and rejected every attempt."""
+    script = _topic_script("Más sobre la alimentación en el canal.")
+    errors = validate_full_short_script_candidate(
+        script,
+        {"target_duration_sec": 35},
+        None,
+        channel_config=_TOPIC_CFG,
+        long_video_title=_LONG_TITLE,
+    )
+    assert "missing_expected_funnel_cta" not in errors
+    assert "cta_beat_missing_channel_direction" not in errors
+
+
+def test_validator_still_accepts_generic_cta_with_topic_config():
+    """Wording must never brick a render: the generic default stays acceptable."""
+    script = _topic_script("Vídeo completo en el canal.")
+    errors = validate_full_short_script_candidate(
+        script,
+        {"target_duration_sec": 35},
+        None,
+        channel_config=_TOPIC_CFG,
+        long_video_title=_LONG_TITLE,
+    )
+    assert "missing_expected_funnel_cta" not in errors
+    assert "cta_beat_missing_channel_direction" not in errors
+
+
+def test_repair_does_not_overwrite_topic_cta():
+    """Attempt-3 repair must not rewrite a topic CTA back to the generic."""
+    script = _topic_script("¿También te pasa? Más sobre la alimentación en el canal.")
+    applied = repair_cta_beat_channel_direction(
+        script,
+        {},
+        channel_config=_TOPIC_CFG,
+        long_video_title=_LONG_TITLE,
+    )
+    assert applied is False
+    assert "Más sobre la alimentación en el canal." in script["cta"]
+
+
+def test_qa_mirror_without_config_accepts_channel_direction():
+    """The QA mirror (no channel_config plumbing) must not flag a topic CTA."""
+    script = _topic_script("Más sobre la alimentación en el canal.")
+    assert cta_beat_has_channel_direction(script, {}) is True

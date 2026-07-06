@@ -159,7 +159,15 @@ def _stage_script(ctx: BuildContext) -> StageResult:
             short_plan["target_duration_sec"] = 45
             plan_for_prompt["target_duration_sec"] = 45
 
-        errors = validate_full_short_script_candidate(candidate, short_plan, sm)
+        errors = validate_full_short_script_candidate(
+            candidate,
+            short_plan,
+            sm,
+            # Same topic inputs as the prompt, so the deterministic CTA gate and
+            # the prompt can never disagree on the funnel CTA again (bug-484).
+            channel_config=channel_config,
+            long_video_title=str((source_artifacts or {}).get("source_video_title") or ""),
+        )
 
         if errors:
             if "audio_fit_over_soft_budget" in errors:

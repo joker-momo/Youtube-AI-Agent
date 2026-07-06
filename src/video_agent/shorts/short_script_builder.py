@@ -97,7 +97,14 @@ def build_short_script(
             repair_cta_beat_channel_direction,
         )
 
-        repair_cta_beat_channel_direction(script, short_plan)
+        repair_cta_beat_channel_direction(
+            script,
+            short_plan,
+            channel_config=channel_config,
+            long_video_title=str(
+                (source_artifacts or {}).get("source_video_title") or ""
+            ),
+        )
 
     if not script.get("source_mapped_flow") and script.get("idea_items"):
         script["source_mapped_flow"] = [

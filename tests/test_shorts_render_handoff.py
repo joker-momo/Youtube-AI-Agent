@@ -237,3 +237,34 @@ def test_prepared_short_operator_render_skips_asset_preparation_and_writes_final
     final_props = json.loads((result.job_dir / "json" / "render_props.json").read_text(encoding="utf-8"))
     assert final_props["visual_schedule"] is None
     assert final_props["audio"] == {"narration": "audio/short_mix.m4a", "music": None}
+
+
+def test_prepared_short_props_zero_long_form_intro_outro(tmp_path: Path):
+    """bug-478: shorts must never inherit the long-form intro/outro branding.
+    The Short composition renders scenes only, so render.duration_sec must equal
+    the scene sum and the embedded branding must zero intro/outro (else the encoded
+    MP4 duration mismatches render.duration_sec and the render fails)."""
+    scenes = _scene_doc()  # scene sum = 4.0
+    handoff = _handoff(scenes, _schedule())
+    props = build_prepared_short_render_props(
+        short_dir=tmp_path / "short-01",
+        channel_config=_channel_config(),
+        style=_style(),
+        scenes=scenes,
+        assets_manifest={"audio": {"narration": "audio/short_mix.m4a", "music": None}},
+        seo={"title": "t", "description": "d", "thumbnail_path": "outputs/short_cover.jpg"},
+        branding={
+            "intro_sec": 10.005,
+            "outro_sec": 8.0,
+            "intro_video_path": "branding/vida-plena-45/intro.mp4",
+            "outro_video_path": "branding/vida-plena-45/outro.mp4",
+        },
+        handoff=handoff,
+        visual_timeline_mode="report_only",
+    )
+    # duration counts scenes only — no 18s of long-form intro/outro on a Short.
+    assert props["render"]["duration_sec"] == 4.0
+    assert props["branding"]["intro_sec"] == 0.0
+    assert props["branding"]["outro_sec"] == 0.0
+    assert props["branding"]["intro_video_path"] is None
+    assert props["branding"]["outro_video_path"] is None

@@ -15,7 +15,6 @@ def write_performance_memory(
     short_script: dict,
     short_scenes: dict,
     retention_plan: dict,
-    thumbnail_meta: dict | None = None,
     *,
     status: str = "scenes_ready",
     failure_stage: str | None = None,
@@ -29,7 +28,6 @@ def write_performance_memory(
         "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "topic": str(short_plan.get("title") or short_plan.get("hook_angle") or short_plan.get("format") or ""),
         "hook_pattern": str(retention_plan.get("hook_pattern") or short_plan.get("hook_pattern") or ""),
-        "thumbnail_emotion": None,
         "format": str(short_plan.get("format") or ""),
         "duration_sec": round(duration, 1),
         "script_word_count": validate_scenes.count_spoken_words(narration),
@@ -48,7 +46,6 @@ def write_performance_memory(
         "failure_stage": failure_stage,
         "failure_reason": failure_reason,
         "learning_notes": [],
-        "thumbnail_meta": thumbnail_meta,
     }
     artifact = paths.short_json_dir(long_job_dir, short_id) / paths.SHORT_PERFORMANCE_MEMORY_FILE
     artifact.parent.mkdir(parents=True, exist_ok=True)

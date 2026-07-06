@@ -126,7 +126,7 @@ export const ShortMediaLayer: React.FC<ShortMediaLayerProps> = ({
       {resolved ? (
         <AbsoluteFill style={{filter: 'blur(40px) brightness(0.55)', transform: 'scale(1.15)'}}>
           {actualKind === 'video' ? (
-            <MediaVideo src={resolved} style={{width: '100%', height: '100%', objectFit: 'cover'}} muted trimBefore={trimBefore} trimAfter={trimAfter} playbackRate={playbackRate} />
+            <MediaVideo src={resolved} objectFit="cover" style={{width: '100%', height: '100%'}} muted trimBefore={trimBefore} trimAfter={trimAfter} playbackRate={playbackRate} />
           ) : (
             <Img src={resolved} style={{width: '100%', height: '100%', objectFit: 'cover'}} />
           )}
@@ -135,7 +135,7 @@ export const ShortMediaLayer: React.FC<ShortMediaLayerProps> = ({
       {resolved ? (
         <AbsoluteFill style={{transform: mediaTransform, transformOrigin: 'center center'}}>
           {actualKind === 'video' ? (
-            <MediaVideo src={resolved} style={{width: '100%', height: '100%', objectFit: 'cover'}} muted trimBefore={trimBefore} trimAfter={trimAfter} playbackRate={playbackRate} />
+            <MediaVideo src={resolved} objectFit="cover" style={{width: '100%', height: '100%'}} muted trimBefore={trimBefore} trimAfter={trimAfter} playbackRate={playbackRate} />
           ) : (
             <Img src={resolved} style={{width: '100%', height: '100%', objectFit: 'cover'}} />
           )}

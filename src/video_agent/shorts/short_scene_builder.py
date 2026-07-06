@@ -40,9 +40,23 @@ class ChatGPTProviderError(Exception):
     the caller must clean the browser/session and retry the same prompt, and must
     NOT pass the response to scene validation or emit scene_count repair feedback."""
 
+    failure_kind = "chatgpt_provider_error"
+
     def __init__(self, message: str, *, snippet: str = ""):
         super().__init__(message)
         self.snippet = snippet
+
+
+class ChatGPTSizeRefusalError(ChatGPTProviderError):
+    """ChatGPT refused to emit the scenes JSON claiming the output would exceed
+    its per-message response size — either as plain refusal text or as a JSON
+    object with an ``error`` field and an empty scenes array. A fully populated
+    5-8 scene payload is small (~3-6 KB), so this is a model misjudgment, not a
+    real limit. The builder retries once with a compact-output correction before
+    raising; like its parent, this must never reach scene validation or consume
+    the creative retry budget."""
+
+    failure_kind = "chatgpt_size_refusal"
 
 
 # Provider/browser error phrases that ChatGPT renders as plain page text. If any
@@ -74,6 +88,51 @@ def is_valid_scene_payload(payload: object) -> bool:
     if not isinstance(scenes, list):
         return False
     return len(scenes) > 0
+
+
+# Phrases ChatGPT uses when it (wrongly) claims the scenes JSON is too big to
+# emit in one message. Only consulted when the payload has no usable scenes,
+# so Spanish scene content can never false-positive on these English phrases.
+SIZE_REFUSAL_PATTERNS = (
+    "maximum response size",
+    "exceeds the maximum response",
+    "exceed the response limit",
+    "exceeds the response limit",
+    "response limits",
+    "too large to fit",
+    "split the task",
+)
+
+
+def is_size_refusal_response(raw: str | None, payload: object | None = None) -> bool:
+    """True when the reply is a refusal instead of scenes: a JSON error-object
+    with empty/missing scenes (any wording), or refusal prose citing response
+    size. Valid scene payloads are never refusals."""
+    text = (raw or "").strip()
+    if not text:
+        return False
+    if payload is None:
+        payload = _parse(raw)
+    if is_valid_scene_payload(payload):
+        return False
+    if isinstance(payload, dict) and str(payload.get("error") or "").strip():
+        return True
+    lowered = text.lower()
+    return any(pattern in lowered for pattern in SIZE_REFUSAL_PATTERNS)
+
+
+# Appended to the scene prompt for the one in-place retry after a size refusal.
+_COMPACT_RETRY_ADDENDUM = (
+    "\n\nSIZE CORRECTION:\n"
+    "Your previous reply refused for response size. That refusal was wrong: a "
+    "complete, fully populated 5-8 scene JSON for this task is small (typically "
+    "under 6,000 characters) and fits easily in one message.\n"
+    "- Return the COMPLETE JSON object now, minified on one single line "
+    "(no indentation, no spaces between tokens).\n"
+    "- Do NOT return an error object. Do NOT return an empty scenes array. "
+    "Do NOT split the answer across messages.\n"
+    "- Keep every required field; keep string values concise.\n"
+)
 
 
 def _parse(raw: str) -> dict:
@@ -469,7 +528,29 @@ def build_short_scenes(
             "ChatGPT returned provider-error text instead of scene JSON.",
             snippet=snippet,
         )
-    scenes = normalize_short_scenes(_parse(raw), short_script)
+    payload = _parse(raw)
+    # Size-refusal guard (bridge 20260705-141239): ChatGPT sometimes refuses the
+    # scenes JSON claiming it exceeds the per-message response size (as refusal
+    # prose or as {"error": ..., "scenes": []}). Retry once in place with a
+    # compact-output correction; the repair-feedback loop must never see this,
+    # because its bigger repair prompt only reinforces the refusal.
+    if is_size_refusal_response(raw, payload):
+        raw = _invoke(llm_fn, "scenes", prompt + _COMPACT_RETRY_ADDENDUM)
+        if is_provider_error_text(raw):
+            snippet = (raw or "").strip().splitlines()[0][:200] if (raw or "").strip() else ""
+            raise ChatGPTProviderError(
+                "ChatGPT returned provider-error text instead of scene JSON.",
+                snippet=snippet,
+            )
+        payload = _parse(raw)
+        if is_size_refusal_response(raw, payload):
+            snippet = (raw or "").strip().splitlines()[0][:200] if (raw or "").strip() else ""
+            raise ChatGPTSizeRefusalError(
+                "ChatGPT refused the scenes JSON for response size twice "
+                "(original prompt + compact retry).",
+                snippet=snippet,
+            )
+    scenes = normalize_short_scenes(payload, short_script)
     scenes = apply_first_frame_plan(scenes, short_plan, channel_config)
     jd = paths.short_json_dir(long_job_dir, short_plan["short_id"])
     jd.mkdir(parents=True, exist_ok=True)

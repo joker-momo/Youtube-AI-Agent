@@ -190,6 +190,39 @@ def _resolve_torch_device(pref: str) -> str:
     return "cpu"
 
 
+# Process-level cache of loaded (model, processor) pairs, keyed by
+# (tag, model_id, device). build_semantic_analyzer builds fresh adapter instances
+# per Short, and each adapter previously cold-loaded its weights + hit Hugging
+# Face metadata endpoints (HEAD/GET, 404s for optional files) every time. Caching
+# here loads each model once per worker process across all Shorts. Never holds a
+# failed load, so a transient failure can still recover on a later attempt.
+_HF_MODEL_CACHE: dict[tuple[str, str, str], tuple[Any, Any]] = {}
+
+
+def _load_hf_pair(
+    tag: str, model_cls: Any, proc_cls: Any, model_id: str, device: str
+) -> tuple[Any, Any] | None:
+    """Return a cached ``(model, processor)`` for ``model_id`` on ``device``,
+    loading it at most once per process. Tries the local snapshot first
+    (``local_files_only=True``) so an already-downloaded model skips all Hugging
+    Face metadata round-trips, then falls back to a normal online load. Returns
+    ``None`` (and caches nothing) when the model cannot be loaded at all, so the
+    adapter degrades to CAPABILITY_UNAVAILABLE exactly as before."""
+    key = (tag, model_id, device)
+    cached = _HF_MODEL_CACHE.get(key)
+    if cached is not None:
+        return cached
+    for local_only in (True, False):
+        try:
+            proc = proc_cls.from_pretrained(model_id, local_files_only=local_only)
+            model = model_cls.from_pretrained(model_id, local_files_only=local_only).to(device).eval()
+        except Exception:  # noqa: BLE001 - missing lib/weights/network → try online, then give up
+            continue
+        _HF_MODEL_CACHE[key] = (model, proc)
+        return _HF_MODEL_CACHE[key]
+    return None
+
+
 class SigLipTopicAdapter:
     """Cheap topic pre-filter via SigLIP-2 (transformers, MPS). Records SUPPORTED /
     CONTRADICTED / UNKNOWN for the span's overall visual intent + required subjects."""
@@ -212,8 +245,14 @@ class SigLipTopicAdapter:
             from transformers import AutoModel, AutoProcessor
 
             self._device = _resolve_torch_device(self.cfg.device)
-            self._model = AutoModel.from_pretrained(self.cfg.siglip_model).to(self._device).eval()
-            self._proc = AutoProcessor.from_pretrained(self.cfg.siglip_model)
+            pair = _load_hf_pair(
+                "siglip", AutoModel, AutoProcessor, self.cfg.siglip_model, self._device
+            )
+            if pair is None:
+                self._model = None
+                self._broken = True
+            else:
+                self._model, self._proc = pair
         except Exception:  # noqa: BLE001 - missing lib/weights → unavailable
             self._model = None
             self._broken = True
@@ -470,12 +509,14 @@ class GroundingDinoForbiddenAdapter:
             # so default to CPU (base model is fast enough one-shot). Honor an
             # explicit non-auto device if the operator forces it.
             self._device = "cpu" if self.cfg.device in ("auto", "cpu") else _resolve_torch_device(self.cfg.device)
-            self._proc = AutoProcessor.from_pretrained(self.cfg.detector_model)
-            self._model = (
-                AutoModelForZeroShotObjectDetection.from_pretrained(self.cfg.detector_model)
-                .to(self._device)
-                .eval()
+            pair = _load_hf_pair(
+                "detector", AutoModelForZeroShotObjectDetection, AutoProcessor,
+                self.cfg.detector_model, self._device,
             )
+            if pair is None:
+                self._model = None
+            else:
+                self._model, self._proc = pair
         except Exception:  # noqa: BLE001
             self._model = None
         return self._model is not None

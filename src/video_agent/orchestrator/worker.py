@@ -197,28 +197,12 @@ def _run_shorts_autopilot_job(job: dict, *, job_dir: Path, channel_path: Path, c
             long_job_dir, channel_config, requested_count, llm_fn=chatgpt_fn,
         )
 
-    def thumbnail_fn(long_job_dir, short_id, cfg):
-        from video_agent.shorts.short_thumbnail_builder import build_short_thumbnail
-
-        def sync_image_fn(*, prompt, project_name, out_path):
-            return asyncio.run(
-                client.generate_image(
-                    prompt=prompt,
-                    project_name=project_name,
-                    out_path=out_path,
-                    aspect_ratio="9:16",
-                )
-            )
-
-        return build_short_thumbnail(long_job_dir, short_id, cfg, sync_image_fn)
-
     def build_short_fn(long_job_dir, short_plan, cfg):
+        # Shorts have no thumbnail/cover deliverable (YouTube Shorts use an auto
+        # frame), so build_short takes no thumbnail_fn.
         return build_short(
             long_job_dir, short_plan, cfg,
             llm_fn=chatgpt_fn, gemini_fn=gemini_fn,
-            # TEMP: thumbnail (AI image-gen) skipped — omit thumbnail_fn so
-            # build_short uses the no-op default (stage marked "skipped").
-            # Re-enable by restoring: thumbnail_fn=thumbnail_fn,
         )
 
     run_shorts_autopilot(
@@ -261,28 +245,11 @@ def _run_shorts_prepare_drafts_job(job: dict, *, job_dir: Path, channel_path: Pa
             long_job_dir, channel_config, requested_count, llm_fn=chatgpt_fn,
         )
 
-    def thumbnail_fn(long_job_dir, short_id, cfg):
-        from video_agent.shorts.short_thumbnail_builder import build_short_thumbnail
-
-        def sync_image_fn(*, prompt, project_name, out_path):
-            return asyncio.run(
-                client.generate_image(
-                    prompt=prompt,
-                    project_name=project_name,
-                    out_path=out_path,
-                    aspect_ratio="9:16",
-                )
-            )
-
-        return build_short_thumbnail(long_job_dir, short_id, cfg, sync_image_fn)
-
     def build_short_fn(long_job_dir, short_plan, cfg, **kwargs):
+        # Shorts have no thumbnail/cover deliverable — no thumbnail_fn.
         return build_short(
             long_job_dir, short_plan, cfg,
             llm_fn=chatgpt_fn, gemini_fn=gemini_fn,
-            # TEMP: thumbnail (AI image-gen) skipped — omit thumbnail_fn so
-            # build_short uses the no-op default (stage marked "skipped").
-            # Re-enable by restoring: thumbnail_fn=thumbnail_fn,
             **kwargs,
         )
 
@@ -345,31 +312,14 @@ def _run_shorts_render_selected_ideas_job(job: dict, *, job_dir: Path, channel_p
     def gemini_fn(prompt: str) -> str:
         return asyncio.run(client.gemini_send(prompt))
 
-    def thumbnail_fn(long_job_dir, short_id, cfg):
-        from video_agent.shorts.short_thumbnail_builder import build_short_thumbnail
-
-        def sync_image_fn(*, prompt, project_name, out_path):
-            return asyncio.run(
-                client.generate_image(
-                    prompt=prompt,
-                    project_name=project_name,
-                    out_path=out_path,
-                    aspect_ratio="9:16",
-                )
-            )
-
-        return build_short_thumbnail(long_job_dir, short_id, cfg, sync_image_fn)
-
     def build_short_fn(long_job_dir, short_plan, cfg, **kwargs):
+        # Shorts have no thumbnail/cover deliverable — no thumbnail_fn.
         return build_short(
             long_job_dir,
             short_plan,
             cfg,
             llm_fn=chatgpt_fn,
             gemini_fn=gemini_fn,
-            # TEMP: thumbnail (AI image-gen) skipped — omit thumbnail_fn so
-            # build_short uses the no-op default (stage marked "skipped").
-            # Re-enable by restoring: thumbnail_fn=thumbnail_fn,
             **kwargs,
         )
 

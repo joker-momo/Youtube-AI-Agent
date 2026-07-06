@@ -310,6 +310,207 @@ def _skip_route_status(visual_route: str) -> str:
     return f"routed_to_{visual_route}"
 
 
+def _is_native_fallback_asset(adapted: dict[str, Any] | None) -> bool:
+    """The per-scene background-stage fallback is usable as a native clip when it
+    is a real, existing native-video file. Mirrors visual_beat_planner._resolved_native
+    without importing the planner (kept local to avoid a stage->planner import cycle)."""
+    return bool(
+        adapted
+        and adapted.get("source_media_kind") == asset_schedule.NATIVE_VIDEO
+        and adapted.get("exists", True)
+        and (adapted.get("public_ref") or adapted.get("local_path"))
+    )
+
+
+def revalidate_failed_spans_with_fallback(
+    *,
+    spans: list[dict[str, Any]],
+    asset_qa: dict[str, Any],
+    trim_plan: dict[str, Any],
+    resolved: dict[str, Any],
+    short_scenes: dict[str, Any],
+    local_qa: dict[str, Any],
+    mode: str,
+    fps: int,
+    trim_cfg: TrimWindowConfig,
+    analyzer: Any,
+    semantic_analyzer: Any,
+) -> dict[str, Any]:
+    """Rescue native-route spans that visual_local_qa left render-ineligible by
+    revalidating the per-scene background-stage fallback asset (``assets/<scene>.mp4``)
+    that the background stage produced AFTER local QA finished.
+
+    The fallback is held to the EXACT same PR-D local + semantic gate as the original
+    finalists — it reuses ``_candidate_verdict`` (decode/motion/trim/crop),
+    ``_semantic_records`` (SigLIP/VLM/detector cascade), ``_qa_verdict`` and
+    ``_reject_capability_reduced_candidate``. Only a genuine ``PASS`` rescues the span
+    (never CAPABILITY_REDUCED), so this can only ever be STRICTER than the original bar,
+    never weaker. On a rescue the span_qa becomes render-eligible and a trim entry is
+    appended so ``build_visual_beat_plan`` adopts a validated native clip; otherwise the
+    span is left FAIL for the generated-image fallback / early actionable-failure path.
+
+    Mutates ``asset_qa['spans']`` and ``trim_plan['spans']`` in place and returns a report.
+    """
+    controlled_action_ids = _controlled_action_scene_ids(short_scenes)
+    resolved_scenes = (resolved or {}).get("scenes") or {}
+    span_qa_by_id = {
+        str(s.get("visual_span_id")): s for s in asset_qa.get("spans") or []
+    }
+    trimmed_span_ids = {
+        str(s.get("visual_span_id")) for s in trim_plan.get("spans") or []
+    }
+    rescued: list[dict[str, Any]] = []
+    attempted: list[str] = []
+
+    for span in spans:
+        span_id = str(span.get("visual_span_id") or "")
+        span_qa = span_qa_by_id.get(span_id)
+        if not span_qa:
+            continue
+        # Only native-route spans that failed local QA are candidates for rescue.
+        if span_qa.get("render_eligible"):
+            continue
+        if str(span_qa.get("visual_route") or "native_video_candidate") != "native_video_candidate":
+            continue
+        already_rejected = {
+            str(c.get("candidate_id"))
+            for c in span_qa.get("candidate_qa") or []
+        }
+        action_critical = span.get("visual_importance") == "critical" or any(
+            str(sid) in controlled_action_ids for sid in (span.get("scene_ids") or [])
+        )
+        required_frames = _span_required_frames(span, short_scenes, fps)
+        attempted.append(span_id)
+
+        for sid in span.get("scene_ids") or []:
+            adapted = resolved_scenes.get(str(sid))
+            if not _is_native_fallback_asset(adapted):
+                continue
+            asset_id = str((adapted or {}).get("asset_id") or "")
+            # Never re-bless an asset local QA already rejected, and honor an
+            # upstream semantic rejection flag from the background stage.
+            if asset_id and asset_id in already_rejected:
+                continue
+            if (adapted or {}).get("semantic_rejected"):
+                continue
+            local_path = str((adapted or {}).get("local_path") or "")
+            if not local_path or not Path(local_path).exists():
+                continue
+
+            analysis: dict[str, Any] | None = None
+            trim: dict[str, Any] | None = None
+            error: str | None = None
+            try:
+                analysis = analyzer.analyze(
+                    Path(local_path), required_frames=required_frames, fps=fps
+                )
+                analysis["fps"] = fps
+                trim = select_trim_window(
+                    analysis, required_frames=required_frames, config=trim_cfg
+                )
+            except Exception as exc:  # noqa: BLE001 - a bad fallback just isn't adopted
+                error = f"{exc.__class__.__name__}:{exc}"
+
+            downloaded = {
+                "candidate_id": asset_id,
+                "provider": (adapted or {}).get("provider"),
+                "provider_asset_id": (adapted or {}).get("provider_asset_id"),
+                "public_ref": (adapted or {}).get("public_ref"),
+                "local_path": local_path,
+            }
+            verdict, rejection_reasons = _candidate_verdict(
+                downloaded=downloaded, analysis=analysis, trim=trim, error=error
+            )
+            records: list[dict[str, Any]] = []
+            if verdict == "PASS" and trim and trim.get("status") == "selected":
+                records = _semantic_records(
+                    span,
+                    candidate_id=asset_id,
+                    local_qa=local_qa,
+                    semantic_analyzer=semantic_analyzer,
+                    video_path=local_path,
+                    duration_sec=float((analysis or {}).get("actual_duration_sec") or 0.0),
+                )
+                semantic_verdict = _qa_verdict(records, verdict, critical=action_critical)
+                if semantic_verdict == "CAPABILITY_REDUCED" and _reject_capability_reduced_candidate(
+                    mode=mode, local_qa=local_qa, span=span, records=records
+                ):
+                    semantic_verdict = "FAIL"
+                verdict = semantic_verdict
+
+            # STRICT: only a genuine PASS rescues the span. CAPABILITY_REDUCED (model
+            # could not verify) or FAIL leaves it for the generated-image fallback so
+            # we never render footage that failed the same gate the finalists failed.
+            if verdict != "PASS" or not (trim and trim.get("status") == "selected"):
+                continue
+
+            span_qa.update(
+                {
+                    "final_candidate_id": asset_id,
+                    "final_selection_status": "revalidated_background_fallback",
+                    "render_eligible": True,
+                    "requires_local_validation": False,
+                    "evidence_records": records,
+                    "revalidated_from_background_fallback": True,
+                }
+            )
+            span_qa["qa"] = {
+                "verdict": "PASS",
+                "errors": [],
+                "warnings": ["rescued_by_background_fallback"],
+            }
+            if span_id not in trimmed_span_ids:
+                trim_plan.setdefault("spans", []).append(
+                    {
+                        "visual_span_id": span_id,
+                        "scene_ids": span.get("scene_ids") or [],
+                        "final_candidate_id": asset_id,
+                        "provider": (adapted or {}).get("provider"),
+                        "provider_asset_id": (adapted or {}).get("provider_asset_id"),
+                        "asset_ref": (adapted or {}).get("public_ref") or local_path,
+                        "local_path": local_path,
+                        "source_duration_sec": (analysis or {}).get("actual_duration_sec"),
+                        "selected_window_start_in_frames": trim["selected_window_start_in_frames"],
+                        "selected_window_end_in_frames": trim["selected_window_end_in_frames"],
+                        "trim_timebase_fps": trim["trim_timebase_fps"],
+                        "required_duration_in_frames": required_frames,
+                        "window_score": trim.get("window_score"),
+                        "motion_band": (analysis or {}).get("motion_band"),
+                        "crop_stability_score": ((analysis or {}).get("crop_feasibility") or {}).get(
+                            "crop_stability_score"
+                        ),
+                        "crop_plan": {
+                            "mode": "cover",
+                            "anchor": "center",
+                            "scale": 1.0,
+                            "target": span.get("crop_target") or "",
+                        },
+                        "qa": {"verdict": "PASS", "errors": [], "warnings": []},
+                    }
+                )
+                trimmed_span_ids.add(span_id)
+            rescued.append({"visual_span_id": span_id, "final_candidate_id": asset_id})
+            break
+
+    if rescued:
+        # Keep the doc-level verdicts consistent after in-place patching.
+        verdicts = [(s.get("qa") or {}).get("verdict") for s in asset_qa.get("spans") or []]
+        asset_qa["qa"] = {
+            "verdict": "FAIL"
+            if any(v == "FAIL" for v in verdicts)
+            else ("CAPABILITY_REDUCED" if any(v == "CAPABILITY_REDUCED" for v in verdicts) else "PASS"),
+            "errors": [],
+            "warnings": [],
+        }
+        if trim_plan.get("spans"):
+            trim_plan["qa"] = {"verdict": "PASS", "errors": [], "warnings": []}
+    return {
+        "attempted_span_ids": attempted,
+        "rescued": rescued,
+        "rescued_count": len(rescued),
+    }
+
+
 def _stage_visual_local_qa(ctx: BuildContext) -> StageResult:
     """Analyze PR C finalists locally, choose final trim windows, and write PR D artifacts."""
     short_id = ctx.short_plan["short_id"]

@@ -1348,3 +1348,116 @@ def _scene_qa_scores() -> dict:
         "audience_fit_45_plus": 10, "hook_strength": 10, "visual_specificity": 10,
         "clarity": 10, "retention_pacing": 9, "natural_spanish": 10, "saveability": 10,
     }
+
+
+# --- bug: ChatGPT response-size refusal treated as empty scenes (bridge
+# 20260705-141239). Two refusal shapes observed in production:
+#   (a) valid JSON: {"error": "...exceeds the maximum response size...", "scenes": []}
+#   (b) plain text: "I can't generate the requested JSON ... exceed the response limits"
+# Neither is a creative scene-QA failure; both must be caught BEFORE validation.
+
+_SIZE_REFUSAL_JSON = (
+    '{"error": "The requested output exceeds the maximum response size I can '
+    'produce in a single message. The required JSON schema with 5–8 fully '
+    'populated scenes and all mandated fields is too large to fit within the '
+    'response limit. Split the task (for example, request scenes 1–3 and '
+    'then scenes 4–6, or reduce the required fields), and I can return '
+    'valid raw JSON for each part.", "scenes": [], "total_duration_sec": 0}'
+)
+
+_SIZE_REFUSAL_TEXT = (
+    "I can't generate the requested JSON because it appears to be intended for "
+    "an external generation pipeline with a very large, strict schema, and "
+    "producing it reliably in-chat would exceed the response limits. Any "
+    "truncation would make the JSON invalid."
+)
+
+
+def test_is_size_refusal_response_detects_both_shapes():
+    from video_agent.shorts.short_scene_builder import is_size_refusal_response
+
+    # Production shapes.
+    assert is_size_refusal_response(_SIZE_REFUSAL_JSON)
+    assert is_size_refusal_response(_SIZE_REFUSAL_TEXT)
+    # Any error-object with empty/missing scenes is a refusal, whatever the wording.
+    assert is_size_refusal_response('{"error": "cannot comply", "scenes": []}')
+    # Valid scenes payloads are never a refusal, even if a string contains "error".
+    assert not is_size_refusal_response(
+        '{"scenes": [{"id": "s01", "narration": "Sin error, todo bien."}]}'
+    )
+    assert not is_size_refusal_response(
+        '{"error": "minor note", "scenes": [{"id": "s01", "narration": "ok"}]}'
+    )
+    assert not is_size_refusal_response("")
+    assert not is_size_refusal_response(None)
+
+
+def test_build_short_scenes_size_refusal_recovers_on_compact_retry(tmp_path: Path):
+    from video_agent.shorts import short_scene_builder as ssb
+    from video_agent.shorts import paths
+
+    job = _long_job(tmp_path)
+    prompts_seen: list[str] = []
+    good = json.dumps({
+        "scenes": [
+            {"id": "s01", "layout": "short_hook", "narration": "Hola.", "duration_sec": 4},
+            {"id": "s02", "layout": "short_tip", "narration": "Consejo.", "duration_sec": 5},
+        ],
+        "total_duration_sec": 9,
+    })
+
+    def llm_fn(kind, prompt):
+        prompts_seen.append(prompt)
+        return _SIZE_REFUSAL_JSON if len(prompts_seen) == 1 else good
+
+    out = ssb.build_short_scenes(
+        job, {"short_id": "short-sz1"}, _GOOD_SCRIPT, _cfg(), llm_fn,
+    )
+    assert len(prompts_seen) == 2
+    # Retry prompt must carry the compact-output correction.
+    assert "SIZE CORRECTION" in prompts_seen[1]
+    assert prompts_seen[1].startswith(prompts_seen[0][:200])
+    assert out["scenes"], "compact retry must yield non-empty scenes"
+    sd = paths.short_dir(job, "short-sz1")
+    assert (sd / "json" / paths.SHORT_SCENES_FILE).exists()
+
+
+def test_build_short_scenes_size_refusal_twice_raises_size_error(tmp_path: Path):
+    from video_agent.shorts import short_scene_builder as ssb
+    from video_agent.shorts import paths
+
+    job = _long_job(tmp_path)
+    calls = {"n": 0}
+
+    def llm_fn(kind, prompt):
+        calls["n"] += 1
+        # Alternate refusal shapes across the two attempts.
+        return _SIZE_REFUSAL_JSON if calls["n"] == 1 else _SIZE_REFUSAL_TEXT
+
+    try:
+        ssb.build_short_scenes(
+            job, {"short_id": "short-sz2"}, _GOOD_SCRIPT, _cfg(), llm_fn,
+        )
+    except ssb.ChatGPTSizeRefusalError as exc:
+        assert isinstance(exc, ssb.ChatGPTProviderError)
+        assert exc.failure_kind == "chatgpt_size_refusal"
+        assert exc.snippet
+    else:
+        raise AssertionError("expected ChatGPTSizeRefusalError")
+
+    assert calls["n"] == 2
+    # Refusal must NOT have written an (empty) scenes artifact.
+    sd = paths.short_dir(job, "short-sz2")
+    assert not (sd / "json" / paths.SHORT_SCENES_FILE).exists()
+
+
+def test_short_scene_prompt_v6_forbids_size_refusal_and_requires_minified_json():
+    from video_agent.shorts import prompts
+
+    p = prompts.short_scene_prompt_v6(
+        _cfg(), {"short_id": "short-min"}, {**_GOOD_SCRIPT, "short_format": "checklist"},
+    )
+    low = p.lower()
+    assert "one single line" in low or "single line" in low
+    assert "never refuse" in low
+    assert "empty scenes array" in low

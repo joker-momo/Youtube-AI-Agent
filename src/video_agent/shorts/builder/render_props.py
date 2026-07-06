@@ -42,7 +42,6 @@ def _render_block(channel_config: dict, duration_sec: float) -> dict[str, Any]:
     base_render = channel_config.get("render") or {}
     return {
         "composition": rcfg.get("composition", "ShortVideoStandard"),
-        "thumbnail_composition": rcfg.get("thumbnail_composition", "ShortCover"),
         "resolution": rcfg.get("resolution", "1080x1920"),
         "fps": rcfg.get("fps", base_render.get("fps", 30)),
         "duration_sec": duration_sec,
@@ -149,8 +148,21 @@ def build_prepared_short_render_props(
       verified (§24.3); a mismatch raises :class:`PreparedPropsError`.
     """
     scene_list = scenes.get("scenes") or []
-    intro = float(branding.get("intro_sec") or 0.0)
-    outro = float(branding.get("outro_sec") or 0.0)
+    # Shorts never render the long-form intro/outro brand clips: the Remotion Short
+    # composition renders scenes ONLY, and a multi-second intro/outro on a ~20-30s
+    # Short would wreck opening retention (and mismatch the encoded MP4 — bug-478,
+    # after branding.enable_intro_outro was turned on channel-wide 2026-07-01 for
+    # long-form). Force them to zero here so render.duration_sec == scene_sum and the
+    # embedded branding does not point the renderer at intro/outro clips.
+    branding = {
+        **branding,
+        "intro_sec": 0.0,
+        "outro_sec": 0.0,
+        "intro_video_path": None,
+        "outro_video_path": None,
+    }
+    intro = 0.0
+    outro = 0.0
     scene_sum = round(sum(float(s.get("duration_sec") or 0.0) for s in scene_list), 1)
 
     render_config = dict(channel_config.get("render") or {})
@@ -158,8 +170,6 @@ def build_prepared_short_render_props(
     for k, v in shorts_render.items():
         if v is not None:
             render_config[k] = v
-    if shorts_render.get("cover_composition") is not None:
-        render_config["thumbnail_composition"] = shorts_render["cover_composition"]
     render_config["duration_sec"] = scene_sum + intro + outro
 
     schedule = handoff.get("visual_schedule") or {}

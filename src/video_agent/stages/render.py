@@ -176,7 +176,7 @@ def _render_gl(render_props_path: Path) -> str | None:
 
 
 def _render_offthreadvideo_threads(render_props_path: Path) -> int | None:
-    """Parallel FFmpeg threads for OffthreadVideo frame extraction.
+    """Parallel FFmpeg threads for Remotion video frame extraction.
 
     Remotion's default is 2 — a pool shared across all render workers. With
     concurrency=auto (8 on this M2) the extraction pool starves the workers on a
@@ -1310,14 +1310,25 @@ def _finish_render_artifact(job_dir: Path, video_path: Path, *, notify_telegram:
     # ------------------------------------------------------------------
     thumb_dir = job_dir / "outputs"
     chatgpt_thumb = thumb_dir / "thumbnail_1.jpg"
-    if not chatgpt_thumb.exists():
+    # Shorts have NO cover deliverable: the Shorts pipeline intentionally removed
+    # its thumbnail stage, and YouTube Shorts use an auto frame, not a custom
+    # thumbnail. The mandatory-thumbnail gate is a long-form requirement (the
+    # legacy Remotion still-fallback was removed 2026-06-30); requiring it for a
+    # Short blocks a fully-rendered video (bug-479). Detect a Short the same way
+    # _is_short_job_dir does (a short_dir is jobs/<job>/shorts/<short_id>).
+    is_short = (
+        job_dir.parent.name == "shorts"
+        or (job_dir / "json" / "short_render_props.json").exists()
+        or (job_dir / "short_render_props.json").exists()
+    )
+    if not is_short and not chatgpt_thumb.exists():
         raise RuntimeError(
             f"ChatGPT thumbnail missing: {chatgpt_thumb}. Generate it "
             "(auto_thumbnail_image_stage) before rendering — the Remotion thumbnail "
             "fallback has been removed."
         )
-    # Keep thumbnail.jpg alias in place for Telegram / operator UI.
-    if not (thumb_dir / "thumbnail.jpg").exists():
+    # Keep thumbnail.jpg alias in place for Telegram / operator UI (when one exists).
+    if chatgpt_thumb.exists() and not (thumb_dir / "thumbnail.jpg").exists():
         shutil.copy2(chatgpt_thumb, thumb_dir / "thumbnail.jpg")
 
     _mark_render_stage_completed(job_dir)

@@ -207,3 +207,57 @@ def test_synthesize_short_narration_forces_dynamic_sync_off(tmp_path: Path, monk
     # must not mutate the caller's config object
     assert "dynamic_sync" not in cfg["shorts"]["tts"]
     assert cfg["shorts"]["tts"]["music"]["preferred_track"] == "legacy.mp3"
+
+
+def test_regen_fallback_forces_ai_strategy_for_rejected_native_scenes(tmp_path: Path, monkeypatch):
+    """bug-477: scenes whose native stock was rejected by local QA must be forced
+    onto the AI-image route. Merely enabling the AI tier (_skip_ai_fallback=False)
+    is not enough — a stock_ok scene re-selects the same rejected clip at Tier 1.
+    Forcing asset_strategy=ai_image_preferred skips the stock tiers. Graphic scenes
+    already force it via layout and must be left untouched."""
+    from video_agent.shorts import audio
+
+    seen: dict = {}
+
+    def fake_prepare_assets(*, job_dir, scene_doc, only_scene_ids=None, **kwargs):
+        seen["only_scene_ids"] = only_scene_ids
+        seen["scene_doc"] = scene_doc
+
+    monkeypatch.setattr("video_agent.shorts.assets.prepare.prepare_assets", fake_prepare_assets)
+    monkeypatch.setattr(audio, "_short_asset_context", lambda short_dir, cfg: {})
+    monkeypatch.setattr(audio, "_persist_prepared_short_scenes", lambda short_dir, scenes: None)
+
+    scenes = {
+        "scenes": [
+            {"id": "s04", "layout": "short_tip", "asset_strategy": "stock_ok"},
+            {"id": "s06", "layout": "short_cta", "asset_strategy": "stock_ok"},
+            {"id": "s03", "layout": "graphic_step_list", "asset_strategy": "graphic_fallback"},
+            {"id": "s01", "layout": "short_hook", "asset_strategy": "stock_ok"},  # not in set
+        ]
+    }
+    audio.regen_fallback_backgrounds(tmp_path, scenes, {"shorts": {}}, {"s04", "s06", "s03"})
+
+    by_id = {s["id"]: s for s in scenes["scenes"]}
+    # Rejected native scenes forced onto the AI route.
+    assert by_id["s04"]["asset_strategy"] == "ai_image_preferred"
+    assert by_id["s04"]["_skip_ai_fallback"] is False
+    assert by_id["s06"]["asset_strategy"] == "ai_image_preferred"
+    # Graphic scene already forces AI via layout — left as graphic_fallback.
+    assert by_id["s03"]["asset_strategy"] == "graphic_fallback"
+    assert by_id["s03"]["_skip_ai_fallback"] is False
+    # A scene not in the regen set is untouched.
+    assert by_id["s01"]["asset_strategy"] == "stock_ok"
+    assert "_skip_ai_fallback" not in by_id["s01"]
+    assert seen["only_scene_ids"] == {"s04", "s06", "s03"}
+
+
+def test_regen_fallback_noop_on_empty_scene_ids(tmp_path: Path, monkeypatch):
+    from video_agent.shorts import audio
+
+    called = {"n": 0}
+    monkeypatch.setattr(
+        "video_agent.shorts.assets.prepare.prepare_assets",
+        lambda **k: called.__setitem__("n", called["n"] + 1),
+    )
+    audio.regen_fallback_backgrounds(tmp_path, {"scenes": []}, {}, set())
+    assert called["n"] == 0

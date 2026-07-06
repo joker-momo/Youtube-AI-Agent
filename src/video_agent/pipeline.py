@@ -1303,8 +1303,6 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
         for k, v in shorts_render.items():
             if v is not None:
                 render_config[k] = v
-        if "cover_composition" in shorts_render and shorts_render["cover_composition"] is not None:
-            render_config["thumbnail_composition"] = shorts_render["cover_composition"]
 
     # Long-form pins the exact composition frame count (intro + scenes + outro) so
     # an enforced render is not sized to the scenes-only schedule total (which would

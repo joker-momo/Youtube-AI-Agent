@@ -2,6 +2,8 @@
 
 > Auto-maintained by OpenWolf. Last scanned: 2026-07-06T09:17:08.862Z
 > Files: 927 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-07-06T09:03:19.327Z
+> Files: 943 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../../../../Users/joker/.claude/
 
@@ -53,6 +55,12 @@
 ## ../../../../private/tmp/claude-501/-Volumes-DATA-YBT-Studio-Youtube-AI-Agent/314044c9-7442-40e0-8082-ba204e813db4/scratchpad/
 
 - `test_cta_only.py` — Isolated CTA test: run ONLY the short script stage (prompt + ChatGPT + (~806 tok)
+- `build_compare.py` — Side-by-side montage: old-formula thumbnails (top row) vs v1.4 (bottom row). (~566 tok)
+- `build_compare3.py` — 3-row montage: old-formula / v1.4 (AI-painted text) / v1.5 (Option A overlay). (~571 tok)
+- `gen_sample_script.py` — Generate ONE sample long-form script with the updated prompt, then check it (~1106 tok)
+- `gen_sample_seo.py` — Generate a sample SEO artifact with the updated prompt, then validate the (~1041 tok)
+- `gen_v14_thumbs.py` — Generate 3 thumbnails with the NEW v1.4 prompt (user-authorized, 2026-07-06). (~628 tok)
+- `gen_v15_thumbs.py` — Option A end-to-end: gen clean backgrounds (v1.5 prompt) → composite text + (~675 tok)
 
 ## ../../../../private/tmp/claude-501/-Volumes-DATA-YBT-Studio-Youtube-AI-Agent/5150a21d-b4f6-4331-9e67-8115da2ce00c/scratchpad/
 
@@ -111,13 +119,13 @@
 ## ./
 
 - `.dockerignore` — Docker ignore rules (~84 tok)
-- `.gitignore` — Git ignore rules (~457 tok)
+- `.gitignore` — Git ignore rules (~518 tok)
 - `AGENTS.md` — Project Operating Rules (~2404 tok)
 - `CLAUDE.md` — 🎯 PRIME DIRECTIVE — read this FIRST, every session, before any request (~2173 tok)
 - `CONCEPTS.md` — CONCEPTS.md — Shared Domain Vocabulary (~1742 tok)
 - `CONCEPTS.md` — CONCEPTS.md — Shared Domain Vocabulary (~1201 tok)
 - `install.sh` — Master installer — macOS native only (no Docker). (~201 tok)
-- `PORTING.md` — PORTING.md — Chuyển project sang máy khác (Ubuntu) (~1562 tok)
+- `PORTING.md` — PORTING.md — Chuyển project sang máy khác (Ubuntu) (~2145 tok)
 - `pyproject.toml` — Local MVP video agent that renders YouTube-ready artifacts with Remotion. (~484 tok)
 - `README.md` — Project documentation (~4139 tok)
 - `requirements.txt` — Python dependencies (~240 tok)
@@ -894,12 +902,12 @@
 
 ## configs/vida-plena-45/
 
-- `channel.yaml` (~5715 tok)
+- `channel.yaml` (~5636 tok)
 
 ## docs/
 
 - `competitor_teardown_2026-06-29.md` — Competitor Teardown — Spanish 60+ health channels (2026-06-29) (~1478 tok)
-- `PROJECT_STATUS.md` — Youtube AI Agent Project Status (~28142 tok)
+- `PROJECT_STATUS.md` — Youtube AI Agent Project Status (~30234 tok)
 - `SKILLS_CHEATSHEET.md` — 📋 Skills Cheatsheet — Youtube-AI-Agent (~1333 tok)
 
 ## docs/implementation/
@@ -909,6 +917,9 @@
 ## docs/plans/
 
 - `task.md` — Antigravity runtime task tracker table (~454 tok)
+
+## docs/references/
+
 
 ## docs/superpowers/plans/
 
@@ -956,11 +967,12 @@
 - `CtaEngagement.tsx` — On-brand animated engagement CTA: Like → Subscribe → Bell, staggered spring-in. (~1670 tok)
 - `render-props.ts` — Exports WordSegment, SubtitleConfig, SceneLayout, LayoutPayload + 9 more (~1945 tok)
 - `Root.tsx` — Side-effect import: registers webfonts via delayRender so Shorts (~926 tok)
+- `ShortVideo.tsx` — Vertical YouTube Short renderer (1080x1920). (~2035 tok)
 
 ## remotion/src/shorts/
 
 - `loadFonts.ts` — Eagerly preload the Short AND long-form composition fonts so Remotion (~358 tok)
-- `ShortBackground.tsx` — Background media + smart fit + readability overlays (spec §3). (~1874 tok)
+- `ShortBackground.tsx` — Background media + smart fit + readability overlays (spec §3). (~2072 tok)
 - `ShortLayouts.tsx` — Universal Short Video layout registry (spec §7 + §8). (~2357 tok)
 - `ShortMediaLayer.tsx` — inferKind (~1535 tok)
 - `ShortText.tsx` — Reusable text primitives for vertical Shorts (spec §4 + §6.1). (~1379 tok)
@@ -974,14 +986,18 @@
 - `cli.py` — build_parser (~4770 tok)
 - `color_mix.py` — Perceptual colour mixing (OKLab): resolve_topic_accent_color (30% blend, bug-466), resolve_topic_background_color/resolve_topic_text_color (12% blend, bug-467). (~2600 tok)
 - `operator_json.py` — JSON object extraction, truncated-root repair, and JSON prompt utility helpers. (~2500 tok)
-- `operator_prompts.py` — Prompt template builders for operator ChatGPT/Gemini workflows. (~16636 tok)
+- `operator_prompts.py` — Prompt template builders for operator ChatGPT/Gemini workflows. (~17318 tok)
 - `operator_validators.py` — class: is_valid, merge, format_report, load_operator_channel_config + 1 more (~4722 tok)
 - `operator.py` — Declares from (~12281 tok)
 - `pipeline.py` — Declares from (~16283 tok)
+- `pipeline.py` — Declares from (~16230 tok)
 - `style_dna.py` — Shared loader for ``configs/<channel>/style-dna.json`` — the single source of (~604 tok)
-- `thumbnail_planner.py` — Thumbnail prompt planner — spec v1.3. (~9686 tok)
+- `thumbnail_planner.py` — Thumbnail prompt planner — spec v1.3. (~10975 tok)
 - `tts_melo_worker.py` — MeloTTS sidecar worker — runs inside the melo venv, driven over JSON-over-stdio. (~594 tok)
 - `tts.py` — TTSClient: synthesize, synthesize_scene_track, synthesize (~4831 tok)
+
+## src/video_agent/ (Option A thumbnail overlay)
+
 
 ## src/video_agent/assets/
 
@@ -1020,13 +1036,13 @@
 - `idea_generator.py` — Idea generator: seed keyword selection → ChatGPT idea expansion. (~5528 tok)
 - `idea_youtube_sync.py` — YouTube channel sync + published-video duplicate detection. (~2793 tok)
 - `job_state.py` — class: to_dict, from_dict, stage, save_job + 2 more (~1072 tok)
-- `worker.py` — _JobHeartbeat: get_jobs_root, get_channel_path, start, stop + 12 more (~8553 tok)
+- `worker.py` — _JobHeartbeat: get_jobs_root, get_channel_path, start, stop + 12 more (~7687 tok)
 
 ## src/video_agent/orchestrator/stages/
 
 - `__init__.py` — Facade package: re-exports every public (and private) symbol from all (~2111 tok)
 - `_shared.py` — StageInputMissingError: dag_mode, set_dag_mode, require_stage, resolve_stage_fps (~2939 tok)
-- `assets_thumbnail.py` — auto_idea_research_stage, generate_scene_asset (~7407 tok)
+- `assets_thumbnail.py` — auto_idea_research_stage, generate_scene_asset (~7595 tok)
 - `audio.py` — run_whisper_timestamps_stage (~4140 tok)
 - `elena_lipsync.py` — Long-form ``elena_lipsync`` pipeline stage. (~722 tok)
 - `elena_plan.py` — Long-form ``elena_plan`` pipeline stage (Phase 5). (~712 tok)
@@ -1053,7 +1069,7 @@
 ## src/video_agent/shorts/
 
 - `asset_schedule.py` — Compiled asset schedule — schema-v2 deterministic visual timeline (spec v3.2.3 (~11012 tok)
-- `audio.py` — Kokoro narration synthesis for a Short, scoped to the short folder. (~2473 tok)
+- `audio.py` — Kokoro narration synthesis for a Short, scoped to the short folder. (~2756 tok)
 - `autopilot.py` — Sequential Shorts Autopilot runner. (~3825 tok)
 - `call_budget.py` — Reason-aware call/retry budget summary for a single Short build. (~1177 tok)
 - `candidate_scorer.py` — Score Short candidates for standalone retention/funnel potential. (~1533 tok)
@@ -1063,17 +1079,21 @@
 - `llm.py` — Shorts AI role wiring (spec v6 §2 + §3). (~1754 tok)
 - `paths.py` — Canonical storage-layout paths for the Shorts autopilot. (~1728 tok)
 - `prompts.py` — Strict, JSON-only, Spain-first prompts for Short script / scene / QA generation. (~26481 tok)
+- `paths.py` — Canonical storage-layout paths for the Shorts autopilot. (~1940 tok)
+- `performance_memory.py` — write_performance_memory (~608 tok)
+- `prompts.py` — Strict, JSON-only, Spain-first prompts for Short script / scene / QA generation. (~26358 tok)
 - `qa_common.py` — Shared QA classes, constants and leaf helpers. (~1986 tok)
 - `qa_normalize.py` — Normalize raw QA issues into structured NormalizedIssue records. (~9104 tok)
 - `qa_product_scores.py` — Product-score classification and Gemini scenes-QA normalization. (~3549 tok)
 - `qa.py` — Shorts QA — dual gate (spec v6 §2.5 + §13). (~13900 tok)
 - `render_continuity_qa.py` — Post-render production continuity QA (spec §34). (~3629 tok)
-- `renderer.py` — Render a Short to vertical ``short.mp4``. (~2360 tok)
+- `renderer.py` — Render a Short to vertical ``short.mp4``. (~2298 tok)
 - `retention_plan.py` — safe_topic, build_retention_plan (~3016 tok)
 - `short_builder.py` — Build one Short end to end: generate → QA (regen loop) → audio → mix → render. (~10242 tok)
-- `short_scene_builder.py` — Spec v6 §2.4 — ChatGPT generates Short scenes AND picks layouts. (~5522 tok)
-- `short_script_builder.py` — Spec v6 §2.3 — Generate + persist a Short script via ChatGPT. (~1466 tok)
+- `short_scene_builder.py` — Spec v6 §2.4 — ChatGPT generates Short scenes AND picks layouts. (~6581 tok)
+- `short_script_builder.py` — Spec v6 §2.3 — Generate + persist a Short script via ChatGPT. (~1524 tok)
 - `short_seo_builder.py` — Build ``short_seo.json`` for a Short (LLM-generated, parsed + normalized). (~2245 tok)
+- `source_map.py` — Build ``short_source_map.json`` linking a Short back to long-video scenes. (~2731 tok)
 - `status.py` — Summarize Shorts state for UI + orphaned-Short recovery (recover_stale_short / force_terminate_orphaned_shorts / short_owner_is_alive). (~2300 tok)
 - `status.py` — Summarize Shorts state for the jobs list / Shorts tab. (~3554 tok)
 - `synthesis.py` — idea_to_short_plan, render_selected_short_ideas (~4316 tok)
@@ -1081,10 +1101,10 @@
 - `visual_acquisition.py` — PR C span-aware metadata acquisition contracts (spec v4.0.3). (~3664 tok)
 - `visual_beat_planner.py` — PR E bounded visual-beat planner (spec v4.0.3). (~7175 tok)
 - `visual_candidate_scoring.py` — Metadata-only span candidate gate/scoring and provisional non-render selection (spec v4.0.3 PR C). (~2469 tok)
-- `visual_local_analysis.py` — Deterministic local visual analysis and trim-window selection for PR D. (~3976 tok)
+- `visual_local_analysis.py` — Deterministic local visual analysis and trim-window selection for PR D. (~4168 tok)
 - `visual_performance.py` — PR F versioned visual performance feature export, YouTube metrics join, manual review normalization, and offline report generation. (~9000 tok)
 - `visual_rhythm.py` — Rotation pool — every entry MUST be a renderer-valid key (see (~1434 tok)
-- `visual_semantic.py` — Optional local semantic vision adapters (spec v4.0.3 §12A, §13, §38). (~7980 tok)
+- `visual_semantic.py` — Optional local semantic vision adapters (spec v4.0.3 §12A, §13, §38). (~8510 tok)
 - `visual_sequence_qa.py` — PR E sequence-level QA artifact over selected beats/tracks, plan distribution, simplicity decisions, and cut-count changes. (~2500 tok)
 - `visual_spans.py` — Report-only visual-span grouping for Shorts (spec v3.2.3 §10, §11, §11A). (~5806 tok)
 - `visual_vocabulary.py` — Controlled visual token aliases and provider-query labels for Shorts metadata acquisition. (~1249 tok)
@@ -1104,18 +1124,19 @@
 - `context.py` — Shared mutable context threaded through the per-stage build functions. (~432 tok)
 - `defaults.py` — Default real side-effect implementations (wired lazily) for short_builder. (~419 tok)
 - `qa_gate.py` — QA gate helpers extracted from short_builder. (~1938 tok)
-- `render_props.py` — Short render handoff writer + shared prepared-short final-props builder. (~2558 tok)
+- `render_props.py` — Short render handoff writer + shared prepared-short final-props builder. (~2661 tok)
 - `retry.py` — Retry helpers extracted from short_builder. (~684 tok)
 - `snapshots.py` — Snapshot and hash helpers extracted from short_builder. (~870 tok)
 - `status.py` — Stage status helpers extracted from short_builder. (~506 tok)
 
 ## src/video_agent/shorts/builder/stages/
 
-- `media.py` — Asset, audio, SEO, render & lifecycle stages for the Short builder. (~6999 tok)
-- `scenes.py` — Scene-generation stage cluster for the Short builder. (~22760 tok)
+- `media.py` — Asset, audio, SEO, render & lifecycle stages for the Short builder. (~6941 tok)
+- `scenes.py` — Scene-generation stage cluster for the Short builder. (~22855 tok)
+- `script.py` — Script generation, QA, anti-AI review & humanization stages. (~7496 tok)
 - `visual_acquisition.py` — PR C report-only visual metadata acquisition stage (spec v4.0.3). (~4072 tok)
-- `visual_beats.py` — PR E visual beat-planning stage. (~1522 tok)
-- `visual_local_qa.py` — PR D local visual QA and trim-window selection stage. (~8077 tok)
+- `visual_beats.py` — PR E visual beat-planning stage. (~2336 tok)
+- `visual_local_qa.py` — PR D local visual QA and trim-window selection stage. (~10780 tok)
 - `visual_performance.py` — PR F non-blocking stage writing visual_performance_features.json and visual_performance_report.json after render/performance_memory. (~2200 tok)
 - `visual_schedule.py` — Compiled visual-schedule stage (spec v3.2.3 §18, §21, §22). (~1894 tok)
 - `visual_spans.py` — Visual-span grouping stage (spec v3.2.3 §18, §19). (~1037 tok)
@@ -1131,11 +1152,12 @@
 - `repairs.py` — repair_five_error_bread_payoff_layout, repair_missing_graphic_checklist_scene, repair_excess_graphic (~8097 tok)
 - `scene_structure.py` — Whole-short scene structure validation, repair plan & pacing. (~11273 tok)
 - `script_checks.py` — Script-level validation: word budget, candidate validation, checklist cap. (~4800 tok)
+- `script_checks.py` — Script-level validation: word budget, candidate validation, checklist cap. (~4609 tok)
 
 ## src/video_agent/stages/
 
 - `assets.py` — prepare_assets (~3884 tok)
-- `render.py` — from: validate_render_duration_matches_scene_sum, probe_video_duration_sec, probe_audio_duration_sec (~15296 tok)
+- `render.py` — from: validate_render_duration_matches_scene_sum, probe_video_duration_sec, probe_audio_duration_sec (~15504 tok)
 - `visual_contact_sheet.py` — Backgrounds may be stills (jpg/png) or rendered clips (mp4/webm). PIL can only (~1273 tok)
 
 ## src/video_agent/visual/
@@ -1197,6 +1219,7 @@
 - `test_elena_band_warning.py` — Elena simple per-scene rule (no frequency/cadence/band). (~1807 tok)
 - `test_elena_plan_stage.py` — Integration test for the long-form ``elena_plan`` pipeline stage. (~402 tok)
 - `test_fallback_image_policy.py` — `_stage_fallback_image_gen` must keep confidently-passing native footage and (~1472 tok)
+- `test_funnel_cta.py` — Topic-aware Short funnel CTA (names the companion long video's theme). (~1627 tok)
 - `test_graphic_images_stage.py` — Tests for the long-form ``graphic_images`` stage. (~3696 tok)
 - `test_local_qa.py` — Unit coverage for the deterministic local pre-QA gate (stages/local_qa.py). (~923 tok)
 - `test_long_comp_duration.py` — Regression guard for long-form composition duration (B1). (~436 tok)
@@ -1208,7 +1231,7 @@
 - `test_long_visual_schedule.py` — Unit tests for the long-form compiled asset schedule (``video_agent.visual.schedule``). (~2631 tok)
 - `test_long_visual_spans.py` — Unit tests for the long-form visual-span core (``video_agent.visual``). (~2587 tok)
 - `test_materialize.py` — test_materialize_clone_identical, test_materialize_cow_independent, test_materialize_overwrites_exis (~447 tok)
-- `test_operator_prompts.py` — Tests for Spain-first locale-aware operator prompts. (~1869 tok)
+- `test_operator_prompts.py` — Tests for Spain-first locale-aware operator prompts. (~2221 tok)
 - `test_operator_qa_nested_verdict.py` — Gemini QA sometimes echoes the FULL artifact (which natively carries a ``qa`` (~463 tok)
 - `test_operator_render_prepared_routing.py` — Short job dirs must always render through the prepared-short owner, even from (~678 tok)
 - `test_operator_workflow.py` — test_extract_json_object_ignores_model_wrapper_text, test_write_operator_prompts_writes_script_promp (~6460 tok)
@@ -1250,6 +1273,7 @@
 - `test_shorts_seo_context_leak.py` — Regression tests for SEO context-leak fix (spec v1.2). (~2137 tok)
 - `test_shorts_stale_recovery.py` — Orphaned-Short recovery: a synchronous build that dies mid-stage leaves (~1649 tok)
 - `test_shorts_studio.py` — client, test_job_queue_active_jobs_returns_pending_and_running, test_rendered_shorts_copy_hashtags_w (~5066 tok)
+- `test_shorts_transition_polish.py` — Source-inspection contracts for the Shorts anti-slideshow polish. (~656 tok)
 - `test_shorts_v6_ai_roles.py` — Spec v6 — AI role contract + temporary conversations. (~3901 tok)
 - `test_shorts_validate_scenes_repair.py` — repair_visual_only_unreadable injects the missing item's text into the scene (~1188 tok)
 - `test_shorts_visual_rhythm.py` — test_visual_rhythm_detects_static_risk_and_varies_motion, test_apply_visual_rhythm_preserves_core_sc (~1284 tok)
@@ -1261,6 +1285,9 @@
 - `test_stage_resolve_fps.py` — Guard for the shared stage fps resolver (overlap #3). (~238 tok)
 - `test_stock_asset_cascade.py` — Tests for the 3-tier visual asset cascade (video -> photo -> AI-gen). (~7236 tok)
 - `test_telegram_short_publish.py` — Tests for the Shorts → Telegram publish-package handoff. (~1810 tok)
+- `test_thumbnail_image_stage.py` — ── _build_thumbnail_prompt ─────────────────────────────────────────────────── (~2787 tok)
+- `test_thumbnail_planner.py` — Spec v1.3 §18 — 42 tests for thumbnail_planner. (~6041 tok)
+- `test_thumbnail_stage_v13.py` — Spec v1.3 Phase 2 stage integration tests. (~2087 tok)
 - `test_timeline_dag_mode_status.py` — Regression coverage for timeline status derivation during a DAG-mode run (~2188 tok)
 - `test_title_ctr_formula.py` — CTR-first title formula (2026-06-29, option b). (~440 tok)
 - `test_tokenizers_parallelism_guard.py` — Regression: importing the local semantic-vision module must disable HF (~332 tok)
@@ -1276,9 +1303,10 @@
 - `test_visual_performance_report.py` — PR F offline report tests for insufficient evidence, joined metric coverage, confounders, and correlation-not-causation wording. (~1700 tok)
 - `test_visual_prompt_english.py` — Tests for visual_prompt English enforcement (validator + query translation). (~1680 tok)
 - `test_visual_review_photo_backed_qa.py` — Regression: bug-455 follow-up (Codex requested action #2) -- surface (~923 tok)
+- `test_visual_review_span_coverage.py` — bug-485: a placeholder BACKGROUND must not block the render when the (~1319 tok)
 - `test_visual_rollout_policy.py` — PR F rollout policy/stage tests for non-blocking feature capture, disabled capture, and forced no automatic weight mutation. (~3600 tok)
 - `test_visual_schedule_stage.py` — Integration test for the long-form ``visual_schedule`` pipeline stage. (~888 tok)
-- `test_visual_semantic.py` — Local semantic vision cascade tests (spec v4.0.3 §12A, §38). (~3063 tok)
+- `test_visual_semantic.py` — Local semantic vision cascade tests (spec v4.0.3 §12A, §38). (~4400 tok)
 - `test_visual_sequence_qa.py` — PR E stage/sequence-QA tests for artifact writes, report-only capability reduction, and disabled mode. (~3400 tok)
 - `test_visual_spans_stage.py` — Integration test for the long-form ``visual_spans`` pipeline stage. (~921 tok)
 - `test_visual_trim_schedule_integration.py` — PR D schedule integration tests for compiled trim fields and trim/source duration validation. (~1690 tok)
@@ -1291,6 +1319,7 @@
 - `test_qa_issues.py` — test_suppress_stale_hook_fidelity, test_repairable_point_grouping, test_count_promise_soft_when_coun (~6327 tok)
 - `test_script_candidate_validation.py` — test_rejects_partial_script_too_few_blocks, test_rejects_script_not_starting_at_zero, test_rejects_m (~2033 tok)
 - `test_script_stages.py` — test_short_script_prompt_has_retention_and_language_rules, test_v13_script_prompt_uses_calibrated_wo (~1613 tok)
+- `test_seo.py` — test_short_seo_prompt_prefers_broad_nutrition_tags_over_nutricion45, test_short_seo_prompt_uses_high (~908 tok)
 
 ## tools/
 

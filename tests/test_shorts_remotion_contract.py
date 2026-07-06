@@ -20,14 +20,23 @@ def _read(p: Path) -> str:
     return p.read_text(encoding="utf-8")
 
 
-# ── Fix A: frame-accurate background, no black lead-in ──────────────────────
+# ── Fix A: frame-accurate media background, no black lead-in ────────────────
 
-def test_short_background_uses_offthread_video():
+def test_short_background_uses_remotion_media_video():
     src = _read(SHORT_BG)
-    assert "OffthreadVideo" in src, "ShortBackground must use OffthreadVideo"
-    assert "<OffthreadVideo" in src
-    # No bare <Video> playback for Shorts backgrounds (causes black frame 0).
+    assert "@remotion/media" in src, "ShortBackground must use @remotion/media"
+    assert "MediaVideo" in src
+    assert "<MediaVideo" in src
+    assert 'objectFit="cover"' in src
+    # No bare Remotion <Video> playback for Shorts backgrounds.
     assert "<Video" not in src, "Shorts background must not use bare <Video>"
+
+
+def test_short_media_layer_uses_remotion_media_cover_prop():
+    src = _read(SHORT_MEDIA_LAYER)
+    assert "@remotion/media" in src, "ShortMediaLayer must use @remotion/media"
+    assert src.count('objectFit="cover"') >= 2
+    assert "MediaVideo src={resolved} style={{width: '100%', height: '100%', objectFit: 'cover'}}" not in src
 
 
 def test_first_short_sequence_starts_at_frame_zero():

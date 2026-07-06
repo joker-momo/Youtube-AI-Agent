@@ -28,6 +28,13 @@ export type ShortBackgroundProps = {
   cropPlan?: CropPlan;
   /** Scene length in frames; normalizes the motion progress 0→1. */
   durationInFrames?: number;
+  /**
+   * A ChatGPT-baked graphic/infographic card (generated_image scene). The card
+   * text is pixels — it cannot animate — so it reads as a frozen slide under the
+   * weak LLM "text_pop" drift. Force a deliberate slow push-in instead so the
+   * card feels intentional and alive (the card's own margins keep text safe).
+   */
+  isGraphic?: boolean;
 };
 
 function inferKind(src: string | undefined): 'video' | 'image' {
@@ -58,7 +65,13 @@ const lerp = (a: number, b: number, p: number) => a + (b - a) * p;
  *  - translateX is kept within the headroom the active scale provides
  *    (scale 1.06 → ±3% safe; we cap at ±2.2%).
  */
-function shortMotion(motion: string | undefined, p: number): {scale: number; x: number} {
+function shortMotion(motion: string | undefined, p: number, isGraphic = false): {scale: number; x: number} {
+  // A baked graphic card never animates its own contents, so give it a deliberate
+  // slow push-in (not the near-frozen text_pop drift) — the card's margins absorb
+  // the ~10% crop and it stops reading as a static slide.
+  if (isGraphic) {
+    return {scale: lerp(1.0, 1.1, p), x: 0};
+  }
   switch ((motion || '').toLowerCase()) {
     // Hook punch-in — noticeable slow zoom toward the subject.
     case 'push_in':
@@ -116,6 +129,7 @@ export const ShortBackground: React.FC<ShortBackgroundProps> = ({
   motion,
   cropPlan,
   durationInFrames,
+  isGraphic = false,
 }) => {
   const resolved = resolveSrc(src);
   const actualKind = kind ?? inferKind(src);
@@ -128,7 +142,7 @@ export const ShortBackground: React.FC<ShortBackgroundProps> = ({
     extrapolateRight: 'clamp',
     easing: Easing.inOut(Easing.ease),
   });
-  const m = shortMotion(motion, progress);
+  const m = shortMotion(motion, progress, isGraphic);
   const c = cropTransform(cropPlan);
   const motionTransform = `translateX(${m.x}%) scale(${m.scale})`;
   const mediaTransform = cropPlan ? `translate(${c.x + m.x}%, ${c.y}%) scale(${c.scale * m.scale})` : motionTransform;
@@ -139,7 +153,7 @@ export const ShortBackground: React.FC<ShortBackgroundProps> = ({
       {resolved ? (
         <AbsoluteFill style={{filter: 'blur(40px) brightness(0.55)', transform: 'scale(1.15)'}}>
           {actualKind === 'video' ? (
-            <MediaVideo src={resolved} style={{width: '100%', height: '100%', objectFit: 'cover'}} muted />
+            <MediaVideo src={resolved} objectFit="cover" style={{width: '100%', height: '100%'}} muted />
           ) : (
             <Img src={resolved} style={{width: '100%', height: '100%', objectFit: 'cover'}} />
           )}
@@ -150,7 +164,7 @@ export const ShortBackground: React.FC<ShortBackgroundProps> = ({
       {resolved ? (
         <AbsoluteFill style={{transform: mediaTransform, transformOrigin: 'center center'}}>
           {actualKind === 'video' ? (
-            <MediaVideo src={resolved} style={{width: '100%', height: '100%', objectFit: 'cover'}} muted />
+            <MediaVideo src={resolved} objectFit="cover" style={{width: '100%', height: '100%'}} muted />
           ) : (
             <Img src={resolved} style={{width: '100%', height: '100%', objectFit: 'cover'}} />
           )}

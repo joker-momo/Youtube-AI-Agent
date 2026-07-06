@@ -108,8 +108,10 @@ def materialize_short_job_aliases(short_dir: Path, channel_config: dict | None =
                 "tags": short_seo.get("tags") or short_seo.get("hashtags") or ["shorts"],
                 "language": short_seo.get("language", "es-ES"),
                 "ai_disclosure": bool(short_seo.get("ai_disclosure", True)),
-                "thumbnail_path": "outputs/thumbnail_1.jpg",
-                "thumbnail_text": (title[:25] or "SHORT").upper(),
+                # Shorts have no thumbnail deliverable; these stay empty (the shared
+                # seo.schema still requires the keys). See _finish_render_artifact.
+                "thumbnail_path": "",
+                "thumbnail_text": "",
                 "suggested_pinned_comments": short_seo.get("pinned_comment", ""),
             },
         )
@@ -142,14 +144,8 @@ def render_short_video(
     outputs_dir = short_dir / paths.SHORT_OUTPUTS_SUBDIR
     outputs_dir.mkdir(parents=True, exist_ok=True)
 
-    # Bypass Remotion thumbnail generation:
-    # If the ChatGPT-generated thumbnail.jpg exists, copy it to outputs/thumbnail_1.jpg
-    # so that render_with_remotion will see it and completely skip Remotion still rendering.
-    thumb = paths.resolve_short_output(short_dir, paths.SHORT_THUMBNAIL_FILE)
-    if not thumb.exists():
-        thumb = short_dir / paths.SHORT_THUMBNAIL_FILE  # fallback root location
-    if thumb.exists():
-        shutil.copyfile(thumb, outputs_dir / "thumbnail_1.jpg")
+    # Shorts have no thumbnail/cover deliverable: the Shorts pipeline generates no
+    # thumbnail and _finish_render_artifact skips the thumbnail gate for shorts.
 
     render_operator_job(
         OperatorRenderOptions(

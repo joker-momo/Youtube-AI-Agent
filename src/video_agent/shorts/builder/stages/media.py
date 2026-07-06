@@ -209,12 +209,6 @@ def _stage_performance_memory(ctx: BuildContext) -> None:
         short_script,
         short_scenes,
         retention_plan,
-        thumbnail_meta={
-            "status": "completed",
-            "mode": "disabled_for_shorts_render",
-            "image_generation_called": False,
-            "thumbnail_path": None,
-        },
         status="rendered",
     )
     ctx.update_stage("performance_memory", "completed", memory_status="rendered")

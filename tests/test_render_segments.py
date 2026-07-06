@@ -463,6 +463,41 @@ def test_render_with_remotion_reuses_valid_existing_video_without_rerendering(tm
     assert video_path.exists()
 
 
+def test_prepared_short_finish_does_not_require_thumbnail(tmp_path, monkeypatch):
+    """Shorts have no cover deliverable; a valid prepared Short render must not
+    fail just because long-form thumbnail_1.jpg is absent."""
+    import video_agent.stages.render as render_mod
+
+    job_dir = tmp_path / "long-job" / "shorts" / "short-01"
+    (job_dir / "json").mkdir(parents=True)
+    (job_dir / "outputs").mkdir(parents=True)
+    (job_dir / "json" / "short_render_props.json").write_text("{}", encoding="utf-8")
+    video_path = job_dir / "outputs" / "video.mp4"
+    _make_clip(video_path, seconds=1.0, fps=30)
+
+    marked = {"called": False}
+    monkeypatch.setattr(render_mod, "_mark_render_stage_completed", lambda _job: marked.__setitem__("called", True))
+    monkeypatch.setattr(render_mod, "_notify_render_done", lambda *a, **k: None)
+
+    render_mod._finish_render_artifact(job_dir, video_path, notify_telegram=False)
+
+    assert marked["called"] is True
+    assert not (job_dir / "outputs" / "thumbnail_1.jpg").exists()
+
+
+def test_long_form_finish_still_requires_chatgpt_thumbnail(tmp_path, monkeypatch):
+    import video_agent.stages.render as render_mod
+
+    job_dir = tmp_path / "long-job"
+    (job_dir / "outputs").mkdir(parents=True)
+    video_path = job_dir / "outputs" / "video.mp4"
+    _make_clip(video_path, seconds=1.0, fps=30)
+    monkeypatch.setattr(render_mod, "_notify_render_done", lambda *a, **k: None)
+
+    with pytest.raises(RuntimeError, match="ChatGPT thumbnail missing"):
+        render_mod._finish_render_artifact(job_dir, video_path, notify_telegram=False)
+
+
 # ---------------------------------------------------------------------------
 # Regression: segment 404 retry (bug-451) — the bundle's public dir is a
 # symlink to remotion/public; a mid-render mutation of the target 404s the

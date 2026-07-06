@@ -202,7 +202,7 @@ def prepare_assets(
                 f"Scene {scene['id']} layout {_layout} requires a ChatGPT-generated "
                 f"image; acquired provider={provider}."
             )
-        # Force all scene backgrounds to video so Remotion always renders OffthreadVideo.
+        # Encode all scene backgrounds to video so Remotion renders one media path.
         asset_suffix = ".mp4"
         image_path = assets_dir / f"{scene['id']}{asset_suffix}"
         # media_kind records whether the SOURCE was real video footage or a still

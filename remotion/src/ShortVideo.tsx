@@ -12,12 +12,37 @@
  * scene Sequences only place text/graphic overlays on compiled boundaries.
  */
 import React from 'react';
-import {AbsoluteFill, Sequence, Audio, useVideoConfig, staticFile} from 'remotion';
+import {AbsoluteFill, Sequence, Audio, useVideoConfig, useCurrentFrame, interpolate, Easing, staticFile} from 'remotion';
 import {CompiledSceneBoundary, RenderProps, Scene} from './render-props';
 import {ShortBackground} from './shorts/ShortBackground';
 import {ShortReadabilityOverlay} from './shorts/ShortReadabilityOverlay';
 import {VisualTimeline} from './shorts/VisualTimeline';
 import {pickShortLayout} from './shorts/ShortLayouts';
+
+/**
+ * Scene-to-scene cross-dissolve length. Each scene renders SHORT_SCENE_XFADE
+ * frames PAST its boundary (it stays painted under the next scene) while the
+ * incoming scene fades in over that window — a real cross-dissolve that kills
+ * the hard-cut "slide flip" feel. The scene START grid is untouched (cursor
+ * advances by the true duration), so the single narration track and every
+ * subtitle/text cue stay perfectly in sync and total duration is unchanged.
+ */
+export const SHORT_SCENE_XFADE = 7;
+
+const SceneCrossfade: React.FC<{fadeFrames: number; children: React.ReactNode}> = ({
+  fadeFrames,
+  children,
+}) => {
+  const frame = useCurrentFrame();
+  const opacity = fadeFrames > 0
+    ? interpolate(frame, [0, fadeFrames], [0, 1], {
+        extrapolateLeft: 'clamp',
+        extrapolateRight: 'clamp',
+        easing: Easing.inOut(Easing.ease),
+      })
+    : 1;
+  return <AbsoluteFill style={{opacity}}>{children}</AbsoluteFill>;
+};
 
 function pickOverlayKey(scene: Scene): 'default' | 'dark' | 'bright' {
   const text = `${scene.visual_prompt || ''} ${scene.narration || ''}`.toLowerCase();
@@ -119,20 +144,26 @@ export const ShortVideo: React.FC<RenderProps> = (props) => {
       {scenes.map((scene, i) => {
         const durFrames = Math.max(1, Math.round((scene.duration_sec || 1) * fps));
         const from = cursor;
+        // Advance by the TRUE duration so scene starts (and the narration/subtitle
+        // grid) never shift. Extend only the RENDER length past the boundary so the
+        // outgoing scene stays painted under the next scene's fade-in (cross-dissolve).
         cursor += durFrames;
+        const isLast = i === scenes.length - 1;
+        const renderFrames = durFrames + (isLast ? 0 : SHORT_SCENE_XFADE);
         const bg = (scene as any).asset_refs?.background as string | undefined;
 
         const Layout = pickShortLayout(scene.layout);
         const isGeneratedGraphic = isGeneratedGraphicScene(scene);
         return (
-          <Sequence key={scene.id || i} from={from} durationInFrames={durFrames} name={scene.id || `scene-${i + 1}`}>
-            <AbsoluteFill>
+          <Sequence key={scene.id || i} from={from} durationInFrames={renderFrames} name={scene.id || `scene-${i + 1}`}>
+            <SceneCrossfade fadeFrames={SHORT_SCENE_XFADE}>
               <ShortBackground
                 src={bg}
                 overlay={pickOverlayKey(scene)}
                 motion={scene.motion}
                 cropPlan={scene.crop_plan}
                 durationInFrames={durFrames}
+                isGraphic={isGeneratedGraphic}
               />
               {!isGeneratedGraphic && (
                 <Layout
@@ -142,7 +173,7 @@ export const ShortVideo: React.FC<RenderProps> = (props) => {
                   accentColor={accentColor}
                 />
               )}
-            </AbsoluteFill>
+            </SceneCrossfade>
           </Sequence>
         );
       })}

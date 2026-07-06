@@ -177,12 +177,21 @@ class LocalVisualAnalyzer:
             with tempfile.TemporaryDirectory() as td:
                 tmp = Path(td)
                 sample_count = max(1, int(math.ceil(duration_sec / self.stride_sec)))
+                # A container's reported duration routinely overhangs its last real
+                # frame by up to ~1 frame, so seeking into that tail zone fails even on
+                # a perfectly valid clip. Keep every seek a couple of frames inside the
+                # end, and treat a residual failure in that tail as a clean EOF rather
+                # than a decode error — only a failure well before the tail is genuine
+                # corruption (bug-476: valid s04.mp4 spuriously decode_failed_at:300).
+                tail_guard = 2.0 / max(fps, 1)
+                safe_end = max(0.0, duration_sec - tail_guard)
                 for idx in range(sample_count):
-                    ts = min(duration_sec - 0.001, idx * self.stride_sec)
+                    ts = min(safe_end, idx * self.stride_sec)
                     frame_no = seconds_to_frames(max(0.0, ts), fps)
                     out = tmp / f"frame-{idx:04d}.jpg"
                     if not _extract_frame(media_path, ts, out):
-                        decode_errors.append(f"decode_failed_at:{frame_no}")
+                        if ts < safe_end - 1e-6:
+                            decode_errors.append(f"decode_failed_at:{frame_no}")
                         continue
                     samples.append(_frame_metrics(out, frame_no, ts))
 

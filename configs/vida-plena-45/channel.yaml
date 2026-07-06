@@ -198,7 +198,7 @@ render:
   # Use Metal-backed ANGLE so Chromium WebGL composites on GPU instead of CPU.
   gl: "angle"
   concurrency: "auto"
-  # OffthreadVideo frame-extraction threads (Remotion default 2). Shared decode-feeder
+  # Remotion video frame-extraction threads (Remotion default 2). Shared decode-feeder
   # pool, NOT render concurrency. BENCHMARKED 2026-06-30 (1200-frame slice, real comp):
   #   threads=4 + conc=8 → 27.3 fps  (WINNER)
   #   threads=8 + conc=8 → 22.3 fps  (−18%: 8 threads oversubscribe the 8 cores,

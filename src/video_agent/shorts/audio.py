@@ -169,6 +169,20 @@ def regen_fallback_backgrounds(
     for scene in short_scenes.get("scenes") or []:
         if scene.get("id") in scene_ids:
             scene["_skip_ai_fallback"] = False
+            # These scenes are in the regen set because their native stock was
+            # rejected by local QA (or the layout needs a controlled image). Merely
+            # enabling the AI tier is not enough: scene_resolver's strict stock tier
+            # (Tier 1) still runs first for a stock_ok scene and re-selects the SAME
+            # rejected clip — it has no view of the semantic rejection — so the AI
+            # tier never fires and the rejected stock is kept (bug-477: s04/s06 kept
+            # their age-band-rejected Pexels videos). Force the AI-image route so the
+            # stock tiers are skipped; graphic_* scenes already force it via layout.
+            if not str(scene.get("layout") or "").startswith("graphic_"):
+                if str(scene.get("asset_strategy") or "stock_ok") not in (
+                    "graphic_fallback",
+                    "ai_image_preferred",
+                ):
+                    scene["asset_strategy"] = "ai_image_preferred"
     llm_history_path = short_dir / paths.SHORT_JSON_SUBDIR / paths.SHORT_LLM_HISTORY_FILE
     prepare_assets(
         job_dir=short_dir,

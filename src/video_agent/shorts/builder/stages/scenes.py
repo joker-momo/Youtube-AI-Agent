@@ -523,12 +523,13 @@ def _scenes_generate_and_normalize(ctx, loop):
         # surface a non-QA failure if the provider keeps erroring.
         loop.provider_error_attempts += 1
         snippet = getattr(exc, "snippet", "")
-        update_stage("scenes", "failed", error="chatgpt_provider_error")
+        failure_kind = getattr(exc, "failure_kind", "chatgpt_provider_error")
+        update_stage("scenes", "failed", error=failure_kind)
         _recorder.record_event(
             "chatgpt",
             "provider_error",
             {
-                "event": "chatgpt_provider_error",
+                "event": failure_kind,
                 "stage": "scene_generation",
                 "action": "clear_browser_state_and_retry",
                 "attempt": loop.provider_error_attempts,
@@ -540,9 +541,9 @@ def _scenes_generate_and_normalize(ctx, loop):
             _jd / paths.SHORT_FAILURE_REPORT_FILE,
             {
                 "stage": "scene_generation",
-                "type": "chatgpt_provider_error",
+                "type": failure_kind,
                 "attempt": loop.provider_error_attempts,
-                "detail": "ChatGPT returned provider-error text instead of scene JSON.",
+                "detail": str(exc) or "ChatGPT returned provider-error text instead of scene JSON.",
                 "error_snippet": snippet,
             },
         )
@@ -558,9 +559,13 @@ def _scenes_generate_and_normalize(ctx, loop):
                     "youtube_url": "",
                     "requires_user_review": True,
                     "qa_verdict": "PROVIDER_ERROR",
-                    "failure_kind": "chatgpt_provider_error",
+                    "failure_kind": failure_kind,
                     "failure_message": (
-                        "ChatGPT provider error persisted after browser/session "
+                        "ChatGPT refused the scenes JSON for response size even "
+                        "after a compact-output retry. This is not a scene QA "
+                        "failure; regenerate the short."
+                        if failure_kind == "chatgpt_size_refusal"
+                        else "ChatGPT provider error persisted after browser/session "
                         "cleanup and retry. This is not a scene QA failure."
                     ),
                     "regeneration_attempts": loop.total_regeneration_attempts,

@@ -4,15 +4,67 @@ from __future__ import annotations
 
 from video_agent.shorts import asset_schedule, paths
 from video_agent.shorts.builder.context import BuildContext
+from video_agent.shorts.builder.stages.visual_local_qa import (
+    _trim_config,
+    revalidate_failed_spans_with_fallback,
+)
 from video_agent.shorts.builder.stages.visual_schedule import _resolve_fps
 from video_agent.shorts.builder.types import _PROCEED, StageResult
 from video_agent.shorts.manifest import write_short_status
+from video_agent.shorts.visual_acquisition import resolve_visual_quality_flow_config
 from video_agent.shorts.visual_beat_planner import (
     build_visual_beat_plan,
     resolve_visual_beat_planner_config,
 )
+from video_agent.shorts.visual_local_analysis import LocalVisualAnalyzer
+from video_agent.shorts.visual_semantic import build_semantic_analyzer
 from video_agent.shorts.visual_sequence_qa import build_visual_sequence_qa
 from video_agent.storage.atomic import atomic_write_json
+
+
+def _rescue_failed_spans_with_background_fallback(
+    ctx: BuildContext, *, resolved: dict, fps: int
+) -> None:
+    """Before beat planning, try to rescue native-route spans that local QA left
+    render-ineligible using the per-scene background fallback the background stage
+    produced afterwards. Held to the same local+semantic gate (see
+    ``revalidate_failed_spans_with_fallback``); patches visual_span_asset_qa +
+    trim_window_plan in ctx.extras/disk when a fallback genuinely passes.
+
+    Best-effort: any failure here must not crash beat planning — the planner still
+    hard-fails cleanly on a truly unrescuable span."""
+    asset_qa = ctx.extras.get("visual_span_asset_qa")
+    if not asset_qa:
+        return
+    flow_cfg = resolve_visual_quality_flow_config(ctx.channel_config)
+    local_qa = flow_cfg.get("local_qa") or {}
+    if not flow_cfg.get("enabled") or not bool(local_qa.get("enabled", False)):
+        return
+    spans = list((ctx.extras.get("visual_acquisition_context") or {}).get("spans") or [])
+    if not spans:
+        return
+    trim_plan = ctx.extras.get("trim_window_plan") or {"spans": []}
+    trim_cfg = _trim_config(flow_cfg)
+    analyzer = LocalVisualAnalyzer(stride_sec=trim_cfg.stride_sec)
+    semantic_analyzer = build_semantic_analyzer(local_qa)
+    report = revalidate_failed_spans_with_fallback(
+        spans=spans,
+        asset_qa=asset_qa,
+        trim_plan=trim_plan,
+        resolved=resolved,
+        short_scenes=ctx.extras.get("short_scenes") or {},
+        local_qa=local_qa,
+        mode=flow_cfg.get("mode") or "report_only",
+        fps=fps,
+        trim_cfg=trim_cfg,
+        analyzer=analyzer,
+        semantic_analyzer=semantic_analyzer,
+    )
+    if report.get("rescued_count"):
+        ctx.extras["visual_span_asset_qa"] = asset_qa
+        ctx.extras["trim_window_plan"] = trim_plan
+        atomic_write_json(ctx.json_dir / paths.SHORT_VISUAL_SPAN_ASSET_QA_FILE, asset_qa)
+        atomic_write_json(ctx.json_dir / paths.SHORT_TRIM_WINDOW_PLAN_FILE, trim_plan)
 
 
 def _stage_visual_beats(ctx: BuildContext) -> StageResult:
@@ -38,6 +90,13 @@ def _stage_visual_beats(ctx: BuildContext) -> StageResult:
         resolved = asset_schedule.adapt_assets_manifest(
             manifest, short_dir=ctx.short_dir, background_report=background_report
         )
+        # Rescue native spans that local QA rejected but whose background fallback
+        # asset can pass the same gate — turns an otherwise hard missing_selected_plan
+        # into a validated native clip (bug-475). Best-effort; never blocks planning.
+        try:
+            _rescue_failed_spans_with_background_fallback(ctx, resolved=resolved, fps=fps)
+        except Exception:  # noqa: BLE001 - rescue is opportunistic; planner still gates.
+            pass
         beat_plan = build_visual_beat_plan(
             short_id=short_id,
             scene_doc=ctx.extras.get("short_scenes") or {},

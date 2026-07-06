@@ -114,7 +114,7 @@ def prepare_assets(
         scene_dur = float(scene.get("duration_sec") or 30)
         if not local_image and stock_service:
             stock_asset = stock_service.get_scene_asset(scene, channel_id, job_dir.name)
-        # Force all scene backgrounds to video so Remotion always renders OffthreadVideo.
+        # Encode all scene backgrounds to video so Remotion renders one media path.
         asset_suffix = ".mp4"
         image_path = assets_dir / f"{scene['id']}{asset_suffix}"
         # media_kind records whether the SOURCE was real video footage or a still

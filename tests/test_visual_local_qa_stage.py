@@ -388,3 +388,152 @@ def test_enforced_critical_missing_semantic_capability_fails_closed(
     assert result.returns is not None
     assert result.returns["status"] == "failed"
     assert result.returns["failure_stage"] == "visual_local_qa"
+
+
+# --------------------------------------------------------------------------- #
+# bug-475: revalidate a native span's background fallback through the SAME local
+# + semantic gate before beat planning, so a validated fallback rescues a span
+# whose PR-C finalists all failed — without weakening any quality gate.
+# --------------------------------------------------------------------------- #
+from video_agent.shorts.builder.stages.visual_local_qa import (  # noqa: E402
+    _trim_config,
+    revalidate_failed_spans_with_fallback,
+)
+
+
+class _SemanticPass:
+    def analyze_span(self, **kw):
+        return [
+            {
+                "requirement": "required_subject:age_band_45_plus",
+                "status": "SUPPORTED",
+                "capability_source": "optional_semantic_model",
+                "model": "fake", "model_version": "fake",
+                "asset_id": kw.get("asset_id"), "confidence": 2.0, "reason": "ok",
+            }
+        ]
+
+
+class _SemanticContradict:
+    def analyze_span(self, **kw):
+        return [
+            {
+                "requirement": "required_subject:age_band_45_plus",
+                "status": "CONTRADICTED",
+                "capability_source": "optional_semantic_model",
+                "model": "fake", "model_version": "fake",
+                "asset_id": kw.get("asset_id"), "confidence": None, "reason": "wrong age",
+            }
+        ]
+
+
+def _revalidate_fixture(tmp_path: Path, *, fallback_asset_id: str = "bg-s04"):
+    """Build the minimal inputs for revalidate_failed_spans_with_fallback with a
+    single native span vs04 (scene s04) that local QA left FAIL / ineligible, plus
+    a real on-disk background fallback asset for s04."""
+    asset = tmp_path / "assets" / "s04.mp4"
+    asset.parent.mkdir(parents=True, exist_ok=True)
+    asset.write_bytes(b"fake mp4")
+    spans = [{
+        "visual_span_id": "vs04",
+        "scene_ids": ["s04"],
+        "visual_intent": "eating a meal",
+        "visual_importance": "critical",
+        "required_subject_tags": ["age_band_45_plus"],
+    }]
+    asset_qa = {
+        "spans": [{
+            "visual_span_id": "vs04",
+            "scene_ids": ["s04"],
+            "visual_route": "native_video_candidate",
+            "final_candidate_id": None,
+            "final_selection_status": "rejected",
+            "render_eligible": False,
+            "requires_local_validation": True,
+            "candidate_qa": [{"candidate_id": "pexels-REJECTED"}],
+            "evidence_records": [],
+            "qa": {"verdict": "FAIL", "errors": [], "warnings": []},
+        }],
+        "qa": {"verdict": "FAIL", "errors": [], "warnings": []},
+    }
+    trim_plan = {"spans": [], "qa": {"verdict": "FAIL", "errors": [], "warnings": []}}
+    resolved = {"scenes": {"s04": {
+        "scene_id": "s04",
+        "local_path": str(asset),
+        "public_ref": "jobs/x/assets/s04.mp4",
+        "provider": "pexels",
+        "provider_asset_id": "12908877",
+        "asset_id": fallback_asset_id,
+        "source_media_kind": "native_video",
+        "exists": True,
+        "semantic_rejected": False,
+    }}}
+    short_scenes = {"scenes": [{"id": "s04", "layout": "short_tip", "duration_sec": 5.0}]}
+    local_qa = {"enabled": True, "critical_fail_closed": True}
+    flow_cfg = {"trim_selector": {"stride_sec": 0.5, "max_windows": 12}}
+    return dict(
+        spans=spans, asset_qa=asset_qa, trim_plan=trim_plan, resolved=resolved,
+        short_scenes=short_scenes, local_qa=local_qa, mode="enforced", fps=30,
+        trim_cfg=_trim_config(flow_cfg),
+    )
+
+
+def test_revalidate_rescues_span_when_background_fallback_passes(tmp_path: Path) -> None:
+    kw = _revalidate_fixture(tmp_path)
+    report = revalidate_failed_spans_with_fallback(
+        analyzer=_PassAnalyzer(), semantic_analyzer=_SemanticPass(), **kw
+    )
+    assert report["rescued_count"] == 1
+    span_qa = kw["asset_qa"]["spans"][0]
+    assert span_qa["render_eligible"] is True
+    assert span_qa["qa"]["verdict"] == "PASS"
+    assert span_qa["final_candidate_id"] == "bg-s04"
+    assert span_qa["revalidated_from_background_fallback"] is True
+    # A trim entry now exists so the beat planner can build a validated native clip.
+    trim = kw["trim_plan"]["spans"]
+    assert len(trim) == 1 and trim[0]["visual_span_id"] == "vs04"
+    assert trim[0]["final_candidate_id"] == "bg-s04"
+    assert trim[0]["selected_window_start_in_frames"] >= 0
+
+
+def test_revalidate_does_not_rescue_when_fallback_fails_same_gate(tmp_path: Path) -> None:
+    kw = _revalidate_fixture(tmp_path)
+    report = revalidate_failed_spans_with_fallback(
+        analyzer=_PassAnalyzer(), semantic_analyzer=_SemanticContradict(), **kw
+    )
+    assert report["rescued_count"] == 0
+    span_qa = kw["asset_qa"]["spans"][0]
+    assert span_qa["render_eligible"] is False
+    assert span_qa["qa"]["verdict"] == "FAIL"
+    assert kw["trim_plan"]["spans"] == []
+
+
+def test_revalidate_strict_no_rescue_when_semantic_unavailable(tmp_path: Path) -> None:
+    # semantic_analyzer=None -> placeholder records -> CAPABILITY_REDUCED, never PASS.
+    kw = _revalidate_fixture(tmp_path)
+    report = revalidate_failed_spans_with_fallback(
+        analyzer=_PassAnalyzer(), semantic_analyzer=None, **kw
+    )
+    assert report["rescued_count"] == 0
+    assert kw["asset_qa"]["spans"][0]["render_eligible"] is False
+
+
+def test_revalidate_skips_asset_already_rejected_by_local_qa(tmp_path: Path) -> None:
+    # The background fallback resolves to the SAME asset id local QA already rejected.
+    kw = _revalidate_fixture(tmp_path, fallback_asset_id="pexels-REJECTED")
+    report = revalidate_failed_spans_with_fallback(
+        analyzer=_PassAnalyzer(), semantic_analyzer=_SemanticPass(), **kw
+    )
+    assert report["rescued_count"] == 0
+    assert kw["asset_qa"]["spans"][0]["render_eligible"] is False
+
+
+def test_revalidate_leaves_already_eligible_span_untouched(tmp_path: Path) -> None:
+    kw = _revalidate_fixture(tmp_path)
+    kw["asset_qa"]["spans"][0]["render_eligible"] = True
+    kw["asset_qa"]["spans"][0]["qa"]["verdict"] = "PASS"
+    report = revalidate_failed_spans_with_fallback(
+        analyzer=_PassAnalyzer(), semantic_analyzer=_SemanticPass(), **kw
+    )
+    assert report["rescued_count"] == 0
+    assert "vs04" not in report["attempted_span_ids"]

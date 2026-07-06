@@ -240,3 +240,124 @@ def test_placeholder_records_never_pass() -> None:
     span = {"required_action_tags": ["gentle_walking"], "forbidden_evidence_tags": ["dog"]}
     for r in _placeholder_records(span, "c1"):
         assert r["status"] in ("CAPABILITY_UNAVAILABLE", "UNKNOWN")
+
+
+# --------------------------------------------------------------------------- #
+# process-level HF model cache (bridge 20260705-143041): repeated
+# build_semantic_analyzer per short must NOT reload SigLIP / Grounding DINO or
+# re-trigger Hugging Face metadata checks when the same (model, device) is reused.
+# --------------------------------------------------------------------------- #
+class _FakeHFModel:
+    def to(self, _device):
+        return self
+
+    def eval(self):
+        return self
+
+
+class _CountingLoader:
+    """Stands in for AutoModel / AutoProcessor: counts from_pretrained calls and
+    records the local_files_only flag it was invoked with."""
+
+    def __init__(self, *, fail_local_only: bool = False, fail_all: bool = False) -> None:
+        self.calls: list[bool] = []
+        self._fail_local_only = fail_local_only
+        self._fail_all = fail_all
+
+    def from_pretrained(self, model_id, *, local_files_only=False, **_kw):
+        self.calls.append(local_files_only)
+        if self._fail_all or (self._fail_local_only and local_files_only):
+            raise OSError(f"not cached: {model_id}")
+        return _FakeHFModel()
+
+
+def _clear_model_cache() -> None:
+    vs._HF_MODEL_CACHE.clear()
+
+
+def test_hf_pair_cache_loads_once_per_config() -> None:
+    _clear_model_cache()
+    model_cls, proc_cls = _CountingLoader(), _CountingLoader()
+
+    first = vs._load_hf_pair("siglip", model_cls, proc_cls, "org/model", "cpu")
+    second = vs._load_hf_pair("siglip", model_cls, proc_cls, "org/model", "cpu")
+
+    assert first is not None and first is second, "same config must return the cached pair"
+    # Exactly one successful load each; the second call is a pure cache hit.
+    assert model_cls.calls == [True], "model loaded once, local snapshot first"
+    assert proc_cls.calls == [True], "processor loaded once, local snapshot first"
+
+
+def test_hf_pair_cache_keyed_by_model_and_device() -> None:
+    _clear_model_cache()
+    model_cls, proc_cls = _CountingLoader(), _CountingLoader()
+
+    vs._load_hf_pair("siglip", model_cls, proc_cls, "org/a", "cpu")
+    vs._load_hf_pair("siglip", model_cls, proc_cls, "org/b", "cpu")
+    vs._load_hf_pair("detector", model_cls, proc_cls, "org/a", "mps")
+
+    # Distinct keys → distinct loads (no false cache sharing across models/devices).
+    assert len(model_cls.calls) == 3
+
+
+def test_hf_pair_tries_local_files_only_first_then_online() -> None:
+    _clear_model_cache()
+    model_cls = _CountingLoader(fail_local_only=True)
+    proc_cls = _CountingLoader(fail_local_only=True)
+
+    pair = vs._load_hf_pair("siglip", model_cls, proc_cls, "org/model", "cpu")
+
+    assert pair is not None, "must fall back to an online load when not cached locally"
+    # Processor loads first each round; its local-only miss short-circuits the
+    # round, so the expensive model is only attempted online.
+    assert proc_cls.calls == [True, False]
+    assert model_cls.calls == [False]
+
+
+def test_hf_pair_returns_none_when_unavailable() -> None:
+    _clear_model_cache()
+    model_cls = _CountingLoader(fail_all=True)
+    proc_cls = _CountingLoader(fail_all=True)
+
+    assert vs._load_hf_pair("siglip", model_cls, proc_cls, "org/model", "cpu") is None
+    # A failed load must NOT be cached — a later retry can still succeed.
+    assert ("siglip", "org/model", "cpu") not in vs._HF_MODEL_CACHE
+
+
+def test_siglip_adapter_uses_shared_cache(monkeypatch) -> None:
+    _clear_model_cache()
+    calls = {"n": 0}
+    sentinel = (_FakeHFModel(), object())
+
+    def fake_pair(tag, model_cls, proc_cls, model_id, device):
+        calls["n"] += 1
+        return sentinel
+
+    monkeypatch.setattr(vs, "_load_hf_pair", fake_pair)
+    cfg = vs.SemanticConfig(enabled=True, device="cpu")
+
+    a1 = vs.SigLipTopicAdapter(cfg)
+    a2 = vs.SigLipTopicAdapter(cfg)
+    assert a1.available() and a2.available()
+    # Two separate short-lived adapter instances (as build_semantic_analyzer makes
+    # per short) both delegate loading to the shared _load_hf_pair helper.
+    assert calls["n"] == 2
+    assert a1._model is sentinel[0] and a2._proc is sentinel[1]
+
+
+def test_detector_adapter_uses_shared_cache(monkeypatch) -> None:
+    _clear_model_cache()
+    seen: list[str] = []
+
+    def fake_pair(tag, model_cls, proc_cls, model_id, device):
+        seen.append(tag)
+        return (_FakeHFModel(), object())
+
+    monkeypatch.setattr(vs, "_load_hf_pair", fake_pair)
+    cfg = vs.SemanticConfig(enabled=True, device="auto")
+
+    adapter = vs.GroundingDinoForbiddenAdapter(cfg)
+    assert adapter.available()
+    assert seen == ["detector"]
+    # detector defaults to CPU under auto/cpu (Metal lacks torch.cummax).
+    assert adapter._device == "cpu"

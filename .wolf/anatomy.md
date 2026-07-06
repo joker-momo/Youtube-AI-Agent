@@ -1,9 +1,7 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-07-06T09:17:08.862Z
-> Files: 927 tracked | Anatomy hits: 0 | Misses: 0
-> Auto-maintained by OpenWolf. Last scanned: 2026-07-06T09:03:19.327Z
-> Files: 943 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-07-06T10:22:35.088Z
+> Files: 948 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../../../../Users/joker/.claude/
 
@@ -54,13 +52,13 @@
 
 ## ../../../../private/tmp/claude-501/-Volumes-DATA-YBT-Studio-Youtube-AI-Agent/314044c9-7442-40e0-8082-ba204e813db4/scratchpad/
 
-- `test_cta_only.py` — Isolated CTA test: run ONLY the short script stage (prompt + ChatGPT + (~806 tok)
 - `build_compare.py` — Side-by-side montage: old-formula thumbnails (top row) vs v1.4 (bottom row). (~566 tok)
 - `build_compare3.py` — 3-row montage: old-formula / v1.4 (AI-painted text) / v1.5 (Option A overlay). (~571 tok)
 - `gen_sample_script.py` — Generate ONE sample long-form script with the updated prompt, then check it (~1106 tok)
 - `gen_sample_seo.py` — Generate a sample SEO artifact with the updated prompt, then validate the (~1041 tok)
 - `gen_v14_thumbs.py` — Generate 3 thumbnails with the NEW v1.4 prompt (user-authorized, 2026-07-06). (~628 tok)
 - `gen_v15_thumbs.py` — Option A end-to-end: gen clean backgrounds (v1.5 prompt) → composite text + (~675 tok)
+- `test_cta_only.py` — Isolated CTA test: run ONLY the short script stage (prompt + ChatGPT + (~806 tok)
 
 ## ../../../../private/tmp/claude-501/-Volumes-DATA-YBT-Studio-Youtube-AI-Agent/5150a21d-b4f6-4331-9e67-8115da2ce00c/scratchpad/
 
@@ -907,7 +905,7 @@
 ## docs/
 
 - `competitor_teardown_2026-06-29.md` — Competitor Teardown — Spanish 60+ health channels (2026-06-29) (~1478 tok)
-- `PROJECT_STATUS.md` — Youtube AI Agent Project Status (~30234 tok)
+- `PROJECT_STATUS.md` — Youtube AI Agent Project Status (~30350 tok)
 - `SKILLS_CHEATSHEET.md` — 📋 Skills Cheatsheet — Youtube-AI-Agent (~1333 tok)
 
 ## docs/implementation/
@@ -1078,9 +1076,9 @@
 - `llm_history.py` — Per-Short LLM call history recorder. (~3344 tok)
 - `llm.py` — Shorts AI role wiring (spec v6 §2 + §3). (~1754 tok)
 - `paths.py` — Canonical storage-layout paths for the Shorts autopilot. (~1728 tok)
-- `prompts.py` — Strict, JSON-only, Spain-first prompts for Short script / scene / QA generation. (~26481 tok)
 - `paths.py` — Canonical storage-layout paths for the Shorts autopilot. (~1940 tok)
 - `performance_memory.py` — write_performance_memory (~608 tok)
+- `prompts.py` — Strict, JSON-only, Spain-first prompts for Short script / scene / QA generation. (~26481 tok)
 - `prompts.py` — Strict, JSON-only, Spain-first prompts for Short script / scene / QA generation. (~26358 tok)
 - `qa_common.py` — Shared QA classes, constants and leaf helpers. (~1986 tok)
 - `qa_normalize.py` — Normalize raw QA issues into structured NormalizedIssue records. (~9104 tok)

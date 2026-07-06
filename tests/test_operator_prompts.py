@@ -97,6 +97,32 @@ def test_seo_prompt_timestamp_format_is_one_per_line():
     assert "MM:SS - Section title" in prompt
 
 
+def test_seo_prompt_chapters_enforce_youtube_auto_chapter_rules():
+    """Chapters must follow YouTube's auto-chapter contract so they actually
+    render: first at 00:00, >=3, ascending, and specific (not vague) labels."""
+    prompt = _chatgpt_seo_prompt(SPAIN_CONFIG, VALID_SCRIPT, VALID_SCENES)
+    assert "00:00" in prompt
+    assert "AT LEAST 3 chapters" in prompt
+    assert "ascending time order" in prompt
+    assert "SHORT and SPECIFIC" in prompt
+
+
+def test_script_prompt_forbids_content_repetition_and_enforces_pacing():
+    """Coach feedback: videos read as too long / repetitive / slow. The script
+    prompt must ban re-explaining ideas and demand forward pacing."""
+    prompt = _chatgpt_script_prompt(SPAIN_CONFIG, {"topic": "dormir mejor"})
+    assert "NO IDEA TWICE" in prompt
+    assert "EXPAND WITH DEPTH, NOT REPETITION" in prompt
+    assert "FORWARD MOMENTUM" in prompt
+
+
+def test_script_prompt_varies_mechanism_opener():
+    """The mechanism rule must not funnel every section into 'Esto ocurre porque'."""
+    prompt = _chatgpt_script_prompt(SPAIN_CONFIG, {"topic": "dormir mejor"})
+    assert "VARY THE OPENER" in prompt
+    assert "more than ONE section's explanation with 'Esto ocurre porque" in prompt
+
+
 def test_script_prompt_contains_spain_locale_guidance():
     prompt = _chatgpt_script_prompt(SPAIN_CONFIG, {"topic": "dormir mejor"})
     assert "Spanish for Spain" in prompt

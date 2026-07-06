@@ -597,3 +597,8 @@ Short KHÔNG có cover deliverable (YouTube Shorts bỏ qua custom thumbnail). �
 - Top performer (65,8K) KHÔNG có mặt người: hình giải phẫu + mũi tên + mệnh lệnh phủ định ("NO NECESITAS CAMINAR / HAZ ESTO") — thắng bằng curiosity, không phải ảnh đẹp. Thumb "bác sĩ" của đối thủ nhìn cũng AI mà vẫn ăn view → nỗi lo "nhìn AI bị bóp" nằm ở hook nhàm nhiều hơn chất ảnh.
 - Gap của mình (đã vá 2026-07-06): thumbnail_text thiếu 3 device (số tuổi, mệnh lệnh, số đếm), và ngắn hơn đối thủ. Đã nới 3-5 → 3-7 từ + device menu trong _chatgpt_seo_prompt. KHÔNG copy: fake doctor, 🚨 emoji, sex bait, cure-claim ("RECONSTRUYE MÚSCULOS").
 - Validator check: thumbnail_title_qa chỉ soi TITLE slice (max_thumbnail_words+2=8), không chặn thumbnail_text word count → nới prompt không lệch validator (bài học bug-484 đã kiểm trước khi sửa).
+
+### Key Learning (2026-07-07): persona identity lock cho thumbnail HOẠT ĐỘNG (verified demo)
+- User cấp ảnh presenter (configs/vida-plena-45/persona/thumbnail_face.jpeg — nữ TBN tóc bob xám ~55-65). Driver ChatGPT đính ảnh qua hidden input[type=file] (set_input_files) + prompt IDENTITY LOCK → cả 3 variant ra ĐÚNG cùng một người, nhận diện tức thì. Đồng bộ thương hiệu across thumbnails đạt được mà không cần API riêng.
+- Cấu hình: channel.yaml thumbnail.persona_reference; attachment validate repo-confined (_safe_attachment_path). Text 40-50% khung + AGE device mandatory cũng verified live ("EVITA ESTO A LOS 50").
+- ⚠️ Trinity đã wipe cây 3 lần (16:04, ~16:2x, 06:19) — LUÔN commit ngay sau verify; đồ wipe nằm trong stash "WIP on <branch>" ngay tại reflog "reset: moving to HEAD".

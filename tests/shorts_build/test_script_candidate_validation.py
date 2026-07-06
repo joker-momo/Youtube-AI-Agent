@@ -244,3 +244,18 @@ def test_qa_mirror_without_config_accepts_channel_direction():
     """The QA mirror (no channel_config plumbing) must not flag a topic CTA."""
     script = _topic_script("Más sobre la alimentación en el canal.")
     assert cta_beat_has_channel_direction(script, {}) is True
+
+
+def test_validator_accepts_natural_cta_naming_long_video_content():
+    """New contract: the model writes a natural CTA naming the long video's
+    content; the gate only requires the channel direction ('canal')."""
+    script = _topic_script("La guía completa del aceite está en el canal.")
+    errors = validate_full_short_script_candidate(
+        script,
+        {"target_duration_sec": 35},
+        None,
+        channel_config=_TOPIC_CFG,
+        long_video_title=_LONG_TITLE,
+    )
+    assert "missing_expected_funnel_cta" not in errors
+    assert "cta_beat_missing_channel_direction" not in errors

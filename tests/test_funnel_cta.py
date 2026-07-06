@@ -78,9 +78,10 @@ def test_is_generic_cta():
     assert is_generic_cta(FUNNEL, "Más sobre el sueño en el canal.") is False
 
 
-def test_script_prompt_topic_cta_beats_generic_source_map_cta():
-    """The exact live failure: source_map pre-set a generic funnel.cta and the plan
-    has no topic fields, but source_video_title carries the topic → topic CTA wins."""
+def test_script_prompt_asks_natural_cta_naming_the_long_video():
+    """A Short cut from a long video must get a NATURAL spoken CTA that names
+    that video's content (model's own words), not a canned exact phrase — and a
+    generic pre-set source_map cta must not mask it."""
     cfg = {"shorts": {"funnel": FUNNEL}}
     plan = {"format": "pain_to_tip"}  # no pillar, no title/viewer_pain
     source_artifacts = {
@@ -88,7 +89,9 @@ def test_script_prompt_topic_cta_beats_generic_source_map_cta():
         "funnel": {"cta": "Vídeo completo en el canal.", "long_video_url": ""},
     }
     p = prompts.short_script_prompt(cfg, plan, source_artifacts)
-    assert "Más sobre la alimentación en el canal." in p
+    assert 'cut from the long video: "Toma 1 cucharada de aceite de oliva cada mañana"' in p
+    assert "naming ITS specific topic in your own words" in p
+    assert "MUST contain the word 'canal'" in p
     assert 'include this exact phrase in the CTA: "Vídeo completo en el canal."' not in p
 
 

@@ -142,28 +142,46 @@ def short_script_prompt(
         indent=2,
     )
 
-    # Bridge CTA: a SPECIFIC explicit funnel.cta wins; a plain generic default does
-    # NOT (it would mask the topic), so fall through to the topic-aware resolver.
-    # The parent long video's title supplies the topic even when the plan has no
-    # pillar/topic fields (bug-484). Kept in sync with the source-map validator.
-    from video_agent.shorts.source_map import is_generic_cta, resolve_funnel_cta
+    # Bridge CTA: every Short is cut from ONE long video, so the spoken CTA must
+    # naturally send the viewer to THAT video's content on the channel — written
+    # by the model in its own words, not a canned template. A SPECIFIC explicit
+    # funnel.cta (operator override) still wins and is enforced verbatim. The
+    # deterministic gate only checks the channel direction ('canal'), so prompt
+    # and validator can never disagree on wording again (bug-484).
+    from video_agent.shorts.source_map import is_generic_cta
 
     funnel_cfg = (channel_config.get("shorts") or {}).get("funnel") or {}
     explicit_cta = (
         (source_artifacts or {}).get("funnel", {}).get("cta")
         or short_plan.get("funnel", {}).get("cta")
     )
+    source_title = str((source_artifacts or {}).get("source_video_title") or "")
     if explicit_cta and not is_generic_cta(funnel_cfg, explicit_cta):
-        expected_cta = explicit_cta
+        cta_rule = (
+            f"CTA must be 8 words or fewer. You MUST include this exact phrase in the CTA: \"{explicit_cta}\"\n"
+        )
+    elif source_title:
+        cta_rule = (
+            "CTA rules (bridge to the long video):\n"
+            f"- This Short is cut from the long video: \"{source_title}\".\n"
+            "- The final CTA must naturally invite the viewer to watch that full video on the channel, "
+            "naming ITS specific topic in your own words (e.g. 'La guía completa del aceite en ayunas está en el canal.').\n"
+            "- The CTA MUST contain the word 'canal' and be 8 words or fewer.\n"
+            "- Do NOT use a canned generic phrase; make it specific to that video's content.\n"
+        )
     else:
+        # No long-video title available (standalone Short): fall back to the
+        # deterministic topic/generic resolver as the exact phrase.
+        from video_agent.shorts.source_map import resolve_funnel_cta
+
         has_url = bool(
             (source_artifacts or {}).get("funnel", {}).get("long_video_url")
             or short_plan.get("funnel", {}).get("long_video_url")
             or short_plan.get("long_video_url")
         )
-        source_title = str((source_artifacts or {}).get("source_video_title") or "")
-        expected_cta = resolve_funnel_cta(
-            funnel_cfg, short_plan, has_url=has_url, extra_text=source_title
+        resolved_cta = resolve_funnel_cta(funnel_cfg, short_plan, has_url=has_url)
+        cta_rule = (
+            f"CTA must be 8 words or fewer. You MUST include this exact phrase in the CTA: \"{resolved_cta}\"\n"
         )
 
     orig_count_val = idea_contract.get("original_count")
@@ -267,7 +285,7 @@ def short_script_prompt(
         "Do not say \"en este short\", \"en este vídeo\", \"hoy\", \"bienvenidos\", or \"hola\".\n"
         "Keep one main idea only.\n"
         "Deliver the payoff before the CTA.\n"
-        f"CTA must be 8 words or fewer. You MUST include this exact phrase in the CTA: \"{expected_cta}\"\n"
+        f"{cta_rule}"
         "No generic recap.\n\n"
         "STYLE RULES:\n"
         "Warm, direct, calm.\n"

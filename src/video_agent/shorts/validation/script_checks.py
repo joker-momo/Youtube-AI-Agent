@@ -59,14 +59,16 @@ def acceptable_funnel_ctas(
 ) -> list[str]:
     """Every CTA phrasing the deterministic gates accept, preferred first.
 
-    ONE source of truth with the script prompt (``resolve_funnel_cta``). Rules:
-    - An explicit, SPECIFIC funnel cta (source_map/short_plan) is strict — it is
-      the only accepted phrasing (unchanged legacy behavior).
-    - Otherwise both the topic-aware resolved CTA and the plain generic defaults
-      are acceptable, so a wording mismatch between prompt and validator can
-      never reject an otherwise-valid script again (bug-484: the validator
-      hardcoded the generic default while the prompt asked for the topic CTA,
-      rejecting every candidate and collapsing the spoken CTA back to generic).
+    Contract (kept in sync with the script prompt):
+    - An explicit, SPECIFIC funnel cta (source_map/short_plan operator override)
+      is strict — it is the only accepted phrasing (unchanged legacy behavior).
+    - Otherwise the model writes a NATURAL CTA that names the parent long
+      video's content in its own words, so no exact phrase can be predicted —
+      the gate only requires the channel direction (the word 'canal'). The
+      resolved topic template stays FIRST as the preferred sentence for the
+      deterministic repair, and the plain defaults remain acceptable.
+      (bug-484: an exact-phrase gate disagreed with the prompt and rejected
+      every otherwise-valid candidate, collapsing the spoken CTA to generic.)
     """
     from video_agent.shorts.source_map import is_generic_cta, resolve_funnel_cta
 
@@ -99,11 +101,9 @@ def acceptable_funnel_ctas(
         fallback = fallback.strip()
         if fallback and fallback not in accepted:
             accepted.append(fallback)
-    if channel_config is None:
-        # Callers without config plumbing (QA mirror) can't reproduce the exact
-        # topic phrasing; accept any CTA that carries the channel direction so a
-        # topic-aware CTA is never treated as "missing the funnel".
-        accepted.append("en el canal")
+    # Natural CTAs name the long video's content in the model's own words; any
+    # phrasing that carries the channel direction satisfies the funnel.
+    accepted.append("canal")
     return accepted
 
 

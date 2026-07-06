@@ -69,16 +69,24 @@ def _default_sync_image_gen(prompt: str, out_path: str | Path) -> None:
     import os
 
     from video_agent.orchestrator.browser_client import BrowserClient
+    from video_agent.persona import PERSONA_SCENE_INSTRUCTION, resolve_persona_reference
 
     # Default to localhost since the script is mostly run natively on host machine now
     browser_worker_url = os.environ.get("BROWSER_WORKER_URL", "http://localhost:8001")
     client = BrowserClient(browser_worker_url)
+    # Presenter identity: attach the configured reference photo (CHANNEL_CONFIG
+    # env) and add the conditional instruction so any person in the image IS the
+    # channel presenter; person-less scenes ignore the reference.
+    persona_ref = resolve_persona_reference()
+    if persona_ref:
+        prompt = prompt + PERSONA_SCENE_INSTRUCTION
     asyncio.run(
         client.generate_image(
             prompt=prompt,
             project_name=_project_name_from_out_path(out_path),
             out_path=str(out_path),
             aspect_ratio="9:16",
+            attachment_path=persona_ref or None,
         )
     )
 

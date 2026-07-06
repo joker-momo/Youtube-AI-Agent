@@ -305,11 +305,30 @@ async def generate_scene_asset(
     project_name = _scene_project_name(state.job_id, scene_id)
     prompt = _ASSET_GEN_PROMPT_PREFIX + visual_prompt
 
-    result = await image_fn(
-        prompt=prompt,
-        project_name=project_name,
-        out_path=str(out_path),
-    )
+    # Presenter identity: attach the configured reference photo so any person in
+    # the scene image IS the channel presenter; person-less scenes ignore it.
+    from video_agent.persona import PERSONA_SCENE_INSTRUCTION, resolve_persona_reference
+
+    persona_ref = resolve_persona_reference(read_yaml(channel_path) or {})
+    kwargs = {}
+    if persona_ref:
+        prompt = prompt + PERSONA_SCENE_INSTRUCTION
+        kwargs["attachment_path"] = persona_ref
+
+    try:
+        result = await image_fn(
+            prompt=prompt,
+            project_name=project_name,
+            out_path=str(out_path),
+            **kwargs,
+        )
+    except TypeError:
+        # Legacy/mock image_fn without attachment support.
+        result = await image_fn(
+            prompt=prompt,
+            project_name=project_name,
+            out_path=str(out_path),
+        )
 
     # Update scenes.json -> asset_refs.primary with the job-relative path.
     rel = str(out_path.relative_to(job_dir))

@@ -91,6 +91,7 @@ class BrowserClient:
         out_path: str,
         response_timeout_ms: int = 360_000,
         aspect_ratio: str = "16:9",
+        attachment_path: str | None = None,
     ) -> dict:
         """Drive ChatGPT image generation via /chatgpt/image.
 
@@ -104,6 +105,7 @@ class BrowserClient:
             "out_path": out_path,
             "response_timeout_ms": response_timeout_ms,
             "aspect_ratio": aspect_ratio,
+            "attachment_path": attachment_path,
         }
         response = await self._post(
             "chatgpt/image",
@@ -138,6 +140,7 @@ class BrowserClient:
         out_paths: list[str],
         response_timeout_ms: int = 360_000,
         aspect_ratio: str = "16:9",
+        attachment_path: str | None = None,
     ) -> dict:
         """Drive ChatGPT batch image generation via /chatgpt/image/batch.
 
@@ -149,6 +152,7 @@ class BrowserClient:
             "out_paths": out_paths,
             "response_timeout_ms": response_timeout_ms,
             "aspect_ratio": aspect_ratio,
+            "attachment_path": attachment_path,
         }
         response = await self._post(
             "chatgpt/image/batch",

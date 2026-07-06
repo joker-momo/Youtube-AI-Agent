@@ -119,6 +119,11 @@ research_gate:
   max_competition: "High"
   min_tag_score: 20
 
+thumbnail:
+  # Persona/identity reference photo attached to every ChatGPT thumbnail gen so
+  # the SAME presenter face appears across all thumbnails (brand consistency).
+  persona_reference: "configs/vida-plena-45/persona/thumbnail_face.jpeg"
+
 seo:
   language: "es-ES"
   min_tags: 5

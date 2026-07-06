@@ -217,3 +217,9 @@ def test_seo_prompt_for_non_spain_spanish_channel_keeps_language_dynamic():
     assert "language: must be es-MX" in prompt
     # Must NOT label the output as Spain-first when channel is LatAm.
     assert "Spain-first Spanish wellness" not in prompt
+
+
+def test_seo_prompt_forces_age_device_once_per_set():
+    prompt = _chatgpt_seo_prompt(SPAIN_CONFIG, VALID_SCRIPT, VALID_SCENES)
+    assert "MANDATORY: at least ONE of the 3 variants uses device 1" in prompt
+    assert "never two negations" in prompt

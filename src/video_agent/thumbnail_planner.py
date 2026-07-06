@@ -744,7 +744,15 @@ def build_thumbnail_prompt(plan: dict) -> str:
         f"Scene:\n{plan.get('scene', '')}\n"
         "\n"
         "Subject:\n"
-        f"{plan.get('persona', '')}\n"
+        + (
+            "IDENTITY LOCK: a reference photo of the channel presenter is ATTACHED to "
+            "this message. Depict EXACTLY this same woman — same face, same silver-gray "
+            "bob haircut, same age and features — recognizably her in every thumbnail. "
+            "Wardrobe/pose/expression may vary with the topic; her identity may not.\n"
+            if plan.get("persona_locked")
+            else ""
+        )
+        + f"{plan.get('persona', '')}\n"
         "Place the subject according to the visual strategy.\n"
         "Face should be clear when the strategy is face_driven.\n"
         "Expression should match the hook and topic: concerned but hopeful, "
@@ -767,10 +775,13 @@ def build_thumbnail_prompt(plan: dict) -> str:
         "above calls for them, to guide the eye. No emojis, stickers, logos, "
         "watermarks, or medical diagrams.\n"
         "\n"
-        "Text (mobile-first, 2-block hierarchy):\n"
+        "Text (mobile-first, DOMINANT like top competitor channels):\n"
         f"Use this EXACT wording only:\n\"{plan.get('thumbnail_text', '')}\"\n"
         "Preserve Spanish accents and punctuation: ñ, á, é, í, ó, ú, ü, ¿, ¡.\n"
-        "Split it into at most 2-3 short blocks. The single most important 1-2 "
+        "The text is the PRIMARY hook: stack it in 2-3 huge lines that together "
+        "cover roughly 40-50% of the frame (one side or the top band), the way the "
+        "top channels in this niche do — viewers aged 60+ must read it instantly.\n"
+        "The single most important 1-2 "
         f"words go inside a solid {plan.get('punch_color', '#E11D2A')} red box as "
         "the punch line; the rest is huge bold white ALL-CAPS with a thick black "
         f"outline and drop shadow, using accent {plan.get('accent_color', '#F2C94C')} "
@@ -814,6 +825,11 @@ def plan_thumbnail_prompts(seo: dict, channel_config: dict) -> list[dict]:
         (channel_config or {}).get("description")
         or _CHANNEL_DESCRIPTION_DEFAULT
     )
+    # Persona identity lock: when the channel configures a presenter reference
+    # photo, the generation stage attaches it and the prompt pins the identity.
+    persona_reference = str(
+        ((channel_config or {}).get("thumbnail") or {}).get("persona_reference") or ""
+    ).strip()
 
     for variant in variants[:3]:
         index = int(variant["variant_index"])
@@ -852,6 +868,8 @@ def plan_thumbnail_prompts(seo: dict, channel_config: dict) -> list[dict]:
             "accent_color": accent_color,
             "punch_color": punch_color,
             "channel_description": channel_description,
+            "persona_reference": persona_reference,
+            "persona_locked": bool(persona_reference),
         }
         plan["category_safety_rules"] = safety_rules_for_category(
             plan["primary_category"], plan["risk_level"], plan["avoid"]

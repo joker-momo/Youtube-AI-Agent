@@ -458,7 +458,7 @@ def test_prompt_bakes_red_punch_box_and_mobile_rule():
     assert plans[0]["punch_color"] in p
     assert "210" in p  # mobile-readability rule
     assert "7 words" in p
-    assert "2-block hierarchy" in p
+    assert "DOMINANT like top competitor channels" in p
 
 
 def test_object_strategy_has_arrow_and_number_badges():
@@ -477,3 +477,26 @@ def test_comparison_strategy_has_check_cross_and_labels():
 def test_strategy_graphics_allowed_in_prompt():
     plans = tp.plan_thumbnail_prompts(_SEO_3, {})
     assert "Strategy graphics" in plans[1]["prompt"]
+
+
+# --- competitor lessons #2/#3 + persona identity lock (2026-07-07) -----------
+
+def test_prompt_demands_dominant_text_share():
+    plans = tp.plan_thumbnail_prompts(_seo_three(), {})
+    for plan in plans:
+        assert "cover roughly 40-50% of the frame" in plan["prompt"]
+        assert "2-3 huge lines" in plan["prompt"]
+
+
+def test_persona_identity_lock_only_when_reference_configured():
+    cfg = {"thumbnail": {"persona_reference": "configs/vida-plena-45/persona/thumbnail_face.jpeg"}}
+    locked = tp.plan_thumbnail_prompts(_seo_three(), cfg)
+    for plan in locked:
+        assert plan["persona_locked"] is True
+        assert plan["persona_reference"].endswith("thumbnail_face.jpeg")
+        assert "IDENTITY LOCK" in plan["prompt"]
+        assert "ATTACHED" in plan["prompt"]
+    unlocked = tp.plan_thumbnail_prompts(_seo_three(), {})
+    for plan in unlocked:
+        assert plan["persona_locked"] is False
+        assert "IDENTITY LOCK" not in plan["prompt"]

@@ -737,6 +737,27 @@ class ChatGPTImageDriver:
                 else:
                     raise BrowserDriverError(f"Image download error after {max_attempts} attempts: {exc}") from exc
 
+    async def _attach_reference_image(self, attachment_path: Path) -> None:
+        """Attach a local image to the composer (persona/identity reference).
+
+        ChatGPT's composer keeps a hidden ``input[type=file]``; Playwright's
+        ``set_input_files`` feeds it directly, so no file-chooser dialog opens.
+        Waits briefly for the upload chip to process before the prompt is sent.
+        Raises BrowserDriverError when the file is missing or no input exists.
+        """
+        attachment_path = Path(attachment_path)
+        if not attachment_path.is_file():
+            raise BrowserDriverError(f"Attachment not found: {attachment_path}")
+        file_inputs = self.page.locator("input[type='file']")
+        if await file_inputs.count() == 0:
+            shot = await save_trace_screenshot(self.page, prefix="chatgpt-image-no-file-input")
+            raise BrowserDriverError(
+                f"ChatGPT composer has no file input for attachments (trace: {shot})"
+            )
+        await file_inputs.first.set_input_files(str(attachment_path))
+        # Give the upload chip time to appear/process; sending too early drops it.
+        await human_pause(self.page, min_ms=3000, max_ms=5000)
+
     async def generate_image(
         self,
         prompt: str,
@@ -745,6 +766,7 @@ class ChatGPTImageDriver:
         out_path: Path,
         response_timeout_ms: int = 240_000,
         aspect_ratio: str = "16:9",
+        attachment_path: Path | None = None,
     ) -> dict:
         """End-to-end: create normal chat, send prompt, save image to ``out_path``.
 
@@ -762,6 +784,8 @@ class ChatGPTImageDriver:
             else:
                 await self._select_create_image_mode_and_aspect_ratio()
             composer = await self._focus_composer()
+            if attachment_path is not None:
+                await self._attach_reference_image(attachment_path)
             full_prompt = build_image_gen_prompt(prompt, aspect_ratio=aspect_ratio)
             await self._fill_composer_robust(composer, full_prompt)
             await human_pause(self.page, min_ms=1500, max_ms=3500)
@@ -790,8 +814,12 @@ class ChatGPTImageDriver:
         out_paths: list[Path],
         response_timeout_ms: int = 240_000,
         aspect_ratio: str = "16:9",
+        attachment_path: Path | None = None,
     ) -> list[dict]:
-        """Generate multiple photorealistic images sequentially in one normal chat session."""
+        """Generate multiple photorealistic images sequentially in one normal chat session.
+
+        ``attachment_path`` (persona/identity reference) is re-attached before
+        EVERY prompt — each generation must carry the reference image."""
         if not self._opened:
             await self.open()
         if not prompts:
@@ -813,6 +841,8 @@ class ChatGPTImageDriver:
                 else:
                     await self._select_create_image_mode_and_aspect_ratio()
                 composer = await self._focus_composer()
+                if attachment_path is not None:
+                    await self._attach_reference_image(attachment_path)
                 full_prompt = build_image_gen_prompt(prompt, aspect_ratio=aspect_ratio)
                 await self._fill_composer_robust(composer, full_prompt)
                 await human_pause(self.page, min_ms=1500, max_ms=3500)

@@ -1,7 +1,7 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-07-06T10:22:35.088Z
-> Files: 948 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-07-06T23:18:58.378Z
+> Files: 949 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../../../../Users/joker/.claude/
 
@@ -54,6 +54,7 @@
 
 - `build_compare.py` — Side-by-side montage: old-formula thumbnails (top row) vs v1.4 (bottom row). (~566 tok)
 - `build_compare3.py` — 3-row montage: old-formula / v1.4 (AI-painted text) / v1.5 (Option A overlay). (~571 tok)
+- `demo_device_thumbs.py` — Demo the new thumbnail_text device menu end-to-end (no pipeline job): (~747 tok)
 - `gen_sample_script.py` — Generate ONE sample long-form script with the updated prompt, then check it (~1106 tok)
 - `gen_sample_seo.py` — Generate a sample SEO artifact with the updated prompt, then validate the (~1041 tok)
 - `gen_v14_thumbs.py` — Generate 3 thumbnails with the NEW v1.4 prompt (user-authorized, 2026-07-06). (~628 tok)
@@ -984,13 +985,13 @@
 - `cli.py` — build_parser (~4770 tok)
 - `color_mix.py` — Perceptual colour mixing (OKLab): resolve_topic_accent_color (30% blend, bug-466), resolve_topic_background_color/resolve_topic_text_color (12% blend, bug-467). (~2600 tok)
 - `operator_json.py` — JSON object extraction, truncated-root repair, and JSON prompt utility helpers. (~2500 tok)
-- `operator_prompts.py` — Prompt template builders for operator ChatGPT/Gemini workflows. (~17318 tok)
+- `operator_prompts.py` — Prompt template builders for operator ChatGPT/Gemini workflows. (~17560 tok)
 - `operator_validators.py` — class: is_valid, merge, format_report, load_operator_channel_config + 1 more (~4722 tok)
 - `operator.py` — Declares from (~12281 tok)
 - `pipeline.py` — Declares from (~16283 tok)
 - `pipeline.py` — Declares from (~16230 tok)
 - `style_dna.py` — Shared loader for ``configs/<channel>/style-dna.json`` — the single source of (~604 tok)
-- `thumbnail_planner.py` — Thumbnail prompt planner — spec v1.3. (~10975 tok)
+- `thumbnail_planner.py` — Thumbnail prompt planner — spec v1.3. (~9991 tok)
 - `tts_melo_worker.py` — MeloTTS sidecar worker — runs inside the melo venv, driven over JSON-over-stdio. (~594 tok)
 - `tts.py` — TTSClient: synthesize, synthesize_scene_track, synthesize (~4831 tok)
 
@@ -1010,11 +1011,11 @@
 
 ## src/video_agent/browser_worker/
 
-- `app.py` — API: 2 endpoints (~10802 tok)
+- `app.py` — API: 2 endpoints (~11111 tok)
 
 ## src/video_agent/browser_worker/drivers/
 
-- `chatgpt_image.py` — ChatGPTImageDriver: build_image_gen_prompt, open (~12374 tok)
+- `chatgpt_image.py` — ChatGPTImageDriver: build_image_gen_prompt, open (~13373 tok)
 - `humanize.py` — human_pause, human_click, estimate_read_pause_ms, human_type (~2426 tok)
 
 ## src/video_agent/lipsync/
@@ -1145,7 +1146,7 @@
 - `_constants.py` — Module-level tuning constants for shorts validation checks. (~1167 tok)
 - `audio_fit.py` — Audio-fit & sync validation for scene durations. (~1889 tok)
 - `checks.py` — Script, scene structure, audio-fit, and graphic payload validators. (~16000 tok)
-- `graphic_checks.py` — Graphic-scene detection and graphic payload field validation. (~6406 tok)
+- `graphic_checks.py` — Graphic-scene detection and graphic payload field validation. (~7162 tok)
 - `issues.py` — Pre-acquisition validation for Shorts structured graphic intents (spec v7 §18). (~1167 tok)
 - `repairs.py` — repair_five_error_bread_payoff_layout, repair_missing_graphic_checklist_scene, repair_excess_graphic (~8097 tok)
 - `scene_structure.py` — Whole-short scene structure validation, repair plan & pacing. (~11273 tok)
@@ -1229,7 +1230,7 @@
 - `test_long_visual_schedule.py` — Unit tests for the long-form compiled asset schedule (``video_agent.visual.schedule``). (~2631 tok)
 - `test_long_visual_spans.py` — Unit tests for the long-form visual-span core (``video_agent.visual``). (~2587 tok)
 - `test_materialize.py` — test_materialize_clone_identical, test_materialize_cow_independent, test_materialize_overwrites_exis (~447 tok)
-- `test_operator_prompts.py` — Tests for Spain-first locale-aware operator prompts. (~2221 tok)
+- `test_operator_prompts.py` — Tests for Spain-first locale-aware operator prompts. (~2394 tok)
 - `test_operator_qa_nested_verdict.py` — Gemini QA sometimes echoes the FULL artifact (which natively carries a ``qa`` (~463 tok)
 - `test_operator_render_prepared_routing.py` — Short job dirs must always render through the prepared-short owner, even from (~678 tok)
 - `test_operator_workflow.py` — test_extract_json_object_ignores_model_wrapper_text, test_write_operator_prompts_writes_script_promp (~6460 tok)

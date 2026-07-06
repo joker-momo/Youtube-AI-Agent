@@ -538,11 +538,17 @@ async def auto_thumbnail_image_stage(
             png_paths.append((assets_dir / f"thumbnail_{i}.png").resolve())
             jpg_paths.append((job_dir / "outputs" / f"thumbnail_{i}.jpg").resolve())
 
+        # Persona identity lock: attach the configured presenter reference photo
+        # to every generation so the SAME face appears across all thumbnails.
+        attachment = str(
+            (channel_config.get("thumbnail") or {}).get("persona_reference") or ""
+        ).strip() or None
         try:
             await image_fn.generate_images(
                 prompts=prompts,
                 project_name=project_name,
                 out_paths=[str(p) for p in png_paths],
+                **({"attachment_path": attachment} if attachment else {}),
             )
             for i, (png_path, jpg_path, variant) in enumerate(
                 zip(png_paths, jpg_paths, variants), start=1

@@ -628,12 +628,41 @@ async def gemini_close_session(session_id: str):
 
 
 
+def _safe_attachment_path(raw: str | None) -> Path | None:
+    """Resolve an optional reference-image path, confined to the repo tree.
+
+    Attachments are operator-provided brand assets (e.g. the thumbnail persona
+    photo under configs/), so unlike out_path they may live outside the jobs
+    root — but never outside the repository. Raises HTTPException(400) on
+    traversal or a missing file."""
+    if not raw:
+        return None
+    from video_agent.contracts import repo_root
+
+    root = repo_root().resolve()
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    candidate = candidate.resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"attachment_path must stay inside the repository: {raw}",
+        ) from None
+    if not candidate.is_file():
+        raise HTTPException(status_code=400, detail=f"attachment_path not found: {raw}")
+    return candidate
+
+
 class ImagePromptRequest(BaseModel):
     prompt: str
     project_name: str
     out_path: str  # path relative to WORKER_ASSETS_ROOT, or absolute path inside it
     response_timeout_ms: int = 240_000
     aspect_ratio: str = "16:9"
+    attachment_path: str | None = None  # persona/identity reference image (repo-confined)
 
 
 @app.post("/chatgpt/image")
@@ -704,6 +733,7 @@ async def chatgpt_image(payload: ImagePromptRequest) -> dict:
                         out_path=safe_out,
                         response_timeout_ms=payload.response_timeout_ms,
                         aspect_ratio=payload.aspect_ratio,
+                        attachment_path=_safe_attachment_path(payload.attachment_path),
                     )
                     return result
                 except Exception as retry_exc:
@@ -741,6 +771,7 @@ class BatchImagePromptRequest(BaseModel):
     out_paths: list[str]
     response_timeout_ms: int = 240_000
     aspect_ratio: str = "16:9"
+    attachment_path: str | None = None  # persona/identity reference image (repo-confined)
 
 
 @app.post("/chatgpt/image/batch")
@@ -781,6 +812,7 @@ async def chatgpt_image_batch(payload: BatchImagePromptRequest) -> dict:
                     out_paths=safe_out_paths,
                     response_timeout_ms=payload.response_timeout_ms,
                     aspect_ratio=payload.aspect_ratio,
+                    attachment_path=_safe_attachment_path(payload.attachment_path),
                 )
                 return {"ok": True, "results": results}
             except LoginRequiredError as exc:

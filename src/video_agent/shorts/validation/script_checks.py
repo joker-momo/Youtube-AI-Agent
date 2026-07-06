@@ -107,6 +107,23 @@ def acceptable_funnel_ctas(
     return accepted
 
 
+def funnel_cta_max_words(channel_config: dict[str, Any] | None) -> int:
+    """Configured spoken-CTA word budget (funnel.cta_max_words), default 12.
+
+    12 gives a natural complete Spanish sentence room to name the long video's
+    topic ("Descubre el error del aceite en ayunas en el canal." = 10 words);
+    the old 8-word cap forced telegraphic fragments.
+    """
+    try:
+        return int(
+            (((channel_config or {}).get("shorts") or {}).get("funnel") or {}).get(
+                "cta_max_words", 12
+            )
+        )
+    except (TypeError, ValueError):
+        return 12
+
+
 def validate_full_short_script_candidate(
     script: dict[str, Any],
     short_plan: dict[str, Any],
@@ -182,7 +199,7 @@ def validate_full_short_script_candidate(
         errors.append("missing_cta")
     elif cta_text:
         word_count = len(re.findall(r"\w+", cta_text))
-        if word_count > 8:
+        if word_count > funnel_cta_max_words(channel_config):
             errors.append("cta_too_long_exceeds_8_words")
         if not any(normalize_str(c) in normalize_str(cta_text) for c in accepted_ctas):
             errors.append("missing_expected_funnel_cta")
@@ -286,12 +303,12 @@ def repair_cta_beat_channel_direction(
     if old_narr and any(norm(c) in norm(old_narr) for c in accepted):
         return False  # already compliant
 
-    # Prefer the validated cta field (<= 8 words, includes the channel direction).
+    # Prefer the validated cta field (within budget, includes the channel direction).
     cta_field = str(script.get("cta") or "").strip()
     if (
         cta_field
         and any(norm(c) in norm(cta_field) for c in accepted)
-        and len(re.findall(r"\w+", cta_field)) <= 8
+        and len(re.findall(r"\w+", cta_field)) <= funnel_cta_max_words(channel_config)
     ):
         new_narr = cta_field
     else:

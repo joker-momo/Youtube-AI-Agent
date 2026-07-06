@@ -137,7 +137,7 @@ def _cta_deterministically_compliant(script: dict, idea: dict | None) -> bool:
     deterministic gate already enforced a funnel-correct, in-budget CTA).
     """
     cta_field = str(script.get("cta") or "").strip()
-    if not cta_field or len(re.findall(r"\w+", cta_field)) > 8:
+    if not cta_field or len(re.findall(r"\w+", cta_field)) > 12:  # matches funnel_cta_max_words default
         return False
     try:
         from video_agent.shorts.validation.script_checks import (
@@ -810,7 +810,7 @@ def normalize_qa_issue(
             # Check if script CTA is context-valid and <= 8 words
             script_cta = str(script.get("cta") or "").strip()
             cta_word_count = len([w for w in script_cta.split() if w.strip()])
-            if script_cta and cta_word_count <= 8:
+            if script_cta and cta_word_count <= 12:  # matches funnel_cta_max_words default
                 issue_class = IssueClass.STALE_OR_SUPPRESSED
                 reason = "wrong_context_suppressed"
                 trigger_regeneration = False

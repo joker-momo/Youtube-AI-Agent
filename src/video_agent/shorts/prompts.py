@@ -75,7 +75,7 @@ _RETENTION_RULES = (
     "- Do not say 'en este short', 'en este vídeo', 'hoy vamos a', 'bienvenidos', or 'hola'.\n"
     "- One main idea only.\n"
     "- Give one useful payoff before the CTA.\n"
-    "- CTA must be short and not exceed 8 words when possible.\n"
+    "- CTA must be short and not exceed 12 words when possible.\n"
     "- Do not make the Short a generic recap or summary.\n"
 )
 
@@ -151,6 +151,9 @@ def short_script_prompt(
     from video_agent.shorts.source_map import is_generic_cta
 
     funnel_cfg = (channel_config.get("shorts") or {}).get("funnel") or {}
+    from video_agent.shorts.validation.script_checks import funnel_cta_max_words
+
+    cta_max_words = funnel_cta_max_words(channel_config)
     explicit_cta = (
         (source_artifacts or {}).get("funnel", {}).get("cta")
         or short_plan.get("funnel", {}).get("cta")
@@ -158,7 +161,7 @@ def short_script_prompt(
     source_title = str((source_artifacts or {}).get("source_video_title") or "")
     if explicit_cta and not is_generic_cta(funnel_cfg, explicit_cta):
         cta_rule = (
-            f"CTA must be 8 words or fewer. You MUST include this exact phrase in the CTA: \"{explicit_cta}\"\n"
+            f"CTA must be {cta_max_words} words or fewer. You MUST include this exact phrase in the CTA: \"{explicit_cta}\"\n"
         )
     elif source_title:
         cta_rule = (
@@ -166,10 +169,13 @@ def short_script_prompt(
             f"- This Short is cut from the long video: \"{source_title}\".\n"
             "- The final CTA must naturally invite the viewer to watch that full video on the channel, "
             "naming ITS specific topic in your own words.\n"
-            "- The CTA MUST contain the word 'canal' and be 8 words or fewer.\n"
+            f"- The CTA MUST contain the word 'canal' and be {cta_max_words} words or fewer.\n"
             "- It MUST be ONE complete, natural spoken sentence with a verb — something a person "
-            "would actually say (e.g. 'La guía del aceite está en el canal.'). NEVER a telegraphic "
-            "fragment like 'Guía del aceite, canal.'\n"
+            "would actually say (e.g. 'Descubre el error del aceite en ayunas en el canal.'). "
+            "NEVER a telegraphic fragment like 'Guía del aceite, canal.'\n"
+            "- The cta field must NEVER be empty.\n"
+            "- The narration of the FINAL beat (purpose 'cta') MUST speak this exact same CTA "
+            "sentence — the cta field and the last beat's narration must match.\n"
             "- Do NOT use a canned generic phrase; make it specific to that video's content.\n"
         )
     else:
@@ -184,7 +190,7 @@ def short_script_prompt(
         )
         resolved_cta = resolve_funnel_cta(funnel_cfg, short_plan, has_url=has_url)
         cta_rule = (
-            f"CTA must be 8 words or fewer. You MUST include this exact phrase in the CTA: \"{resolved_cta}\"\n"
+            f"CTA must be {cta_max_words} words or fewer. You MUST include this exact phrase in the CTA: \"{resolved_cta}\"\n"
         )
 
     orig_count_val = idea_contract.get("original_count")
@@ -1082,7 +1088,7 @@ def gemini_script_qa_prompt(
         "- No banned intro phrases such as \"hola\", \"bienvenidos\", \"en este short\", \"en este vídeo\", or \"hoy\".\n"
         "- Script must keep ONE main idea.\n"
         "- Payoff must appear before the CTA.\n"
-        "- CTA must be short and 8 words or fewer.\n"
+        "- CTA must be short and 12 words or fewer.\n"
         "- No generic recap.\n"
         "- No medical overclaim.\n"
         "- No miracle promise.\n"
@@ -1137,7 +1143,7 @@ def gemini_script_qa_prompt(
         "- hook fails the first-2-seconds rule\n"
         "- script has more than one main idea\n"
         "- payoff is missing or appears only after CTA\n"
-        "- CTA is longer than 8 words\n"
+        "- CTA is longer than 12 words\n"
         "- Spanish is not es-ES\n"
         "- required JSON fields are missing\n"
         "- source fidelity cannot be confirmed for important claims when SOURCE MAP is present\n\n"

@@ -497,7 +497,7 @@ shorts:
     use_first_scene_as_cover: true
   funnel:
     cta_to_long_video: true
-    cta_max_words: 8
+    cta_max_words: 12
     default_cta_without_url: "Vídeo completo en el canal."
     default_cta_with_url: "Mira la guía completa aquí."
     # Topic-aware CTA: {tema} is filled from the Short's pillar so the spoken

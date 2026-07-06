@@ -165,8 +165,11 @@ def short_script_prompt(
             "CTA rules (bridge to the long video):\n"
             f"- This Short is cut from the long video: \"{source_title}\".\n"
             "- The final CTA must naturally invite the viewer to watch that full video on the channel, "
-            "naming ITS specific topic in your own words (e.g. 'La guía completa del aceite en ayunas está en el canal.').\n"
+            "naming ITS specific topic in your own words.\n"
             "- The CTA MUST contain the word 'canal' and be 8 words or fewer.\n"
+            "- It MUST be ONE complete, natural spoken sentence with a verb — something a person "
+            "would actually say (e.g. 'La guía del aceite está en el canal.'). NEVER a telegraphic "
+            "fragment like 'Guía del aceite, canal.'\n"
             "- Do NOT use a canned generic phrase; make it specific to that video's content.\n"
         )
     else:

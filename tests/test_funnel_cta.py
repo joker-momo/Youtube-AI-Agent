@@ -92,6 +92,8 @@ def test_script_prompt_asks_natural_cta_naming_the_long_video():
     assert 'cut from the long video: "Toma 1 cucharada de aceite de oliva cada mañana"' in p
     assert "naming ITS specific topic in your own words" in p
     assert "MUST contain the word 'canal'" in p
+    assert "ONE complete, natural spoken sentence with a verb" in p
+    assert "NEVER a telegraphic" in p
     assert 'include this exact phrase in the CTA: "Vídeo completo en el canal."' not in p
 
 

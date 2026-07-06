@@ -139,12 +139,19 @@ def _long_scene_index(long_job_dir: Path) -> dict[str, dict]:
 
 
 def _long_title(long_job_dir: Path) -> str:
-    p = long_job_dir / "seo.json"
-    if p.exists():
+    # Different pipeline versions store the long-form artifacts at the job root or
+    # under json/; try both, and fall back to the script title, so the topic is
+    # always recoverable for the funnel CTA.
+    for rel in ("seo.json", "json/seo.json", "script.json", "json/script.json"):
+        p = long_job_dir / rel
+        if not p.exists():
+            continue
         try:
-            return str(json.loads(p.read_text(encoding="utf-8")).get("title", ""))
+            title = str(json.loads(p.read_text(encoding="utf-8")).get("title", "")).strip()
         except Exception:
-            return ""
+            title = ""
+        if title:
+            return title
     return ""
 
 

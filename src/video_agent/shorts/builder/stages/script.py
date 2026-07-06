@@ -107,6 +107,16 @@ def _stage_script(ctx: BuildContext) -> StageResult:
     ctx.extras["script_retry_memory"]
     ctx.extras["script_memory_file"]
 
+    # The parent long video's title carries the topic ("...aceite de oliva...")
+    # even when the plan has no pillar/topic fields, so make it available to the
+    # script prompt's topic-aware funnel CTA (bug-484).
+    if not (source_artifacts or {}).get("source_video_title"):
+        from video_agent.shorts.source_map import _long_title
+
+        _title = _long_title(long_job_dir)
+        if _title:
+            source_artifacts = {**(source_artifacts or {}), "source_video_title": _title}
+
     # --- Stage 1: Script ---
     update_stage("script", "in_progress")
     try:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from video_agent.shorts import prompts
-from video_agent.shorts.source_map import funnel_topic_es, resolve_funnel_cta
+from video_agent.shorts.source_map import funnel_topic_es, is_generic_cta, resolve_funnel_cta
 
 FUNNEL = {
     "default_cta_without_url": "Vídeo completo en el canal.",
@@ -64,6 +64,47 @@ def test_resolve_cta_falls_back_to_plain_default_when_no_topic():
     cta = resolve_funnel_cta(FUNNEL, {"pillar": "unknown-x"}, has_url=False)
     assert "{tema}" not in cta
     assert cta == "Vídeo completo en el canal."
+
+
+def test_topic_from_extra_text_when_plan_has_no_fields():
+    # The real live case: plan carries no topic fields, but the parent long video
+    # title does ("...aceite de oliva...").
+    assert funnel_topic_es({}, extra_text="Toma 1 cucharada de aceite de oliva cada mañana") == "la alimentación"
+
+
+def test_is_generic_cta():
+    assert is_generic_cta(FUNNEL, "Vídeo completo en el canal.") is True
+    assert is_generic_cta(FUNNEL, "Mira la guía completa aquí.") is True
+    assert is_generic_cta(FUNNEL, "Más sobre el sueño en el canal.") is False
+
+
+def test_script_prompt_topic_cta_beats_generic_source_map_cta():
+    """The exact live failure: source_map pre-set a generic funnel.cta and the plan
+    has no topic fields, but source_video_title carries the topic → topic CTA wins."""
+    cfg = {"shorts": {"funnel": FUNNEL}}
+    plan = {"format": "pain_to_tip"}  # no pillar, no title/viewer_pain
+    source_artifacts = {
+        "source_video_title": "Toma 1 cucharada de aceite de oliva cada mañana",
+        "funnel": {"cta": "Vídeo completo en el canal.", "long_video_url": ""},
+    }
+    p = prompts.short_script_prompt(cfg, plan, source_artifacts)
+    assert "Más sobre la alimentación en el canal." in p
+    assert 'include this exact phrase in the CTA: "Vídeo completo en el canal."' not in p
+
+
+def test_build_source_map_writes_topic_cta_from_long_title(tmp_path):
+    from video_agent.shorts.source_map import build_source_map
+
+    job = tmp_path / "toma-1-cucharada-de-aceite-de-oliva"
+    (job / "json").mkdir(parents=True)
+    (job / "scenes.json").write_text("{}")
+    # _long_title reads the long job's seo/script title; provide a seo.json.
+    (job / "seo.json").write_text('{"title": "Toma 1 cucharada de aceite de oliva cada mañana"}')
+    sm = build_source_map(
+        job, {"short_id": "short-01", "scene_ids": []}, {"narration": "x"},
+        {"shorts": {"funnel": FUNNEL}}, long_video_url="",
+    )
+    assert sm["funnel"]["cta"] == "Más sobre la alimentación en el canal."
 
 
 def test_script_prompt_embeds_topic_specific_cta():

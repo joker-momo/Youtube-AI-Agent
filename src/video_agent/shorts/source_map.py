@@ -71,12 +71,13 @@ def _strip_accents(text: str) -> str:
     )
 
 
-def funnel_topic_es(short_plan: dict) -> str:
+def funnel_topic_es(short_plan: dict, extra_text: str = "") -> str:
     """Resolve the Short's topic to a short Spanish noun, or '' when unknown.
 
     Prefers the explicit pillar; when it is missing/unmapped (bug-484), scans the
-    plan's text (title, hook, viewer pain, payoff, narration seed) for topic
-    keywords so the CTA still specializes."""
+    plan's text (title, hook, viewer pain, payoff, narration seed) plus any
+    ``extra_text`` (e.g. the parent long video's title) for topic keywords so the
+    CTA still specializes even when the plan carries no topic fields."""
     short_plan = short_plan or {}
     pillar = str(short_plan.get("pillar") or short_plan.get("detected_pillar") or "").strip().lower()
     if pillar in _PILLAR_TOPIC_ES:
@@ -84,9 +85,10 @@ def funnel_topic_es(short_plan: dict) -> str:
 
     haystack = _strip_accents(
         " ".join(
-            str(short_plan.get(k) or "")
-            for k in ("title", "hook_text", "hook", "viewer_pain",
-                      "practical_payoff", "narration_seed", "topic")
+            [str(short_plan.get(k) or "")
+             for k in ("title", "hook_text", "hook", "viewer_pain",
+                       "practical_payoff", "narration_seed", "topic")]
+            + [str(extra_text or "")]
         )
     )
     if haystack.strip():
@@ -96,7 +98,20 @@ def funnel_topic_es(short_plan: dict) -> str:
     return ""
 
 
-def resolve_funnel_cta(funnel_cfg: dict, short_plan: dict, *, has_url: bool) -> str:
+def is_generic_cta(funnel_cfg: dict, cta: str) -> bool:
+    """True when ``cta`` is one of the plain (non-topic) default phrases, so a
+    caller can treat it as 'not specific' and prefer a topic-aware CTA instead."""
+    funnel_cfg = funnel_cfg or {}
+    generics = {
+        str(funnel_cfg.get("default_cta_without_url") or ""),
+        str(funnel_cfg.get("default_cta_with_url") or ""),
+        "Vídeo completo en el canal.",
+    }
+    generics.discard("")
+    return str(cta or "").strip() in generics
+
+
+def resolve_funnel_cta(funnel_cfg: dict, short_plan: dict, *, has_url: bool, extra_text: str = "") -> str:
     """The spoken CTA that bridges a Short to its long video.
 
     Prefers a topic-aware template (``cta_topic_template_with/without_url`` with a
@@ -106,7 +121,7 @@ def resolve_funnel_cta(funnel_cfg: dict, short_plan: dict, *, has_url: bool) -> 
     validator use the SAME expected CTA and never drift.
     """
     funnel_cfg = funnel_cfg or {}
-    tema = funnel_topic_es(short_plan or {})
+    tema = funnel_topic_es(short_plan or {}, extra_text=extra_text)
     tpl_key = "cta_topic_template_with_url" if has_url else "cta_topic_template_without_url"
     tpl = str(funnel_cfg.get(tpl_key) or "")
     if tema and "{tema}" in tpl:
@@ -159,9 +174,16 @@ def build_source_map(
             }
         )
     funnel_cfg = (channel_config.get("shorts") or {}).get("funnel") or {}
-    cta = short_script.get("cta") or resolve_funnel_cta(
-        funnel_cfg, short_plan, has_url=bool(long_video_url)
-    )
+    # The parent long video's title carries the topic ("...aceite de oliva...") even
+    # when the Short plan has no pillar/topic fields, so feed it to the resolver.
+    long_title = _long_title(long_job_dir)
+    script_cta = str(short_script.get("cta") or "").strip()
+    if script_cta and not is_generic_cta(funnel_cfg, script_cta):
+        cta = script_cta
+    else:
+        cta = resolve_funnel_cta(
+            funnel_cfg, short_plan, has_url=bool(long_video_url), extra_text=long_title
+        )
     return {
         "short_id": short_plan.get("short_id"),
         "idea_id": short_plan.get("idea_id"),

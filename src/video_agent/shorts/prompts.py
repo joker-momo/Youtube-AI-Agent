@@ -142,23 +142,29 @@ def short_script_prompt(
         indent=2,
     )
 
-    # Bridge CTA: an explicit funnel.cta wins; otherwise derive a topic-aware
-    # default that names the companion long video's theme (kept in sync with the
-    # source-map validator via resolve_funnel_cta).
-    if source_artifacts and source_artifacts.get("funnel", {}).get("cta"):
-        expected_cta = source_artifacts["funnel"]["cta"]
-    elif short_plan.get("funnel", {}).get("cta"):
-        expected_cta = short_plan["funnel"]["cta"]
-    else:
-        from video_agent.shorts.source_map import resolve_funnel_cta
+    # Bridge CTA: a SPECIFIC explicit funnel.cta wins; a plain generic default does
+    # NOT (it would mask the topic), so fall through to the topic-aware resolver.
+    # The parent long video's title supplies the topic even when the plan has no
+    # pillar/topic fields (bug-484). Kept in sync with the source-map validator.
+    from video_agent.shorts.source_map import is_generic_cta, resolve_funnel_cta
 
-        funnel_cfg = (channel_config.get("shorts") or {}).get("funnel") or {}
+    funnel_cfg = (channel_config.get("shorts") or {}).get("funnel") or {}
+    explicit_cta = (
+        (source_artifacts or {}).get("funnel", {}).get("cta")
+        or short_plan.get("funnel", {}).get("cta")
+    )
+    if explicit_cta and not is_generic_cta(funnel_cfg, explicit_cta):
+        expected_cta = explicit_cta
+    else:
         has_url = bool(
             (source_artifacts or {}).get("funnel", {}).get("long_video_url")
             or short_plan.get("funnel", {}).get("long_video_url")
             or short_plan.get("long_video_url")
         )
-        expected_cta = resolve_funnel_cta(funnel_cfg, short_plan, has_url=has_url)
+        source_title = str((source_artifacts or {}).get("source_video_title") or "")
+        expected_cta = resolve_funnel_cta(
+            funnel_cfg, short_plan, has_url=has_url, extra_text=source_title
+        )
 
     orig_count_val = idea_contract.get("original_count")
     final_count_val = idea_contract.get("final_count")

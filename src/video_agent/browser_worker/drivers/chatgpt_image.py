@@ -690,11 +690,21 @@ class ChatGPTImageDriver:
                     for (const sel of containers) {
                         const imgs = document.querySelectorAll(sel);
                         for (let i = imgs.length - 1; i >= 0; i--) {
-                            const s = imgs[i].src || '';
+                            const img = imgs[i];
+                            const s = img.src || '';
                             if (!s.startsWith('http')) continue;
                             if (exclude.has(s)) continue;
                             if (s.includes('avatar') || s.includes('icon')) continue;
-                            if (imgs[i].naturalWidth < 256) continue;
+                            if (img.naturalWidth < 256) continue;
+                            // Skip images inside a USER turn: when a persona
+                            // reference photo is attached it renders as an
+                            // https-hosted <img> in the user bubble BEFORE the
+                            // assistant finishes generating. The broad
+                            // main/article fallbacks would otherwise return that
+                            // reference photo verbatim (byte-identical), silently
+                            // replacing every AI image with the raw reference.
+                            const roleEl = img.closest('[data-message-author-role]');
+                            if (roleEl && roleEl.getAttribute('data-message-author-role') === 'user') continue;
                             return s;
                         }
                     }

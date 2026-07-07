@@ -212,3 +212,17 @@ def test_valid_checklist_untouched_and_empty_still_raises():
     empty = _scene("graphic_checklist", {"title": "PASOS", "items": []})
     with pytest.raises(ValueError, match="requires 2-5 items"):
         validate_short_graphic_scenes([empty])
+
+
+def test_scene_prompt_forbids_bare_label_compression():
+    """bug-487: the scene builder gutted 'mide cuánto aceite usas realmente, sin
+    cambiar nada' into 'Mide lo que usas.' — a bare label that lost the point and
+    failed fidelity + product-quality QA. The prompt must forbid that."""
+    from video_agent.shorts.prompts import short_scene_prompt_v6
+
+    p = short_scene_prompt_v6(
+        {}, {"short_id": "s"}, {"short_id": "s", "narration": "n", "hook": "h", "cta": "c"}
+    )
+    assert "NEVER reduce a step to a bare 2-4 word label" in p
+    assert "keep the step's CONVERSATIONAL action sentence" in p
+    assert "UPPER end of each layout's word cap" in p

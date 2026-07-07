@@ -783,8 +783,10 @@ class ChatGPTImageDriver:
         for _ in range(40):
             await asyncio.sleep(0.5)
             if await self._attachment_preview_count() > before:
-                # Let the thumbnail finish processing before the prompt is sent.
-                await human_pause(self.page, min_ms=1500, max_ms=2500)
+                # The preview chip appears as soon as the upload STARTS; the image
+                # is not usable (and the send button stays disabled) until it
+                # finishes processing, so keep the original generous settle wait.
+                await human_pause(self.page, min_ms=3500, max_ms=5000)
                 return
         shot = await save_trace_screenshot(self.page, prefix="chatgpt-image-attach-not-registered")
         raise BrowserDriverError(

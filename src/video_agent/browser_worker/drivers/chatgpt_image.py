@@ -771,6 +771,13 @@ class ChatGPTImageDriver:
         attachment_path = Path(attachment_path)
         if not attachment_path.is_file():
             raise BrowserDriverError(f"Attachment not found: {attachment_path}")
+        # ChatGPT mounts/activates the real composer file input only after the
+        # "+" (Add photos & files) menu is opened; setting files on the stale
+        # hidden input silently drops the upload, so ChatGPT replies "please
+        # upload the reference photo" and the persona is lost. Open the menu
+        # first (best-effort), then set files on a now-active input.
+        await self._click_first_visible(IMAGE_TOOL_MENU_SELECTORS, timeout_ms=2500)
+        await human_pause(self.page, min_ms=600, max_ms=1200)
         file_inputs = self.page.locator("input[type='file']")
         if await file_inputs.count() == 0:
             shot = await save_trace_screenshot(self.page, prefix="chatgpt-image-no-file-input")
@@ -778,7 +785,14 @@ class ChatGPTImageDriver:
                 f"ChatGPT composer has no file input for attachments (trace: {shot})"
             )
         before = await self._attachment_preview_count()
-        await file_inputs.first.set_input_files(str(attachment_path))
+        # Feed every file input (ChatGPT may render several; only the active
+        # composer one accepts the image, the rest ignore it).
+        n_inputs = await file_inputs.count()
+        for idx in range(n_inputs):
+            try:
+                await file_inputs.nth(idx).set_input_files(str(attachment_path))
+            except Exception:
+                pass
         # Poll up to ~20s for the upload preview to register.
         for _ in range(40):
             await asyncio.sleep(0.5)

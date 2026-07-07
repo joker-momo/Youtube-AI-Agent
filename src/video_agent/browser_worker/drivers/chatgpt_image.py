@@ -737,14 +737,37 @@ class ChatGPTImageDriver:
                 else:
                     raise BrowserDriverError(f"Image download error after {max_attempts} attempts: {exc}") from exc
 
+    # Composer indicators that a file attachment actually registered. Counted
+    # before/after upload (not matched absolutely) so a chat that already holds
+    # a previous attachment never false-positives.
+    _ATTACHMENT_PREVIEW_SELECTORS = (
+        "button[aria-label*='Remove' i]",
+        "[data-testid*='attachment']",
+        "img[src^='blob:']",
+    )
+
+    async def _attachment_preview_count(self) -> int:
+        total = 0
+        for sel in self._ATTACHMENT_PREVIEW_SELECTORS:
+            try:
+                total += await self.page.locator(sel).count()
+            except Exception:
+                pass
+        return total
+
     async def _attach_reference_image(self, attachment_path: Path) -> None:
-        """Attach a local image to the composer (persona/identity reference).
+        """Attach a local image to the composer and VERIFY it registered.
 
         ChatGPT's composer keeps a hidden ``input[type=file]``; Playwright's
         ``set_input_files`` feeds it directly, so no file-chooser dialog opens.
-        Waits briefly for the upload chip to process before the prompt is sent.
-        Raises BrowserDriverError when the file is missing or no input exists.
+        A silent miss (wrong/stale input, dropped upload) is dangerous: the
+        prompt still claims a photo is ATTACHED, so ChatGPT replies "please
+        upload the reference photo" and the persona lock is silently lost. So we
+        wait for the upload preview chip to actually appear and raise loudly if
+        it does not — a visible failure beats a wrong-identity image.
         """
+        import asyncio
+
         attachment_path = Path(attachment_path)
         if not attachment_path.is_file():
             raise BrowserDriverError(f"Attachment not found: {attachment_path}")
@@ -754,9 +777,20 @@ class ChatGPTImageDriver:
             raise BrowserDriverError(
                 f"ChatGPT composer has no file input for attachments (trace: {shot})"
             )
+        before = await self._attachment_preview_count()
         await file_inputs.first.set_input_files(str(attachment_path))
-        # Give the upload chip time to appear/process; sending too early drops it.
-        await human_pause(self.page, min_ms=3000, max_ms=5000)
+        # Poll up to ~20s for the upload preview to register.
+        for _ in range(40):
+            await asyncio.sleep(0.5)
+            if await self._attachment_preview_count() > before:
+                # Let the thumbnail finish processing before the prompt is sent.
+                await human_pause(self.page, min_ms=1500, max_ms=2500)
+                return
+        shot = await save_trace_screenshot(self.page, prefix="chatgpt-image-attach-not-registered")
+        raise BrowserDriverError(
+            "Reference image upload did not register in the composer "
+            f"(persona lock would be silently lost) (trace: {shot})"
+        )
 
     async def generate_image(
         self,

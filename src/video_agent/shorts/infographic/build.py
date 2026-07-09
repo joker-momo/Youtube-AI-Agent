@@ -98,7 +98,11 @@ async def run_infographic_short(
         poster_ref=_public_short_ref(short_dir, "assets", paths.SHORT_POSTER_IMAGE_NAME),
         audio_ref=_public_short_ref(short_dir, "audio", Path(audio_path).name),
         duration_sec=duration,
-        music_track=str((channel_config.get("shorts") or {}).get("music_track") or "shorts_sleep_stress"),
+        # v1: no music bed. Shorts music lives per-short as assets/bgm.mp3 (materialized
+        # by the narrated audio pipeline, which infographic does not run). Referencing a
+        # non-existent staticFile would 404 the render. Voiceover is the audio; a proper
+        # per-short bgm is a follow-up. Empty => InfographicShort skips the music track.
+        music_track="",
         channel_name=str((channel_config.get("channel") or {}).get("name") or ""),
     )
     atomic_write_json(short_dir / "json" / paths.SHORT_RENDER_PROPS_FILE, props)

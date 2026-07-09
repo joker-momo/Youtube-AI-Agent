@@ -3,6 +3,7 @@ import {Composition} from 'remotion';
 import {ChannelVideo} from './ChannelVideo';
 import {ShortVideo} from './ShortVideo';
 import {ShortCover} from './ShortCover';
+import {InfographicShort} from './shorts/InfographicShort';
 import {defaultRenderProps, RenderProps} from './render-props';
 // Side-effect import: registers webfonts via delayRender so Shorts
 // compositions render with the correct typeface from frame 0.
@@ -75,6 +76,15 @@ export const Root: React.FC = () => {
         height={1920}
         defaultProps={defaultRenderProps}
         calculateMetadata={calculateVideoMetadata}
+      />
+      <Composition
+        id="InfographicShort"
+        component={InfographicShort}
+        durationInFrames={900}
+        fps={30}
+        width={1080}
+        height={1920}
+        defaultProps={{poster: '', audio: '', durationInFrames: 900}}
       />
       <Composition
         id="ShortCover"

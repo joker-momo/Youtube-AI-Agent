@@ -1,4 +1,3 @@
-import asyncio
 import json
 from pathlib import Path
 
@@ -51,9 +50,9 @@ CFG = {"audience": {"age_range": [45, 75]}, "channel": {"name": "Vida Plena 45+"
 def test_pass_gate_renders_and_writes_seo(tmp_path):
     image_fn, llm_fn, read_text_fn, tts_fn, render_fn = _deps("vista i0 i1 i2 i3 i4 i5")
     short_dir = tmp_path / "job-1" / "shorts" / "short-01"
-    status = asyncio.run(run_infographic_short(
+    status = run_infographic_short(
         short_dir, CFG, {"topic": "vista despues de los 60"},
-        image_fn=image_fn, llm_fn=llm_fn, read_text_fn=read_text_fn, tts_fn=tts_fn, render_fn=render_fn))
+        image_fn=image_fn, llm_fn=llm_fn, read_text_fn=read_text_fn, tts_fn=tts_fn, render_fn=render_fn)
     assert status["short_type"] == "infographic"
     assert status["rendered"] is True
     assert (short_dir / "outputs" / "short.mp4").exists()
@@ -70,10 +69,10 @@ def test_pass_gate_renders_and_writes_seo(tmp_path):
 def test_failed_text_qa_blocks_render(tmp_path):
     image_fn, llm_fn, read_text_fn, tts_fn, render_fn = _deps("totally different words")
     short_dir = tmp_path / "job-1" / "shorts" / "short-02"
-    status = asyncio.run(run_infographic_short(
+    status = run_infographic_short(
         short_dir, CFG, {"topic": "vista"},
         image_fn=image_fn, llm_fn=llm_fn, read_text_fn=read_text_fn, tts_fn=tts_fn, render_fn=render_fn,
-        max_poster_attempts=2))
+        max_poster_attempts=2)
     assert status["status"] == "needs_manual_review"
     assert status["rendered"] is False
     assert not (short_dir / "outputs" / "short.mp4").exists()
@@ -83,9 +82,9 @@ def test_qa_disabled_renders_without_reader(tmp_path):
     # No read_text_fn -> QA skipped -> renders even though poster text is unverified.
     image_fn, llm_fn, _read, tts_fn, render_fn = _deps("garbled unreadable poster")
     short_dir = tmp_path / "job-1" / "shorts" / "short-03"
-    status = asyncio.run(run_infographic_short(
+    status = run_infographic_short(
         short_dir, CFG, {"topic": "vista"},
-        image_fn=image_fn, llm_fn=llm_fn, tts_fn=tts_fn, render_fn=render_fn))
+        image_fn=image_fn, llm_fn=llm_fn, tts_fn=tts_fn, render_fn=render_fn)
     assert status["rendered"] is True
     assert status["status"] == "rendered"
     qa = json.loads((short_dir / "json" / "poster_qa.json").read_text())

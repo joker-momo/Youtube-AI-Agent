@@ -41,7 +41,7 @@ def _public_short_ref(short_dir: Path, subdir: str, name: str) -> str:
     return f"jobs/{Path(short_dir).name}/{subdir}/{name}"
 
 
-async def run_infographic_short(
+def run_infographic_short(
     short_dir: Path,
     channel_config: dict,
     source: dict,
@@ -53,6 +53,11 @@ async def run_infographic_short(
     render_fn: Callable[..., Path],
     max_poster_attempts: int = 3,
 ) -> dict[str, Any]:
+    """Synchronous orchestrator. ``image_fn`` is async (the only awaited dep), so it is
+    driven with a fresh ``asyncio.run`` per poster generation; ``llm_fn``/``tts_fn``/
+    ``render_fn`` are plain sync callables — some (the real ``chatgpt_fn``) use
+    ``asyncio.run`` internally, so this function must NOT itself run inside an event
+    loop (nested ``asyncio.run`` raises)."""
     short_dir = Path(short_dir)
     short_dir.mkdir(parents=True, exist_ok=True)
 
@@ -63,12 +68,12 @@ async def run_infographic_short(
     if read_text_fn is None:
         # QA disabled: generate the poster once and proceed (no text gate). The
         # AI-only garble risk is accepted; nothing blocks the render.
-        await generate_poster(short_dir, plan, image_fn)
+        asyncio.run(generate_poster(short_dir, plan, image_fn))
         verdict = {"verdict": "skipped", "missing": []}
     else:
         verdict = {"verdict": "qa_unavailable", "missing": []}
         for _ in range(max_poster_attempts):
-            await generate_poster(short_dir, plan, image_fn)
+            asyncio.run(generate_poster(short_dir, plan, image_fn))
             verdict = qa_poster(
                 short_dir / "assets" / paths.SHORT_POSTER_IMAGE_NAME, plan, read_text_fn=read_text_fn
             )
@@ -152,11 +157,11 @@ def render_selected_infographic_ideas(
         source = {"topic": idea.get("topic") or title, "title": title}
         short_id = f"short-{n:02d}_{idea_id}_{ts}_{_slug(title or idea_id)}"
         short_dir = long_job_dir / "shorts" / short_id
-        status = asyncio.run(run_infographic_short(
+        status = run_infographic_short(
             short_dir, channel_config, source,
             image_fn=image_fn, llm_fn=llm_fn, tts_fn=tts_fn, render_fn=render_fn,
             read_text_fn=read_text_fn,
-        ))
+        )
         status.update({"idea_id": idea_id, "short_id": short_id, "short_type": "infographic"})
         manifest_mod.write_short_status(long_job_dir, short_id, status)
         results.append({

@@ -19,3 +19,6 @@ def test_props_reference_poster_and_audio_and_duration():
     assert props["kenBurnsScaleMax"] <= 1.02
     # Overlays OFF by default (safe area — poster carries all text).
     assert props["showSubscribeCue"] is False
+    # Renders the InfographicShort composition; concurrency stays "auto" (HARD RULE).
+    assert props["render"]["composition"] == "InfographicShort"
+    assert props["render"]["concurrency"] == "auto"

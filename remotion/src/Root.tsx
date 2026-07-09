@@ -85,6 +85,9 @@ export const Root: React.FC = () => {
         width={1080}
         height={1920}
         defaultProps={{poster: '', audio: '', durationInFrames: 900}}
+        calculateMetadata={({props}) => ({
+          durationInFrames: Math.max(1, Math.round(props.durationInFrames || 900)),
+        })}
       />
       <Composition
         id="ShortCover"

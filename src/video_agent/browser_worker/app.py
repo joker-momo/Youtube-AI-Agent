@@ -208,6 +208,40 @@ def _target_url(site: str) -> str:
     return targets[site]
 
 
+# Playwright's default connect_over_cdp timeout is 180_000 ms. When the runtime
+# listener dies mid-session the attach hangs for that full 3 minutes and then
+# surfaces as a generic 500. Bound it and raise a structured 503 so the caller
+# (and Codex verification) sees the real cause instead of an opaque 500.
+_CDP_CONNECT_TIMEOUT_MS = 45_000
+
+
+async def _attach_cdp_or_503(pw, cdp_url: str):
+    """Resolve the runtime ws endpoint and attach over CDP.
+
+    Raises HTTPException(503) with structured detail on any resolve or attach
+    failure (including the bounded connect timeout), never a bare 500.
+    """
+    try:
+        ws_endpoint = await _resolve_browser_ws(cdp_url)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"cdp_url": cdp_url, "stage": "resolve_ws", "error": f"{type(exc).__name__}: {exc}"},
+        ) from exc
+    try:
+        return await pw.chromium.connect_over_cdp(ws_endpoint, timeout=_CDP_CONNECT_TIMEOUT_MS)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "cdp_url": cdp_url,
+                "ws_endpoint": ws_endpoint,
+                "stage": "connect_over_cdp",
+                "error": f"{type(exc).__name__}: {exc}",
+            },
+        ) from exc
+
+
 @app.get("/health")
 def health() -> dict:
     return {"ok": True, "service": "browser-worker"}
@@ -226,8 +260,9 @@ async def runtime() -> dict:
         from playwright.async_api import async_playwright
 
         async with async_playwright() as pw:
-            ws_endpoint = await _resolve_browser_ws(url)
-            browser = await pw.chromium.connect_over_cdp(ws_endpoint)
+            # Bounded attach + structured 503 so this health probe fails fast
+            # instead of hanging for the 180s Playwright default.
+            browser = await _attach_cdp_or_503(pw, url)
             try:
                 contexts = browser.contexts
                 pages = sum(len(ctx.pages) for ctx in contexts)
@@ -239,6 +274,8 @@ async def runtime() -> dict:
                 }
             finally:
                 await browser.close()
+    except HTTPException:
+        raise  # already a structured 503 from _attach_cdp_or_503
     except Exception as exc:
         raise HTTPException(
             status_code=503,
@@ -272,10 +309,15 @@ async def _connect_runtime():
     from playwright.async_api import async_playwright
 
     cdp_url = _cdp_url()
-    ws_endpoint = await _resolve_browser_ws(cdp_url)
     pw_ctx = async_playwright()
     pw = await pw_ctx.__aenter__()
-    browser = await pw.chromium.connect_over_cdp(ws_endpoint)
+    try:
+        browser = await _attach_cdp_or_503(pw, cdp_url)
+    except BaseException:
+        # release the just-opened Playwright context so a failed attach does not
+        # leak the driver process
+        await pw_ctx.__aexit__(None, None, None)
+        raise
     return pw_ctx, browser
 
 
@@ -481,16 +523,9 @@ async def _drive(site: str, prompt: str, timeout_ms: int) -> dict:
     from playwright.async_api import async_playwright
 
     cdp_url = _cdp_url()
-    try:
-        ws_endpoint = await _resolve_browser_ws(cdp_url)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=503,
-            detail={"cdp_url": cdp_url, "error": str(exc)},
-        ) from exc
 
     async with async_playwright() as pw:
-        browser = await pw.chromium.connect_over_cdp(ws_endpoint)
+        browser = await _attach_cdp_or_503(pw, cdp_url)
         try:
             context = (
                 browser.contexts[0]
@@ -681,16 +716,9 @@ async def chatgpt_image(payload: ImagePromptRequest) -> dict:
     safe_out = _safe_asset_path(payload.out_path)
     safe_out.parent.mkdir(parents=True, exist_ok=True)
     cdp_url = _cdp_url()
-    try:
-        ws_endpoint = await _resolve_browser_ws(cdp_url)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=503,
-            detail={"cdp_url": cdp_url, "error": str(exc)},
-        ) from exc
 
     async with async_playwright() as pw:
-        browser = await pw.chromium.connect_over_cdp(ws_endpoint)
+        browser = await _attach_cdp_or_503(pw, cdp_url)
         try:
             context = (
                 browser.contexts[0]
@@ -787,16 +815,9 @@ async def chatgpt_image_batch(payload: BatchImagePromptRequest) -> dict:
         p.parent.mkdir(parents=True, exist_ok=True)
 
     cdp_url = _cdp_url()
-    try:
-        ws_endpoint = await _resolve_browser_ws(cdp_url)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=503,
-            detail={"cdp_url": cdp_url, "error": str(exc)},
-        ) from exc
 
     async with async_playwright() as pw:
-        browser = await pw.chromium.connect_over_cdp(ws_endpoint)
+        browser = await _attach_cdp_or_503(pw, cdp_url)
         try:
             context = (
                 browser.contexts[0]

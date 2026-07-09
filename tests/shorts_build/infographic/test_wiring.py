@@ -17,6 +17,9 @@ def test_studio_command_for_short_type():
     assert command_for_short_type("infographic") == "shorts_render_infographic"
     assert command_for_short_type("narrated") == "shorts_render_selected_ideas"
     assert command_for_short_type("") == "shorts_render_selected_ideas"
+    # Casing/whitespace must normalize (routing + duplicate guard must agree).
+    assert command_for_short_type("  Infographic ") == "shorts_render_infographic"
+    assert command_for_short_type("INFOGRAPHIC") == "shorts_render_infographic"
 
 
 def _fake_deps():

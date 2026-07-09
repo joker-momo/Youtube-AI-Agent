@@ -698,6 +698,11 @@ def post_shorts_studio_render_ideas(
     if invalid:
         raise HTTPException(status_code=400, detail={"error": "invalid_idea_ids", "idea_ids": invalid})
 
+    # Normalize ONCE so the routing, duplicate check, payload and message all agree
+    # (e.g. "Infographic" / " infographic " must not route infographic while the dup
+    # guard looks for a differently-cased key).
+    short_type = str(req.short_type or "narrated").strip().lower()
+
     # Prevent rendering if already rendered (unless force=True). Duplicate detection
     # is keyed by (idea_id, short_type): the SAME idea may have one narrated Short AND
     # one infographic Short, but not two of the same variant.
@@ -706,7 +711,7 @@ def post_shorts_studio_render_ideas(
         manifest = _read_json(shorts_paths.manifest_path(job_dir))
         for entry in manifest.get("shorts") or []:
             if entry.get("idea_id"):
-                active_pairs.add((entry["idea_id"], str(entry.get("short_type") or "narrated")))
+                active_pairs.add((entry["idea_id"], str(entry.get("short_type") or "narrated").strip().lower()))
 
         shorts_root = shorts_paths.shorts_dir(job_dir)
         if shorts_root.exists():
@@ -721,26 +726,26 @@ def post_shorts_studio_render_ideas(
                     idea_doc = _read_json(child / shorts_paths.SHORT_IDEA_FILE)
                     idea_id = idea_doc.get("idea_id")
                 if idea_id:
-                    active_pairs.add((idea_id, str(status_doc.get("short_type") or "narrated")))
+                    active_pairs.add((idea_id, str(status_doc.get("short_type") or "narrated").strip().lower()))
 
-        already_rendered = [i for i in idea_ids if (i, req.short_type) in active_pairs]
+        already_rendered = [i for i in idea_ids if (i, short_type) in active_pairs]
         if already_rendered:
             raise HTTPException(
                 status_code=400,
                 detail={
                     "error": "already_rendered",
-                    "message": f"Idea(s) {', '.join(already_rendered)} already rendered as {req.short_type}. Delete their existing shorts first.",
+                    "message": f"Idea(s) {', '.join(already_rendered)} already rendered as {short_type}. Delete their existing shorts first.",
                 }
             )
 
     _clear_stop_requested(job_dir)
-    command = command_for_short_type(req.short_type)
+    command = command_for_short_type(short_type)
     queue = JobQueue(jobs_root / "queue.db")
     queue.enqueue(
         job_id,
         enforce_approvals=False,
         command=command,
-        payload={"idea_ids": idea_ids, "force": bool(req.force), "short_type": req.short_type},
+        payload={"idea_ids": idea_ids, "force": bool(req.force), "short_type": short_type},
     )
     return {
         "status": "enqueued",

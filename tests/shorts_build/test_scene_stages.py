@@ -1340,7 +1340,12 @@ def test_short_scene_prompt_v6_layout_budget_ordering_and_selfcheck():
     assert i_selfcheck != -1 and i_selfcheck < i_schema
     # old verbatim-narration instruction is gone
     assert "Keep the narration faithful to the SCRIPT" not in p
-    assert "do NOT copy long" in p
+    # the builder now PRESERVES script content and SPLITS long beats rather than
+    # compressing them (the old "do NOT copy long ... verbatim" rule caused
+    # source-fidelity QA hard-blocks and was removed)
+    assert "do NOT copy long" not in p
+    assert "Preserve ALL of the SCRIPT's content" in p
+    assert "SPLIT triggers" in p
 
 
 def _scene_qa_scores() -> dict:
@@ -1461,3 +1466,30 @@ def test_short_scene_prompt_v6_forbids_size_refusal_and_requires_minified_json()
     assert "one single line" in low or "single line" in low
     assert "never refuse" in low
     assert "empty scenes array" in low
+
+
+def test_short_scene_prompt_v6_enforces_verbatim_preserve_split_not_compress():
+    """Regression: the builder used to compress script narration to per-scene word
+    caps and shorten the CTA to 3-5 words, which scene_qa then hard-blocked for
+    source-fidelity (real incident: café short dropped the hook's 2nd half, a whole
+    sentence, and the CTA's topic, landing 23.2s < 35s). The prompt must now teach
+    VERBATIM preservation + SPLIT (not compression), and must NOT tell the model to
+    shorten/compress narration or the CTA to fit caps/timing."""
+    from video_agent.shorts import prompts
+
+    p = prompts.short_scene_prompt_v6(
+        _cfg(), {"short_id": "short-fid"}, {**_GOOD_SCRIPT, "short_format": "checklist"},
+    )
+    low = p.lower()
+    # Teaches content preservation + splitting (not compression).
+    assert "preserve all of the script's content" in low
+    assert "split" in low
+    assert "clause boundary" in low
+    # Faithful paraphrase is allowed; only dropping/changing content fails.
+    assert "faithful paraphrase" in low
+    # The CTA scene must carry the FULL script CTA incl. its topic (no 3-5 word cap).
+    assert "full script cta" in low
+    # The old compression permissions are gone.
+    assert "you may shorten scene.narration" not in low
+    assert "3–5 word cta" not in low
+    assert "do not copy long script narration beats verbatim" not in low

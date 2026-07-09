@@ -80,6 +80,26 @@ def _scenes(short_id: str = "short-01") -> dict:
     }
 
 
+def _generic_scenes(short_id: str = "short-01") -> dict:
+    """Scenes whose narration covers the generic (AI-slop) script, so the
+    deterministic source-fidelity coverage guard (bug-503) passes and the pipeline
+    reaches the anti_ai_review stage that this generic content is meant to fail."""
+    return {
+        "channel_id": "vida-plena-45",
+        "short_id": short_id,
+        "total_duration_sec": 21.0,
+        "scenes": [
+            {"id": "s1", "duration_sec": 2.5, "on_screen_text": "CONSEJOS", "caption": "c", "layout": "short_hook", "visual_prompt": "vertical generic wellness", "narration": "Es importante recordar consejos saludables."},
+            {"id": "s2", "duration_sec": 4.2, "on_screen_text": "HÁBITOS", "caption": "c", "layout": "short_tip", "visual_prompt": "vertical generic wellness", "narration": "Para mantener hábitos saludables."},
+            {"id": "s3", "duration_sec": 4.2, "on_screen_text": "EQUILIBRIO", "caption": "c", "layout": "short_tip", "visual_prompt": "vertical generic wellness", "narration": "De forma equilibrada cada día."},
+            {"id": "s4", "duration_sec": 4.2, "on_screen_text": "BIENESTAR", "caption": "c", "layout": "short_tip", "visual_prompt": "vertical generic wellness", "narration": "Cuida tu bienestar general."},
+            {"id": "s5", "duration_sec": 3.5, "on_screen_text": "SIGUE", "caption": "c", "layout": "short_tip", "visual_prompt": "vertical generic wellness", "narration": "Sigue estos consejos siempre."},
+            {"id": "s6", "duration_sec": 2.4, "on_screen_text": "GUÁRDALO", "caption": "c", "layout": "short_cta", "visual_prompt": "vertical close", "narration": "Guárdalo para comprar."},
+        ],
+        "qa": {"verdict": "PENDING_SHORTS_QA"},
+    }
+
+
 def _llm(script_sequence: list[dict] | None = None, scenes_sequence: list[dict] | None = None):
     scripts = list(script_sequence or [_script()])
     scenes = list(scenes_sequence or [_scenes()])
@@ -174,7 +194,7 @@ def test_anti_ai_fail_blocks_render_and_updates_performance_memory(tmp_path: Pat
         job,
         _plan("short-fail"),
         _cfg(),
-        llm_fn=_llm(script_sequence=[_script("short-fail", generic=True), {**_script("short-fail", generic=True), "hook": "Different generic hook."}], scenes_sequence=[_scenes("short-fail"), _scenes("short-fail")]),
+        llm_fn=_llm(script_sequence=[_script("short-fail", generic=True), {**_script("short-fail", generic=True), "hook": "Different generic hook."}], scenes_sequence=[_generic_scenes("short-fail"), _generic_scenes("short-fail")]),
         **_stub_io(calls),
     )
 

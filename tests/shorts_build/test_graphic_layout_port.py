@@ -215,14 +215,17 @@ def test_valid_checklist_untouched_and_empty_still_raises():
 
 
 def test_scene_prompt_forbids_bare_label_compression():
-    """bug-487: the scene builder gutted 'mide cuánto aceite usas realmente, sin
-    cambiar nada' into 'Mide lo que usas.' — a bare label that lost the point and
-    failed fidelity + product-quality QA. The prompt must forbid that."""
+    """bug-487 / bug-503: the scene builder gutted 'mide cuánto aceite usas realmente,
+    sin cambiar nada' into 'Mide lo que usas.' — a bare label that lost the point and
+    failed fidelity + product-quality QA. The prompt must forbid shortening and instead
+    require verbatim preservation with clause-boundary splitting."""
     from video_agent.shorts.prompts import short_scene_prompt_v6
 
     p = short_scene_prompt_v6(
         {}, {"short_id": "s"}, {"short_id": "s", "narration": "n", "hook": "h", "cta": "c"}
     )
-    assert "NEVER reduce a step to a bare 2-4 word label" in p
-    assert "keep the step's CONVERSATIONAL action sentence" in p
-    assert "UPPER end of each layout's word cap" in p
+    assert "NEVER drop, summarize away, or reduce a beat" in p
+    # the café/aceite gutting example is still called out as BAD
+    assert "Mide lo que usas." in p
+    # and the fix is SPLIT-at-clause-boundary, keeping every clause
+    assert "clause boundary" in p

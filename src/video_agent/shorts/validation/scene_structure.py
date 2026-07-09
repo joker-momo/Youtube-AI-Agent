@@ -14,11 +14,176 @@ from video_agent.shorts.validation.graphic_checks import (
     is_explicit_graphic_led,
 )
 from video_agent.shorts.validation.issues import *  # noqa: F401,F403
+from video_agent.shorts.validation.issues import _words  # underscore name: skipped by import *
 
 
 def _scene_tokens(scene: dict[str, Any]) -> set[str]:
     text = f"{scene.get('narration') or ''} {scene.get('on_screen_text') or ''}"
     return {w.lower() for w in _words(text)}
+
+
+# Structural / function words that carry no coverage signal. Kept deliberately
+# small: qualifiers like "realmente"/"siempre" are NOT here — losing them changes
+# the point (bug-487), so they must still count toward coverage.
+_ES_STOPWORDS: frozenset[str] = frozenset(
+    """a al algo alguna algunas alguno algunos ante antes aqui asi aunque cada como
+    con contra cual cuando de del desde donde dos el ella ellas ello ellos en entre
+    era eran es esa esas ese eso esos esta estan estar este esto estos ha hasta hay
+    la las le les lo los mas me mi mis muy ni no nos os otra otras otro otros
+    para pero por porque que se sea segun ser si sin sobre son su sus tan te tu tus
+    un una unas uno unos y ya""".split()
+)
+
+# Generic funnel verbs/nouns shared by every CTA — they do NOT identify the video's
+# specific topic, so they are excluded when checking that the CTA keeps its topic.
+# Includes accented Spanish variants (vídeo, guía, aquí, suscríbete) so an accented
+# generic word is not mistaken for a distinctive topic.
+_CTA_GENERIC: frozenset[str] = frozenset(
+    """descubre mira aprende sigue ver video vídeo canal completo entero aqui aquí
+    enlace link descripcion descripción abajo comenta guarda guardalo guárdalo
+    guardala guárdala comparte suscribete suscríbete error errores secreto secretos
+    clave guia guía truco trucos aprender ahora hoy""".split()
+)
+
+
+def _content_anchors(text: str) -> set[str]:
+    """Lowercased content words (len>=3, excluding structural stopwords)."""
+    return {w for w in (t.lower() for t in _words(text)) if len(w) >= 3 and w not in _ES_STOPWORDS}
+
+
+def _scene_all_text(scene: dict[str, Any]) -> str:
+    """All human-readable text a scene delivers: spoken narration PLUS on-screen
+    text, caption, and layout_payload values. A graphic scene shows content in its
+    payload instead of speaking every word, so coverage must count it as present —
+    otherwise the graphic-repair step (which moves narration into layout_payload)
+    would falsely read as dropped content.
+    """
+    parts = [
+        str(scene.get("narration") or ""),
+        str(scene.get("on_screen_text") or ""),
+        str(scene.get("caption") or ""),
+    ]
+
+    def _walk(value: Any) -> None:
+        if isinstance(value, str):
+            parts.append(value)
+        elif isinstance(value, dict):
+            for v in value.values():
+                _walk(v)
+        elif isinstance(value, (list, tuple)):
+            for v in value:
+                _walk(v)
+
+    _walk(scene.get("layout_payload"))
+    return " ".join(parts)
+
+
+def _validate_script_coverage(
+    scenes: list[dict[str, Any]], script: dict[str, Any] | None
+) -> list[SceneValidationIssue]:
+    """Deterministic source-fidelity guard (bug-503).
+
+    The scene builder must PRESERVE the script's content, splitting long sentences
+    across scenes rather than dropping them. Gemini scene-QA judges nuance, but a
+    whole beat vanishing (or the CTA losing its topic) is objective — catch it here
+    so it fails the same regardless of the judge's mood. Faithful paraphrase keeps
+    the content words and PASSES; a dropped beat loses them and FAILS.
+    """
+    issues: list[SceneValidationIssue] = []
+    narration = str((script or {}).get("narration") or "").strip()
+    if not narration or not scenes:
+        return issues
+
+    scene_pool: set[str] = set()
+    for s in scenes:
+        scene_pool |= {w.lower() for w in _words(_scene_all_text(s))}
+
+    # Narration-only anchors per scene, for the qualifier-drop check below (a
+    # dropped qualifier must be caught even if on_screen_text/payload happens to
+    # carry the word — the requirement is that the qualifier stays SPOKEN).
+    scene_narr_anchors = [_content_anchors(str(s.get("narration") or "")) for s in scenes]
+
+    # 1. Whole-beat drop detection: each script sentence's key words must survive.
+    sentences = [p.strip() for p in re.split(r"(?<=[.!?])\s+|\n+", narration) if p.strip()]
+    for sent in sentences:
+        anchors = _content_anchors(sent)
+        if len(anchors) < 3:
+            continue  # too short to judge reliably; skip to avoid false positives
+        covered = anchors & scene_pool
+        if len(covered) / len(anchors) < 0.34:
+            issues.append(
+                SceneValidationIssue(
+                    type="source_fidelity",
+                    scene_id=None,
+                    severity="repairable_error",
+                    detail=(
+                        f"Scenes drop a required script beat "
+                        f"(only {len(covered)}/{len(anchors)} key words present): {sent!r}"
+                    ),
+                    repair_hint=(
+                        "Add or SPLIT a scene so this script sentence's content is spoken. "
+                        "Preserve it verbatim or as a faithful paraphrase — never compress it away."
+                    ),
+                )
+            )
+            continue
+
+        # 2. Single-qualifier drop: the beat is mostly present, but a word is
+        #    missing. If the scene that speaks this beat is a pure TRUNCATION of
+        #    the script sentence (uses only words FROM it, adds none), the missing
+        #    word was silently dropped — not paraphrased. A faithful paraphrase
+        #    substitutes words, so its narration would contain extra anchors and
+        #    is not flagged. Catches losing 'realmente' / 'nada' (bug-503 reopen).
+        missing = anchors - scene_pool
+        if not missing:
+            continue
+        best = max(scene_narr_anchors, key=lambda sa: len(sa & anchors), default=set())
+        overlap = best & anchors
+        if len(overlap) >= 2 and len(overlap) >= 0.5 * len(anchors) and not (best - anchors):
+            issues.append(
+                SceneValidationIssue(
+                    type="source_fidelity",
+                    scene_id=None,
+                    severity="repairable_error",
+                    detail=(
+                        f"Scene drops a qualifier/word from the script beat "
+                        f"(missing {sorted(missing)}): {sent!r}"
+                    ),
+                    repair_hint=(
+                        "Keep every qualifier of the script sentence (e.g. 'realmente', "
+                        "'nada') — speak it verbatim or paraphrase faithfully; never silently "
+                        "omit a word."
+                    ),
+                )
+            )
+
+    # 2. CTA topic drop: the final short_cta scene must keep the script CTA's
+    #    specific topic (not just the generic 'descubre ... en el canal' frame).
+    cta = str((script or {}).get("cta") or "").strip()
+    cta_topic = {w for w in _content_anchors(cta) if w not in _CTA_GENERIC}
+    if cta_topic:
+        cta_pool: set[str] = set()
+        for s in scenes:
+            if str(s.get("layout") or "") == "short_cta":
+                cta_pool |= {w.lower() for w in _words(_scene_all_text(s))}
+        if cta_pool and not (cta_topic & cta_pool):
+            issues.append(
+                SceneValidationIssue(
+                    type="source_fidelity",
+                    scene_id=None,
+                    severity="repairable_error",
+                    detail=(
+                        "CTA scene drops the specific topic from the script CTA "
+                        f"(missing all of {sorted(cta_topic)})."
+                    ),
+                    repair_hint=(
+                        "Speak the full script CTA, including its specific topic phrase, "
+                        "in the final short_cta scene."
+                    ),
+                )
+            )
+
+    return issues
 
 
 def _redundancy_score(scene: dict[str, Any], others: list[dict[str, Any]]) -> float:
@@ -618,6 +783,8 @@ def validate_scene_structure(
         issue = validate_audio_fit(total_for_range or scene_sum, audio_duration_sec)
         if issue:
             issues.append(issue)
+
+    issues.extend(_validate_script_coverage(scenes, script))
 
     return issues
 

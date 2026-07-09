@@ -113,12 +113,33 @@ def test_build_short_keeps_audio_and_video_in_sync_at_planned_durations(tmp_path
     plan = {"short_id": "short-preserve-duration", "format": "mistake_list", "scene_ids": ["scene-09"],
             "source_start_sec": 183.0, "source_end_sec": 199.0, "music_track": "shorts_sleep_stress",
             "narration_seed": "Cinco errores con el pan."}
+    # Script matches the bread scenes below so the deterministic source-fidelity
+    # coverage guard (bug-503) passes — this test exercises duration sync, not fidelity.
+    # Mirrors _GOOD_SCRIPT's shape (beats/source_long_job_id) with bread content.
+    sync_script = {
+        "short_id": "short-preserve-duration", "source_long_job_id": "long-job",
+        "short_format": "pain_to_tip", "target_duration_sec": 28, "hook": "El pan integral no basta.",
+        "narration": (
+            "El pan integral no basta. Uno: comerlo de pie. Dos: sumarlo sin decidir. "
+            "Tres: dejar la barra a la vista. Cuatro: cortar por cansancio. "
+            "Cinco: cenar improvisando. Mejor: porción visible, plato pequeño, comida completa. "
+            "Guárdalo en el canal."
+        ),
+        "beats": [
+            {"time_sec": 0, "narration": "El pan integral no basta.", "purpose": "hook"},
+            {"time_sec": 2, "narration": "Uno: comerlo de pie.", "purpose": "tip"},
+            {"time_sec": 5, "narration": "Cinco: cenar improvisando.", "purpose": "tip"},
+            {"time_sec": 8, "narration": "Mejor: porción visible, plato pequeño, comida completa.", "purpose": "tip"},
+            {"time_sec": 11, "narration": "Guárdalo en el canal.", "purpose": "cta"},
+        ],
+        "cta": "Guárdalo en el canal.", "qa": {"verdict": "PENDING_SHORTS_QA"},
+    }
     scenes_doc = {
         "channel_id": "vida-plena-45",
         "short_id": "short-preserve-duration",
         "total_duration_sec": 27.6,
         "scenes": [
-            {"id": "s01", "duration_sec": 2.2, "on_screen_text": "NO ES EL PAN", "caption": "SON 5 HÁBITOS", "layout": "short_hook", "visual_prompt": "Realistic bread on Spanish kitchen table", "narration": "No es el pan."},
+            {"id": "s01", "duration_sec": 2.2, "on_screen_text": "NO ES EL PAN", "caption": "SON 5 HÁBITOS", "layout": "short_hook", "visual_prompt": "Realistic bread on Spanish kitchen table", "narration": "El pan integral no basta."},
             {"id": "s02", "duration_sec": 3.6, "on_screen_text": "DE PIE", "caption": "Sin plato", "layout": "short_pain", "visual_prompt": "Realistic person eating bread standing in kitchen", "narration": "Uno: comerlo de pie."},
             {"id": "s03", "duration_sec": 3.6, "on_screen_text": "SUMAR SIN DECIDIR", "caption": "Con arroz o pasta", "layout": "graphic_comparison", "visual_prompt": "Graphic comparison card: bread alone vs bread added to rice or pasta", "narration": "Dos: sumarlo sin decidir.", "layout_payload": {"title": "DECIDE PRIMERO", "left": {"heading": "MEJOR", "text": "Elige una porción"}, "right": {"heading": "CUIDADO", "text": "Pan encima de arroz"}}},
             {"id": "s04", "duration_sec": 3.6, "on_screen_text": "BARRA A LA VISTA", "caption": "Demasiado a mano", "layout": "short_pain", "visual_prompt": "Realistic bread bar left on dining table", "narration": "Tres: dejar la barra a la vista."},
@@ -165,7 +186,11 @@ def test_build_short_keeps_audio_and_video_in_sync_at_planned_durations(tmp_path
         job,
         plan,
         _cfg(),
-        llm_fn=_llm_fn_factory(scenes=scenes_doc),
+        llm_fn=_llm_fn_factory(
+            script=sync_script, scenes=scenes_doc,
+            seo={"title": "Error al comer pan integral (45+)", "description": "d",
+                 "hashtags": ["#shorts"], "pinned_comment": "Mira el vídeo largo"},
+        ),
         gemini_fn=lambda p: json.dumps({
             "verdict": "PASS",
             "issues": [],

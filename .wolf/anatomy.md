@@ -1,7 +1,7 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-07-09T14:38:28.142Z
-> Files: 1002 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-07-09T21:26:21.741Z
+> Files: 1006 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../../../../Users/joker/.claude/
 
@@ -1036,7 +1036,7 @@
 
 ## src/video_agent/browser_worker/
 
-- `app.py` — API: 2 endpoints (~11210 tok)
+- `app.py` — API: 2 endpoints (~11471 tok)
 
 ## src/video_agent/browser_worker/drivers/
 
@@ -1107,7 +1107,7 @@
 - `paths.py` — Canonical storage-layout paths for the Shorts autopilot. (~1993 tok)
 - `paths.py` — Canonical storage-layout paths for the Shorts autopilot. (~1940 tok)
 - `performance_memory.py` — write_performance_memory (~608 tok)
-- `prompts.py` — Strict, JSON-only, Spain-first prompts for Short script / scene / QA generation. (~26920 tok)
+- `prompts.py` — Strict, JSON-only, Spain-first prompts for Short script / scene / QA generation. (~27677 tok)
 - `prompts.py` — Strict, JSON-only, Spain-first prompts for Short script / scene / QA generation. (~26358 tok)
 - `qa_common.py` — Shared QA classes, constants and leaf helpers. (~1986 tok)
 - `qa_normalize.py` — Normalize raw QA issues into structured NormalizedIssue records. (~9104 tok)
@@ -1180,7 +1180,7 @@
 - `render.py` — Render an infographic short via Remotion (direct InfographicShort composition). (~650 tok)
 - `schema.py` — Poster-plan schema + validation for infographic shorts. (~528 tok)
 - `seo.py` — SEO/title artifact for infographic Shorts, reusing the shipped Shorts title rules. (~544 tok)
-- `voiceover.py` — Narration text for an infographic short (read the poster) + TTS synth. (~372 tok)
+- `voiceover.py` — Narration text for an infographic short (read the poster) + TTS synth. (~492 tok)
 
 ## src/video_agent/shorts/validation/
 
@@ -1191,7 +1191,7 @@
 - `graphic_checks.py` — Graphic-scene detection and graphic payload field validation. (~7162 tok)
 - `issues.py` — Pre-acquisition validation for Shorts structured graphic intents (spec v7 §18). (~1167 tok)
 - `repairs.py` — repair_five_error_bread_payoff_layout, repair_missing_graphic_checklist_scene, repair_excess_graphic (~8097 tok)
-- `scene_structure.py` — Whole-short scene structure validation, repair plan & pacing. (~11273 tok)
+- `scene_structure.py` — Whole-short scene structure validation, repair plan & pacing. (~13495 tok)
 - `script_checks.py` — Script-level validation: word budget, candidate validation, checklist cap. (~4800 tok)
 - `script_checks.py` — Script-level validation: word budget, candidate validation, checklist cap. (~4609 tok)
 
@@ -1252,6 +1252,7 @@
 - `test_audience_age.py` — Per-video audience age is derived from the idea, not hardcoded to 45. (~632 tok)
 - `test_auto_stages.py` — FakeBrowserClient: channel_path, idea_payload, valid_script_payload, valid_scenes_payload + 11 more (~26540 tok)
 - `test_briefing_script_length_contract.py` — Regression: the script + script_qa BRIEFING length contract is content-driven. (~771 tok)
+- `test_browser_worker_cdp_attach.py` — CDP attach failures surface as a structured 503, never a generic 500. (~866 tok)
 - `test_browser_worker_chrome.py` — test_runtime_returns_503_when_cdp_unreachable, test_cdp_url_defaults_to_localhost, test_cdp_url_resp (~481 tok)
 - `test_color_mix.py` — Tests for OKLab-based per-video accent colour resolution (bug-466). (~1858 tok)
 - `test_complete_stage_resume.py` — Regression guard for ``_complete_stage`` resume pointer (I2). (~707 tok)
@@ -1315,7 +1316,7 @@
 - `test_shorts_frames.py` — Frame-contract parity tests (spec v3.2.3 §14.1). (~584 tok)
 - `test_shorts_idea_preservation.py` — test_extracts_numbered_promise_and_avoids_bare_number_false_positives, test_range_count_contract_use (~9976 tok)
 - `test_shorts_llm_history.py` — test_recorder_logs_prompt_and_response, test_recorder_supports_two_arg_call_shape, test_recorder_log (~1004 tok)
-- `test_shorts_pipeline_new_quality_stages.py` — fn, background_fn, tts_fn, mix_fn (~2705 tok)
+- `test_shorts_pipeline_new_quality_stages.py` — fn, background_fn, tts_fn, mix_fn (~3129 tok)
 - `test_shorts_remotion_contract.py` — Source-inspection contracts for the Shorts Remotion renderer. (~447 tok)
 - `test_shorts_render_handoff.py` — test_prepared_short_props_drop_report_only_schedule_and_embed_enforced_schedule, test_prepared_short (~2589 tok)
 - `test_shorts_retention_plan.py` — test_retention_plan_fallback_writes_required_fields, test_retention_plan_parses_llm_json_when_enable (~2344 tok)
@@ -1365,9 +1366,12 @@
 
 ## tests/shorts_build/
 
-- `test_build_orchestration.py` — test_short_stage_retry_clears_stale_completion_and_error, test_build_short_pass_renders_and_writes_a (~11987 tok)
-- `test_graphic_layout_port.py` — Regression tests for the long-form graphic-card port into the Shorts pipeline. (~1543 tok)
+- `conftest.py` — Shorts Autopilot v5 — Phase 3/4: prompts, source map, seo, QA, build_short. (~2399 tok)
+- `test_build_orchestration.py` — test_short_stage_retry_clears_stale_completion_and_error, test_build_short_pass_renders_and_writes_a (~12444 tok)
+- `test_graphic_layout_port.py` — Regression tests for the long-form graphic-card port into the Shorts pipeline. (~2546 tok)
 - `test_qa_issues.py` — test_suppress_stale_hook_fidelity, test_repairable_point_grouping, test_count_promise_soft_when_coun (~6327 tok)
+- `test_scene_script_coverage.py` — bug-503 / Codex task 20260709-202252: deterministic source-fidelity coverage guard. (~2018 tok)
+- `test_scene_stages.py` — test_phase15_graphic_layouts_preserved_by_scene_normalizer, test_scene_normalizer_backfills_source_s (~18633 tok)
 - `test_script_candidate_validation.py` — test_rejects_partial_script_too_few_blocks, test_rejects_script_not_starting_at_zero, test_rejects_m (~2033 tok)
 - `test_script_stages.py` — test_short_script_prompt_has_retention_and_language_rules, test_v13_script_prompt_uses_calibrated_wo (~1613 tok)
 - `test_seo.py` — test_short_seo_prompt_prefers_broad_nutrition_tags_over_nutricion45, test_short_seo_prompt_uses_high (~1668 tok)

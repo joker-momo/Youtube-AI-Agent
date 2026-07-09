@@ -63,15 +63,17 @@ _GOOD_SCENES = {
 }
 
 
-def _llm_fn_factory(script=_GOOD_SCRIPT, scenes=_GOOD_SCENES):
+def _llm_fn_factory(script=_GOOD_SCRIPT, scenes=_GOOD_SCENES, seo=None):
+    default_seo = {"title": "Dormir mejor 45+", "description": "d", "hashtags": ["#shorts"],
+                   "pinned_comment": "Mira el vídeo largo"}
+
     def fn(kind, prompt):
         if kind == "script":
             return json.dumps(script)
         if kind == "scenes":
             return json.dumps(scenes)
         if kind == "seo":
-            return json.dumps({"title": "Dormir mejor 45+", "description": "d", "hashtags": ["#shorts"],
-                               "pinned_comment": "Mira el vídeo largo"})
+            return json.dumps(seo or default_seo)
         return "{}"
     return fn
 

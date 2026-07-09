@@ -29,7 +29,7 @@ async def run_infographic_short(
     *,
     image_fn,
     llm_fn: Callable[..., str],
-    read_text_fn: Callable[[Path], str],
+    read_text_fn: Callable[[Path], str] | None = None,
     tts_fn: Callable[..., Path],
     render_fn: Callable[..., Path],
     max_poster_attempts: int = 3,
@@ -40,13 +40,21 @@ async def run_infographic_short(
     plan = build_poster_plan(channel_config, source, llm_fn)
     atomic_write_json(short_dir / "json" / paths.SHORT_POSTER_PLAN_FILE, plan)
 
-    verdict: dict[str, Any] = {"verdict": "qa_unavailable", "missing": []}
-    poster_path = short_dir / "assets" / paths.SHORT_POSTER_IMAGE_NAME
-    for _ in range(max_poster_attempts):
-        poster_path = await generate_poster(short_dir, plan, image_fn)
-        verdict = qa_poster(poster_path, plan, read_text_fn=read_text_fn)
-        if verdict["verdict"] == "pass":
-            break
+    verdict: dict[str, Any]
+    if read_text_fn is None:
+        # QA disabled: generate the poster once and proceed (no text gate). The
+        # AI-only garble risk is accepted; nothing blocks the render.
+        await generate_poster(short_dir, plan, image_fn)
+        verdict = {"verdict": "skipped", "missing": []}
+    else:
+        verdict = {"verdict": "qa_unavailable", "missing": []}
+        for _ in range(max_poster_attempts):
+            await generate_poster(short_dir, plan, image_fn)
+            verdict = qa_poster(
+                short_dir / "assets" / paths.SHORT_POSTER_IMAGE_NAME, plan, read_text_fn=read_text_fn
+            )
+            if verdict["verdict"] == "pass":
+                break
     atomic_write_json(short_dir / "json" / paths.SHORT_POSTER_QA_FILE, verdict)
 
     status: dict[str, Any] = {
@@ -54,7 +62,7 @@ async def run_infographic_short(
         "poster_format": plan.get("poster_format"),
         "rendered": False,
     }
-    if verdict["verdict"] != "pass":
+    if verdict["verdict"] not in ("pass", "skipped"):
         status["status"] = "needs_manual_review"
         status["qa"] = verdict
         atomic_write_json(short_dir / paths.SHORT_STATUS_FILE, status)

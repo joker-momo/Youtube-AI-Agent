@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import json
-from typing import Any
-from video_agent.contracts import TopicFamily, resolve_topic_family
 
+from video_agent.audience_age import resolve_target_min_age
+from video_agent.contracts import TopicFamily
 from video_agent.shorts.idea_preservation import derive_idea_contract, derive_idea_items
 
 
@@ -399,9 +399,33 @@ def short_seo_prompt(
         or ""
     ).strip()
 
+    # Age frame follows the video's audience (a 60+ Short frames at 60, not a
+    # hardcoded 45); defaults to the channel's configured floor.
+    min_age = resolve_target_min_age(channel_config, title_seed, hook, narration[:400])
+
+    title_formulas = (
+        "SHORT TITLE = SCROLL-STOPPER (critical — this OVERRIDES the generic SEO title guidance below):\n"
+        "A Shorts title has ONE job: stop the scrolling thumb in one glance. Adults "
+        f"{min_age}+ dislike cheap sensationalism — hit the problem AND the real solution "
+        "directly, and make the viewer feel they must watch NOW.\n"
+        "- HARD LIMIT: title <= 40 characters (phones truncate longer titles mid-scroll). "
+        "Never a long sentence that wraps.\n"
+        f"- Use ONE of these 4 proven Spain-Spanish formulas — whichever fits the script (frame the age at {min_age}):\n"
+        f"  1) WARNING (miedo a hacer algo mal): \"¡Error al [acción]! (Mayores de {min_age})\" "
+        f"— p.ej. \"¡Error al comer fruta! (A los {min_age}+)\", \"¿Sufres de espalda? ¡Deja de hacer esto!\"\n"
+        "  2) QUICK WIN (resultado fácil, sin esfuerzo): \"[Beneficio] en 60 segundos (Sin [lo que temen])\" "
+        "— p.ej. \"Más energía en 60 segundos (Sin dietas)\", \"Duerme mejor hoy (Sin pastillas)\"\n"
+        "  3) MYTH-BUSTER (curiosidad científica): \"¿[Mito común]? La verdad científica\" "
+        f"— p.ej. \"¿Café en ayunas? La verdad científica\", \"¿El aceite es malo? La verdad tras los {min_age}\"\n"
+        f"  4) CALL OUT (llamar al público): \"Si tienes más de {min_age}, escucha esto…\" "
+        f"— p.ej. \"Si tienes más de {min_age}, necesitas saber esto\"\n"
+        "- The title MUST honestly match the script's real pain + payoff (no clickbait the Short does not deliver).\n"
+        "- Shorts have NO thumbnail: the first ~3 seconds of the hook must ECHO the title almost verbatim.\n\n"
+    )
+
     schema = (
         "{\n"
-        '  "title": "string, <= 60 chars, includes the core pain and the 45+ frame",\n'
+        '  "title": "string, <= 40 chars, a SCROLL-STOPPER using ONE of the 4 Shorts title formulas (Warning / Quick Win / Myth-Buster / Call Out)",\n'
         '  "description": "string, 1-3 sentences in es-ES, echoes the script payoff, ends with 3-5 hashtags",\n'
         '  "hashtags": ["#string", "#string", "#string", "#string", "#string"],\n'
         '  "pinned_comment": "string, opens a real conversation about the script\'s pain, ends with a question to the viewer",\n'
@@ -430,6 +454,7 @@ def short_seo_prompt(
         f"- Retention-plan comment trigger: {comment_trigger or '(none)'}\n\n"
         f"- Idea contract: {json.dumps(idea_contract, ensure_ascii=False)}\n\n"
         f"{_OUTPUT_RULES}\n"
+        f"{title_formulas}"
         "SEO IDEA FIDELITY:\n"
         "- If the original idea promised 5 errores and final script preserved 5 errores, title/description may mention 5 errores.\n"
         "- If adaptation was explicitly approved and final script changed count, SEO must match final count.\n"
@@ -445,23 +470,15 @@ def short_seo_prompt(
         "- For nutrition/pan/plato Shorts, prefer natural title/description keywords such as \"alimentación saludable\", \"plato saludable\", \"el pan engorda\", \"comer pan saludable\", or \"qué pan es mejor\" when they match the script.\n"
         "- Description must reuse the chosen broad keyword naturally in the first sentence, then add the practical 45+ Spain/es-ES angle.\n"
         "- Keep Spain intent subtle and natural: Spain Spanish vocabulary, adults 45+, and everyday Spain-compatible phrasing; do not add fake geography if the script does not mention it.\n\n"
-        "TITLE RULES:\n"
-        "- Maximum 60 characters including spaces.\n"
-        "- For bread/pan-related Shorts, the title MUST match the final script format and viewer promise. Use an \"errores\"/mistake-list title ONLY when short_format is \"mistake_list\" OR the final hook/narration explicitly promises errores, and the video actually covers them.\n"
-        "- For checklist / label-reading / purchase-rule / comparison bread Shorts, do NOT use an \"errores\" title. Prefer action/topic titles such as \"Gira el paquete: regla para comprar pan\", \"Pan después de los 45: mira la etiqueta\", or \"Qué mirar al comprar pan después de los 45\".\n"
-        "- Name the actual pain or payoff from the script (e.g. \"carga mental\", \"insomnio\", \"sarcopenia\") AND the 45+ frame.\n"
-        "- Put the chosen broad keyword near the beginning when it reads naturally, then qualify it with the specific pain/payoff or 45+ frame.\n"
+        "TITLE RULES (secondary to the SCROLL-STOPPER formulas above — those govern):\n"
+        "- Maximum 40 characters including spaces (see the hard limit above).\n"
+        "- The title MUST be one of the 4 scroll-stopper formulas above (Warning / Quick Win / Myth-Buster / Call Out) — do NOT emit a flat topic/keyword sentence that is not one of them.\n"
+        "- Honesty: use a Warning/\"error\" framing only when the script genuinely covers that mistake; never promise a count (\"5 errores\") the video does not deliver.\n"
+        "- The formula slots must carry the script's actual pain/payoff, not a generic statement.\n"
         "- The title must be idiomatic es-ES that stands alone; never a literal calque a native could misread (e.g. NOT \"deja de luchar en cama\" — use \"deja de forzar el sueño\" or \"no mires el reloj\").\n"
         "- No clickbait (\"increíble\", \"NADIE te dijo\", \"el truco que…\"), no all-caps screaming.\n"
-        "- At most one tasteful emoji at the end if it reinforces the topic; never multiple.\n\n"
-        "TITLE DEVICE — PROVEN BEST (title A/B testing; option B wins):\n"
-        "- Lead the title with ONE of these two high-CTR devices, chosen to fit the script:\n"
-        "  1. QUESTION: a direct '¿…?' that voices the viewer's own doubt (e.g. '¿Café sin azúcar arruina tu descanso tras los 50?').\n"
-        "  2. CONTRARIAN: a counter-intuitive angle that pushes back on a common belief (e.g. '¿Dietas a los 45? Por qué deberías dejarlas').\n"
-        "- The device MUST still carry a specific pain/payoff from the script AND the 45+/50+/60+ age frame — never a generic statement.\n"
-        "- Prefer the QUESTION or CONTRARIAN device over a flat 'El error…' statement; in testing those flat statements scored lowest.\n"
-        "- These are honest curiosity devices, not clickbait: the question/claim must be truthfully answered by the Short.\n"
-        "- Vary the device across Shorts; do not open every title the same way.\n\n"
+        "- At most one tasteful emoji at the end if it reinforces the topic; never multiple.\n"
+        "- Vary which formula you use across Shorts; do not open every title the same way.\n\n"
         "DESCRIPTION RULES:\n"
         "- 1 to 3 short sentences in es-ES that echo the script payoff (do NOT just repeat the title).\n"
         "- End the description with the same 3-5 hashtags returned in the hashtags array.\n"

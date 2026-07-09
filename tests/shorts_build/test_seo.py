@@ -41,8 +41,10 @@ def test_short_seo_prompt_uses_high_volume_keywords_with_spain_45_intent():
     assert "description must reuse" in low
 
 
-def test_short_seo_prompt_prefers_question_or_contrarian_title_device():
-    """Winning title formula (option B): question or contrarian, not flat 'El error'."""
+def test_short_seo_prompt_uses_four_scroll_stopper_formulas_not_old_device():
+    """Shorts titles use the 4 scroll-stopper formulas, <=40 chars. The old
+    'option B wins / QUESTION-CONTRARIAN / prefer over flat El error' device and
+    the 60-char limit must be GONE (they contradicted the Warning formula)."""
     from video_agent.shorts import prompts
 
     p = prompts.short_seo_prompt(
@@ -50,10 +52,19 @@ def test_short_seo_prompt_prefers_question_or_contrarian_title_device():
         {"short_id": "short-01", "format": "pain_to_tip", "pillar": "sleep"},
         {"hook": "El café sin azúcar y el sueño", "narration": "Cuidado con la tarde."},
     )
-    assert "option B wins" in p
-    assert "QUESTION:" in p
-    assert "CONTRARIAN:" in p
-    assert "over a flat 'El error…' statement" in p
+    low = p.lower()
+    # New rules present.
+    assert "scroll" in low
+    assert "error al" in low            # Warning formula
+    assert "60 segundos" in low         # Quick Win
+    assert "la verdad científica" in low  # Myth-Buster
+    assert "escucha esto" in low        # Call Out
+    assert "40" in p
+    # Old contradictory rules GONE.
+    assert "option B wins" not in p
+    assert "CONTRARIAN:" not in p
+    assert "over a flat 'El error…' statement" not in p
+    assert "Maximum 60 characters" not in p
 
 
 def test_short_seo_normalizes_concatenated_hashtags_and_removes_nutricion45():
@@ -92,5 +103,58 @@ def test_build_short_seo_rewrites_description_with_spaced_normalized_hashtags(tm
     assert seo["hashtags"] == ["#nutricion", "#pan", "#platosaludable"]
     assert seo["description"].endswith("#nutricion #pan #platosaludable")
     assert "#nutricion45#pan" not in seo["description"]
+
+
+def test_build_short_seo_hard_enforces_40_char_title(tmp_path: Path):
+    """A title over 40 chars must NOT survive (reviewer probe: 51-char title
+    'Este título tiene claramente más de cuarenta carac…' was accepted at 50)."""
+    from video_agent.shorts import short_seo_builder
+
+    job = _long_job(tmp_path)
+    long_title = "Este título tiene claramente más de cuarenta caracteres"  # 55 chars
+    assert len(long_title) > 40
+
+    def llm_fn(kind, prompt):
+        return json.dumps({
+            "title": long_title,
+            "description": "Contenido real del pan.",
+            "hashtags": ["#alimentacionsaludable", "#shorts"],
+            "pinned_comment": "¿Cómo lo haces tú?",
+        })
+
+    seo = short_seo_builder.build_short_seo(
+        job, "short-01", {"short_id": "short-01"},
+        {"hook": "El pan y el título largo", "narration": "Dale sitio al pan."},
+        _cfg(), llm_fn,
+    )
+    assert len(seo["title"]) <= 40, seo["title"]
+
+
+def test_non_formula_title_cannot_survive_retries(tmp_path: Path):
+    """A non-formula, hook-misaligned title must NOT be published — after
+    retries the builder replaces it with a valid deterministic formula title."""
+    from video_agent.shorts import short_seo_builder
+    from video_agent.shorts.short_seo_builder import _title_issues
+
+    job = _long_job(tmp_path)
+    bad = "Consejos generales de nutrición"  # no formula, won't align with hook
+    hook = "El insomnio tras la jubilación"
+
+    def llm_fn(kind, prompt):  # stubbornly returns the same bad title every retry
+        return json.dumps({
+            "title": bad,
+            "description": "Duerme mejor.",
+            "hashtags": ["#bienestar", "#shorts"],
+            "pinned_comment": "¿Te pasa?",
+        })
+
+    seo = short_seo_builder.build_short_seo(
+        job, "short-01", {"short_id": "short-01"},
+        {"hook": hook, "narration": "El descanso importa."},
+        _cfg(), llm_fn,
+    )
+    assert seo["title"] != bad                    # the bad title did NOT survive
+    assert _title_issues(seo["title"], hook) == []  # published title is valid
+    assert len(seo["title"]) <= 40
 
 

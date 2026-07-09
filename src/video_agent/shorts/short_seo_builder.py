@@ -1,13 +1,116 @@
 """Build ``short_seo.json`` for a Short (LLM-generated, parsed + normalized)."""
 from __future__ import annotations
 
-from pathlib import Path
 import re
-from typing import Any, Callable
+import unicodedata
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
 
+from video_agent.audience_age import resolve_target_min_age
 from video_agent.shorts import paths, prompts
 from video_agent.shorts.idea_preservation import validate_seo_idea_consistency
 from video_agent.storage.atomic import atomic_write_json
+
+# A Shorts title must be a <=40-char scroll-stopper using one of the 4 proven
+# formulas, and must echo the hook (Shorts have no thumbnail — the first 3
+# seconds ARE the title). These are enforced deterministically after the LLM
+# call so a drifting title is regenerated (and hard-trimmed as a last resort).
+MAX_SHORT_TITLE_CHARS = 40
+
+_TITLE_FORMULA_SIGNALS = (
+    re.compile(r"error al ", re.IGNORECASE),                 # Warning
+    re.compile(r"deja de ", re.IGNORECASE),                  # Warning variant
+    re.compile(r"en 60 segundos", re.IGNORECASE),            # Quick Win
+    re.compile(r"\(sin ", re.IGNORECASE),                    # Quick Win "(Sin …)"
+    re.compile(r"la verdad", re.IGNORECASE),                 # Myth-Buster ("¿…? La verdad")
+    re.compile(r"si tienes m[aá]s de", re.IGNORECASE),       # Call Out
+    re.compile(r"escucha esto|necesitas saber", re.IGNORECASE),  # Call Out
+)
+# NOTE: a bare "¿…?" is intentionally NOT a formula signal — a plain question
+# like "¿Café en ayunas?" is not a complete Myth-Buster (that needs "La verdad
+# científica"). Each of the 4 formulas above has a stronger, specific marker.
+
+_TITLE_STOPWORDS = {
+    "el", "la", "los", "las", "un", "una", "unos", "unas", "de", "del", "que",
+    "esto", "este", "esta", "con", "por", "para", "más", "mas", "tus", "sus",
+    "como", "cada", "sin", "hoy", "eso", "año", "años", "tras", "sobre",
+}
+
+
+def _title_content_tokens(text: str) -> set[str]:
+    """Lower-cased, accent-stripped content words (>=4 chars, non-stopword)."""
+    decomposed = unicodedata.normalize("NFKD", str(text).lower())
+    ascii_text = "".join(c for c in decomposed if not unicodedata.combining(c))
+    words = re.findall(r"[a-z0-9]+", ascii_text)
+    return {w for w in words if len(w) >= 4 and w not in _TITLE_STOPWORDS}
+
+
+def _title_issues(title: str, hook: str) -> list[str]:
+    """Deterministic scroll-stopper title checks (feed the SEO retry loop)."""
+    issues: list[str] = []
+    t = (title or "").strip()
+    if len(t) > MAX_SHORT_TITLE_CHARS:
+        issues.append(
+            f"Title is {len(t)} characters; a Shorts title MUST be <= {MAX_SHORT_TITLE_CHARS}."
+        )
+    if not any(pat.search(t) for pat in _TITLE_FORMULA_SIGNALS):
+        issues.append(
+            "Title uses none of the 4 scroll-stopper formulas "
+            "(Warning '¡Error al…' / Quick Win '… en 60 segundos (Sin …)' / "
+            "Myth-Buster '¿…? La verdad científica' / Call Out 'Si tienes más de …')."
+        )
+    if hook and not (_title_content_tokens(t) & _title_content_tokens(hook)):
+        issues.append(
+            "Title shares no content word with the hook; the first 3 seconds of the "
+            "Short must echo the title, so the title must be built from the hook's topic."
+        )
+    return issues
+
+
+def _hard_trim_title(title: str) -> str:
+    """Last-resort guarantee that a title is <= MAX_SHORT_TITLE_CHARS."""
+    t = (title or "").strip()
+    if len(t) <= MAX_SHORT_TITLE_CHARS:
+        return t
+    return t[:MAX_SHORT_TITLE_CHARS].rstrip(" ,.;:-–—…¿¡")
+
+
+def _ordered_content_tokens(text: str) -> list[str]:
+    """Content words in hook order, ORIGINAL form (case + accents preserved).
+
+    Length + stopword filtering use an accent-stripped normalized form, but the
+    returned words keep their accents so a synthesised title reads naturally
+    (``título``, not ``titulo``).
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in re.findall(r"\w+", str(text), re.UNICODE):
+        norm = "".join(
+            c for c in unicodedata.normalize("NFKD", raw.lower()) if not unicodedata.combining(c)
+        )
+        if len(norm) >= 4 and norm not in _TITLE_STOPWORDS and norm not in seen:
+            seen.add(norm)
+            out.append(raw)
+    return out
+
+
+def _fallback_title_from_hook(hook: str, min_age: int) -> str:
+    """Deterministic, VALID scroll-stopper title synthesised from the hook.
+
+    Used only when the LLM cannot produce a compliant title after all retries —
+    a valid Call-Out formula that carries a real hook word (accents preserved) so
+    it satisfies the formula + hook-alignment + <=40 checks, which beats silently
+    publishing a broken one.
+    """
+    prefix = f"Si tienes más de {min_age}: "  # carries the "si tienes más de" signal
+    budget = MAX_SHORT_TITLE_CHARS - len(prefix)
+    for word in _ordered_content_tokens(hook):
+        if len(word) <= budget and len(prefix + word) <= MAX_SHORT_TITLE_CHARS:
+            return prefix + word
+    # No hook word fits (empty/pathological hook) — a generic Call Out is still a
+    # valid formula and <=40; the hook-alignment check is skipped when hook is empty.
+    return f"Si tienes más de {min_age}, escucha esto"
 
 
 # Generic gym/virality tags that almost never match a Spain-first wellness
@@ -42,7 +145,7 @@ def _build_seo_retry_feedback(issues: list) -> str:
         "",
         "DO NOT REGRESS:",
         "- Do not use an \"errores\" title unless the Short is genuinely a mistake_list.",
-        "- Keep the title Spanish, natural, and under 60 characters.",
+        "- Keep the title a Spanish scroll-stopper, <= 40 characters, using one of the 4 Shorts title formulas (Warning / Quick Win / Myth-Buster / Call Out).",
         "- Keep 3-5 hashtags with #shorts last.",
     ])
     return "\n".join(lines)
@@ -158,8 +261,7 @@ def build_short_seo(
         # YouTube allows many tags but the spec asks for 3-5 visible hashtags.
         hashtags = hashtags[:5]
         title = (parsed.get("title") or short_script.get("hook", "")).strip()
-        if len(title) > 60:
-            title = title[:60].rstrip() + "…"
+        hook = str(short_script.get("hook") or "")
         description = _description_with_spaced_hashtags((parsed.get("description") or "").strip(), hashtags)
         seo = {
             "short_id": short_id,
@@ -174,16 +276,50 @@ def build_short_seo(
         issues = validate_seo_idea_consistency(seo, short_script)
         blocking = [i for i in issues if i.severity == "blocking_error"]
         repairable = [i for i in issues if i.severity == "repairable_error"]
+        title_problems = _title_issues(title, hook)
         if blocking:
             detail = "; ".join(i.detail for i in blocking)
             raise ValueError(f"SEO idea fidelity validation failed: {detail}")
-        if not repairable:
+        if not repairable and not title_problems:
             break
         if attempt >= MAX_SEO_RETRIES:
-            detail = "; ".join(i.detail for i in repairable)
-            raise ValueError(f"SEO idea fidelity validation failed after {MAX_SEO_RETRIES} retries: {detail}")
+            # Idea fidelity is a hard contract — still fails loudly.
+            if repairable:
+                detail = "; ".join(i.detail for i in repairable)
+                raise ValueError(
+                    f"SEO idea fidelity validation failed after {MAX_SEO_RETRIES} retries: {detail}"
+                )
+            if title_problems:
+                # NEVER silently publish a title that fails the scroll-stopper
+                # contract. Replace it with a deterministic, VALID formula title
+                # synthesised from the hook. If even that cannot be made valid
+                # (pathological hook), fail loudly rather than ship a bad title.
+                min_age = resolve_target_min_age(
+                    channel_config,
+                    str(short_plan.get("title") or ""),
+                    hook,
+                    str(short_script.get("narration") or "")[:400],
+                )
+                fallback = _fallback_title_from_hook(hook, min_age)
+                if _title_issues(fallback, hook):
+                    raise ValueError(
+                        "Could not produce a valid scroll-stopper Short title after "
+                        f"{MAX_SEO_RETRIES} retries (last invalid title: {title!r})."
+                    )
+                seo["title"] = fallback
+            else:
+                seo["title"] = _hard_trim_title(title)
+            break
         # Regenerate SEO with cumulative feedback so the model can self-correct.
-        retry_feedback = _build_seo_retry_feedback(repairable)
+        feedback_parts = []
+        if repairable:
+            feedback_parts.append(_build_seo_retry_feedback(repairable))
+        if title_problems:
+            feedback_parts.append(
+                "TITLE FIXES REQUIRED (scroll-stopper contract):\n"
+                + "\n".join(f"- {p}" for p in title_problems)
+            )
+        retry_feedback = "\n\n".join(feedback_parts)
 
     jd = paths.short_json_dir(long_job_dir, short_id)
     jd.mkdir(parents=True, exist_ok=True)

@@ -149,6 +149,20 @@ def test_expand_pexels_queries_uses_visual_brief_and_bucket_queries():
     assert all(q == q.lower() for q in queries)
 
 
+def test_visual_dna_stock_queries_avoid_repetitive_wellness_defaults():
+    dna = _dna()
+    queries = [
+        query.lower()
+        for bucket in (dna.get("visual_buckets") or {}).values()
+        for query in bucket.get("pexels_queries_en", []) or []
+    ]
+    joined = "\n".join(queries)
+    assert "sitting on sofa calm lifestyle" not in joined
+    assert "relaxing sofa evening" not in joined
+    assert "tea cup evening home calm" not in joined
+    assert "morning kitchen coffee calm" not in joined
+
+
 def test_normalize_to_english_translates_spanish_tokens():
     dna = _dna()
     assert "morning" in normalize_to_english_pexels_query("mañana cocina café", dna)

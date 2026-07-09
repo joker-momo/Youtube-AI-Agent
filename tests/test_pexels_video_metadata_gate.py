@@ -33,9 +33,9 @@ def test_photo_with_tags_unchanged():
     """A photo whose provider metadata yields tags still matches via its OWN tags —
     the fallback must not kick in or alter the existing photo behaviour."""
     q = _elderly_query()
-    photo = {"width": 1920, "height": 1080, "tags": ["senior", "kitchen", "vegetables"]}
+    photo = {"width": 1920, "height": 1080, "tags": ["mature", "kitchen", "vegetables"]}
     res = _candidate_score(q, photo)
-    assert "senior" in res["matched_terms"]
+    assert "mature" in res["matched_terms"]
 
 
 def test_photo_with_only_alt_text_matches():
@@ -46,8 +46,15 @@ def test_photo_with_only_alt_text_matches():
         "width": 1920,
         "height": 1080,
         "tags": [],
-        "alt": "Senior woman preparing healthy vegetables in a bright kitchen",
+        "alt": "Mature woman preparing healthy vegetables in a bright kitchen",
     }
     res = _candidate_score(q, photo)
     assert res["matched_terms"]
-    assert {"senior", "kitchen", "vegetables"} & set(res["matched_terms"])
+    assert {"mature", "kitchen", "vegetables"} & set(res["matched_terms"])
+
+
+def test_demographic_enforcement_keeps_45plus_mature_not_elderly_by_default():
+    query = _force_elderly_demographic("middle aged woman checking phone in living room")
+    assert "elderly" not in query.lower()
+    assert "senior" not in query.lower()
+    assert "mature adult 45 plus" in query.lower()

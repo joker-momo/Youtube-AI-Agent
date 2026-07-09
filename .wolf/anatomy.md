@@ -1,7 +1,7 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-07-06T23:18:58.378Z
-> Files: 949 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-07-09T14:38:28.142Z
+> Files: 1002 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../../../../Users/joker/.claude/
 
@@ -16,6 +16,8 @@
 - `feedback_never_change_render_concurrency.md` (~292 tok)
 - `feedback_notify_long_task_mobile.md` (~332 tok)
 - `MEMORY.md` — Declares hints (~527 tok)
+- `project_browser_worker_no_reload.md` (~354 tok)
+- `project_chatgpt_free_tier_blocker.md` (~525 tok)
 - `project_elena_loop_crossfade.md` (~261 tok)
 - `project_elena_voice.md` (~719 tok)
 - `project_lipsync_hybrid_integration.md` (~713 tok)
@@ -61,6 +63,14 @@
 - `gen_v15_thumbs.py` — Option A end-to-end: gen clean backgrounds (v1.5 prompt) → composite text + (~675 tok)
 - `test_cta_only.py` — Isolated CTA test: run ONLY the short script stage (prompt + ChatGPT + (~806 tok)
 
+## ../../../../private/tmp/claude-501/-Volumes-DATA-YBT-Studio-Youtube-AI-Agent/50a4eebd-a80f-4fc9-9c99-9e7caef54b1c/scratchpad/
+
+- `diag_plain.py` — Isolate the 'Image generation failed' cause: run gens in 3 variants and (~861 tok)
+- `dump_graphic_prompts.py` — Reconstruct the EXACT ChatGPT graphic-image prompts for a job, byte-for-byte, (~881 tok)
+- `live_attach_test.py` — Live UI test: run the EDITED ChatGPTImageDriver against the real logged-in (~824 tok)
+- `live_diag.py` — Diagnostic: run the attach+send flow, then DUMP page state instead of (~900 tok)
+- `snap.py` — main (~290 tok)
+
 ## ../../../../private/tmp/claude-501/-Volumes-DATA-YBT-Studio-Youtube-AI-Agent/5150a21d-b4f6-4331-9e67-8115da2ce00c/scratchpad/
 
 - `debug_scene05_full.py` (~598 tok)
@@ -93,6 +103,12 @@
 - `verify_elena_video.py` — Post-render verification of video_elena.mp4: probe + continuity QA + frame grab. (~810 tok)
 - `verify_exact.py` — Verify the EXACT-topic video: probe + continuity QA + Elena frame grabs. (~689 tok)
 - `watch_job.py` — Watch the running job. Wake the agent only on FORWARD progress (a stage index (~517 tok)
+
+## ../../../../private/tmp/claude-501/-Volumes-DATA-YBT-Studio-Youtube-AI-Agent/d2f804b5-a6f5-462e-b8fd-8f82e456667e/scratchpad/
+
+- `regen_mundial.py` — Regen the Mundial job's comparison graphics + thumbnails with the fixed prompts. (~506 tok)
+- `watch_job.sh` — Background watcher for the Mundial long-form job. (~584 tok)
+- `watch_short.sh` — Watch the short-01 rebuild. Exit (re-invoke Claude) on queue terminal state, (~482 tok)
 
 ## ../../../../private/tmp/claude-501/-Volumes-DATA-YBT-Studio-Youtube-AI-Agent/f349c6d7-2edf-45d8-bcde-b0903be14f56/scratchpad/
 
@@ -926,6 +942,7 @@
 - `2026-06-20-visual-spans-pr-a.md` — Visual Spans (PR A) Implementation Plan (~1846 tok)
 - `2026-06-23-reflink-materialize.md` — Reflink Media Materialization Implementation Plan (~3258 tok)
 - `2026-06-27-shorts-asset-layer-decoupling.md` — Shorts ↔ Long Asset Layer Decoupling — Implementation Plan (~6300 tok)
+- `2026-07-09-infographic-short.md` — Infographic Short Implementation Plan (~14415 tok)
 
 ## docs/superpowers/specs/
 
@@ -933,10 +950,15 @@
 - `2026-06-23-reflink-materialize-design.md` — Reflink Media Materialization (P2, reflink-first) (~1538 tok)
 - `2026-06-27-shorts-asset-layer-decoupling-design.md` — Shorts ↔ Long Asset Layer Decoupling (Sub-1) (~3219 tok)
 - `2026-06-29-transcript-lab-design.md` — Transcript Lab — standalone YouTube transcript fetcher (~811 tok)
+- `2026-07-09-infographic-short-design.md` — Infographic Short — Design Spec (~3328 tok)
 
 ## inputs/
 
 - `manual_idea.json` (~152 tok)
+
+## inputs/ideas/vida-plena-45/
+
+- `20260707-161917-00-estrategias-practicas-para-disfrutar-de.json` (~799 tok)
 
 ## installers/
 
@@ -965,11 +987,12 @@
 - `ChannelVisualTimeline.tsx` — Long-form background layer driven by the compiled asset schedule. (~956 tok)
 - `CtaEngagement.tsx` — On-brand animated engagement CTA: Like → Subscribe → Bell, staggered spring-in. (~1670 tok)
 - `render-props.ts` — Exports WordSegment, SubtitleConfig, SceneLayout, LayoutPayload + 9 more (~1945 tok)
-- `Root.tsx` — Side-effect import: registers webfonts via delayRender so Shorts (~926 tok)
+- `Root.tsx` — Side-effect import: registers webfonts via delayRender so Shorts (~1056 tok)
 - `ShortVideo.tsx` — Vertical YouTube Short renderer (1080x1920). (~2035 tok)
 
 ## remotion/src/shorts/
 
+- `InfographicShort.tsx` — InfographicShort (~598 tok)
 - `loadFonts.ts` — Eagerly preload the Short AND long-form composition fonts so Remotion (~358 tok)
 - `ShortBackground.tsx` — Background media + smart fit + readability overlays (spec §3). (~2072 tok)
 - `ShortLayouts.tsx` — Universal Short Video layout registry (spec §7 + §8). (~2357 tok)
@@ -982,16 +1005,18 @@
 
 ## src/video_agent/
 
+- `audience_age.py` — Resolve the per-video target audience age from the idea, not a hardcode. (~1291 tok)
 - `cli.py` — build_parser (~4770 tok)
 - `color_mix.py` — Perceptual colour mixing (OKLab): resolve_topic_accent_color (30% blend, bug-466), resolve_topic_background_color/resolve_topic_text_color (12% blend, bug-467). (~2600 tok)
 - `operator_json.py` — JSON object extraction, truncated-root repair, and JSON prompt utility helpers. (~2500 tok)
-- `operator_prompts.py` — Prompt template builders for operator ChatGPT/Gemini workflows. (~17560 tok)
+- `operator_prompts.py` — Prompt template builders for operator ChatGPT/Gemini workflows. (~18526 tok)
 - `operator_validators.py` — class: is_valid, merge, format_report, load_operator_channel_config + 1 more (~4722 tok)
 - `operator.py` — Declares from (~12281 tok)
+- `persona.py` — Channel presenter identity for AI-generated imagery. (~730 tok)
 - `pipeline.py` — Declares from (~16283 tok)
 - `pipeline.py` — Declares from (~16230 tok)
 - `style_dna.py` — Shared loader for ``configs/<channel>/style-dna.json`` — the single source of (~604 tok)
-- `thumbnail_planner.py` — Thumbnail prompt planner — spec v1.3. (~9991 tok)
+- `thumbnail_planner.py` — Thumbnail prompt planner — spec v1.3. (~10207 tok)
 - `tts_melo_worker.py` — MeloTTS sidecar worker — runs inside the melo venv, driven over JSON-over-stdio. (~594 tok)
 - `tts.py` — TTSClient: synthesize, synthesize_scene_track, synthesize (~4831 tok)
 
@@ -1011,11 +1036,11 @@
 
 ## src/video_agent/browser_worker/
 
-- `app.py` — API: 2 endpoints (~11111 tok)
+- `app.py` — API: 2 endpoints (~11210 tok)
 
 ## src/video_agent/browser_worker/drivers/
 
-- `chatgpt_image.py` — ChatGPTImageDriver: build_image_gen_prompt, open (~13373 tok)
+- `chatgpt_image.py` — ChatGPTImageDriver: build_image_gen_prompt, open (~15439 tok)
 - `humanize.py` — human_pause, human_click, estimate_read_pause_ms, human_type (~2426 tok)
 
 ## src/video_agent/lipsync/
@@ -1030,25 +1055,28 @@
 ## src/video_agent/orchestrator/
 
 - `__init__.py` (~143 tok)
+- `briefing.py` — Stage-specific role descriptions. The orchestrator prepends the (~8510 tok)
 - `browser_client.py` — BrowserClientError: chatgpt_send, gemini_send, generate_image, generate_images + 6 more (~3932 tok)
 - `dag.py` — Dependency-DAG scheduler for the long-form pipeline (parallel lanes). (~1512 tok)
+- `idea_expander.py` — IdeaExpansionError: build_title_to_idea_prompt, expand_title_to_idea (~1724 tok)
 - `idea_generator.py` — Idea generator: seed keyword selection → ChatGPT idea expansion. (~5528 tok)
 - `idea_youtube_sync.py` — YouTube channel sync + published-video duplicate detection. (~2793 tok)
+- `image_prompt_log.py` — Per-job audit log of every ChatGPT image-generation prompt. (~2016 tok)
 - `job_state.py` — class: to_dict, from_dict, stage, save_job + 2 more (~1072 tok)
-- `worker.py` — _JobHeartbeat: get_jobs_root, get_channel_path, start, stop + 12 more (~7687 tok)
+- `worker.py` — _JobHeartbeat: get_jobs_root, get_channel_path, chatgpt_fn, start + 10 more (~8150 tok)
 
 ## src/video_agent/orchestrator/stages/
 
 - `__init__.py` — Facade package: re-exports every public (and private) symbol from all (~2111 tok)
 - `_shared.py` — StageInputMissingError: dag_mode, set_dag_mode, require_stage, resolve_stage_fps (~2939 tok)
-- `assets_thumbnail.py` — auto_idea_research_stage, generate_scene_asset (~7595 tok)
+- `assets_thumbnail.py` — auto_idea_research_stage, generate_scene_asset (~8282 tok)
 - `audio.py` — run_whisper_timestamps_stage (~4140 tok)
 - `elena_lipsync.py` — Long-form ``elena_lipsync`` pipeline stage. (~722 tok)
 - `elena_plan.py` — Long-form ``elena_plan`` pipeline stage (Phase 5). (~712 tok)
-- `graphic_images.py` — Long-form ``graphic_images`` pipeline stage (Phase 4). (~8478 tok)
+- `graphic_images.py` — Long-form ``graphic_images`` pipeline stage (Phase 4). (~7802 tok)
 - `local_qa.py` — Deterministic local pre-QA checks run before the Gemini QA round-trip. (~1534 tok)
 - `precomposite.py` — Pre-composite stage: bakes Elena circle + scene overlays per scene via ffmpeg. (~3580 tok)
-- `qa.py` — promote_qa_stage; `_auto_run_then_promote` retry sends a targeted repair prompt (error + pinned job_id/channel_id) on validation failure instead of blind resend (bug-457). (~7576 tok)
+- `qa.py` — promote_qa_stage (~7975 tok)
 - `render_continuity_qa.py` — Long-form ``render_continuity_qa`` stage (Phase 6); `_sample_luma` seeks each boundary frame independently (bug-458). `_qa_schedule` recompiles a fresh post-TTS schedule via `pipeline._recompile_asset_schedule` first (bug-459), independent of `visual.span_planning.mode`. (~3623 tok)
 - `render_review.py` — run_render_stage, run_review_stage, run_persona_eval_stage (~2488 tok)
 - `scenes.py` — run_scenes_stage, promote_scenes_stage, auto_scenes_stage (~1954 tok)
@@ -1076,10 +1104,10 @@
 - `idea_preservation.py` — derive_idea_contract, derive_idea_items, ensure_script_idea_fields, validate_script_idea_contract (~10494 tok)
 - `llm_history.py` — Per-Short LLM call history recorder. (~3344 tok)
 - `llm.py` — Shorts AI role wiring (spec v6 §2 + §3). (~1754 tok)
-- `paths.py` — Canonical storage-layout paths for the Shorts autopilot. (~1728 tok)
+- `paths.py` — Canonical storage-layout paths for the Shorts autopilot. (~1993 tok)
 - `paths.py` — Canonical storage-layout paths for the Shorts autopilot. (~1940 tok)
 - `performance_memory.py` — write_performance_memory (~608 tok)
-- `prompts.py` — Strict, JSON-only, Spain-first prompts for Short script / scene / QA generation. (~26481 tok)
+- `prompts.py` — Strict, JSON-only, Spain-first prompts for Short script / scene / QA generation. (~26920 tok)
 - `prompts.py` — Strict, JSON-only, Spain-first prompts for Short script / scene / QA generation. (~26358 tok)
 - `qa_common.py` — Shared QA classes, constants and leaf helpers. (~1986 tok)
 - `qa_normalize.py` — Normalize raw QA issues into structured NormalizedIssue records. (~9104 tok)
@@ -1091,7 +1119,7 @@
 - `short_builder.py` — Build one Short end to end: generate → QA (regen loop) → audio → mix → render. (~10242 tok)
 - `short_scene_builder.py` — Spec v6 §2.4 — ChatGPT generates Short scenes AND picks layouts. (~6581 tok)
 - `short_script_builder.py` — Spec v6 §2.3 — Generate + persist a Short script via ChatGPT. (~1524 tok)
-- `short_seo_builder.py` — Build ``short_seo.json`` for a Short (LLM-generated, parsed + normalized). (~2245 tok)
+- `short_seo_builder.py` — Build ``short_seo.json`` for a Short (LLM-generated, parsed + normalized). (~4109 tok)
 - `source_map.py` — Build ``short_source_map.json`` linking a Short back to long-video scenes. (~2731 tok)
 - `status.py` — Summarize Shorts state for UI + orphaned-Short recovery (recover_stale_short / force_terminate_orphaned_shorts / short_owner_is_alive). (~2300 tok)
 - `status.py` — Summarize Shorts state for the jobs list / Shorts tab. (~3554 tok)
@@ -1140,6 +1168,20 @@
 - `visual_schedule.py` — Compiled visual-schedule stage (spec v3.2.3 §18, §21, §22). (~1894 tok)
 - `visual_spans.py` — Visual-span grouping stage (spec v3.2.3 §18, §19). (~1037 tok)
 
+## src/video_agent/shorts/infographic/
+
+- `__init__.py` (~41 tok)
+- `build.py` — Orchestrate the infographic-short pipeline (plan → poster → QA → voice → render). (~2200 tok)
+- `plan.py` — LLM-driven infographic poster plan (pick format + fill), validated. (~736 tok)
+- `poster_prompt.py` — Per-format 9:16 infographic poster prompts (AI-only, text baked in). (~963 tok)
+- `poster.py` — Generate the infographic poster PNG via the injected image function. (~460 tok)
+- `qa.py` — Deterministic text-presence QA gate over a poster's read-back text. (~343 tok)
+- `render_props.py` — Render props for the Remotion InfographicShort composition. (~370 tok)
+- `render.py` — Render an infographic short via Remotion (direct InfographicShort composition). (~650 tok)
+- `schema.py` — Poster-plan schema + validation for infographic shorts. (~528 tok)
+- `seo.py` — SEO/title artifact for infographic Shorts, reusing the shipped Shorts title rules. (~544 tok)
+- `voiceover.py` — Narration text for an infographic short (read the poster) + TTS synth. (~372 tok)
+
 ## src/video_agent/shorts/validation/
 
 - `__init__.py` — Facade exports for Shorts scene validation package. (~36 tok)
@@ -1185,7 +1227,7 @@
 - `dashboard.py` — Dashboard page route. (~153 tok)
 - `jobs.py` — Job CRUD and control routes. (~3256 tok)
 - `run.py` — Run-all and run-batch pipeline routes. (~1362 tok)
-- `shorts_studio.py` — API: 3 endpoints (~9691 tok)
+- `shorts_studio.py` — API: 3 endpoints (~9875 tok)
 - `shorts.py` — Backend API for the Shorts Autopilot (spec §18). (~2492 tok)
 - `stages.py` — Stage-run/promote/auto routes plus scene asset generation. (~6244 tok)
 - `timeline.py` — Timeline and logs routes. (~5981 tok)
@@ -1206,7 +1248,10 @@
 - `test_asset_strategy_fallback_cascade.py` — test_fallback_cascade_stock_ok_non_key, test_fallback_cascade_ai_image_preferred, test_ai_image_pref (~1682 tok)
 - `test_assets_quality_upgrade.py` — _Stock: search, normalize, test_asset_quality_downranks_stock_portrait_for_first_frame_evidence, tes (~2014 tok)
 - `test_assets_stage.py` — The graphic/defer/relabel tests below exercise the SHORT fork — that logic (~7116 tok)
-- `test_auto_stages.py` — FakeBrowserClient: channel_path, idea_payload, valid_script_payload, valid_scenes_payload + 13 more (~22689 tok)
+- `test_audience_age_wiring.py` — A 60+ idea must make the content builders speak to 60, not hardcoded 45. (~863 tok)
+- `test_audience_age.py` — Per-video audience age is derived from the idea, not hardcoded to 45. (~632 tok)
+- `test_auto_stages.py` — FakeBrowserClient: channel_path, idea_payload, valid_script_payload, valid_scenes_payload + 11 more (~26540 tok)
+- `test_briefing_script_length_contract.py` — Regression: the script + script_qa BRIEFING length contract is content-driven. (~771 tok)
 - `test_browser_worker_chrome.py` — test_runtime_returns_503_when_cdp_unreachable, test_cdp_url_defaults_to_localhost, test_cdp_url_resp (~481 tok)
 - `test_color_mix.py` — Tests for OKLab-based per-video accent colour resolution (bug-466). (~1858 tok)
 - `test_complete_stage_resume.py` — Regression guard for ``_complete_stage`` resume pointer (I2). (~707 tok)
@@ -1219,7 +1264,10 @@
 - `test_elena_plan_stage.py` — Integration test for the long-form ``elena_plan`` pipeline stage. (~402 tok)
 - `test_fallback_image_policy.py` — `_stage_fallback_image_gen` must keep confidently-passing native footage and (~1472 tok)
 - `test_funnel_cta.py` — Topic-aware Short funnel CTA (names the companion long video's theme). (~1627 tok)
+- `test_graphic_comparison_color.py` — Comparison graphic cards must not misuse red=bad / green=good coloring. (~355 tok)
 - `test_graphic_images_stage.py` — Tests for the long-form ``graphic_images`` stage. (~3696 tok)
+- `test_image_prompt_log_coverage.py` — Coverage tests: every long-form ChatGPT image path writes an exact prompt log. (~1684 tok)
+- `test_image_prompt_log.py` — Unit tests for the per-job ChatGPT image-prompt audit log. (~1071 tok)
 - `test_local_qa.py` — Unit coverage for the deterministic local pre-QA gate (stages/local_qa.py). (~923 tok)
 - `test_long_comp_duration.py` — Regression guard for long-form composition duration (B1). (~436 tok)
 - `test_long_duration_sync.py` — Regression guard for ``_sync_scene_durations_from_audio`` (long-form). (~824 tok)
@@ -1234,6 +1282,8 @@
 - `test_operator_qa_nested_verdict.py` — Gemini QA sometimes echoes the FULL artifact (which natively carries a ``qa`` (~463 tok)
 - `test_operator_render_prepared_routing.py` — Short job dirs must always render through the prepared-short owner, even from (~678 tok)
 - `test_operator_workflow.py` — test_extract_json_object_ignores_model_wrapper_text, test_write_operator_prompts_writes_script_promp (~6460 tok)
+- `test_persona_no_attachment.py` — Presenter identity is guided by TEXT, not an attached reference photo. (~399 tok)
+- `test_persona_reference.py` — Presenter identity across AI-generated imagery (persona.py). (~452 tok)
 - `test_pexels_video_metadata_gate.py` — Pexels VIDEO has NO tags/alt metadata, so the tag-overlap strict gate (~688 tok)
 - `test_pipeline_artifacts.py` — test_pipeline_writes_structured_artifacts_without_render, test_operator_render_writes_review_page_wi (~3245 tok)
 - `test_post_asset_qa_rejection_and_fallback.py` — mock_vision_qa, test_post_asset_qa_rejection_and_fallback, mock_vision_qa, mock_ensure_asset (~1790 tok)
@@ -1255,6 +1305,7 @@
 - `test_script_length_quality_first.py` — Quality-first script length contract. (~969 tok)
 - `test_script_stage.py` — channel_path, idea_payload, valid_script_payload, valid_scenes_payload (~10502 tok)
 - `test_short_graphic_image_migration.py` — test_video_covered_marker_never_skips_ai_for_graphic_scenes, test_video_covered_marker_uses_native_v (~1894 tok)
+- `test_short_title_formulas.py` — Shorts titles use the 4 scroll-stopper formulas, <=40 chars, age-framed. (~1403 tok)
 - `test_shorts_asset_schedule.py` — Compiled-schedule + manifest-adapter tests (spec v3.2.3 §15/§16/§16.1/§17, §41.2). (~4174 tok)
 - `test_shorts_audio_sync.py` — test_audio_visual_delta_uses_tail_constants, test_audio_visual_delta_pass_threshold, test_audio_visu (~477 tok)
 - `test_shorts_audio.py` — Shorts Autopilot v5 — Phase 5: music resolution + ffmpeg mix command. (~2283 tok)
@@ -1284,8 +1335,9 @@
 - `test_stage_resolve_fps.py` — Guard for the shared stage fps resolver (overlap #3). (~238 tok)
 - `test_stock_asset_cascade.py` — Tests for the 3-tier visual asset cascade (video -> photo -> AI-gen). (~7236 tok)
 - `test_telegram_short_publish.py` — Tests for the Shorts → Telegram publish-package handoff. (~1810 tok)
+- `test_thumbnail_distinctive_subject.py` — Thumbnails must show the video's DISTINCTIVE subject, not a generic category. (~282 tok)
 - `test_thumbnail_image_stage.py` — ── _build_thumbnail_prompt ─────────────────────────────────────────────────── (~2787 tok)
-- `test_thumbnail_planner.py` — Spec v1.3 §18 — 42 tests for thumbnail_planner. (~6041 tok)
+- `test_thumbnail_planner.py` — Spec v1.3 §18 — 42 tests for thumbnail_planner. (~5181 tok)
 - `test_thumbnail_stage_v13.py` — Spec v1.3 Phase 2 stage integration tests. (~2087 tok)
 - `test_timeline_dag_mode_status.py` — Regression coverage for timeline status derivation during a DAG-mode run (~2188 tok)
 - `test_title_ctr_formula.py` — CTR-first title formula (2026-06-29, option b). (~440 tok)
@@ -1318,7 +1370,23 @@
 - `test_qa_issues.py` — test_suppress_stale_hook_fidelity, test_repairable_point_grouping, test_count_promise_soft_when_coun (~6327 tok)
 - `test_script_candidate_validation.py` — test_rejects_partial_script_too_few_blocks, test_rejects_script_not_starting_at_zero, test_rejects_m (~2033 tok)
 - `test_script_stages.py` — test_short_script_prompt_has_retention_and_language_rules, test_v13_script_prompt_uses_calibrated_wo (~1613 tok)
-- `test_seo.py` — test_short_seo_prompt_prefers_broad_nutrition_tags_over_nutricion45, test_short_seo_prompt_uses_high (~908 tok)
+- `test_seo.py` — test_short_seo_prompt_prefers_broad_nutrition_tags_over_nutricion45, test_short_seo_prompt_uses_high (~1668 tok)
+
+## tests/shorts_build/infographic/
+
+- `__init__.py` (~0 tok)
+- `test_build.py` — image_fn, llm_fn, read_text_fn, tts_fn (~1140 tok)
+- `test_infographic_seo.py` — test_build_infographic_seo_writes_title_aligned_with_hook, llm_fn (~338 tok)
+- `test_paths.py` — test_infographic_artifact_names_exist (~75 tok)
+- `test_plan.py` — test_build_poster_plan_parses_validates_and_sets_age, llm_fn, test_invalid_then_valid_retries, llm_f (~378 tok)
+- `test_poster_prompt.py` — test_prompt_contains_title_and_all_item_labels, test_numbered_tips_prompt_requests_numbers, test_war (~458 tok)
+- `test_poster.py` — test_generate_poster_writes_png_logs_and_passes_raw_body, fake_image_fn (~383 tok)
+- `test_qa.py` — test_pass_when_all_text_present, test_fail_lists_missing_labels, test_unavailable_reader_yields_qa_u (~223 tok)
+- `test_render_props.py` — test_props_reference_poster_and_audio_and_duration (~338 tok)
+- `test_render.py` — test_render_command_targets_infographic_composition_with_auto_concurrency (~312 tok)
+- `test_schema.py` — test_valid_category_grid_plan_has_no_issues, test_unknown_format_is_flagged, test_category_grid_item (~429 tok)
+- `test_voiceover.py` — test_narration_starts_with_hook_line, test_narration_reads_every_item_and_ends_with_cta (~187 tok)
+- `test_wiring.py` — test_worker_dispatches_infographic_command, test_studio_command_for_short_type, image_fn, llm_fn (~1038 tok)
 
 ## tools/
 

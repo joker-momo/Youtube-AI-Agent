@@ -211,21 +211,18 @@ def _force_elderly_demographic(query: str) -> str:
     has_people = any(word in lower_q for word in people_words)
 
     if has_people:
-        # Replace weak terms like middle aged, adult with strong senior/elderly terms
+        # Keep the channel audience age-appropriate without forcing every asset
+        # into an elderly/senior visual stereotype. The channel is 45+, not a
+        # frailty/retirement channel.
         q = query
-        q = q.replace("Middle aged", "Elderly senior")
-        q = q.replace("middle aged", "elderly senior")
-        q = q.replace("Middle-aged", "Elderly senior")
-        q = q.replace("middle-aged", "elderly senior")
-        q = q.replace("Adult", "Elderly")
-        q = q.replace("adult", "elderly")
-        # Replace '45+' phrasing with explicit elderly
-        q = re.sub(r'\b45\+?\b', 'elderly senior 55+', q)
+        q = re.sub(r"\b[Mm]iddle[- ]aged\b", "mature adult 45 plus", q)
+        q = re.sub(r"\b[Aa]dults?\b", "mature adult", q)
+        q = re.sub(r"\b45\+?\b", "45 plus", q)
 
         # Enforce European / Latin American / Hispanic / Caucasian
-        if not any(w in lower_q for w in ["european", "latin", "hispanic", "caucasian", "elderly", "senior"]):
-            q = f"{q} elderly european senior"
-        elif not any(w in lower_q for w in ["european", "latin", "hispanic", "caucasian"]):
+        if not any(w in lower_q for w in ["mature", "older", "45", "50", "sixties", "european", "latin", "hispanic", "caucasian", "elderly", "senior"]):
+            q = f"{q} mature adult 45 plus"
+        if not any(w in lower_q for w in ["european", "latin", "hispanic", "caucasian"]):
             q = f"{q} european latin american"
         return q.strip()
     return query
@@ -664,7 +661,7 @@ class StockSearchCore:
     # Demographic keywords that require a fresh API search (skip library cache to avoid
     # returning old videos of young people that were cached before this constraint existed).
     _DEMOGRAPHIC_KEYWORDS = {
-        "elderly", "senior", "european", "latin", "hispanic", "caucasian",
+        "elderly", "senior", "mature", "older", "european", "latin", "hispanic", "caucasian",
         "grandmother", "grandfather", "grandparent",
         # pipeline-specific visual_prompt patterns that will be rewritten
         "wellness", "adults", "realistic", "lifestyle", "photo",
@@ -791,19 +788,17 @@ class StockSearchCore:
             matched = set(item.get("matched_terms") or [])
             prompt = query.lower()
 
-            # Demographic strict enforcement — gate on the SCENE's original
-            # visual_prompt, NOT the enriched ``query``. ``_force_elderly_demographic``
-            # appends "elderly european senior" to every wellness/photo query, so
-            # keying off ``query`` would demand an "elderly"/"senior" *tag* on every
-            # candidate — which real stock rarely carries — and reject good on-topic
-            # footage down into the slow AI tier. We only require demographic
-            # evidence when the scene itself asks for a specific age group.
+            # Demographic strict enforcement gates on the SCENE's original
+            # visual_prompt, NOT the enriched stock-search query. The enrichment
+            # adds broad 45+ audience hints, but those should not force every
+            # candidate to carry explicit age metadata; require demographic
+            # evidence only when the scene itself asks for a specific age group.
             scene_prompt = str(scene.get("visual_prompt") or "").lower()
             demo_terms = {"senior", "elderly", "mature", "older", "50s", "60s", "aging", "grandfather", "grandmother", "grandparent", "55+"}
             if any(term in scene_prompt for term in demo_terms):
                 has_demo = any(d in matched for d in demo_terms)
                 if not has_demo:
-                    item["failed_required_terms"] = "Missing demographic terms (senior/elderly) for a demographic-specific query"
+                    item["failed_required_terms"] = "Missing demographic terms for a demographic-specific query"
                     return False
 
             # Check label reading strict context

@@ -254,21 +254,43 @@ async def _auto_run_then_promote(
             )
 
             # Send a targeted repair instead of blindly re-sending the identical
-            # task: the real job_id/channel_id are only stated ONCE, in the
-            # initial briefing, never repeated in the per-stage task prompt. If
-            # the model gets a field wrong (e.g. copying idea.source into
-            # job_id — bug-457), re-sending the same prompt just has it repeat
-            # its own prior wrong answer from conversation history every time,
-            # burning all retries on the identical mistake. Stating the exact
-            # failure plus the correct pinned values lets it self-correct.
-            repair_msg = (
-                f"Tu respuesta anterior para {promote_stage_name} tiene un error "
-                f"que bloquea la promoción:\n{exc}\n\n"
-                f'Usa EXACTAMENTE job_id="{state.job_id}" y channel_id="{state.channel_id}" '
-                "(no copies ningún otro valor del contexto, como el campo 'source' de la idea). "
-                "Reenvía el JSON COMPLETO corregido en un único bloque ```json, empezando por "
-                "la misma línea // FILE: de antes, con el resto del contenido igual salvo la corrección."
-            )
+            # task. Two distinct failure shapes need two different repairs:
+            #
+            # 1. The model produced a JSON object but a FIELD is wrong (e.g.
+            #    copying idea.source into job_id — bug-457). Re-sending the same
+            #    task just has it repeat its own wrong answer from conversation
+            #    history. Fix: state the exact failure + pinned values and ask it
+            #    to resend the CORRECTED previous JSON.
+            #
+            # 2. The model produced NO JSON at all — only prose (e.g. it refused
+            #    or explained instead of answering, "No JSON object found in
+            #    model output" — bug-458). Asking to "resend the corrected
+            #    previous JSON" is impossible: there is no previous JSON, so the
+            #    model replies "no existe un contenido previo" and every retry
+            #    dies the same way. Fix: tell it to GENERATE the complete
+            #    artifact from scratch NOW, re-supplying the full original task
+            #    (schema + // FILE instructions) so the repair is self-contained.
+            has_prior_json = bool(extract_json_objects(raw_response))
+            if has_prior_json:
+                repair_msg = (
+                    f"Tu respuesta anterior para {promote_stage_name} tiene un error "
+                    f"que bloquea la promoción:\n{exc}\n\n"
+                    f'Usa EXACTAMENTE job_id="{state.job_id}" y channel_id="{state.channel_id}" '
+                    "(no copies ningún otro valor del contexto, como el campo 'source' de la idea). "
+                    "Reenvía el JSON COMPLETO corregido en un único bloque ```json, empezando por "
+                    "la misma línea // FILE: de antes, con el resto del contenido igual salvo la corrección."
+                )
+            else:
+                repair_msg = (
+                    f"No recibí ningún objeto JSON válido en tu respuesta anterior para "
+                    f"{promote_stage_name} (error: {exc}). No intentes corregir ni reenviar "
+                    "nada anterior: no existe un JSON previo. Genera el artefacto COMPLETO "
+                    "desde cero AHORA, respondiendo con el JSON COMPLETO en un único bloque "
+                    "```json y empezando por la línea // FILE: correspondiente.\n\n"
+                    f'Usa EXACTAMENTE job_id="{state.job_id}" y channel_id="{state.channel_id}".\n\n'
+                    "Tarea original:\n"
+                    f"{task}"
+                )
             raw_response = await session_fn([repair_msg])
             if not isinstance(raw_response, str) or not raw_response.strip():
                 raise StageInputMissingError(

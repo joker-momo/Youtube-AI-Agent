@@ -83,13 +83,19 @@ Health safety:
 - key_points must include at least one caution about consulting a professional when appropriate.
 - For sarcopenia, do not say "cura la sarcopenia" or guarantee preventing muscle loss.
 
+Content quality (raise the bar so the video is genuinely engaging and fits the audience):
+- Angle/key_points coherence: every concrete tactic named in "angle" MUST appear as its own key_point. Do not promise a lever in the angle (e.g. a strategic nap, a specific food, a timing trick) and then omit it from key_points.
+- No internal overlap: each key_point must cover a DISTINCT lever. Do not spend two key_points on the same idea (e.g. two points both about caffeine/coffee). Merge overlapping points and use the freed slot for a missing, higher-value lever.
+- Depth for retention: include at least one key_point that explains the WHY for THIS audience (e.g. why sleep/recovery/metabolism shifts with age), not only what-to-do tips. A short mechanism or reason increases watch time and trust with viewers 45+.
+- Evergreen vs one-off: if title_seed is tied to a seasonal or one-time event (a specific tournament, holiday, date), frame topic/angle so the advice stays useful beyond that event (name the event in the hook, but keep the core tactics generalizable). If the event framing cannot be generalized, say so in duration_reason.
+
 Create JSON with these fields:
 - topic: specific, explanatory, not just the title
 - angle: specific editorial approach, not a generic summary
 - target_duration_sec: integer
 - duration_mode: "{duration_mode}"
 - duration_reason: required when duration_mode is auto
-- key_points: at least 3 practical Spanish strings
+- key_points: at least 3 practical Spanish strings; each a DISTINCT lever, no overlap; cover every tactic named in "angle"; include at least one that explains the WHY for the audience
 - title_seed: exactly "{title_seed}"
 - target_keyword
 - viewer_pain

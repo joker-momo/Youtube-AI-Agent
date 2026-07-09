@@ -678,9 +678,11 @@ class ChatGPTImageDriver:
         deadline = time.monotonic() + response_timeout_ms / 1000.0
         last_logged = 0
         exclude_list = exclude_urls or []
+        retried_failure = False
         while time.monotonic() < deadline:
-            src = await self.page.evaluate(
-                """(excludeList) => {
+            try:
+                src = await self.page.evaluate(
+                    """(excludeList) => {
                     const exclude = new Set(excludeList || []);
                     const containers = [
                         "[data-message-author-role='assistant'] img",
@@ -710,20 +712,89 @@ class ChatGPTImageDriver:
                     }
                     return '';
                 }""",
-                exclude_list
-            )
+                    exclude_list
+                )
+            except Exception as exc:
+                # ChatGPT is a SPA: posting the prompt navigates / to /c/<id>,
+                # and it re-renders mid-stream. A poll that races a navigation
+                # throws "Execution context was destroyed". That is transient —
+                # the image is still coming. Swallow it and re-poll; only the
+                # deadline should end this loop.
+                if "context was destroyed" in str(exc) or "navigation" in str(exc).lower():
+                    await self.page.wait_for_timeout(600)
+                    continue
+                raise
             if src:
                 return src
+
+            # ChatGPT renders "Image generation failed" (with a "Try again"
+            # button) as a NON-message error node, so it carries no assistant
+            # <img> and no assistant text — the poll above would otherwise burn
+            # the full response_timeout_ms (observed: 220s) on a failure the
+            # backend already reported in ~5s. Detect it, auto-retry once, then
+            # fail fast with an accurate error instead of a blind timeout.
+            failure = await self._detect_generation_failure()
+            if failure:
+                if not retried_failure:
+                    retried_failure = True
+                    print(
+                        "[chatgpt-image] ChatGPT reported 'Image generation "
+                        "failed'; clicking Try again (1/1).",
+                        flush=True,
+                    )
+                    await self._click_first_visible(
+                        (
+                            "button:has-text('Try again')",
+                            "button:has-text('Retry')",
+                            "button:has-text('Reintentar')",
+                        ),
+                        timeout_ms=2_000,
+                    )
+                    await self.page.wait_for_timeout(1_500)
+                    continue
+                shot = await save_trace_screenshot(
+                    self.page, prefix="chatgpt-image-gen-failed"
+                )
+                raise BrowserDriverError(
+                    "ChatGPT reported 'Image generation failed' (twice). The "
+                    "account may be rate-limited or lack image-generation "
+                    "quota (Free tier often fails here).",
+                    screenshot_path=shot,
+                )
+
             # Poll fast so we return promptly once the image lands.
             await self.page.wait_for_timeout(600)
             now = int(time.monotonic())
             if now - last_logged >= 10:
                 last_logged = now
+                remaining = int(deadline - time.monotonic())
+                print(
+                    f"[chatgpt-image] waiting for generated image... ~{remaining}s left",
+                    flush=True,
+                )
         shot = await save_trace_screenshot(self.page, prefix="chatgpt-image-timeout")
         raise BrowserDriverError(
             "ChatGPT image generation timed out.",
             screenshot_path=shot,
         )
+
+    async def _detect_generation_failure(self) -> bool:
+        """True when ChatGPT shows an image-generation failure banner.
+
+        The banner is language-dependent; match the English/Spanish strings the
+        current UI uses. Best-effort: a page navigation mid-check returns False
+        (the next poll re-checks)."""
+        try:
+            return await self.page.evaluate(
+                """() => {
+                    const t = (document.body.innerText || '').toLowerCase();
+                    return t.includes('image generation failed')
+                        || t.includes('error al generar la imagen')
+                        || t.includes('no se pudo generar la imagen');
+                }"""
+            )
+        except Exception:
+            return False
 
     async def _download_image(self, src: str, dest: Path) -> Path:
         """Download the image bytes via the page's APIRequest (carries auth)."""
@@ -795,21 +866,30 @@ class ChatGPTImageDriver:
                 f"ChatGPT composer has no file input for attachments (trace: {shot})"
             )
         before = await self._attachment_preview_count()
-        # Feed every file input (ChatGPT may render several; only the active
-        # composer one accepts the image, the rest ignore it).
         n_inputs = await file_inputs.count()
+        # Feed file inputs ONE AT A TIME (ChatGPT may render several; only the
+        # active composer input accepts the image, the rest ignore it). Setting
+        # files on EVERY input up-front risks the active one taking the image
+        # twice -> a doubled reference chip. So set on one input, then poll for
+        # the preview to register before trying the next input.
         for idx in range(n_inputs):
             try:
                 await file_inputs.nth(idx).set_input_files(str(attachment_path))
             except Exception:
-                pass
-        # Poll up to ~20s for the upload preview to register.
-        for _ in range(40):
+                continue
+            # Poll ~5s for THIS input's upload to register before trying another.
+            for _ in range(10):
+                await asyncio.sleep(0.5)
+                if await self._attachment_preview_count() > before:
+                    # The preview chip appears as soon as the upload STARTS; the
+                    # image is not usable (send stays disabled) until it finishes
+                    # processing, so keep the original generous settle wait.
+                    await human_pause(self.page, min_ms=3500, max_ms=5000)
+                    return
+        # Last resort: a slow upload may still register after all inputs cycled.
+        for _ in range(30):
             await asyncio.sleep(0.5)
             if await self._attachment_preview_count() > before:
-                # The preview chip appears as soon as the upload STARTS; the image
-                # is not usable (and the send button stays disabled) until it
-                # finishes processing, so keep the original generous settle wait.
                 await human_pause(self.page, min_ms=3500, max_ms=5000)
                 return
         shot = await save_trace_screenshot(self.page, prefix="chatgpt-image-attach-not-registered")

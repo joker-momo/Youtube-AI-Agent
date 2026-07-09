@@ -278,3 +278,70 @@ def test_build_image_gen_prompt_contradictions():
     assert "no padding" not in f3
     assert "no text overlays" in f3
     assert "no watermark" in f3
+
+
+class _FakeFileInput:
+    def __init__(self, on_set):
+        self._on_set = on_set
+
+    async def set_input_files(self, path):
+        self._on_set(path)
+
+
+class _FakeFileInputs:
+    """Fake Playwright locator for input[type='file'] with N inputs."""
+
+    def __init__(self, n, set_log):
+        self._n = n
+        self._set_log = set_log
+
+    async def count(self):
+        return self._n
+
+    def nth(self, idx):
+        return _FakeFileInput(lambda p: self._set_log.append(idx))
+
+
+class _FakeAttachPage:
+    def __init__(self, file_inputs):
+        self._file_inputs = file_inputs
+
+    def locator(self, selector):
+        assert selector == "input[type='file']"
+        return self._file_inputs
+
+
+def test_attach_reference_stops_after_first_input_registers(monkeypatch, tmp_path):
+    """Dup-attach fix: image fed one-at-a-time; stop once preview registers.
+
+    Guards against feeding the reference to EVERY file input (which doubled the
+    reference chip on the active composer input)."""
+    ref = tmp_path / "persona.png"
+    ref.write_bytes(b"fake ref image")
+
+    set_log: list[int] = []
+    file_inputs = _FakeFileInputs(n=3, set_log=set_log)
+    driver = ChatGPTImageDriver(page=_FakeAttachPage(file_inputs))
+
+    # preview count: 0 before any set; jumps to 1 right after the first set.
+    async def preview_count():
+        return 1 if set_log else 0
+
+    async def click_first_visible(selectors, *, timeout_ms=1500):
+        return True
+
+    async def fake_pause(*args, **kwargs):
+        return None
+
+    async def fake_sleep(_):
+        return None
+
+    monkeypatch.setattr(driver, "_attachment_preview_count", preview_count)
+    monkeypatch.setattr(driver, "_click_first_visible", click_first_visible)
+    monkeypatch.setattr(chatgpt_image, "human_pause", fake_pause)
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    asyncio.run(driver._attach_reference_image(ref))
+
+    # Only the FIRST input was fed — no doubled attach across the other inputs.
+    assert set_log == [0]

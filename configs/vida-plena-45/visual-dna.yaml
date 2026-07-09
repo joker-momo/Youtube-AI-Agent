@@ -237,11 +237,11 @@ visual_buckets:
       es: ["cansado", "cansada", "rigidez", "levantarte", "te notas", "energía", "mañana", "rutina"]
       en: ["tired", "stiff", "wake up", "morning", "energy", "routine"]
     pexels_queries_en:
-      - "woman 50 morning kitchen coffee calm"
-      - "middle aged woman home morning routine"
-      - "mature adult morning kitchen coffee"
-      - "man 55 at home stretching morning"
-      - "woman 50 sitting on sofa calm lifestyle"
+      - "mature adult checking day planner at dining table"
+      - "adult 50 opening window morning light"
+      - "mature person preparing walking shoes by doorway"
+      - "man 55 reading evening schedule at table"
+      - "woman 50 adjusting bedside alarm clock"
 
   spain_daily_life:
     weight: 1.35
@@ -300,9 +300,9 @@ visual_buckets:
     pexels_queries_en:
       - "bedroom morning light curtains"
       - "person turning off phone night"
-      - "calm bedroom evening lamp"
-      - "woman relaxing sofa evening"
-      - "tea cup evening home calm"
+      - "hands closing laptop before bed"
+      - "quiet balcony night light Spain"
+      - "alarm clock bedside table dim light"
 
   gentle_movement:
     weight: 1.20

@@ -707,6 +707,7 @@ async def chatgpt_image(payload: ImagePromptRequest) -> dict:
                     out_path=safe_out,
                     response_timeout_ms=payload.response_timeout_ms,
                     aspect_ratio=payload.aspect_ratio,
+                    attachment_path=_safe_attachment_path(payload.attachment_path),
                 )
                 return result
             except LoginRequiredError as exc:

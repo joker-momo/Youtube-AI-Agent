@@ -494,9 +494,11 @@ def test_persona_identity_lock_only_when_reference_configured():
     for plan in locked:
         assert plan["persona_locked"] is True
         assert plan["persona_reference"].endswith("thumbnail_face.jpeg")
-        assert "IDENTITY LOCK" in plan["prompt"]
-        assert "ATTACHED" in plan["prompt"]
+        # Identity is now a TEXT description of the recurring presenter — no
+        # attached reference photo.
+        assert "RECURRING PRESENTER" in plan["prompt"]
+        assert "ATTACHED" not in plan["prompt"]
     unlocked = tp.plan_thumbnail_prompts(_seo_three(), {})
     for plan in unlocked:
         assert plan["persona_locked"] is False
-        assert "IDENTITY LOCK" not in plan["prompt"]
+        assert "RECURRING PRESENTER" not in plan["prompt"]

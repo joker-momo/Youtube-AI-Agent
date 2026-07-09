@@ -25,8 +25,11 @@ def test_env_fallback(monkeypatch, tmp_path):
 
 
 def test_instruction_is_conditional():
-    # Must instruct identity WHEN a person appears, and explicitly allow
-    # person-less scenes to ignore the reference (no forced presenter).
+    # Must instruct identity (text description, no attached photo) WHEN a person
+    # appears, and explicitly forbid a forced presenter in person-less scenes.
     assert "if this image shows a person" in PERSONA_SCENE_INSTRUCTION
-    assert "same woman" in PERSONA_SCENE_INSTRUCTION
+    assert "presenter" in PERSONA_SCENE_INSTRUCTION
+    assert "recognizably consistent" in PERSONA_SCENE_INSTRUCTION
     assert "do NOT add a person" in PERSONA_SCENE_INSTRUCTION
+    # No reference photo is attached anymore.
+    assert "attach" not in PERSONA_SCENE_INSTRUCTION.lower()

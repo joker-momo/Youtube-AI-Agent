@@ -14,14 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from video_agent.color_mix import (
-    resolve_topic_accent_color,
-    resolve_topic_background_color,
-    resolve_topic_text_color,
-)
 from video_agent.orchestrator.orchestrator import create_job
 from video_agent.orchestrator.stages.graphic_images import run_graphic_images_stage
-from video_agent.style_dna import DEFAULT_STYLE as _DEFAULT_STYLE
 
 
 @pytest.fixture(autouse=True)
@@ -103,12 +97,10 @@ def test_image_failure_is_non_fatal(tmp_path):
     assert by_id["scene-02"]["graphic"]["image_ref"] == "jobs/j1/assets/graphic-scene-02.png"  # other scene ok
 
 
-def test_topic_accent_color_flows_into_prompt_as_visible_treatment(tmp_path):
-    """bug-465: the per-video topic accent must read in the prompt as a real,
-    visible design element (ribbon/border/section fill), not the old wording
-    that confined it to 'ONLY as a small accent (one word, an underline, or a
-    marker icon)' -- which made every card collapse to the same fixed brand
-    green/cream regardless of topic_accent_color."""
+def test_graphic_prompt_omits_style_dna_and_prioritizes_scene_content(tmp_path):
+    """User feedback 2026-07-09: long-form ChatGPT graphic cards had collapsed
+    into the same cream/green wellness-magazine template. Graphic image prompts
+    must be content-first and must not inject channel style-DNA palette/mood."""
     scenes = [{
         "id": "scene-01", "layout": "checklist", "caption": "Reduce el azucar",
         "graphic": {"needed": True, "prompt": "x"},
@@ -126,26 +118,20 @@ def test_topic_accent_color_flows_into_prompt_as_visible_treatment(tmp_path):
 
     assert len(captured_prompts) == 1
     prompt = captured_prompts[0]
-    # bug-466: the RAW topic hex is no longer used as-is -- it's blended into the
-    # channel's own brand anchor (OKLab) first, so a clashing topic colour can't
-    # ship raw. The blended resolved_accent_color is what should reach the prompt.
-    resolved = resolve_topic_accent_color(_DEFAULT_STYLE["palette"]["accent"], "#A47A3F")
-    assert resolved["resolved_accent_color"] in prompt
-    assert "ONLY as a small accent" not in prompt  # the old tiny-marker wording is gone
-    # must instruct a real visible surface for the accent, not a marginal touch...
-    assert any(kw in prompt for kw in ("rule", "underline", "border", "tag", "label"))
-    # ...but a REFINED one -- user feedback (2026-07-03) on the first real
-    # regeneration: a bold solid ribbon/banner block made the card look heavy/
-    # cheap and cropped the background photo more than the original. The
-    # instruction must now explicitly rule that out.
-    assert "NEVER a bold solid block, banner, or ribbon" in prompt
-    assert "must NOT crop or crowd the background photo" in prompt
+    assert "CONTENT-FIRST ART DIRECTION" in prompt
+    assert "Use ONLY this brand palette" not in prompt
+    assert "Brand style" not in prompt
+    assert "#A47A3F" not in prompt
+    assert "#F6F1E8" not in prompt
+    assert "#2F6B57" not in prompt
+    assert "wellness-magazine" not in prompt
+    assert "Do NOT force a recurring cream/green" in prompt
+    assert "scene's specific idea" in prompt
 
 
-def test_graphic_metadata_persisted_with_prompt_hash_and_palette(tmp_path):
-    """bug-465/466: per-scene graphic metadata (effective palette + prompt hash
-    + colour resolution) must be persisted so a future run can detect whether
-    the prompt/palette that generated the cached PNG has since changed."""
+def test_graphic_metadata_records_style_dna_disabled(tmp_path):
+    """The prompt hash is still persisted for cache safety, but style DNA is no
+    longer part of long-form graphic generation."""
     scenes = [{
         "id": "scene-01", "layout": "checklist", "caption": "Reduce el azucar",
         "graphic": {"needed": True, "prompt": "x"},
@@ -157,32 +143,15 @@ def test_graphic_metadata_persisted_with_prompt_hash_and_palette(tmp_path):
 
     graphic = json.loads(out.read_text())["scenes"][0]["graphic"]
     assert isinstance(graphic.get("prompt_hash"), str) and len(graphic["prompt_hash"]) > 0
-    resolved = resolve_topic_accent_color(_DEFAULT_STYLE["palette"]["accent"], "#A47A3F")
-    assert graphic["raw_topic_accent_color"] == "#A47A3F"
-    assert graphic["brand_anchor_color"] == _DEFAULT_STYLE["palette"]["accent"]
-    assert graphic["resolved_accent_color"] == resolved["resolved_accent_color"]
-    assert graphic["mix_ratio"] == 0.3
-    assert graphic.get("effective_palette", {}).get("accent") == resolved["resolved_accent_color"]
-
-    # bug-467: background/text now flex per-video too, reusing the same raw
-    # topic accent hex but blended much lighter (12%) so the card stays close
-    # to the channel's cream/text identity.
-    bg_resolved = resolve_topic_background_color(_DEFAULT_STYLE["palette"]["background"], "#A47A3F")
-    text_resolved = resolve_topic_text_color(_DEFAULT_STYLE["palette"]["text"], "#A47A3F")
-    assert graphic["brand_background_color"] == _DEFAULT_STYLE["palette"]["background"]
-    assert graphic["resolved_background_color"] == bg_resolved["resolved_background_color"]
-    assert graphic["background_mix_ratio"] == 0.12
-    assert graphic["brand_text_color"] == _DEFAULT_STYLE["palette"]["text"]
-    assert graphic["resolved_text_color"] == text_resolved["resolved_text_color"]
-    assert graphic["text_mix_ratio"] == 0.12
-    assert graphic.get("effective_palette", {}).get("background") == bg_resolved["resolved_background_color"]
-    assert graphic.get("effective_palette", {}).get("text") == text_resolved["resolved_text_color"]
+    assert graphic["style_dna_disabled"] is True
+    assert "effective_palette" not in graphic
+    assert "resolved_accent_color" not in graphic
 
 
-def test_stale_prompt_hash_forces_regeneration(tmp_path):
-    """bug-465: a cached PNG generated under a DIFFERENT topic_accent_color
-    must be regenerated, not silently reused with its stale colour treatment,
-    when the prompt hash it was generated from no longer matches."""
+def test_topic_accent_change_does_not_regenerate_content_first_graphic(tmp_path):
+    """Changing SEO topic colour used to invalidate every graphic via style DNA.
+    Long-form graphics are now content-first, so colour/DNA drift must not force
+    regeneration when scene content is unchanged."""
     scenes = [{
         "id": "scene-01", "layout": "checklist", "caption": "Reduce el azucar",
         "graphic": {"needed": True, "prompt": "x"},
@@ -205,15 +174,12 @@ def test_stale_prompt_hash_forces_regeneration(tmp_path):
 
     asyncio.run(run_graphic_images_stage(job_dir, None, _fake_image_fn(written)))
 
-    assert len(written) == 2  # regenerated, not reused
+    assert len(written) == 1  # reused; colour/DNA is not part of the prompt now
     second_doc = json.loads((job_dir / "json" / "scenes.json").read_text())
     second_graphic = second_doc["scenes"][0]["graphic"]
     second_hash = second_graphic["prompt_hash"]
-    assert second_hash != first_hash
-    resolved = resolve_topic_accent_color(_DEFAULT_STYLE["palette"]["accent"], "#2F6B57")
-    assert second_graphic["raw_topic_accent_color"] == "#2F6B57"
-    assert second_graphic["resolved_accent_color"] == resolved["resolved_accent_color"]
-    assert second_graphic["effective_palette"]["accent"] == resolved["resolved_accent_color"]
+    assert second_hash == first_hash
+    assert second_graphic["style_dna_disabled"] is True
 
 
 def test_missing_prompt_hash_forces_regeneration(tmp_path):

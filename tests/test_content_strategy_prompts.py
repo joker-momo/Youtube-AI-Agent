@@ -34,10 +34,12 @@ def test_script_prompt_requires_actionable_specific_advice():
         {"topic": "plato saludable después de los 45", "job_id": "job-1"},
     )
 
-    assert "1/2 plato verduras" in prompt
-    assert "1/4 proteína" in prompt
-    assert "1/4 carbohidrato" in prompt
-    assert "evita picar por ansiedad" in prompt
+    assert "topic-specific guidance" in prompt
+    assert "timing" in prompt
+    assert "amounts" in prompt
+    assert "food swaps" in prompt
+    assert "do not default to the same plate formula" in prompt
+    assert "1/2 plato verduras" not in prompt
     assert "Do not leave advice as generic slogans" in prompt
 
 

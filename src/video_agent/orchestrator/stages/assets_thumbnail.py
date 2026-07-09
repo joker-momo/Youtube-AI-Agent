@@ -11,6 +11,10 @@ from video_agent.contracts import (
     ARTIFACT_THUMBNAIL,
     EVENT_LOG,
 )
+from video_agent.audience_age import resolve_target_min_age
+from video_agent.orchestrator.image_prompt_log import (
+    safe_log_image_prompt as _log_image_prompt,
+)
 from video_agent.orchestrator.job_state import load_job
 from video_agent.orchestrator.stages._shared import (
     StageInputMissingError,
@@ -107,6 +111,18 @@ _ASSET_GEN_PROMPT_PREFIX = (
     "Photorealistic, 16:9 cinematic, soft natural light, no text overlay, "
     "no watermark, no logos. Audience: adultos 45+. Scene visual: "
 )
+
+
+def _asset_gen_prefix(min_age: int) -> str:
+    """Scene-image prefix targeting THIS video's audience age.
+
+    A 60+ idea must render people in their 60s, not a hardcoded 45.
+    ``_ASSET_GEN_PROMPT_PREFIX`` is kept for back-compat (default 45).
+    """
+    return (
+        "Photorealistic, 16:9 cinematic, soft natural light, no text overlay, "
+        f"no watermark, no logos. Audience: adultos {min_age}+. Scene visual: "
+    )
 
 
 def _scene_project_name(job_id: str, scene_id: str) -> str:
@@ -303,32 +319,44 @@ async def generate_scene_asset(
     assets_dir.mkdir(parents=True, exist_ok=True)
     out_path = assets_dir / f"{scene_id}.png"
     project_name = _scene_project_name(state.job_id, scene_id)
-    prompt = _ASSET_GEN_PROMPT_PREFIX + visual_prompt
 
-    # Presenter identity: attach the configured reference photo so any person in
-    # the scene image IS the channel presenter; person-less scenes ignore it.
+    # Per-video audience age: a 60+ idea must render 60+ people, not a hardcoded
+    # 45. Resolve from the SEO title (carries the idea's age phrase) + this
+    # scene's own text, falling back to the channel's configured audience floor.
+    channel_cfg = read_yaml(channel_path) or {}
+    seo_title = ""
+    try:
+        seo_path = _resolve_artifact(job_dir, ARTIFACT_SEO, "seo.json")
+        if seo_path.exists():
+            seo_title = str((json.loads(seo_path.read_text(encoding="utf-8")) or {}).get("title") or "")
+    except Exception:
+        seo_title = ""
+    min_age = resolve_target_min_age(channel_cfg, seo_title, str(visual_prompt))
+    prompt = _asset_gen_prefix(min_age) + visual_prompt
+
+    # Presenter identity is described in TEXT (no reference photo attached): any
+    # person in the scene image is the channel presenter; person-less scenes are
+    # unaffected. resolve_persona_reference is reused only as "presenter configured?"
     from video_agent.persona import PERSONA_SCENE_INSTRUCTION, resolve_persona_reference
 
-    persona_ref = resolve_persona_reference(read_yaml(channel_path) or {})
-    kwargs = {}
-    if persona_ref:
+    if resolve_persona_reference(read_yaml(channel_path) or {}):
         prompt = prompt + PERSONA_SCENE_INSTRUCTION
-        kwargs["attachment_path"] = persona_ref
 
-    try:
-        result = await image_fn(
-            prompt=prompt,
-            project_name=project_name,
-            out_path=str(out_path),
-            **kwargs,
-        )
-    except TypeError:
-        # Legacy/mock image_fn without attachment support.
-        result = await image_fn(
-            prompt=prompt,
-            project_name=project_name,
-            out_path=str(out_path),
-        )
+    _log_image_prompt(
+        job_dir,
+        stage="assets_chatgpt",
+        kind="scene_asset",
+        prompt=prompt,
+        scene_id=scene_id,
+        out_path=str(out_path),
+        project_name=project_name,
+    )
+
+    result = await image_fn(
+        prompt=prompt,
+        project_name=project_name,
+        out_path=str(out_path),
+    )
 
     # Update scenes.json -> asset_refs.primary with the job-relative path.
     rel = str(out_path.relative_to(job_dir))
@@ -533,7 +561,15 @@ async def auto_thumbnail_image_stage(
         )
         img.save(jpg_path, "JPEG", quality=94, optimize=True)
 
-    def _write_prompt_log(index: int, prompt_text: str, variant: dict[str, str]) -> None:
+    def _write_prompt_log(
+        index: int,
+        prompt_text: str,
+        variant: dict[str, str],
+        *,
+        strategy: str | None = None,
+        out_path: str | None = None,
+        project_name: str | None = None,
+    ) -> None:
         log_path = prompt_log_dir / f"thumbnail_prompt_{index}.md"
         body = (
             f"# Thumbnail prompt — variant {index}\n\n"
@@ -543,6 +579,18 @@ async def auto_thumbnail_image_stage(
             f"```text\n{prompt_text}\n```\n"
         )
         log_path.write_text(body, encoding="utf-8")
+        # Unified per-job image-prompt audit trail (thumbnail + scene asset +
+        # graphic all funnel here) — record the exact prompt sent to ChatGPT.
+        _log_image_prompt(
+            job_dir,
+            stage=stage_name,
+            kind="thumbnail",
+            prompt=prompt_text,
+            index=index,
+            strategy=strategy,
+            out_path=out_path,
+            project_name=project_name,
+        )
 
     has_batch = hasattr(image_fn, "generate_images")
     if has_batch:
@@ -552,22 +600,23 @@ async def auto_thumbnail_image_stage(
         project_name = f"{state.job_id[:30]}-thumbnails"[:45]
         for i, (plan, variant) in enumerate(zip(plans, variants), start=1):
             prompt = plan["prompt"]
-            _write_prompt_log(i, prompt, variant)
+            _write_prompt_log(
+                i, prompt, variant,
+                strategy=plan.get("visual_strategy"),
+                out_path=str((assets_dir / f"thumbnail_{i}.png").resolve()),
+                project_name=project_name,
+            )
             prompts.append(prompt)
             png_paths.append((assets_dir / f"thumbnail_{i}.png").resolve())
             jpg_paths.append((job_dir / "outputs" / f"thumbnail_{i}.jpg").resolve())
 
-        # Persona identity lock: attach the configured presenter reference photo
-        # to every generation so the SAME face appears across all thumbnails.
-        attachment = str(
-            (channel_config.get("thumbnail") or {}).get("persona_reference") or ""
-        ).strip() or None
+        # Presenter identity is described in the prompt text (build_thumbnail_prompt),
+        # not attached as a reference photo — the attachment path was unreliable.
         try:
             await image_fn.generate_images(
                 prompts=prompts,
                 project_name=project_name,
                 out_paths=[str(p) for p in png_paths],
-                **({"attachment_path": attachment} if attachment else {}),
             )
             for i, (png_path, jpg_path, variant) in enumerate(
                 zip(png_paths, jpg_paths, variants), start=1
@@ -607,9 +656,14 @@ async def auto_thumbnail_image_stage(
 
             thumb_text = variant["thumbnail_text"]
             prompt = plan["prompt"]
-            _write_prompt_log(i, prompt, variant)
             project_name = f"{state.job_id[:30]}-thumb{i}"[:45]
             png_path = (assets_dir / f"thumbnail_{i}.png").resolve()
+            _write_prompt_log(
+                i, prompt, variant,
+                strategy=plan.get("visual_strategy"),
+                out_path=str(png_path),
+                project_name=project_name,
+            )
             jpg_path = (job_dir / "outputs" / f"thumbnail_{i}.jpg").resolve()
 
             try:

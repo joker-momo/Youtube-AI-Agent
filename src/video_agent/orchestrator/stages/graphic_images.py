@@ -22,12 +22,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-from video_agent.color_mix import (
-    resolve_topic_accent_color,
-    resolve_topic_background_color,
-    resolve_topic_text_color,
-)
+from video_agent.audience_age import resolve_target_min_age
 from video_agent.contracts import ARTIFACT_SCENES, ARTIFACT_SEO, EVENT_LOG, repo_root
+from video_agent.orchestrator.image_prompt_log import (
+    safe_log_image_prompt as _log_image_prompt,
+)
 from video_agent.orchestrator.job_state import load_job
 from video_agent.orchestrator.stages._shared import (
     StageInputMissingError,
@@ -37,8 +36,6 @@ from video_agent.orchestrator.stages._shared import (
     dag_mode,
 )
 from video_agent.storage.atomic import atomic_write_json
-from video_agent.style_dna import DEFAULT_STYLE as _DEFAULT_STYLE
-from video_agent.style_dna import load_style_dna
 from video_agent.utils.json_io import read_json, read_yaml
 from video_agent.utils.logging import EventLogger
 from video_agent.visual.spans import GRAPHIC_LAYOUTS
@@ -55,15 +52,22 @@ def _late_recovery_window_sec() -> float:
     20260704-130051). Read at run time so tests can set
     GRAPHIC_LATE_RECOVERY_WINDOW_SEC=0 to skip the wait."""
     return float(os.environ.get("GRAPHIC_LATE_RECOVERY_WINDOW_SEC", "180"))
-_PROMPT_PREFIX = (
-    "Premium editorial illustration for a Spanish-language wellness video aimed at "
-    "adults 45+. Calm, trustworthy, warm palette, clean modern typography. This image "
-    "is shown FULL-SCREEN as-is with NO captions added afterwards, so all on-screen "
-    "text must be rendered directly INTO the image. "
-    "Anatomy must look natural: avoid close-up hands, fingers, or utensils held mid-air; "
-    "keep hands relaxed, partially out of frame or softly out of focus; absolutely no "
-    "malformed hands, extra fingers, or distorted faces. "
-)
+def _prompt_prefix(min_age: int) -> str:
+    """Content-first image prefix targeting THIS video's audience age.
+
+    ``min_age`` follows the idea (a 60+ idea renders 60+ people), not a hardcoded
+    45 — resolved from the video's SEO title / channel floor by the stage.
+    """
+    return (
+        "Content-first editorial image for a Spanish-language YouTube video aimed at "
+        f"adults {min_age}+. The visual concept must come from THIS scene's narration and "
+        "background prompt, not from a fixed channel template. This image "
+        "is shown FULL-SCREEN as-is with NO captions added afterwards, so all on-screen "
+        "text must be rendered directly INTO the image. "
+        "Anatomy must look natural: avoid close-up hands, fingers, or utensils held mid-air; "
+        "keep hands relaxed, partially out of frame or softly out of focus; absolutely no "
+        "malformed hands, extra fingers, or distorted faces. "
+    )
 
 
 def _text_to_render(scene: dict[str, Any]) -> str:
@@ -98,62 +102,43 @@ def _load_channel_name(channel_path: Path | None) -> str:
         return ""
 
 
-def _brand_style(style: dict[str, Any]) -> str:
-    """A brand-style directive (palette hex + mood + layout) so ChatGPT renders the
-    card ON-brand — warm editorial, not the generic navy/white/yellow clickbait look."""
-    # Colours come entirely from the channel palette (no hardcoded hex or colour names);
-    # fall back to the default-style palette so this works for ANY channel's brand.
-    dp = _DEFAULT_STYLE["palette"]
-    p = (style or {}).get("palette") or dp
-    bg = p.get("background", dp["background"])
-    primary = p.get("primary", dp["primary"])
-    sec = p.get("secondary", dp["secondary"])
-    accent = p.get("accent", dp["accent"])
-    text = p.get("text", dp["text"])
-    mood = ", ".join((style or {}).get("visual_mood") or _DEFAULT_STYLE["visual_mood"])
+def _content_first_style() -> str:
+    """Scene-specific art direction for long-form graphic images.
+
+    User feedback (2026-07-09): channel style-DNA made ChatGPT graphics collapse
+    into the same cream/green wellness card, flattening the creative content from
+    the script. Long-form graphics should vary with the scene; thumbnails keep
+    their own prompt path and are not affected here.
+    """
     return (
-        f"Brand style — {mood} editorial for a wellness channel for adults 45+ (NOT clickbait). "
-        f"Use ONLY this brand palette (hex): background {bg}, primary panel {primary}, secondary "
-        f"{sec}, accent {accent}, text {text}. Set the text block on a SOFT, LIGHT panel/card in "
-        f"the background colour {bg} (preferred — keeps the card feeling airy, calm and premium) "
-        f"with text {text} on top, generous negative space around the words. Only use the darker "
-        f"primary colour {primary} for a SMALL secondary element (a slim tag, label chip, or thin "
-        "divider) — never as the dominant panel fill, so the card never reads as a heavy solid "
-        f"colour block. Give the card a REFINED, deliberate accent touch in {accent} — a slim "
-        "colour rule/underline beneath the heading, a fine border line around the panel, or a "
-        "small colour tag/label — occupying roughly 5-10% of the card, clearly visible as an "
-        "intentional per-topic highlight but NEVER a bold solid block, banner, or ribbon that "
-        f"dominates the composition. Use {sec} only for small supporting icons/dividers. Do NOT "
-        "use navy, pure black, stark white blocks, neon, or a harsh full-bleed gradient. Keep the "
-        "composition airy: the panel/card must stay compact and must NOT crop or crowd the "
-        "background photo or its subject — leave the photo's main subject clearly visible with "
-        "generous breathing room, like a premium magazine pull-quote overlay, not a full-width "
-        "banner. Lay it out as a calm, premium wellness-magazine card with generous padding, "
-        "rounded corners and a clear text hierarchy. Give the panel a soft drop shadow and gentle "
-        "depth so it feels premium and tactile, never flat. "
+        "CONTENT-FIRST ART DIRECTION: use the scene's specific idea, setting, object, "
+        "tension, and action as the main creative driver. Do NOT force a recurring "
+        "cream/green brand palette, fixed soft panel, recurring channel card, or generic "
+        "living-room/kitchen template unless the scene itself calls for it. Choose colours, "
+        "materials, camera angle, background, and graphic treatment that fit the concrete "
+        "moment described by this scene. Keep the text large, sharp, and legible at video "
+        "size, but let the composition vary from scene to scene."
     )
 
 
 _CARD_KIND = {
     "hook": "a bold full-bleed hook TITLE BANNER — headline set VERY large across the whole frame with minimal panel, no bullet list and no check-marks",
-    "checklist": "a clean checklist card on a soft side panel, each item on its own row led by a small check-mark in the brand accent colour",
-    "quote": "an editorial quote card: one large centered sentence in quotation marks on a soft LIGHT background-colour panel (NOT the primary-colour panel), no check-marks, no bullet list",
+    "checklist": "a clean checklist card, each item on its own row led by a small check-mark or clear marker",
+    "quote": "an editorial quote card: one large centered sentence in quotation marks with a visual treatment that fits the scene, no check-marks, no bullet list",
     "cta": "a call-to-action card with a clear button",
-    "warning": "a cautionary card using cross / caution markers in the brand secondary colour (not check-marks), with an 'avoid this' tone",
+    "warning": "a cautionary card using cross / caution markers (not check-marks), with an 'avoid this' tone",
     "stat": "a bold statistic card built around ONE ENORMOUS number as the hero, the number filling roughly half the card with only a small label — center or left aligned",
     "steps": "a numbered step-by-step timeline card on a side panel: ordered items 1, 2, 3 connected by arrows or chevrons, no check-marks",
-    "comparison": "a two-column comparison card: two options side by side, each on its own half, separated by a clear central divider",
-    "myth": "a myth-versus-fact card: two stacked contrasting rows, a secondary-colour-cross 'Mito' row above an accent-check 'Realidad' row",
-    "plate_map": "a top-down 'healthy plate' card: ONE round plate of real food, each component labelled DIRECTLY on/beside its section with a short marker line in the brand colours",
+    "comparison": "a two-column comparison card: two options side by side, each on its own half, separated by a clear central divider, using neutral equal-weight colours for both halves",
+    "myth": "a myth-versus-fact card: two stacked contrasting rows, a cross/caution 'Mito' row above a check/confirmation 'Realidad' row",
+    "plate_map": "a top-down 'healthy plate' card: ONE round plate of real food, each component labelled DIRECTLY on/beside its section with a short marker line",
     "recipe_snapshot": "a recipe-snapshot card: 2-3 real food photos as clean side-by-side tiles, each with a short label — a practical example, not a text list",
     "quote_portrait": (
         "a magazine-style quote-portrait card: ONE large quotation beside a warm candid "
         "portrait of an adult 60+, editorial cover feel, no boxed text panel — but the "
-        "accent colour still needs a real, sizable presence without a panel to put a "
-        "ribbon on: render the opening quotation mark OVERSIZED and solid in the accent "
-        "colour (large enough to read as a deliberate graphic element, not a small glyph), "
-        "AND add a bold accent-coloured rule/bar beneath the quote spanning at least half "
-        "its width"
+        "graphic element still needs a real, sizable presence without a boxed panel: "
+        "render the opening quotation mark OVERSIZED and solid, AND add a bold rule/bar "
+        "beneath the quote spanning at least half its width"
     ),
     "evidence_nugget": "an evidence-nugget card: ONE number/fact as a large documentary-style lower-third over a real photo, serious and credible, minimal extra text",
     "do_dont": "a do-versus-don't card: TWO real photos side by side — the worse choice desaturated with a cross marker, the better choice bright with a check marker",
@@ -194,18 +179,29 @@ def _content_lines(layout: str, title: str, body: str, bullets: list[str], cta: 
             lines.append(
                 f'TWO side-by-side columns separated by a central divider — left: "{title}", right: "{body}".'
             )
+        # Colour semantics: the two sides may be two EXTREMES or two neutral
+        # options, not a good-vs-bad pair. Do NOT default to red=bad / green=good
+        # (real incident: a "green" column labelled "too little" read as the
+        # recommended choice and contradicted the heading). Only use a
+        # green/recommended tint if ONE side is explicitly the correct answer.
+        lines.append(
+            "Colour both columns with NEUTRAL, equal-weight brand tones and a plain "
+            "central divider. Do NOT default to a red (bad) versus green (good) scheme; "
+            "use a green/check or red/cross treatment ONLY if one column is explicitly the "
+            "recommended choice — otherwise neither side may look 'correct' by colour alone."
+        )
         return lines
     if layout == "myth":
         if title:
-            lines.append(f'Top row labelled "Mito" with a cross icon in the brand secondary (caution) colour: "{title}".')
+            lines.append(f'Top row labelled "Mito" with a cross or caution icon: "{title}".')
         if body:
-            lines.append(f'Bottom row labelled "Realidad" with a check icon in the brand accent colour: "{body}".')
+            lines.append(f'Bottom row labelled "Realidad" with a check or confirmation icon: "{body}".')
         return lines
     if layout == "plate_map":
         if title:
             lines.append(f'Small heading: "{title}".')
         if bullets:
-            lines.append(f"Label each plate component DIRECTLY on/beside its portion with a short marker line (brand colours): {items}.")
+            lines.append(f"Label each plate component DIRECTLY on/beside its portion with a short marker line: {items}.")
         return lines
     if layout == "recipe_snapshot":
         if title:
@@ -228,17 +224,16 @@ def _content_lines(layout: str, title: str, body: str, bullets: list[str], cta: 
         bad = bullets[0] if len(bullets) >= 1 else title
         good = bullets[1] if len(bullets) >= 2 else body
         if bad:
-            lines.append(f'LEFT photo (the WORSE choice): desaturated, with a cross marker in the brand secondary colour — "{bad}".')
+            lines.append(f'LEFT photo (the WORSE choice): desaturated, with a cross marker — "{bad}".')
         if good:
-            lines.append(f'RIGHT photo (the BETTER choice): bright, with a check marker in the brand accent colour — "{good}".')
+            lines.append(f'RIGHT photo (the BETTER choice): bright, with a check marker — "{good}".')
         return lines
     if layout == "warning":
         if title:
             lines.append(f'Heading: "{title}".')
         if bullets:
             lines.append(
-                "Each item on its own row led by a cross / caution icon in the brand secondary "
-                f"colour (not a check-mark): {items}."
+                f"Each item on its own row led by a cross / caution icon (not a check-mark): {items}."
             )
         if body:
             lines.append(f'Supporting line: "{body}".')
@@ -254,11 +249,11 @@ def _content_lines(layout: str, title: str, body: str, bullets: list[str], cta: 
         if body:
             lines.append(f'At most one short support line beneath it: "{body}".')
         return lines
-    # checklist + cta + default: the classic heading + accent-coloured check-mark rows.
+    # checklist + cta + default: heading plus readable row markers.
     if title:
         lines.append(f'Heading: "{title}".')
     if bullets:
-        lines.append(f"Checklist items, each on its own row with a small check-mark icon in the brand accent colour: {items}.")
+        lines.append(f"Checklist items, each on its own row with a small check-mark or clear marker icon: {items}.")
     if body:
         lines.append(f'Supporting line: "{body}".')
     if cta and layout == "cta":
@@ -299,7 +294,7 @@ def _graphic_prompt(
             + " ".join(lines)
             + f" Set every word in {font} (or a near-identical clean geometric bold sans-serif). "
             "Lay it out with a clear visual hierarchy; make each line LARGE and BOLD with HIGH "
-            "CONTRAST against the brand panel described above so it is crisp and easy to read, "
+            "CONTRAST against the chosen background or panel so it is crisp and easy to read, "
             "never faint or washed out. Spell everything exactly with correct Spanish accents; "
             "add no other text."
         )
@@ -362,70 +357,56 @@ async def run_graphic_images_stage(job_dir: Path, channel_path: Path | None, ima
     scene_doc = read_json(scenes_path) or {}
     logger = EventLogger(job_dir / EVENT_LOG)
     assets_dir = job_dir / "assets"
-    style = load_style_dna(channel_path)
-    # Per-video topic accent (chosen by ChatGPT in the seo stage) used to replace
-    # the brand accent swatch OUTRIGHT — a topic colour that clashes with the
-    # channel palette could make graphics look off-brand or jarring (bug-466).
-    # Blend it into the channel's OWN accent (OKLab space) instead: every video
-    # still reads as the same channel (anchor dominates, default 70%) while each
-    # topic gets its own highlight shade (30%), and a colour that would clash
-    # raw gets pulled back toward brand-safe territory rather than used as-is.
-    brand_anchor_color = (style.get("palette") or {}).get("accent") or _DEFAULT_STYLE["palette"]["accent"]
-    brand_background_color = (style.get("palette") or {}).get("background") or _DEFAULT_STYLE["palette"]["background"]
-    brand_text_color = (style.get("palette") or {}).get("text") or _DEFAULT_STYLE["palette"]["text"]
-    raw_topic_accent_color = None
-    seo_path = _resolve_artifact(job_dir, ARTIFACT_SEO, "seo.json")
-    if seo_path.exists():
-        seo_doc = read_json(seo_path) or {}
-        raw_topic_accent_color = seo_doc.get("topic_accent_color")
-    color_resolution = resolve_topic_accent_color(brand_anchor_color, raw_topic_accent_color)
-    # Background/text also flex per-video, reusing the SAME topic accent hex
-    # (no separate SEO field) but blended much lighter (12% vs the accent's
-    # 30%) since they're large-area colours where a heavy blend would drift
-    # the card off the channel's recognisable cream/text tone and risks
-    # eroding text/background contrast.
-    background_resolution = resolve_topic_background_color(brand_background_color, raw_topic_accent_color)
-    text_resolution = resolve_topic_text_color(brand_text_color, raw_topic_accent_color)
-    style = {
-        **style,
-        "palette": {
-            **(style.get("palette") or {}),
-            "accent": color_resolution["resolved_accent_color"],
-            "background": background_resolution["resolved_background_color"],
-            "text": text_resolution["resolved_text_color"],
-        },
-    }
     # Card typography is locked to Montserrat to match the Remotion subtitle font
     # (one typeface across the whole video). Overrides any style-DNA headline font.
     font = "Montserrat"
-    brand = _brand_style(style)
+    brand = _content_first_style()
     channel_name = _load_channel_name(channel_path)
 
-    effective_palette = dict(style.get("palette") or {})
+    # Per-video audience age: a 60+ idea must render 60+ people, not a hardcoded
+    # 45. Resolve from the SEO title (carries the idea's age phrase) + early
+    # scene narration, falling back to the channel's configured audience floor.
+    channel_cfg = read_yaml(channel_path) if channel_path else {}
+    seo_title = ""
+    try:
+        seo_path = _resolve_artifact(job_dir, ARTIFACT_SEO, "seo.json")
+        if seo_path.exists():
+            seo_title = str((read_json(seo_path) or {}).get("title") or "")
+    except Exception:
+        seo_title = ""
+    early_narration = " ".join(
+        str(s.get("narration") or "") for s in (scene_doc.get("scenes") or [])[:6]
+    )
+    min_age = resolve_target_min_age(channel_cfg, seo_title, early_narration)
+
     generated = 0
     failed = 0
     def _stamp_graphic(scene: dict, scene_id: str, out_path: Path, prompt_hash: str) -> dict:
         """Persist the full per-scene graphic metadata block (image_ref, prompt
-        hash, resolved colour trail) — shared by the reuse, fresh-generation and
+        hash, and style-DNA status) — shared by the reuse, fresh-generation and
         late-recovery paths so the three can never drift apart."""
         existing = scene.get("graphic") if isinstance(scene.get("graphic"), dict) else {}
         graphic = dict(existing)
         graphic.pop("failed", None)
         graphic.pop("error", None)
+        for key in (
+            "effective_palette",
+            "raw_topic_accent_color",
+            "brand_anchor_color",
+            "resolved_accent_color",
+            "mix_ratio",
+            "brand_background_color",
+            "resolved_background_color",
+            "background_mix_ratio",
+            "brand_text_color",
+            "resolved_text_color",
+            "text_mix_ratio",
+        ):
+            graphic.pop(key, None)
         graphic["needed"] = True
         graphic["image_ref"] = _publish_graphic(state.job_id, out_path)
         graphic["prompt_hash"] = prompt_hash
-        graphic["effective_palette"] = effective_palette
-        graphic["raw_topic_accent_color"] = color_resolution["raw_topic_accent_color"]
-        graphic["brand_anchor_color"] = color_resolution["brand_anchor_color"]
-        graphic["resolved_accent_color"] = color_resolution["resolved_accent_color"]
-        graphic["mix_ratio"] = color_resolution["mix_ratio"]
-        graphic["brand_background_color"] = background_resolution["brand_background_color"]
-        graphic["resolved_background_color"] = background_resolution["resolved_background_color"]
-        graphic["background_mix_ratio"] = background_resolution["mix_ratio"]
-        graphic["brand_text_color"] = text_resolution["brand_text_color"]
-        graphic["resolved_text_color"] = text_resolution["resolved_text_color"]
-        graphic["text_mix_ratio"] = text_resolution["mix_ratio"]
+        graphic["style_dna_disabled"] = True
         scene["graphic"] = graphic
         return graphic
 
@@ -484,9 +465,19 @@ async def run_graphic_images_stage(job_dir: Path, channel_path: Path | None, ima
                 {"scene_id": scene_id, "reason": "prompt_hash_changed", "old_hash": stored_hash, "new_hash": prompt_hash},
             )
         pre_attempt_mtime_ns = out_path.stat().st_mtime_ns if out_path.exists() else None
+        full_prompt = _prompt_prefix(min_age) + prompt
+        _log_image_prompt(
+            job_dir,
+            stage=_STAGE,
+            kind="graphic",
+            prompt=full_prompt,
+            scene_id=scene_id,
+            out_path=str(out_path),
+            project_name=f"{state.job_id}-graphic-{scene_id}",
+        )
         try:
             await image_fn(
-                prompt=_PROMPT_PREFIX + prompt,
+                prompt=full_prompt,
                 project_name=f"{state.job_id}-graphic-{scene_id}",
                 out_path=str(out_path),
             )

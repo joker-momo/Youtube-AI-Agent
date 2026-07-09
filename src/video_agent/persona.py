@@ -1,10 +1,11 @@
 """Channel presenter identity for AI-generated imagery.
 
-One presenter face across every AI-generated image that shows a person —
-long-form thumbnails, long-form scene images, and the Shorts AI-image tier —
-driven by the reference photo configured at ``thumbnail.persona_reference``
-(brand-wide key). The photo is attached to each ChatGPT generation and the
-prompt carries a conditional identity instruction, so scenes without people
+One presenter identity across every AI-generated image that shows a person —
+long-form thumbnails, long-form scene images, and the Shorts AI-image tier.
+Identity is guided by a TEXT description (no reference photo is attached to the
+ChatGPT generation): the attachment path was dropped because it was unreliable
+(echoed the reference photo verbatim, upload-registration failures). The prompt
+carries a conditional identity instruction, so scenes without people
 (food/object/hands close-ups) are unaffected.
 """
 
@@ -14,16 +15,16 @@ import os
 from pathlib import Path
 from typing import Any
 
-# Appended to scene-image prompts whenever the reference photo is attached.
-# Conditional on purpose: the same attachment goes to person-less shots too,
-# and ChatGPT must not force the presenter into them.
+# Text description of the recurring presenter, appended to scene-image prompts
+# when a presenter is configured. No photo is attached — identity is described
+# in words. Conditional on purpose: person-less shots must NOT get a person.
 PERSONA_SCENE_INSTRUCTION = (
-    "\n\nPRESENTER IDENTITY (reference photo attached): if this image shows a "
-    "person, the person MUST be the same woman as in the attached photo — same "
-    "face, same silver-gray bob haircut, same age — recognizably her. Wardrobe, "
-    "pose and setting follow the scene description. If the scene needs no person "
-    "(object, food, or hands-only close-up), ignore the reference photo entirely "
-    "and do NOT add a person."
+    "\n\nPRESENTER IDENTITY: if this image shows a person, depict the channel's "
+    "recurring presenter — a natural-looking mature Mediterranean Spanish woman "
+    "(around 55-65) with a silver-gray bob haircut, warm and trustworthy, kept "
+    "recognizably consistent across images. Wardrobe, pose and setting follow the "
+    "scene description. If the scene needs no person (object, food, or hands-only "
+    "close-up), do NOT add a person."
 )
 
 

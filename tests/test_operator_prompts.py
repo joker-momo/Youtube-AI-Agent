@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from video_agent.operator import (
+    _chatgpt_scenes_batch_prompt,
     _chatgpt_scenes_plan_prompt,
     _chatgpt_scenes_prompt,
     _chatgpt_script_prompt,
@@ -144,6 +145,42 @@ def test_script_prompt_contains_spain_locale_guidance():
     assert "ordenador" in prompt
 
 
+def test_script_prompt_uses_filtered_script_context_not_full_channel_config():
+    cfg = {
+        **SPAIN_CONFIG,
+        "style_dna": {"path": "configs/vida-plena-45/style-dna.json"},
+        "visuals": {"visual_dna_path": "configs/vida-plena-45/visual-dna.yaml"},
+        "thumbnail": {"persona_reference": "configs/vida-plena-45/persona/thumbnail_face.jpeg"},
+        "personas": [{"id": "maria", "profile_path": "configs/vida-plena-45/personas/maria.md"}],
+        "render": {"concurrency": "auto", "fps": 30},
+        "branding": {"intro_video_path": "asset_library/source/intro.mp4"},
+        "niche": {
+            "category": "health_wellness",
+            "sub_niches": ["nutrition_45plus", "sleep_quality"],
+            "avoid_topics": ["miracle_cures"],
+        },
+    }
+
+    prompt = _chatgpt_script_prompt(cfg, {"topic": "dormir mejor"})
+
+    assert "Script context (filtered from channel config" in prompt
+    assert "Channel config:" not in prompt
+    assert "style_dna" not in prompt
+    assert "style-dna" not in prompt
+    assert "visual_dna" not in prompt
+    assert "visual-dna" not in prompt
+    assert "thumbnail_face" not in prompt
+    assert "persona_reference" not in prompt
+    assert "profile_path" not in prompt
+    assert '"render"' not in prompt
+    assert '"concurrency"' not in prompt
+    assert "intro_video_path" not in prompt
+    assert "Vida Plena 45+" in prompt
+    assert "nutrition_45plus" in prompt
+    assert "duration_sec_min" in prompt
+    assert "pace_wpm" in prompt
+
+
 def test_scenes_prompt_visual_context_not_hardcoded_to_sleep():
     # The visual-context guidance must not force a sleep-only setting on every
     # topic (it used to hardcode "sleep-wellness context: bedroom...").
@@ -151,7 +188,45 @@ def test_scenes_prompt_visual_context_not_hardcoded_to_sleep():
     assert "sleep-wellness context" not in prompt
     assert "¿Por qué no puedes dormir?" not in prompt
     assert "derive" in prompt.lower()
-    assert "unless the narration is about sleep" in prompt
+    assert "choose a calm bedroom only when the narration is about sleep" in prompt
+
+
+def test_scenes_prompt_visual_prompt_avoids_reusable_sofa_tea_template():
+    prompt = _chatgpt_scenes_prompt(SPAIN_CONFIG, VALID_SCRIPT)
+    assert "Mature woman in her 50s [action from narration]" not in prompt
+    assert "Mature adult woman drinking herbal tea on a sofa" not in prompt
+    assert "Do NOT reuse generic wellness filler" in prompt
+    assert "visual signature" in prompt
+
+
+def test_scenes_prompt_does_not_default_nutrition_to_food_cards():
+    prompt = _chatgpt_scenes_prompt(SPAIN_CONFIG, VALID_SCRIPT)
+
+    assert "Use layout=\"plate_map\" ONLY when" in prompt
+    assert "Use layout=\"recipe_snapshot\" ONLY when" in prompt
+    assert "not a generic nutrition checklist" in prompt
+    assert "Prefer stat, steps, comparison, myth, or do_dont" in prompt
+
+
+def test_scenes_batch_prompt_does_not_default_nutrition_to_food_cards():
+    plan = {
+        "data": {
+            "batches": [
+                {"batch_index": 1, "scene_start": "scene-01", "scene_end": "scene-06"}
+            ]
+        }
+    }
+    prompt = _chatgpt_scenes_batch_prompt(
+        SPAIN_CONFIG,
+        VALID_SCRIPT,
+        plan,
+        {"batch_index": 1, "scene_start": "scene-01", "scene_end": "scene-06"},
+    )
+
+    assert "Use layout=\"plate_map\" ONLY when" in prompt
+    assert "Use layout=\"recipe_snapshot\" ONLY when" in prompt
+    assert "not a generic nutrition checklist" in prompt
+    assert "Prefer stat, steps, comparison, myth, or do_dont" in prompt
 
 
 def test_scenes_prompt_visual_context_reflects_niche_category():

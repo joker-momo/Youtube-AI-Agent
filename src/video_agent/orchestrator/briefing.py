@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from video_agent.audience_age import resolve_target_min_age
 from video_agent.contracts import repo_root
 
 # Stage-specific role descriptions. The orchestrator prepends the
@@ -114,7 +115,7 @@ _SCHEMA_ES = {
         '      "title": str (3-50 caracteres),\n'
         '      "focus": str (15-150 caracteres)\n'
         "    },\n"
-        '  "narration": str (2900-4350 palabras = ~20-30 min a 145 wpm),\n'
+        '  "narration": str (AL MENOS {script_word_floor} palabras = ~{floor_min}+ min a {pace_wpm} wpm; SIN máximo, más largo si aporta valor),\n'
         '  "cta": str (20-250 caracteres),\n'
         '  "qa": { "verdict": "PENDING_GEMINI_QA" }\n'
         "}"
@@ -123,8 +124,8 @@ _SCHEMA_ES = {
         "{\n"
         '  "channel_id": str (= channel_id dado),\n'
         '  "job_id": str (= job_id dado),\n'
-        '  "total_duration_sec": int (1200-1800, formato long-form 20-30 min),\n'
-        '  "scenes": array de 24-40 objetos,\n'
+        '  "total_duration_sec": int (= duración hablada del narration aprobado; mínimo {floor_sec}s, SIN tope fijo),\n'
+        '  "scenes": array (1 escena cada 30-60 s; normalmente 12-40 según la longitud),\n'
         "    cada objeto: {\n"
         '      "id": str (formato \\"scene-NN\\" secuencial),\n'
         '      "duration_sec": int (30-60),\n'
@@ -164,8 +165,10 @@ _LENGTH_ES = {
     "script": (
         "- hook: 80-180 caracteres, una o dos frases, sin clickbait.\n"
         "- sections: 10-15 secciones, cada title 3-50 chars, focus 15-150 chars.\n"
-        "- narration: 2900-4350 palabras (~20-30 min a 145 palabras/min).\n"
-        "- Estructura long-form 20-30 min: hook (15-25 s) -> intro promesa "
+        "- narration: AL MENOS {script_word_floor} palabras (~{floor_min}+ min a {pace_wpm} palabras/min). "
+        "SIN máximo: un guion más largo es bienvenido siempre que cada sección aporte valor real. "
+        "Nunca recortes contenido útil para acortar.\n"
+        "- Estructura long-form (mínimo {floor_min} min, sin tope): hook (15-25 s) -> intro promesa "
         "(30-45 s) -> 10-15 secciones, cada una con: explicación + ejemplo o "
         "micro-historia + transición fluida -> resumen (45-60 s) -> "
         "cta (30-45 s). Mantén ritmo y evita relleno; cada sección aporta "
@@ -174,8 +177,10 @@ _LENGTH_ES = {
         "sugerencia de suscribirse + comentar + ver otro video."
     ),
     "scenes": (
-        "- total_duration_sec: 1200-1800 segundos (formato long-form 20-30 min).\n"
-        "- 24-40 escenas, duración 30-60 s cada una.\n"
+        "- total_duration_sec: igual a la duración hablada real del narration aprobado "
+        "(~palabras / {pace_wpm} × 60). Mínimo {floor_sec} s, SIN tope fijo. NO inventes "
+        "relleno ni estires escenas para alcanzar un número: la duración la fija el guion.\n"
+        "- Un cambio de plano cada 30-60 s (normalmente 12-40 escenas según la longitud).\n"
         "- La suma de duration_sec debe igualar total_duration_sec.\n"
         "- visual_prompt en inglés (5-25 palabras), describe un plano real.\n"
         "- on_screen_text en español, 3-6 palabras, sin signos finales.\n"
@@ -201,18 +206,18 @@ _LENGTH_ES = {
 # Sub-task decomposition: forces the model to plan before emitting JSON.
 _DECOMP_ES = {
     "script": [
-        "1. Identifica el dolor o duda principal de la idea y el resultado concreto que el espectador 45+ obtiene tras 20-30 min.",
+        "1. Identifica el dolor o duda principal de la idea y el resultado concreto que el espectador {audience_min_age}+ obtiene tras al menos {floor_min} min.",
         "2. Escribe el hook (80-180 chars) que conecte con el dolor + promesa.",
-        "3. Define 10-15 sections que cubran la respuesta práctica con profundidad para 20-30 min: cada sección debe tener un sub-punto único + ejemplo o anécdota.",
-        "4. Redacta narration uniendo hook + intro + secciones + resumen + cta. Target: 2900-4350 palabras (~20-30 min a 145 wpm).",
-        "5. Cuenta palabras de narration. Si está fuera de rango, agrega o elimina ejemplos hasta caer en 2900-4350.",
+        "3. Define 10-15 sections que cubran la respuesta práctica con profundidad (mínimo {floor_min} min, sin tope): cada sección debe tener un sub-punto único + ejemplo o anécdota.",
+        "4. Redacta narration uniendo hook + intro + secciones + resumen + cta. Mínimo: {script_word_floor} palabras (~{floor_min}+ min a {pace_wpm} wpm); sin máximo.",
+        "5. Cuenta palabras de narration. Si estás por debajo de {script_word_floor}, agrega más ejemplos, pasos concretos o micro-historias hasta superar el mínimo. No hay límite superior; nunca recortes para acortar.",
         "6. Verifica transiciones fluidas entre secciones (\"además\", \"otro hábito\", \"si esto te suena\"...).",
         "7. Evita relleno: cada párrafo aporta valor concreto; el espectador debe sentir que el tiempo está bien invertido.",
         "8. Solo entonces construye el JSON.",
     ],
     "scenes": [
-        "1. Lee narration del script aprobado y elige un total_duration_sec entre 1200 y 1800 s.",
-        "2. Divide narration en 24-40 bloques sucesivos cuyas duraciones sumen total_duration_sec. Cada bloque ~30-60 s.",
+        "1. Lee narration del script aprobado y fija total_duration_sec = su duración hablada real (~palabras / {pace_wpm} × 60); mínimo {floor_sec}s, sin tope fijo.",
+        "2. Divide narration en bloques sucesivos (uno cada ~30-60 s, normalmente 12-40) cuyas duraciones sumen total_duration_sec. No añadas texto que no esté en el narration aprobado.",
         "3. Para cada bloque: redacta on_screen_text (3-6 palabras en español), caption (1 frase), visual_prompt (5-25 palabras en INGLÉS, estilo de búsqueda en banco de imágenes), motion (de la lista permitida).",
         "4. Asigna ids scene-01, scene-02... en orden, hasta scene-NN.",
         "5. Vuelve a sumar duration_sec. Si no coincide con total_duration_sec, ajusta una o dos escenas (preferiblemente la primera o última) para cuadrar exactamente.",
@@ -263,8 +268,45 @@ def _expected_language(channel_config: dict | None = None) -> str:
     )
 
 
+def _script_length_floor(channel_config: dict | None = None) -> dict[str, int]:
+    """Content-driven length contract: a hard MINIMUM only, NO upper cap.
+
+    Derived from channel config (``content_format.duration_sec_min`` × ``tts.pace_wpm``)
+    exactly like the script-generation prompt in operator_prompts.py, so the
+    generator and the Gemini QA gate agree on the same floor. Previously the QA
+    contract here was hardcoded to "2900-4350 palabras (~20-30 min a 145 wpm)",
+    which ignored the channel's real pace (120 wpm) and 11-min floor and imposed
+    a phantom upper bound — failing correctly-sized scripts (bug-495).
+    """
+    config = channel_config or {}
+    pace_wpm = int((config.get("tts") or {}).get("pace_wpm", 120))
+    floor_sec = int((config.get("content_format") or {}).get("duration_sec_min", 660))
+    floor_min = round(floor_sec / 60)
+    word_floor = int(round(floor_sec / 60 * pace_wpm))
+    return {
+        "pace_wpm": pace_wpm,
+        "floor_sec": floor_sec,
+        "floor_min": floor_min,
+        "script_word_floor": word_floor,
+    }
+
+
 def _fill_stage_contract(text: str, channel_config: dict | None = None) -> str:
-    return text.replace("{expected_language}", _expected_language(channel_config))
+    text = text.replace("{expected_language}", _expected_language(channel_config))
+    if "{audience_min_age}" in text:
+        # Channel-level floor (briefing has no per-idea signal); the per-video
+        # age override is applied in the operator content prompt.
+        text = text.replace(
+            "{audience_min_age}", str(resolve_target_min_age(channel_config or {}))
+        )
+    if any(
+        token in text
+        for token in ("{script_word_floor}", "{floor_min}", "{pace_wpm}", "{floor_sec}")
+    ):
+        floor = _script_length_floor(channel_config)
+        for key, value in floor.items():
+            text = text.replace("{" + key + "}", str(value))
+    return text
 
 
 def _channel_summary(channel_config: dict) -> str:

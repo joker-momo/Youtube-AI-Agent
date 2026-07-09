@@ -5,12 +5,40 @@ import json
 from pathlib import Path
 from typing import Any
 
+from video_agent.audience_age import resolve_target_min_age
 from video_agent.operator_json import _json_block, _json_file_directive
 from video_agent.utils.json_io import read_json
 
 
 def _resolve_existing_qa_path(job_dir: Path, artifact: str) -> Path:
     return job_dir / "operator" / "gemini" / f"{artifact}_qa.json"
+
+
+def _idea_min_age(channel_config: dict[str, Any], idea: dict[str, Any]) -> int:
+    """Target floor age for THIS video, from the idea (else channel floor).
+
+    The channel is branded 45+, but an idea can target another age
+    ("si tienes MÁS DE 60 AÑOS ..."); the whole video must then speak to that
+    age. Falls back to ``audience.age_range`` floor for generic ideas.
+    """
+    return resolve_target_min_age(
+        channel_config,
+        str(idea.get("topic") or ""),
+        str(idea.get("title_seed") or ""),
+        str(idea.get("target_keyword") or ""),
+        str(idea.get("thumbnail_hook") or ""),
+        str(idea.get("angle") or ""),
+    )
+
+
+def _script_min_age(channel_config: dict[str, Any], script: dict[str, Any]) -> int:
+    """Target floor age carried by an approved script (title/hook/narration)."""
+    return resolve_target_min_age(
+        channel_config,
+        str(script.get("title") or ""),
+        str(script.get("hook") or ""),
+        str(script.get("narration") or "")[:600],
+    )
 
 
 def _locale_guidance(channel_config: dict[str, Any]) -> dict[str, Any]:
@@ -36,13 +64,23 @@ def _locale_guidance(channel_config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _locale_block_lines(channel_config: dict[str, Any], *, header: str = "LOCALE AND LANGUAGE RULES (MANDATORY):") -> list[str]:
-    """Return prompt lines describing locale-specific writing rules from channel config."""
+def _locale_block_lines(
+    channel_config: dict[str, Any],
+    *,
+    header: str = "LOCALE AND LANGUAGE RULES (MANDATORY):",
+    min_age: int | None = None,
+) -> list[str]:
+    """Return prompt lines describing locale-specific writing rules from channel config.
+
+    ``min_age`` is the per-video target floor age (from the idea/script); when
+    omitted it falls back to the channel's configured audience floor.
+    """
     locale = _locale_guidance(channel_config)
+    age = min_age if min_age is not None else resolve_target_min_age(channel_config)
     lines = [
         header,
         f"• Write in Spanish for {locale['target_locale']}, language code {locale['language']}.",
-        f"• Use a natural {locale['target_locale']}-first tone for adults 45+.",
+        f"• Use a natural {locale['target_locale']}-first tone for adults {age}+.",
     ]
     if locale["prefer"]:
         lines.append("• Prefer these terms when natural: " + ", ".join(locale["prefer"]) + ".")
@@ -53,9 +91,72 @@ def _locale_block_lines(channel_config: dict[str, Any], *, header: str = "LOCALE
     return lines
 
 
+def _script_channel_context(channel_config: dict[str, Any]) -> dict[str, Any]:
+    """Small, script-relevant channel context for ChatGPT.
+
+    Do not dump the full channel config into script generation: render settings,
+    thumbnail/persona paths, style-DNA, visual-DNA, and operational wiring can
+    bias the spoken content or leak irrelevant implementation details. The script
+    model only needs audience, locale, topic boundaries, length, voice/tone, and
+    safety positioning.
+    """
+    cfg = channel_config or {}
+    channel = cfg.get("channel") if isinstance(cfg.get("channel"), dict) else {}
+    audience = cfg.get("audience") if isinstance(cfg.get("audience"), dict) else {}
+    locale_style = cfg.get("locale_style") if isinstance(cfg.get("locale_style"), dict) else {}
+    niche = cfg.get("niche") if isinstance(cfg.get("niche"), dict) else {}
+    content_format = cfg.get("content_format") if isinstance(cfg.get("content_format"), dict) else {}
+    positioning = cfg.get("positioning") if isinstance(cfg.get("positioning"), dict) else {}
+    seo = cfg.get("seo") if isinstance(cfg.get("seo"), dict) else {}
+    tts = cfg.get("tts") if isinstance(cfg.get("tts"), dict) else {}
+
+    return {
+        "channel": {
+            "id": channel.get("id"),
+            "name": channel.get("name"),
+            "description": channel.get("description"),
+        },
+        "audience": {
+            "language": audience.get("language"),
+            "age_range": audience.get("age_range"),
+            "primary_markets": audience.get("primary_markets"),
+            "secondary_markets": audience.get("secondary_markets"),
+        },
+        "locale_style": {
+            "target_locale": locale_style.get("target_locale"),
+            "language_code": locale_style.get("language_code"),
+            "lexical_preferences": locale_style.get("lexical_preferences"),
+        },
+        "niche": {
+            "category": niche.get("category"),
+            "sub_niches": niche.get("sub_niches"),
+            "avoid_topics": niche.get("avoid_topics"),
+        },
+        "content_format": {
+            "duration_sec_min": content_format.get("duration_sec_min"),
+            "target_duration_sec": content_format.get("target_duration_sec"),
+            "scenes_count_min": content_format.get("scenes_count_min"),
+            "scenes_count_max": content_format.get("scenes_count_max"),
+        },
+        "tts": {
+            "pace_wpm": tts.get("pace_wpm"),
+        },
+        "positioning": {
+            "forbidden_phrases": positioning.get("forbidden_phrases"),
+            "preferred_phrases": positioning.get("preferred_phrases"),
+        },
+        "seo": {
+            "language": seo.get("language"),
+            "min_tags": seo.get("min_tags"),
+            "max_tags": seo.get("max_tags"),
+        },
+    }
+
+
 def _chatgpt_script_prompt(channel_config: dict[str, Any], idea: dict[str, Any]) -> str:
     cf = channel_config.get("content_format", {})
     pace_wpm = channel_config.get("tts", {}).get("pace_wpm", 120)
+    min_age = _idea_min_age(channel_config, idea)
     # Quality-first length: a hard MINIMUM only, NO upper cap. The script IS the
     # spoken narration — the scenes stage preserves it (splits into more scenes)
     # rather than condensing — so the floor is the real ~11-min content_format
@@ -101,7 +202,7 @@ def _chatgpt_script_prompt(channel_config: dict[str, Any], idea: dict[str, Any])
             "• Open with a specific pain after 45: a concrete symptom, frustration, or hidden daily mistake the viewer recognizes immediately.",
             "• Make the hook feel like: pain + possible misunderstanding + gentle promise. Example: 'Si después de los 45 comes \"saludable\" pero sigues sin energía, quizá el problema no es tu fuerza de voluntad, sino cómo estás armando tu plato.'",
             "• Sections must give actions the viewer can apply today, not vague wellness slogans.",
-            "• For nutrition topics, prefer concrete plate guidance: 1/2 plato verduras, 1/4 proteína, 1/4 carbohidrato, una grasa saludable, cena más ligera, evita picar por ansiedad.",
+            "• For nutrition topics, give topic-specific guidance with concrete timing, amounts, food swaps, label cues, hunger triggers, or plate structure ONLY when the idea actually needs it; do not default to the same plate formula across videos.",
             "• Do not leave advice as generic slogans like 'come más verduras', 'bebe más agua', 'duerme mejor', or 'haz ejercicio' unless each one includes a specific how-to, amount, timing, or trigger.",
             "• Use this core narrative format for the viewer experience: pain after 45 -> common misunderstanding -> simple explanation -> 3-5 practical steps -> relief close.",
             "• This is a story framework, not a topic restriction. You can apply it across sleep, nutrition, movement, menopause, stress, energy, weight, digestion, and daily habits.",
@@ -171,10 +272,10 @@ def _chatgpt_script_prompt(channel_config: dict[str, Any], idea: dict[str, Any])
             "• AVOID: 'No necesitas ganar una batalla contra tu cuerpo. Necesitas construir confianza con él.'",
             "• PREFER: 'No necesitas ganar una batalla contra tu cuerpo.\\n\\nNecesitas construir confianza con él.'",
             "",
-            *_locale_block_lines(channel_config),
+            *_locale_block_lines(channel_config, min_age=min_age),
             "",
-            "Channel config:",
-            _json_block(channel_config),
+            "Script context (filtered from channel config; excludes render, thumbnail, persona, style-DNA, visual-DNA, and operational settings):",
+            _json_block(_script_channel_context(channel_config)),
             "",
             "Video idea:",
             _json_block(idea),
@@ -230,7 +331,26 @@ _SCENE_RHYTHM_RULES = [
 ]
 
 
-def _visual_context_line(channel_config: dict[str, Any]) -> str:
+_LAYOUT_SELECTION_RULES = [
+    "- Use layout=\"subtitle\" for normal explanation scenes.",
+    "- Use layout=\"checklist\" only when the narration contains 2-4 concrete steps/items; bullets must come from narration/caption/on_screen_text.",
+    "- Use layout=\"warning\" only when the narration describes a mistake, risk, or something to avoid.",
+    "- Use layout=\"quote\" only for a short emotional or memorable sentence supported by the narration.",
+    "- Use layout=\"stat\" when the narration centers on ONE memorable number/quantity (e.g. \"3 pasos\", \"2 veces al día\", \"80%\"): put that number or short phrase in title, and a short label in body. No bullets.",
+    "- Use layout=\"steps\" when the narration describes an ORDERED sequence/process/schedule (do A, then B, then C): put 2-4 ordered steps in bullets, supported by the narration.",
+    "- Use layout=\"comparison\" when the narration contrasts TWO options/choices (bien vs mal, esto vs aquello): put the two sides in bullets[0] and bullets[1] (both supported by narration).",
+    "- Use layout=\"myth\" when the narration corrects a misconception: put the mistaken belief in title and the correction/reality in body (both supported by narration).",
+    "- Use layout=\"plate_map\" ONLY when the narration explicitly describes a real meal/plate structure with visible food components; put the 2-4 plate components in bullets (supported by narration). This is not a generic nutrition checklist.",
+    "- Use layout=\"recipe_snapshot\" ONLY when the narration gives 2-3 named foods as a concrete practical meal/snack example; put those real foods in bullets (supported by narration). This is not a generic nutrition checklist.",
+    "- Prefer stat, steps, comparison, myth, or do_dont for nutrition advice about timing, habits, labels, portions, swaps, hunger, digestion, or recovery when the narration is not literally a plate/recipe example.",
+    "- Use layout=\"quote_portrait\" for the most emotional/transitional sentence you want to feature magazine-style: put the sentence in body (a stronger variant of quote).",
+    "- Use layout=\"evidence_nugget\" for a single credible number/fact tied to age/health ('después de los 60', 'masa muscular'): put the number/fact in title and short context in body (a documentary variant of stat).",
+    "- Use layout=\"do_dont\" when the narration contrasts a WORSE choice vs a clearly BETTER one ('esto no, mejor esto'): put the worse option in bullets[0], the better in bullets[1] (both supported). Use comparison instead when the two options are NEUTRAL.",
+    "- Prefer variety: across the whole script, do NOT make every card a checklist — pick the layout that matches the content shape (a number → stat, a sequence → steps, a contrast → comparison, a myth → myth). Never reuse the same title on two different graphic scenes.",
+]
+
+
+def _visual_context_line(channel_config: dict[str, Any], min_age: int | None = None) -> str:
     """Visual-context guidance for ``visual_prompt``, derived from the channel
     niche instead of hardcoded to one topic.
 
@@ -244,16 +364,18 @@ def _visual_context_line(channel_config: dict[str, Any]) -> str:
     if override:
         return f"- visual_prompt must match: {override}"
     category = str(niche.get("category") or "health and wellness").replace("_", " ")
-    audience = channel_config.get("audience") or {}
-    age_range = audience.get("age_range") or [45]
-    age = age_range[0] if isinstance(age_range, list) and age_range else 45
+    age = min_age if min_age is not None else resolve_target_min_age(channel_config)
     return (
         f"- visual_prompt must match THIS video's specific topic AND the channel context "
         f"({category} for adults {age}+): real everyday domestic settings, authentic mature "
         f"people, calm natural light. DERIVE the exact setting/action from the scene's own "
-        f"narration (kitchen + real food for nutrition, gentle movement for exercise, calm "
-        f"bedroom for sleep). Do NOT default to a bedroom/sleep setting unless the narration "
-        f"is about sleep."
+        f"narration: choose meal prep, supermarket labels, dining table, or real food only "
+        f"when the narration is actually about food; choose gentle movement for exercise; "
+        f"choose a calm bedroom only when the narration is about sleep. Give every scene a "
+        f"distinct visual signature: vary location, person type, action, prop/object, time "
+        f"of day, and camera distance. Do NOT reuse generic wellness filler such as sofa, "
+        f"tea, kitchen, phone, or smiling portrait unless that exact object or setting is "
+        f"supported by the narration."
     )
 
 
@@ -267,7 +389,8 @@ def _chatgpt_scenes_prompt(
     scenes_min = cf.get("scenes_count_min", 40)
     scenes_max = cf.get("scenes_count_max", 55)
     scene_dur_target = round(target_sec / ((scenes_min + scenes_max) / 2))
-    
+    min_age = _script_min_age(channel_config, script)
+
     prompt_parts = [
         "You are exporting a SCENES artifact as a JSON file for a YouTube channel pipeline.",
         "",
@@ -294,8 +417,8 @@ def _chatgpt_scenes_prompt(
         "- asset_refs: must be an object {}, never an array",
         "- on_screen_text MUST be 2-4 words (keyword hook), and MUST NOT duplicate caption text.",
         "- caption should be natural spoken sentence(s); never copy on_screen_text verbatim.",
-        "- visual_prompt: ⚠️ MANDATORY ENGLISH ONLY. NEVER Spanish. visual_prompt is fed directly to Pexels stock search, which is English-keyword based. Spanish prompts produce off-topic stock footage (e.g. 'Bellagio fountains' for a 'rutina nocturna' scene). Required style: specific (person + setting + action + lighting + camera framing). Example TEMPLATE (adapt setting + action to THIS scene's narration): 'Mature woman in her 50s [action from narration] in a [relevant everyday setting], warm natural light, medium shot'. ALL OTHER FIELDS may be Spanish, but visual_prompt MUST be English.",
-        _visual_context_line(channel_config),
+        "- visual_prompt: ⚠️ MANDATORY ENGLISH ONLY. NEVER Spanish. visual_prompt is fed directly to Pexels stock search, which is English-keyword based. Spanish prompts produce off-topic stock footage (e.g. 'Bellagio fountains' for a 'rutina nocturna' scene). Required style: a concrete, scene-specific stock query with subject + setting + action + relevant prop/object + lighting/time + camera framing. Use THIS scene's narration as the source of truth. Do NOT reuse generic wellness filler such as sofa, tea, kitchen, phone, or smiling portrait unless that exact object/setting is in the narration. ALL OTHER FIELDS may be Spanish, but visual_prompt MUST be English.",
+        _visual_context_line(channel_config, min_age),
         "- avoid off-topic visuals (cars, highways, random city traffic, tech gadgets unless explicitly in narration).",
         "- motion: 'slow_zoom' / 'pan_right' / 'pan_left'; never repeat same motion 3x in a row",
         "- layout: one of [\"hook\", \"subtitle\", \"checklist\", \"warning\", \"quote\", \"cta\", \"stat\", \"steps\", \"comparison\", \"myth\", \"plate_map\", \"recipe_snapshot\", \"quote_portrait\", \"evidence_nugget\", \"do_dont\"].",
@@ -303,26 +426,13 @@ def _chatgpt_scenes_prompt(
         "- layout_reason: short English reason explaining why the layout fits the narration.",
         "- scene-01 should use layout=\"hook\" with a 2-8 word Spanish title when safe.",
         "- final scene should use layout=\"cta\" only if it contains a clear final action.",
-        "- Use layout=\"subtitle\" for normal explanation scenes.",
-        "- Use layout=\"checklist\" only when the narration contains 2-4 concrete steps/items; bullets must come from narration/caption/on_screen_text.",
-        "- Use layout=\"warning\" only when the narration describes a mistake, risk, or something to avoid.",
-        "- Use layout=\"quote\" only for a short emotional or memorable sentence supported by the narration.",
-        "- Use layout=\"stat\" when the narration centers on ONE memorable number/quantity (e.g. \"3 pasos\", \"2 veces al día\", \"80%\"): put that number or short phrase in title, and a short label in body. No bullets.",
-        "- Use layout=\"steps\" when the narration describes an ORDERED sequence/process/schedule (do A, then B, then C): put 2-4 ordered steps in bullets, supported by the narration.",
-        "- Use layout=\"comparison\" when the narration contrasts TWO options/choices (bien vs mal, esto vs aquello): put the two sides in bullets[0] and bullets[1] (both supported by narration).",
-        "- Use layout=\"myth\" when the narration corrects a misconception: put the mistaken belief in title and the correction/reality in body (both supported by narration).",
-        "- Use layout=\"plate_map\" when the narration describes the STRUCTURE of a meal/plate (proteína + vegetal + fibra, 'completa el plato'): put the 2-4 plate components in bullets (supported by narration).",
-        "- Use layout=\"recipe_snapshot\" when the narration gives a concrete PRACTICAL meal example (e.g. yogur + avena + fruta): put the 2-3 real foods in bullets (supported by narration).",
-        "- Use layout=\"quote_portrait\" for the most emotional/transitional sentence you want to feature magazine-style: put the sentence in body (a stronger variant of quote).",
-        "- Use layout=\"evidence_nugget\" for a single credible number/fact tied to age/health ('después de los 60', 'masa muscular'): put the number/fact in title and short context in body (a documentary variant of stat).",
-        "- Use layout=\"do_dont\" when the narration contrasts a WORSE choice vs a clearly BETTER one ('esto no, mejor esto'): put the worse option in bullets[0], the better in bullets[1] (both supported). Use comparison instead when the two options are NEUTRAL.",
-        "- Prefer variety: across the whole script, do NOT make every card a checklist — pick the layout that matches the content shape (a number → stat, a sequence → steps, a contrast → comparison, a myth → myth). Never reuse the same title on two different graphic scenes.",
+        *_LAYOUT_SELECTION_RULES,
         "- ⚠️ VISUAL RHYTHM (critical for retention): the graphic layouts (hook/checklist/warning/quote/cta/stat/steps/comparison/myth/plate_map/recipe_snapshot/quote_portrait/evidence_nugget/do_dont) render as full design cards. Two or more cards back-to-back feel like a static slideshow and lose viewers. NEVER place two graphic-layout scenes consecutively — separate EVERY graphic scene with at least one (ideally two) layout=\"subtitle\" narrative scene(s) that play over moving video. This applies right after the scene-01 hook too: scene-02 onward must be \"subtitle\" until the next genuine card moment. Most scenes should be \"subtitle\"; spread the graphic cards sparingly across the whole script.",
         "- Every non-subtitle layout must include enough layout_payload for rendering.",
         "- All card payload text (title/body/bullets) must be COPIED from the narration/caption using the SAME words (you may shorten to a short phrase, but do NOT paraphrase or invent) — Python downgrades any layout whose payload text is not found in the scene's narration/caption/on_screen_text.",
         "- qa.verdict: must be PENDING_GEMINI_QA — never mark your own scenes as PASS",
         "",
-        *_locale_block_lines(channel_config, header="LOCALE RULES:"),
+        *_locale_block_lines(channel_config, header="LOCALE RULES:", min_age=min_age),
         "• All Spanish scene fields (narration, caption, on_screen_text, layout_payload) must use the configured language.",
         "• on_screen_text must sound natural in the configured locale and remain 2-4 words.",
         "• visual_prompt must remain English (stock search/generation works better in English).",
@@ -421,7 +531,9 @@ def _chatgpt_scenes_plan_prompt(channel_config: dict[str, Any], script: dict[str
             "- final batch must include the final scene.",
             "- ⚠️ COVER THE ENTIRE SCRIPT: create enough batches/scenes that the full approved narration is preserved across scenes. Do not compress, summarize, or drop any section — the scene count scales with script length.",
             "",
-            *_locale_block_lines(channel_config, header="Locale rules:"),
+            *_locale_block_lines(
+                channel_config, header="Locale rules:", min_age=_script_min_age(channel_config, script)
+            ),
             "- Spanish text fields must use the configured language for the configured locale.",
             "- Prefer Spain-native terms from channel_config.locale_style.lexical_preferences.prefer.",
             "- Avoid terms from channel_config.locale_style.lexical_preferences.avoid.",
@@ -479,7 +591,7 @@ def _chatgpt_scenes_batch_prompt(
         "- Every scene must include: id, duration_sec, narration, on_screen_text, caption, visual_prompt, motion, asset_refs, layout, layout_payload, layout_reason.",
         "- asset_refs must be {}.",
         "- All card payload text (title/body/bullets) must be COPIED from the narration/caption using the SAME words (you may shorten to a short phrase, but do NOT paraphrase or invent) — Python downgrades any layout whose payload text is not found in the scene's narration/caption/on_screen_text.",
-        "- ⚠️ visual_prompt MANDATORY ENGLISH ONLY. NEVER Spanish. Fed directly to Pexels (English keyword search). Spanish visual_prompt = rejected, you will be asked to regenerate. Example: 'Mature adult woman drinking herbal tea on a sofa at night, warm tungsten lighting, medium shot'.",
+        "- ⚠️ visual_prompt MANDATORY ENGLISH ONLY. NEVER Spanish. Fed directly to Pexels (English keyword search). Spanish visual_prompt = rejected, you will be asked to regenerate. Write a concrete, scene-specific stock query with subject + setting + action + relevant prop/object + lighting/time + camera framing. Give every scene a distinct visual signature; do NOT reuse generic wellness filler such as sofa, tea, kitchen, phone, or smiling portrait unless that exact object/setting is in the narration.",
         "- narration must reproduce the approved script content for this scene range FAITHFULLY: keep every concrete detail, example, step, and explanation from the matching script sections. Do NOT summarize, shorten, or drop content.",
         "- If a script section is long, split it across MORE scenes (35–60 words each) rather than cutting content.",
         "- layout must be one of: hook, subtitle, checklist, warning, quote, cta, stat, steps, comparison, myth, plate_map, recipe_snapshot, quote_portrait, evidence_nugget, do_dont.",
@@ -487,26 +599,15 @@ def _chatgpt_scenes_batch_prompt(
         "- layout_reason must be a short English reason explaining why the layout fits the narration.",
         "- scene-01 should use layout=\"hook\" with a 2-8 word Spanish title when safe.",
         "- final scene should use layout=\"cta\" only if it contains a clear final action.",
-        "- Use layout=\"subtitle\" for normal explanation scenes.",
-        "- Use layout=\"checklist\" only when the narration contains 2-4 concrete steps/items; bullets must come from narration/caption/on_screen_text.",
-        "- Use layout=\"warning\" only when the narration describes a mistake, risk, or something to avoid.",
-        "- Use layout=\"quote\" only for a short emotional or memorable sentence supported by the narration.",
-        "- Use layout=\"stat\" when the narration centers on ONE memorable number/quantity (e.g. \"3 pasos\", \"2 veces al día\", \"80%\"): put that number or short phrase in title, and a short label in body. No bullets.",
-        "- Use layout=\"steps\" when the narration describes an ORDERED sequence/process/schedule (do A, then B, then C): put 2-4 ordered steps in bullets, supported by the narration.",
-        "- Use layout=\"comparison\" when the narration contrasts TWO options/choices (bien vs mal, esto vs aquello): put the two sides in bullets[0] and bullets[1] (both supported by narration).",
-        "- Use layout=\"myth\" when the narration corrects a misconception: put the mistaken belief in title and the correction/reality in body (both supported by narration).",
-        "- Use layout=\"plate_map\" when the narration describes the STRUCTURE of a meal/plate (proteína + vegetal + fibra, 'completa el plato'): put the 2-4 plate components in bullets (supported by narration).",
-        "- Use layout=\"recipe_snapshot\" when the narration gives a concrete PRACTICAL meal example (e.g. yogur + avena + fruta): put the 2-3 real foods in bullets (supported by narration).",
-        "- Use layout=\"quote_portrait\" for the most emotional/transitional sentence you want to feature magazine-style: put the sentence in body (a stronger variant of quote).",
-        "- Use layout=\"evidence_nugget\" for a single credible number/fact tied to age/health ('después de los 60', 'masa muscular'): put the number/fact in title and short context in body (a documentary variant of stat).",
-        "- Use layout=\"do_dont\" when the narration contrasts a WORSE choice vs a clearly BETTER one ('esto no, mejor esto'): put the worse option in bullets[0], the better in bullets[1] (both supported). Use comparison instead when the two options are NEUTRAL.",
-        "- Prefer variety: across the whole script, do NOT make every card a checklist — pick the layout that matches the content shape (a number → stat, a sequence → steps, a contrast → comparison, a myth → myth). Never reuse the same title on two different graphic scenes.",
+        *_LAYOUT_SELECTION_RULES,
         "- ⚠️ VISUAL RHYTHM (critical for retention): the graphic layouts (hook/checklist/warning/quote/cta/stat/steps/comparison/myth/plate_map/recipe_snapshot/quote_portrait/evidence_nugget/do_dont) render as full design cards. Two or more cards back-to-back feel like a static slideshow and lose viewers. NEVER place two graphic-layout scenes consecutively — separate EVERY graphic scene with at least one (ideally two) layout=\"subtitle\" narrative scene(s) that play over moving video. This applies right after the scene-01 hook too: scene-02 onward must be \"subtitle\" until the next genuine card moment. Most scenes should be \"subtitle\"; spread the graphic cards sparingly across the whole script.",
         "- Every non-subtitle layout must include enough layout_payload for rendering.",
         "- Do not invent overlay facts that are not supported by narration/caption/on_screen_text.",
         "- Do not return more than one JSON object.",
         "",
-        *_locale_block_lines(channel_config, header="Locale rules:"),
+        *_locale_block_lines(
+            channel_config, header="Locale rules:", min_age=_script_min_age(channel_config, script)
+        ),
         "- Spanish text fields must use the configured language for the configured locale.",
         "- Prefer terms from channel_config.locale_style.lexical_preferences.prefer.",
         "- Avoid terms from channel_config.locale_style.lexical_preferences.avoid.",
@@ -598,6 +699,7 @@ def _chatgpt_seo_prompt(
     locale = _locale_guidance(channel_config)
     seo_language = locale["language"]
     is_spain = seo_language == "es-ES"
+    min_age = _script_min_age(channel_config, script)
     tags_line = (
         "- tags: 5-8 concise Spain-first Spanish wellness search terms"
         if is_spain
@@ -670,7 +772,7 @@ def _chatgpt_seo_prompt(
             "SEO LOCALE RULES:",
             f"• Optimize title, description, tags, and pinned comment for {locale['target_locale']}-first Spanish ({seo_language}).",
             "• Prefer 'móvil' over 'celular', 'ordenador' over 'computadora', 'por la tarde' over LatAm phrasing when natural." if is_spain else "• Use vocabulary natural to the configured audience locale.",
-            "• Use 'personas de más de 45 años' or 'adultos 45+'; avoid 'adultos mayores', 'tercera edad', 'ancianos'.",
+            f"• Use 'personas de más de {min_age} años' or 'adultos {min_age}+'; avoid 'adultos mayores', 'tercera edad', 'ancianos'.",
             "• Do not use LatAm label text like 'Spanish/LatAm' in output.",
             "• For thumbnail_text, use 3-7 words, all caps, Spain-natural Spanish, strong but not exaggerated." if is_spain else "• For thumbnail_text, use 3-7 words, all caps, natural Spanish for the configured locale, strong but not exaggerated.",
             "• Title and thumbnail_text must share the same pain angle.",
@@ -710,6 +812,12 @@ def _gemini_qa_prompt(
 ) -> str:
     artifact_text = _json_block(artifact) if artifact is not None else "<paste ChatGPT JSON artifact here>"
     locale = _locale_guidance(channel_config or {})
+    _age_signals = [
+        str(artifact.get(k) or "")
+        for k in ("title", "narration", "hook", "thumbnail_text", "topic")
+        if isinstance(artifact, dict)
+    ]
+    min_age = resolve_target_min_age(channel_config or {}, *_age_signals)
     locale_qa_lines = [
         "",
         "════════════════════════════════════════",
@@ -774,7 +882,7 @@ def _gemini_qa_prompt(
             "MANDATORY CHECK 2 — Schema & Content Quality",
             "════════════════════════════════════════",
             "• Schema fit: all required fields present, correct types, no nulls where strings expected",
-            f"• Channel fit: content matches {locale['language']} Spanish health channel ({locale['target_locale']}-first) for adults 45+",
+            f"• Channel fit: content matches {locale['language']} Spanish health channel ({locale['target_locale']}-first) for adults {min_age}+",
             "• Safety: no specific medical diagnoses, no supplement promotion, no miracle cures",
             "• Clarity: language is natural, readable, appropriate pace",
             f"• Duration accuracy (for scenes): total_duration_sec must match sum of scene durations",

@@ -58,11 +58,17 @@ def _format_block(plan: dict[str, Any]) -> str:
     return "Layout: a clean labelled infographic. Items: " + "; ".join(labels) + "."
 
 
-def build_poster_prompt(plan: dict[str, Any]) -> str:
+def build_poster_body(plan: dict[str, Any]) -> str:
+    """The raw poster body WITHOUT the driver's dimension instruction."""
     title = str(plan.get("title") or "").strip()
     subtitle = str(plan.get("subtitle") or "").strip()
     body = _BASE + "\n\n" + f'Big title at the top: "{title}".'
     if subtitle:
         body += f' Subtitle under it: "{subtitle}".'
     body += "\n\n" + _format_block(plan)
-    return build_image_gen_prompt(body, aspect_ratio="9:16")
+    return body
+
+
+def build_poster_prompt(plan: dict[str, Any]) -> str:
+    """Full prompt (body + portrait dimension instruction) — for logging/inspection."""
+    return build_image_gen_prompt(build_poster_body(plan), aspect_ratio="9:16")

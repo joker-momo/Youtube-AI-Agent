@@ -29,5 +29,13 @@ def synthesize_infographic_voiceover(short_dir: Path, plan: dict[str, Any], chan
     from video_agent.shorts.audio import synthesize_short_narration
 
     text = build_narration_text(plan)
-    single_scene = {"scenes": [{"id": "s01", "narration": text}], "total_duration_sec": 0}
+    # The shorts TTS path forces dynamic_sync=False, so synthesize_scene_track reads
+    # scene["duration_sec"] to pad/trim. Seed a small value: because the real speech is
+    # longer, the engine extends the scene to the ACTUAL speech length (tts.py:218-219)
+    # — no truncation, no KeyError, no silent fallback. Omitting it produced a 44-byte
+    # empty wav (0.6s video).
+    single_scene = {
+        "scenes": [{"id": "s01", "narration": text, "duration_sec": 1}],
+        "total_duration_sec": 1,
+    }
     return synthesize_short_narration(Path(short_dir), single_scene, channel_config)

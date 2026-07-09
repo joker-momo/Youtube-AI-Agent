@@ -127,10 +127,50 @@ def _dispatch_queue_job(
     if command == "shorts_render_one":
         _run_short_render_job(job, job_dir=job_dir, channel_path=channel_path)
         return
+    if command == "shorts_render_infographic":
+        _run_short_infographic_job(job, job_dir=job_dir, channel_path=channel_path, client=client)
+        return
     if command == "shorts_confirm_render":
         _run_shorts_confirm_render_job(job, job_dir=job_dir, channel_path=channel_path)
         return
     raise ValueError(f"Unknown queue command: {command}")
+
+
+def _run_short_infographic_job(job: dict, *, job_dir: Path, channel_path: Path, client: BrowserClient) -> None:
+    """Build infographic Shorts (one dense AI poster + voiceover) for selected ideas."""
+    import json as _json
+
+    from video_agent.shorts.infographic.build import render_selected_infographic_ideas
+    from video_agent.shorts.infographic.render import make_infographic_render_fn
+    from video_agent.shorts.infographic.voiceover import synthesize_infographic_voiceover
+    from video_agent.utils.json_io import read_yaml
+
+    payload: dict = {}
+    raw = job.get("payload")
+    if raw:
+        try:
+            payload = _json.loads(raw) if isinstance(raw, str) else dict(raw)
+        except Exception:
+            payload = {}
+    idea_ids = list(payload.get("idea_ids") or [])
+    force = bool(payload.get("force"))
+    channel_config = read_yaml(channel_path)
+
+    def chatgpt_fn(prompt: str) -> str:
+        from video_agent.shorts.llm import chatgpt_send_with_recovery
+        return asyncio.run(chatgpt_send_with_recovery(client, prompt))
+
+    render_selected_infographic_ideas(
+        job_dir,
+        channel_config,
+        idea_ids,
+        image_fn=client.generate_image,  # async; awaited inside run_infographic_short
+        llm_fn=chatgpt_fn,
+        tts_fn=synthesize_infographic_voiceover,
+        render_fn=make_infographic_render_fn(channel_config),
+        read_text_fn=None,  # v1: QA disabled
+        force=force,
+    )
 
 
 class _JobHeartbeat:

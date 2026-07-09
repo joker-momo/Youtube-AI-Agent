@@ -1,12 +1,17 @@
 """Orchestrate the infographic-short pipeline (plan → poster → QA → voice → render)."""
 from __future__ import annotations
 
+import asyncio
+import datetime
+import re
 import wave
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from video_agent.shorts import manifest as manifest_mod
 from video_agent.shorts import paths
+from video_agent.shorts.idea_store import read_short_ideas
 from video_agent.shorts.infographic.plan import build_poster_plan
 from video_agent.shorts.infographic.poster import generate_poster
 from video_agent.shorts.infographic.qa import qa_poster
@@ -104,3 +109,62 @@ async def run_infographic_short(
     status["video_path"] = f"{short_dir.name}/outputs/{Path(out).name}"
     atomic_write_json(short_dir / paths.SHORT_STATUS_FILE, status)
     return status
+
+
+def _slug(text: str, *, max_len: int = 40) -> str:
+    s = re.sub(r"[^a-z0-9]+", "-", str(text or "").lower()).strip("-")
+    return s[:max_len] or "short"
+
+
+def render_selected_infographic_ideas(
+    long_job_dir: Path,
+    channel_config: dict,
+    idea_ids: list[str],
+    *,
+    image_fn,
+    llm_fn: Callable[..., str],
+    tts_fn: Callable[..., Path],
+    render_fn: Callable[..., Path],
+    read_text_fn: Callable[[Path], str] | None = None,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Build one infographic Short per selected idea (parent topic -> poster short).
+
+    Mirrors ``render_selected_short_ideas`` but runs the infographic pipeline. Writes
+    each short's status + a manifest entry tagged ``short_type="infographic"``.
+    """
+    long_job_dir = Path(long_job_dir)
+    ideas_doc = read_short_ideas(long_job_dir)
+    ideas_by_id = {str(i.get("idea_id")): i for i in ideas_doc.get("ideas") or []}
+    selected = [ideas_by_id[i] for i in idea_ids if i in ideas_by_id]
+    if not selected:
+        raise ValueError("No valid idea IDs selected")
+
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    results: list[dict[str, Any]] = []
+    for n, idea in enumerate(selected, start=1):
+        idea_id = str(idea.get("idea_id"))
+        title = str(idea.get("title") or "")
+        source = {"topic": idea.get("topic") or title, "title": title}
+        short_id = f"short-{n:02d}_{idea_id}_{ts}_{_slug(title or idea_id)}"
+        short_dir = long_job_dir / "shorts" / short_id
+        status = asyncio.run(run_infographic_short(
+            short_dir, channel_config, source,
+            image_fn=image_fn, llm_fn=llm_fn, tts_fn=tts_fn, render_fn=render_fn,
+            read_text_fn=read_text_fn,
+        ))
+        status.update({"idea_id": idea_id, "short_id": short_id, "short_type": "infographic"})
+        manifest_mod.write_short_status(long_job_dir, short_id, status)
+        results.append({
+            "short_id": short_id, "idea_id": idea_id, "short_type": "infographic",
+            "status": status.get("status"), "rendered": status.get("rendered", False),
+            "video_path": status.get("video_path"),
+        })
+
+    try:
+        doc = manifest_mod.read_manifest(long_job_dir) or {}
+    except FileNotFoundError:
+        doc = {}
+    doc["shorts"] = list(doc.get("shorts") or []) + results
+    manifest_mod.write_manifest(long_job_dir, doc)
+    return {"shorts": results}

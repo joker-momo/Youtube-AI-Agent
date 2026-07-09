@@ -24,5 +24,9 @@ def build_infographic_render_props(
         "fps": _FPS,
         "durationInFrames": max(1, round(float(duration_sec) * _FPS)),
         "kenBurns": True,
-        "showSubscribeCue": True,
+        # Cap the zoom so baked-in poster text is never cropped at any frame.
+        "kenBurnsScaleMax": 1.02,
+        # Overlays OFF by default: the poster already carries all text; a subscribe
+        # cue / channel badge risks covering it (spec safe-area rule).
+        "showSubscribeCue": False,
     }

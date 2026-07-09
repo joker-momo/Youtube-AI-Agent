@@ -11,6 +11,7 @@ from video_agent.shorts.infographic.plan import build_poster_plan
 from video_agent.shorts.infographic.poster import generate_poster
 from video_agent.shorts.infographic.qa import qa_poster
 from video_agent.shorts.infographic.render_props import build_infographic_render_props
+from video_agent.shorts.infographic.seo import build_infographic_seo
 from video_agent.storage.atomic import atomic_write_json
 
 
@@ -20,6 +21,19 @@ def _wav_seconds(path: Path) -> float:
             return w.getnframes() / float(w.getframerate() or 1)
     except Exception:
         return 30.0
+
+
+def _long_job_dir(short_dir: Path) -> Path:
+    """The parent long-form job dir for a short at ``<job>/shorts/<short_id>``."""
+    return Path(short_dir).parent.parent
+
+
+def _public_short_ref(short_dir: Path, subdir: str, name: str) -> str:
+    """staticFile ref under remotion/public: ``materialize_short_job_aliases`` publishes
+    a short's files to ``remotion/public/jobs/<short_dir.name>/<subdir>/`` (keyed by the
+    short's OWN dir name, flattened — NOT nested under the parent job id), so the render
+    ref must use that same key. The render_fn is responsible for the materialize step."""
+    return f"jobs/{Path(short_dir).name}/{subdir}/{name}"
 
 
 async def run_infographic_short(
@@ -71,9 +85,13 @@ async def run_infographic_short(
     audio_path = tts_fn(short_dir, plan, channel_config)
     duration = _wav_seconds(Path(audio_path)) + 0.6
 
+    # SEO/title artifact (writes json/short_seo.json via the shipped Short SEO path:
+    # 4 scroll-stopper formulas, <=40 chars, aligned with the poster hook_line).
+    build_infographic_seo(_long_job_dir(short_dir), short_dir.name, plan, channel_config, llm_fn)
+
     props = build_infographic_render_props(
-        poster_ref=f"jobs/{short_dir.name}/assets/{paths.SHORT_POSTER_IMAGE_NAME}",
-        audio_ref=f"jobs/{short_dir.name}/audio/{Path(audio_path).name}",
+        poster_ref=_public_short_ref(short_dir, "assets", paths.SHORT_POSTER_IMAGE_NAME),
+        audio_ref=_public_short_ref(short_dir, "audio", Path(audio_path).name),
         duration_sec=duration,
         music_track=str((channel_config.get("shorts") or {}).get("music_track") or "shorts_sleep_stress"),
         channel_name=str((channel_config.get("channel") or {}).get("name") or ""),

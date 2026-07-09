@@ -8,20 +8,26 @@ export type InfographicShortProps = {
   channelName?: string;
   durationInFrames: number;
   kenBurns?: boolean;
+  kenBurnsScaleMax?: number;
   showSubscribeCue?: boolean;
 };
 
 export const InfographicShort: React.FC<InfographicShortProps> = ({
-  poster, audio, music, channelName, durationInFrames, kenBurns = true, showSubscribeCue = true,
+  poster, audio, music, channelName, durationInFrames,
+  kenBurns = true, kenBurnsScaleMax = 1.02, showSubscribeCue = false,
 }) => {
   const frame = useCurrentFrame();
   const {width, height} = useVideoConfig();
-  const scale = kenBurns ? interpolate(frame, [0, durationInFrames], [1, 1.06], {extrapolateRight: 'clamp'}) : 1;
+  // Hard cap the zoom at 1.02: baked-in poster text must never be cropped.
+  const maxScale = Math.min(kenBurnsScaleMax, 1.02);
+  const scale = kenBurns ? interpolate(frame, [0, durationInFrames], [1, maxScale], {extrapolateRight: 'clamp'}) : 1;
   return (
     <AbsoluteFill style={{backgroundColor: '#000'}}>
       <AbsoluteFill style={{justifyContent: 'center', alignItems: 'center'}}>
         <Img src={staticFile(poster)} style={{width, height, objectFit: 'contain', transform: `scale(${scale})`}} />
       </AbsoluteFill>
+      {/* Overlays are OFF by default (safe area): the poster already carries all text.
+          They render only when explicitly enabled via showSubscribeCue. */}
       {showSubscribeCue && (
         <AbsoluteFill style={{alignItems: 'center', top: 24, height: 60}}>
           <div style={{color: '#fff', fontWeight: 800, fontSize: 40, background: '#E11D2A', padding: '6px 22px', borderRadius: 10}}>
@@ -29,7 +35,7 @@ export const InfographicShort: React.FC<InfographicShortProps> = ({
           </div>
         </AbsoluteFill>
       )}
-      {channelName && (
+      {showSubscribeCue && channelName && (
         <AbsoluteFill style={{justifyContent: 'flex-end', alignItems: 'center', bottom: 24}}>
           <div style={{color: '#fff', fontWeight: 700, fontSize: 30, textShadow: '0 2px 6px #000'}}>{channelName}</div>
         </AbsoluteFill>

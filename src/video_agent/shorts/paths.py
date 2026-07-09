@@ -44,6 +44,10 @@ SHORT_CALL_BUDGET_SUMMARY_FILE = "call_budget_summary.json"
 SHORT_FAILURE_REPORT_FILE = "short_failure_report.json"
 SHORT_QA_DECISION_SUMMARY_FILE = "qa_decision_summary.json"
 SHORT_RENDER_PROPS_FILE = "short_render_props.json"  # builder→render handoff supplement
+# Infographic-short artifacts.
+SHORT_POSTER_PLAN_FILE = "poster_plan.json"
+SHORT_POSTER_QA_FILE = "poster_qa.json"
+SHORT_POSTER_IMAGE_NAME = "poster.png"  # under <short_dir>/assets/
 # Visual-span + compiled-timeline artifacts (spec v3.2.3 §7). All live under json/.
 SHORT_VISUAL_SPANS_FILE = "visual_spans.json"
 SHORT_VISUAL_SPAN_QA_FILE = "visual_span_qa.json"

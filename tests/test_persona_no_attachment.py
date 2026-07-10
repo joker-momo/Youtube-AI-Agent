@@ -37,3 +37,16 @@ def test_thumbnail_without_persona_lock_still_builds():
     plan = {"variant_title": "x", "thumbnail_text": "Y", "persona_locked": False}
     p = build_thumbnail_prompt(plan).lower()
     assert "attach" not in p
+
+
+def test_shorts_asset_image_gen_sends_no_attachment():
+    """The shorts assets path was the last caller still attaching the persona
+    reference photo (bug-488 family) — identity must be text-only there too."""
+    import inspect
+
+    from video_agent.shorts.assets import prepare
+
+    src = inspect.getsource(prepare._default_sync_image_gen)
+    assert "attachment_path" not in src
+    # Text identity instruction still applied when a persona is configured.
+    assert "PERSONA_SCENE_INSTRUCTION" in src

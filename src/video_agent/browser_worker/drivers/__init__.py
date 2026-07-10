@@ -8,6 +8,7 @@ from video_agent.browser_worker.drivers.base import (
 from video_agent.browser_worker.drivers.chatgpt import ChatGPTDriver
 from video_agent.browser_worker.drivers.chatgpt_image import ChatGPTImageDriver
 from video_agent.browser_worker.drivers.gemini import GeminiDriver
+from video_agent.browser_worker.drivers.gemini_image import GeminiImageDriver
 from video_agent.browser_worker.drivers.humanize import (
     estimate_read_pause_ms,
     human_click,
@@ -20,6 +21,7 @@ __all__ = [
     "ChatGPTDriver",
     "ChatGPTImageDriver",
     "GeminiDriver",
+    "GeminiImageDriver",
     "LoginRequiredError",
     "QuotaExceededError",
     "estimate_read_pause_ms",

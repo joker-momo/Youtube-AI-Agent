@@ -700,6 +700,54 @@ class ImagePromptRequest(BaseModel):
     attachment_path: str | None = None  # persona/identity reference image (repo-confined)
 
 
+async def _generate_image_via_gemini(
+    context,
+    *,
+    prompt: str,
+    project_name: str,
+    out_path: Path,
+    response_timeout_ms: int,
+    aspect_ratio: str,
+) -> dict:
+    """Fallback image gen: same prompt/out_path, via Gemini instead of ChatGPT.
+
+    Used when ChatGPT fails twice (initial attempt + the existing
+    clear-data-and-retry pass) — most often the ChatGPT Free-tier account
+    hitting its image-generation quota (bug-511). Runs on a fresh page in the
+    SAME browser context; no conversation cleanup needed (Gemini temporary
+    chat never saves history).
+    """
+    from video_agent.browser_worker.drivers import GeminiImageDriver
+
+    page = await context.new_page()
+    try:
+        await human_pause(page, min_ms=400, max_ms=900)
+        driver = GeminiImageDriver(page)
+        return await driver.generate_image(
+            prompt,
+            project_name=project_name,
+            out_path=out_path,
+            response_timeout_ms=response_timeout_ms,
+            aspect_ratio=aspect_ratio,
+        )
+    finally:
+        try:
+            await page.close()
+        except Exception:
+            pass
+
+
+def _gemini_fallback_error_detail(gemini_exc: Exception, chatgpt_exc: Exception) -> dict:
+    detail = (
+        _driver_error_detail(gemini_exc)
+        if isinstance(gemini_exc, BrowserDriverError)
+        else {"error": f"{type(gemini_exc).__name__}: {gemini_exc}"}
+    )
+    detail["chatgpt_error"] = str(chatgpt_exc)
+    detail["gemini_fallback_attempted"] = True
+    return detail
+
+
 @app.post("/chatgpt/image")
 async def chatgpt_image(payload: ImagePromptRequest) -> dict:
     """One-shot ChatGPT image generation via a normal chat conversation.
@@ -771,16 +819,33 @@ async def chatgpt_image(payload: ImagePromptRequest) -> dict:
                             status_code=409,
                             detail=_driver_error_detail(retry_exc, login_required=True),
                         ) from retry_exc
-                    elif isinstance(retry_exc, BrowserDriverError):
+                    # ChatGPT failed twice (initial + retry) — fall back to
+                    # Gemini image gen (bug-511) instead of failing the Short.
+                    print(
+                        f"[browser] ChatGPT image gen failed twice ({retry_exc}); "
+                        "falling back to Gemini...",
+                        flush=True,
+                    )
+                    try:
+                        result = await _generate_image_via_gemini(
+                            context,
+                            prompt=payload.prompt,
+                            project_name=payload.project_name,
+                            out_path=safe_out,
+                            response_timeout_ms=payload.response_timeout_ms,
+                            aspect_ratio=payload.aspect_ratio,
+                        )
+                        return result
+                    except Exception as gemini_exc:
+                        if isinstance(gemini_exc, LoginRequiredError):
+                            raise HTTPException(
+                                status_code=409,
+                                detail=_driver_error_detail(gemini_exc, login_required=True),
+                            ) from gemini_exc
                         raise HTTPException(
                             status_code=502,
-                            detail=_driver_error_detail(retry_exc),
-                        ) from retry_exc
-                    else:
-                        raise HTTPException(
-                            status_code=502,
-                            detail={"error": f"{type(retry_exc).__name__}: {retry_exc}"},
-                        ) from retry_exc
+                            detail=_gemini_fallback_error_detail(gemini_exc, retry_exc),
+                        ) from gemini_exc
             finally:
                 try:
                     await human_pause(page, min_ms=400, max_ms=900)
@@ -801,6 +866,41 @@ class BatchImagePromptRequest(BaseModel):
     response_timeout_ms: int = 240_000
     aspect_ratio: str = "16:9"
     attachment_path: str | None = None  # persona/identity reference image (repo-confined)
+
+
+async def _generate_images_via_gemini(
+    context,
+    *,
+    prompts: list[str],
+    project_name: str,
+    out_paths: list[Path],
+    response_timeout_ms: int,
+    aspect_ratio: str,
+) -> list[dict]:
+    """Batch fallback: generate every prompt via Gemini, one page, sequentially."""
+    from video_agent.browser_worker.drivers import GeminiImageDriver
+
+    page = await context.new_page()
+    try:
+        await human_pause(page, min_ms=400, max_ms=900)
+        driver = GeminiImageDriver(page)
+        results = []
+        for prompt, out_path in zip(prompts, out_paths, strict=True):
+            results.append(
+                await driver.generate_image(
+                    prompt,
+                    project_name=project_name,
+                    out_path=out_path,
+                    response_timeout_ms=response_timeout_ms,
+                    aspect_ratio=aspect_ratio,
+                )
+            )
+        return results
+    finally:
+        try:
+            await page.close()
+        except Exception:
+            pass
 
 
 @app.post("/chatgpt/image/batch")
@@ -869,16 +969,33 @@ async def chatgpt_image_batch(payload: BatchImagePromptRequest) -> dict:
                             status_code=409,
                             detail=_driver_error_detail(retry_exc, login_required=True),
                         ) from retry_exc
-                    elif isinstance(retry_exc, BrowserDriverError):
+                    # ChatGPT batch failed twice — fall back to Gemini for the
+                    # whole batch (bug-511), rather than failing the Short.
+                    print(
+                        f"[browser] ChatGPT image batch failed twice ({retry_exc}); "
+                        "falling back to Gemini...",
+                        flush=True,
+                    )
+                    try:
+                        results = await _generate_images_via_gemini(
+                            context,
+                            prompts=payload.prompts,
+                            project_name=payload.project_name,
+                            out_paths=safe_out_paths,
+                            response_timeout_ms=payload.response_timeout_ms,
+                            aspect_ratio=payload.aspect_ratio,
+                        )
+                        return {"ok": True, "results": results}
+                    except Exception as gemini_exc:
+                        if isinstance(gemini_exc, LoginRequiredError):
+                            raise HTTPException(
+                                status_code=409,
+                                detail=_driver_error_detail(gemini_exc, login_required=True),
+                            ) from gemini_exc
                         raise HTTPException(
                             status_code=502,
-                            detail=_driver_error_detail(retry_exc),
-                        ) from retry_exc
-                    else:
-                        raise HTTPException(
-                            status_code=502,
-                            detail={"error": f"{type(retry_exc).__name__}: {retry_exc}"},
-                        ) from retry_exc
+                            detail=_gemini_fallback_error_detail(gemini_exc, retry_exc),
+                        ) from gemini_exc
             finally:
                 try:
                     await human_pause(page, min_ms=400, max_ms=900)

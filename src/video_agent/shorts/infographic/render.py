@@ -8,11 +8,11 @@ public dir, then run the Remotion CLI built by `build_remotion_commands`.
 """
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 from video_agent.shorts import paths
 from video_agent.shorts.renderer import _mirror_short_assets_to_public
+from video_agent.stages.render import _run_with_progress
 
 
 def build_infographic_render_command(render_props_path: Path, video_path: Path) -> list[str]:
@@ -37,7 +37,11 @@ def render_infographic(short_dir: Path, channel_config: dict) -> Path:
     video_path = outputs / paths.SHORT_VIDEO_FILE
     _mirror_short_assets_to_public(short_dir)
     cmd = build_infographic_render_command(render_props_path, video_path)
-    subprocess.run(cmd, check=True)  # pragma: no cover - needs a live Remotion install
+    progress_path = short_dir / "json" / "render_progress.json"
+    # Streams Remotion's "Rendered n/m" / "Encoded n/m" stdout into render_progress.json
+    # (same primitive the narrated pipeline uses) so the Renders tab's progress bar
+    # moves instead of sitting at 0% for the whole render.
+    _run_with_progress(cmd, progress_path)  # pragma: no cover - needs a live Remotion install
     return video_path
 
 

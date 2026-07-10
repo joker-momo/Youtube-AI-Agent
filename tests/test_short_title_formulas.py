@@ -115,6 +115,9 @@ def test_fallback_preserves_accents_from_hook():
     from video_agent.shorts.short_seo_builder import _fallback_title_from_hook
 
     # The recovered hook word must keep its accent ("título", not "titulo").
-    fb = _fallback_title_from_hook("El pan y el título largo", 45)
+    # "título" leads the hook so it's the first qualifying content word even
+    # after the >=3-char floor (short real words like "pan" now also count,
+    # bug-523 follow-up — reordered so this test isn't confounded by that).
+    fb = _fallback_title_from_hook("El título largo y el pan", 45)
     assert "título" in fb
     assert "titulo" not in fb.lower().replace("título", "")

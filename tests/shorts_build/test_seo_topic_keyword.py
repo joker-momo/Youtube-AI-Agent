@@ -167,3 +167,23 @@ def test_seo_prompt_asks_for_broad_search_phrase_in_description():
     p = prompts.short_seo_prompt(CFG, PLAN, SCRIPT)
     assert "hábitos saludables" in p
     assert "broad wellness search phrase" in p.lower()
+
+
+def test_short_3_letter_topic_word_is_not_dropped_from_topic_tokens():
+    """Bug (2026-07-11): a bread ("pan") checklist_score Short published with title
+    "Si tienes más de 45: comprueba" -- no mention of "pan" anywhere. Root cause:
+    _title_content_tokens required >=4 chars, silently dropping short-but-real
+    Spanish topic nouns ("pan", "sal", "sol", "voz"...) from BOTH the topic-keyword
+    requirement AND the emergency-fallback title synthesis, so the whole
+    topic-keyword contract (bug-517/519) never even considered "pan" a valid
+    keyword to enforce or embed."""
+    plan_with_short_topic = {"short_id": "s-1", "format": "infographic",
+                              "title": "¿Este pan te conviene?"}
+    tokens = _topic_tokens(plan_with_short_topic)
+    assert "pan" in tokens
+
+
+def test_fallback_title_can_embed_a_3_letter_topic_word():
+    from video_agent.shorts.short_seo_builder import _fallback_title_from_hook
+    title = _fallback_title_from_hook("Pan: comprueba estas 5 señales", 45)
+    assert "pan" in title.lower()

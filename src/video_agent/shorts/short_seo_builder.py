@@ -35,15 +35,23 @@ _TITLE_STOPWORDS = {
     "el", "la", "los", "las", "un", "una", "unos", "unas", "de", "del", "que",
     "esto", "este", "esta", "con", "por", "para", "más", "mas", "tus", "sus",
     "como", "cada", "sin", "hoy", "eso", "año", "años", "tras", "sobre",
+    # 3-letter fillers (only relevant now that the length floor dropped to 3).
+    "muy", "tan", "sus", "les", "nos", "soy", "voy", "doy",
 }
 
 
 def _title_content_tokens(text: str) -> set[str]:
-    """Lower-cased, accent-stripped content words (>=4 chars, non-stopword)."""
+    """Lower-cased, accent-stripped content words (>=3 chars, non-stopword).
+
+    >=3 (not 4): many real Spanish topic nouns are exactly 3 letters (pan, sal,
+    sol, voz, luz, paz, red, oro, uva, té) — a >=4 floor silently dropped them
+    from the topic-keyword contract, so a bread ("pan") Short's fallback title
+    synthesis had no way to ever embed its own topic word (bug-523 follow-up).
+    """
     decomposed = unicodedata.normalize("NFKD", str(text).lower())
     ascii_text = "".join(c for c in decomposed if not unicodedata.combining(c))
     words = re.findall(r"[a-z0-9]+", ascii_text)
-    return {w for w in words if len(w) >= 4 and w not in _TITLE_STOPWORDS}
+    return {w for w in words if len(w) >= 3 and w not in _TITLE_STOPWORDS}
 
 
 def _title_issues(title: str, hook: str) -> list[str]:
@@ -155,7 +163,7 @@ def _ordered_content_tokens(text: str) -> list[str]:
         norm = "".join(
             c for c in unicodedata.normalize("NFKD", raw.lower()) if not unicodedata.combining(c)
         )
-        if len(norm) >= 4 and norm not in _TITLE_STOPWORDS and norm not in seen:
+        if len(norm) >= 3 and norm not in _TITLE_STOPWORDS and norm not in seen:
             seen.add(norm)
             out.append(raw)
     return out

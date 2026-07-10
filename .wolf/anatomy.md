@@ -1,7 +1,7 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-07-10T08:44:13.466Z
-> Files: 1028 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-07-10T15:34:58.075Z
+> Files: 1029 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../../../../Users/joker/.claude/
 
@@ -934,7 +934,7 @@
 
 ## configs/vida-plena-45/
 
-- `channel.yaml` (~5844 tok)
+- `channel.yaml` (~6073 tok)
 
 ## docs/
 
@@ -1043,7 +1043,7 @@
 
 ## src/video_agent/assets/
 
-- `audio_ops.py` — Shared audio primitives (narration synth + bgm mix + silent wav + progress). (~2925 tok)
+- `audio_ops.py` — Shared audio primitives (narration synth + bgm mix + silent wav + progress). (~3098 tok)
 - `library.py` — AssetLibrary: list_usage_for_asset, update_visual_metadata, get_by_provider_id, get_by_asset_id + 2 (~5988 tok)
 - `materialize.py` — `materialize_media(src, dst)`: APFS CoW clone (`cp -c`) with `shutil.copy2` fallback, no hardlink. Drop-in copy2 replacement collapsing lib→job→public 3× bytes to 1×. Used by stages/assets.py, shorts/renderer.py, pipeline.py (~340 tok)
 - `media_ops.py` — Shared media primitives (ffmpeg encode, placeholder, preview, frame extract). (~1766 tok)
@@ -1194,13 +1194,13 @@
 ## src/video_agent/shorts/infographic/
 
 - `__init__.py` (~41 tok)
-- `build.py` — Orchestrate static infographic Shorts (plan → poster → QA → music → render). (~3978 tok)
+- `build.py` — Orchestrate static infographic Shorts (plan → poster → QA → music → render). (~5678 tok)
 - `plan.py` — LLM-driven infographic poster plan (pick format + fill), validated. (~935 tok)
-- `poster_prompt.py` — Per-format 9:16 infographic poster prompts (AI-only, text baked in). (~1443 tok)
-- `poster.py` — Generate the infographic poster PNG via the injected image function. (~460 tok)
+- `poster_prompt.py` — Per-format 9:16 infographic poster prompts (AI-only, text baked in). (~1830 tok)
+- `poster.py` — Generate the infographic poster PNG via the injected image function. (~532 tok)
 - `qa.py` — Deterministic text-presence QA gate over a poster's read-back text. (~343 tok)
 - `render_props.py` — Render props for the Remotion InfographicShort composition. (~380 tok)
-- `render.py` — Render an infographic short via Remotion (direct InfographicShort composition). (~650 tok)
+- `render.py` — Render an infographic short via Remotion (direct InfographicShort composition). (~748 tok)
 - `schema.py` — Poster-plan schema + validation for infographic shorts. (~995 tok)
 - `seo.py` — SEO/title artifact for infographic Shorts, reusing the shipped Shorts title rules. (~544 tok)
 - `voiceover.py` — Narration text for an infographic short (read the poster) + TTS synth. (~492 tok)
@@ -1238,7 +1238,7 @@
 - `app.py` — API: 1 endpoints (~355 tok)
 - `dashboard.html` — Video Agent Dashboard (~42369 tok)
 - `run_all_pipeline.py` — stop_request_path, is_run_locked, execute_run_all (~9787 tok)
-- `shorts_studio.html` — Shorts Studio (~66845 tok)
+- `shorts_studio.html` — Shorts Studio (~58436 tok)
 
 ## src/video_agent/web/routes/
 
@@ -1273,6 +1273,7 @@
 - `test_assets_stage.py` — The graphic/defer/relabel tests below exercise the SHORT fork — that logic (~7116 tok)
 - `test_audience_age_wiring.py` — A 60+ idea must make the content builders speak to 60, not hardcoded 45. (~863 tok)
 - `test_audience_age.py` — Per-video audience age is derived from the idea, not hardcoded to 45. (~632 tok)
+- `test_audio_ops_mixer.py` — Shared narration+BGM mixer primitive (video_agent.assets.audio_ops). (~635 tok)
 - `test_auto_stages.py` — FakeBrowserClient: channel_path, idea_payload, valid_script_payload, valid_scenes_payload + 11 more (~26540 tok)
 - `test_briefing_script_length_contract.py` — Regression: the script + script_qa BRIEFING length contract is content-driven. (~771 tok)
 - `test_browser_worker_cdp_attach.py` — CDP attach failures surface as a structured 503, never a generic 500. (~866 tok)
@@ -1331,7 +1332,7 @@
 - `test_script_stage.py` — channel_path, idea_payload, valid_script_payload, valid_scenes_payload (~10502 tok)
 - `test_short_graphic_image_migration.py` — test_video_covered_marker_never_skips_ai_for_graphic_scenes, test_video_covered_marker_uses_native_v (~1894 tok)
 - `test_short_title_formulas.py` — Shorts titles use the 4 scroll-stopper formulas, <=40 chars, age-framed. (~1403 tok)
-- `test_shorts_api.py` — Shorts Autopilot v5 — Phase 7: backend API + status/source-url. (~6610 tok)
+- `test_shorts_api.py` — Shorts Autopilot v5 — Phase 7: backend API + status/source-url. (~6888 tok)
 - `test_shorts_asset_schedule.py` — Compiled-schedule + manifest-adapter tests (spec v3.2.3 §15/§16/§16.1/§17, §41.2). (~4174 tok)
 - `test_shorts_audio_sync.py` — test_audio_visual_delta_uses_tail_constants, test_audio_visual_delta_pass_threshold, test_audio_visu (~1046 tok)
 - `test_shorts_audio.py` — Shorts Autopilot v5 — Phase 5: music resolution + ffmpeg mix command. (~2283 tok)
@@ -1410,18 +1411,18 @@
 ## tests/shorts_build/infographic/
 
 - `__init__.py` (~0 tok)
-- `test_build.py` — image_fn, llm_fn, read_text_fn, music_fn (~1789 tok)
+- `test_build.py` — image_fn, llm_fn, read_text_fn, music_fn (~3957 tok)
 - `test_infographic_seo.py` — test_build_infographic_seo_writes_title_aligned_with_hook, llm_fn (~338 tok)
 - `test_paths.py` — test_infographic_artifact_names_exist (~75 tok)
 - `test_plan.py` — test_build_poster_plan_parses_validates_and_sets_age, llm_fn, test_invalid_then_valid_retries, llm_f (~378 tok)
-- `test_poster_prompt.py` — test_prompt_contains_title_and_all_item_labels, test_numbered_tips_prompt_requests_numbers, test_war (~458 tok)
+- `test_poster_prompt.py` — test_prompt_contains_title_and_all_item_labels, test_numbered_tips_prompt_requests_numbers, test_war (~1551 tok)
 - `test_poster.py` — test_generate_poster_writes_png_logs_and_passes_raw_body, fake_image_fn (~383 tok)
 - `test_qa.py` — test_pass_when_all_text_present, test_fail_lists_missing_labels, test_unavailable_reader_yields_qa_u (~223 tok)
 - `test_render_props.py` — test_props_reference_poster_and_audio_and_duration (~370 tok)
-- `test_render.py` — test_render_command_targets_infographic_composition_with_auto_concurrency (~312 tok)
+- `test_render.py` — test_render_command_targets_infographic_composition_with_auto_concurrency, test_render_infographic_w (~774 tok)
 - `test_schema.py` — test_valid_category_grid_plan_has_no_issues, test_unknown_format_is_flagged, test_category_grid_item (~1040 tok)
 - `test_voiceover.py` — test_narration_starts_with_hook_line, test_narration_reads_every_item_and_ends_with_cta (~187 tok)
-- `test_wiring.py` — test_worker_dispatches_infographic_command, test_studio_command_for_short_type, image_fn, llm_fn (~2616 tok)
+- `test_wiring.py` — test_worker_dispatches_infographic_command, test_studio_command_for_short_type, image_fn, llm_fn (~3177 tok)
 
 ## tools/
 

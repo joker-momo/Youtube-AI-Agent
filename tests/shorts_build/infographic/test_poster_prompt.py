@@ -99,3 +99,36 @@ def test_checklist_score_layout_renders_checkboxes_and_score_line():
     assert "checkbox" in body.lower()
     assert "duermo siete horas" in body
     assert "4+ = vas bien" in body
+
+
+def test_poster_body_carries_channel_brand_identity_as_bottom_banner():
+    """Operator decision (2026-07-10, final): a corner tag (even a "visible logo"
+    one) still under-delivered — the operator referenced a sample poster with a
+    solid-color BOTTOM BANNER BAR carrying the channel name, and asked for exactly
+    that element (no mascot, no speech bubble, no trust badge — scoped down from
+    the full reference). Must not contradict the base prompt's "no watermark" rule."""
+    from video_agent.shorts.infographic.poster_prompt import build_poster_body, _BASE
+    body = build_poster_body(
+        {"poster_format": "numbered_tips", "title": "Foods For Eyes",
+         "items": [{"label": f"i{n}"} for n in range(5)]},
+        channel_config={"channel": {"name": "Vida Plena 45+: Salud y Bienestar"}},
+    )
+    assert "Vida Plena 45+" in body
+    assert "banner" in body.lower()
+    assert "bottom" in body.lower()
+    # Scoped down: no mascot / speech bubble / trust badge additions.
+    assert "mascot" not in body.lower()
+    assert "badge" not in body.lower()
+    # The exception must be carved out of the base "no watermark" rule, not just
+    # bolted on afterward (bug: the base rule silently won, AI skipped the tag).
+    assert "except the channel brand" in _BASE.lower()
+
+
+def test_poster_body_omits_brand_line_when_no_channel_name_configured():
+    from video_agent.shorts.infographic.poster_prompt import build_poster_body
+    body = build_poster_body(
+        {"poster_format": "numbered_tips", "title": "Foods For Eyes",
+         "items": [{"label": f"i{n}"} for n in range(5)]},
+    )
+    # No crash, no dangling "Brand identity:" line with an empty name.
+    assert "Brand identity" not in body

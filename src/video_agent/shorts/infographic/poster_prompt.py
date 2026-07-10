@@ -10,7 +10,9 @@ _BASE = (
     "wellness audience. Render ALL the Spanish text below EXACTLY as written, spelled "
     "correctly with accents, large and legible on a phone. Use simple realistic food/"
     "object photos or clean flat icons per item. Keep generous margins; do not crop any "
-    "text. Add NO other text, no watermark, no logo, no captions beyond what is listed. "
+    "text. Add NO other text, no captions beyond what is listed, and no watermark or logo "
+    "EXCEPT the channel brand mark described below (if any) — that is the only permitted "
+    "extra mark on the poster. "
     "STRICT TYPOGRAPHIC HIERARCHY: render each item's short label/sub-heading LARGE and "
     "extra-BOLD, and any explanation/note text clearly smaller and lighter beneath it — "
     "a phone viewer must understand the poster from the bold labels alone, without "
@@ -91,7 +93,26 @@ def _format_block(plan: dict[str, Any]) -> str:
     return "Layout: a clean labelled infographic. Items: " + "; ".join(labels) + "."
 
 
-def build_poster_body(plan: dict[str, Any]) -> str:
+def _brand_identity_line(channel_config: dict[str, Any] | None) -> str:
+    name = str(((channel_config or {}).get("channel") or {}).get("name") or "").strip()
+    if not name:
+        return ""
+    # A full "Name: Tagline" channel name is too long for a corner tag; use just
+    # the part before the colon (short, still recognizable) for the on-screen mark.
+    short_name = name.split(":", 1)[0].strip() or name
+    return (
+        f'\n\nBrand identity (creative direction): "{name}". Match a calm, '
+        f"trustworthy, editorial wellness tone consistent with this identity. "
+        f"Additionally, add a BOTTOM BANNER: a solid-color bar spanning the full "
+        f'width at the very bottom of the poster, with the channel name "{short_name}" '
+        f"in bold white or cream text centered inside it — clearly legible at a "
+        f"glance, like a YouTube channel watermark bar. Keep the banner short "
+        f"(one line, ~5-8% of the poster height) so it never covers or crowds any "
+        f"item's text, icon, or the numbered list above it."
+    )
+
+
+def build_poster_body(plan: dict[str, Any], channel_config: dict[str, Any] | None = None) -> str:
     """The raw poster body WITHOUT the driver's dimension instruction."""
     title = str(plan.get("title") or "").strip()
     subtitle = str(plan.get("subtitle") or "").strip()
@@ -99,9 +120,10 @@ def build_poster_body(plan: dict[str, Any]) -> str:
     if subtitle:
         body += f' Subtitle under it: "{subtitle}".'
     body += "\n\n" + _format_block(plan)
+    body += _brand_identity_line(channel_config)
     return body
 
 
-def build_poster_prompt(plan: dict[str, Any]) -> str:
+def build_poster_prompt(plan: dict[str, Any], channel_config: dict[str, Any] | None = None) -> str:
     """Full prompt (body + portrait dimension instruction) — for logging/inspection."""
-    return build_image_gen_prompt(build_poster_body(plan), aspect_ratio="9:16")
+    return build_image_gen_prompt(build_poster_body(plan, channel_config), aspect_ratio="9:16")

@@ -12,7 +12,9 @@ from video_agent.shorts.infographic.poster_prompt import (
 )
 
 
-async def generate_poster(short_dir: Path, plan: dict[str, Any], image_fn) -> Path:
+async def generate_poster(
+    short_dir: Path, plan: dict[str, Any], image_fn, channel_config: dict[str, Any] | None = None
+) -> Path:
     """Generate the infographic poster image for a short.
 
     Args:
@@ -20,6 +22,8 @@ async def generate_poster(short_dir: Path, plan: dict[str, Any], image_fn) -> Pa
         plan: The poster plan dict (contains title, items, format, etc.).
         image_fn: Async image generation function that accepts prompt, project_name,
                   out_path, and aspect_ratio kwargs.
+        channel_config: Supplies the channel's brand identity as creative direction
+                        for the poster (never rendered as on-screen text/watermark).
 
     Returns:
         Path to the generated poster PNG.
@@ -32,13 +36,13 @@ async def generate_poster(short_dir: Path, plan: dict[str, Any], image_fn) -> Pa
         short_dir,
         stage="infographic",
         kind="infographic_poster",
-        prompt=build_poster_prompt(plan),
+        prompt=build_poster_prompt(plan, channel_config),
         out_path=str(out_path),
         aspect_ratio="9:16",
     )
     # ...but pass the RAW body: the driver prepends the dimension instruction once.
     await image_fn(
-        prompt=build_poster_body(plan),
+        prompt=build_poster_body(plan, channel_config),
         project_name=f"{short_dir.name[:38]}-poster"[:45],
         out_path=str(out_path),
         aspect_ratio="9:16",

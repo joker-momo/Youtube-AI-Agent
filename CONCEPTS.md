@@ -58,6 +58,11 @@
   `audio.py` produces dry narration; `audio_mixer.py` is the sole music mixer
   and writes `audio/short_mix.m4a`, `music_selection.json`, and the canonical
   `assets_manifest.audio` render reference.
+- **Original procedural BGM** — a deterministic, math-synthesized instrumental
+  bed keyed by a Short id. It uses no external audio input and writes an AAC
+  output plus `json/original_bgm.json` provenance. The music-only infographic
+  path opts into it through `shorts.infographic.music_source`.
+  `src/video_agent/shorts/original_bgm.py`.
 
 ## Visual timeline (spec v3.2.3)
 
@@ -159,6 +164,7 @@
 
 ## Assets & render
 
+- **Music-only infographic Short** — a single 9:16 poster held static for a configured reading duration, with no TTS narration. Its BGM can be a deterministic original procedural bed (default) or an explicitly configured licensed library track. Built by `src/video_agent/shorts/infographic/build.py` and rendered by `remotion/src/shorts/InfographicShort.tsx`.
 - **TTS** — text-to-speech narration generation. `src/video_agent/tts.py`.
 - **Thumbnail planner** — plans thumbnails for a video.
   `src/video_agent/thumbnail_planner.py`.

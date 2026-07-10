@@ -1,7 +1,7 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-07-09T21:26:21.741Z
-> Files: 1006 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-07-10T08:29:07.567Z
+> Files: 1024 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../../../../Users/joker/.claude/
 
@@ -106,9 +106,18 @@
 
 ## ../../../../private/tmp/claude-501/-Volumes-DATA-YBT-Studio-Youtube-AI-Agent/d2f804b5-a6f5-462e-b8fd-8f82e456667e/scratchpad/
 
+- `inspect_gemini.py` — Live-inspect the Gemini image page via CDP while GeminiImageDriver waits. (~568 tok)
 - `regen_mundial.py` — Regen the Mundial job's comparison graphics + thumbnails with the fixed prompts. (~506 tok)
 - `watch_job.sh` — Background watcher for the Mundial long-form job. (~584 tok)
 - `watch_short.sh` — Watch the short-01 rebuild. Exit (re-invoke Claude) on queue terminal state, (~482 tok)
+
+## ../../../../private/tmp/claude-501/-Volumes-DATA-YBT-Studio-Youtube-AI-Agent/deb2259c-c822-4258-aefb-ba6312128829/scratchpad/
+
+- `doctor_scan.py` — Read-only /doctor transcript scan: usage, hooks, denials. Counting only. (~2121 tok)
+- `patch_ars_inline.json` (~22 tok)
+- `patch_claude_json.json` (~35 tok)
+- `patch_local_settings.json` (~56 tok)
+- `patch_user_settings.json` (~41 tok)
 
 ## ../../../../private/tmp/claude-501/-Volumes-DATA-YBT-Studio-Youtube-AI-Agent/f349c6d7-2edf-45d8-bcde-b0903be14f56/scratchpad/
 
@@ -136,8 +145,8 @@
 - `.dockerignore` — Docker ignore rules (~84 tok)
 - `.gitignore` — Git ignore rules (~518 tok)
 - `AGENTS.md` — Project Operating Rules (~2404 tok)
-- `CLAUDE.md` — 🎯 PRIME DIRECTIVE — read this FIRST, every session, before any request (~2173 tok)
-- `CONCEPTS.md` — CONCEPTS.md — Shared Domain Vocabulary (~1742 tok)
+- `CLAUDE.md` — 🎯 PRIME DIRECTIVE — read this FIRST, every session, before any request (~1370 tok)
+- `CONCEPTS.md` — CONCEPTS.md — Shared Domain Vocabulary (~2901 tok)
 - `CONCEPTS.md` — CONCEPTS.md — Shared Domain Vocabulary (~1201 tok)
 - `install.sh` — Master installer — macOS native only (no Docker). (~201 tok)
 - `PORTING.md` — PORTING.md — Chuyển project sang máy khác (Ubuntu) (~2145 tok)
@@ -259,6 +268,14 @@
 
 - `openwolf.md` (~313 tok)
 - `skill-routing.md` — Claude rule for shared cross-agent skill routing: root AGENTS as canonical policy, Superpowers as OS, Addy agent-skills as non-overlapping toolbox only (~850 tok)
+
+## .claude/skills/openwolf-designqc/
+
+- `SKILL.md` — OpenWolf Design QC (~405 tok)
+
+## .claude/skills/openwolf-reframe/
+
+- `SKILL.md` — OpenWolf Reframe — UI Framework Selection (~312 tok)
 
 ## .codegraph/
 
@@ -917,7 +934,7 @@
 
 ## configs/vida-plena-45/
 
-- `channel.yaml` (~5636 tok)
+- `channel.yaml` (~5844 tok)
 
 ## docs/
 
@@ -1036,11 +1053,13 @@
 
 ## src/video_agent/browser_worker/
 
-- `app.py` — API: 2 endpoints (~11471 tok)
+- `app.py` — API: 2 endpoints (~12754 tok)
 
 ## src/video_agent/browser_worker/drivers/
 
+- `__init__.py` (~264 tok)
 - `chatgpt_image.py` — ChatGPTImageDriver: build_image_gen_prompt, open (~15439 tok)
+- `gemini_image.py` — Gemini image-generation driver — fallback when ChatGPT image gen fails. (~3487 tok)
 - `humanize.py` — human_pause, human_click, estimate_read_pause_ms, human_type (~2426 tok)
 
 ## src/video_agent/lipsync/
@@ -1063,7 +1082,7 @@
 - `idea_youtube_sync.py` — YouTube channel sync + published-video duplicate detection. (~2793 tok)
 - `image_prompt_log.py` — Per-job audit log of every ChatGPT image-generation prompt. (~2016 tok)
 - `job_state.py` — class: to_dict, from_dict, stage, save_job + 2 more (~1072 tok)
-- `worker.py` — _JobHeartbeat: get_jobs_root, get_channel_path, chatgpt_fn, start + 10 more (~8150 tok)
+- `worker.py` — _JobHeartbeat: get_jobs_root, get_channel_path, chatgpt_fn, start + 10 more (~8437 tok)
 
 ## src/video_agent/orchestrator/stages/
 
@@ -1103,11 +1122,12 @@
 - `frames.py` — Canonical seconds→frames contract for the Shorts compiled visual timeline. (~442 tok)
 - `idea_preservation.py` — derive_idea_contract, derive_idea_items, ensure_script_idea_fields, validate_script_idea_contract (~10494 tok)
 - `llm_history.py` — Per-Short LLM call history recorder. (~3344 tok)
-- `llm.py` — Shorts AI role wiring (spec v6 §2 + §3). (~1754 tok)
+- `llm.py` — Shorts AI role wiring (spec v6 §2 + §3). (~2084 tok)
+- `original_bgm.py` — Create reproducible, original background music for Shorts. (~3492 tok)
 - `paths.py` — Canonical storage-layout paths for the Shorts autopilot. (~1993 tok)
 - `paths.py` — Canonical storage-layout paths for the Shorts autopilot. (~1940 tok)
 - `performance_memory.py` — write_performance_memory (~608 tok)
-- `prompts.py` — Strict, JSON-only, Spain-first prompts for Short script / scene / QA generation. (~27677 tok)
+- `prompts.py` — Strict, JSON-only, Spain-first prompts for Short script / scene / QA generation. (~28248 tok)
 - `prompts.py` — Strict, JSON-only, Spain-first prompts for Short script / scene / QA generation. (~26358 tok)
 - `qa_common.py` — Shared QA classes, constants and leaf helpers. (~1986 tok)
 - `qa_normalize.py` — Normalize raw QA issues into structured NormalizedIssue records. (~9104 tok)
@@ -1119,7 +1139,7 @@
 - `short_builder.py` — Build one Short end to end: generate → QA (regen loop) → audio → mix → render. (~10242 tok)
 - `short_scene_builder.py` — Spec v6 §2.4 — ChatGPT generates Short scenes AND picks layouts. (~6581 tok)
 - `short_script_builder.py` — Spec v6 §2.3 — Generate + persist a Short script via ChatGPT. (~1524 tok)
-- `short_seo_builder.py` — Build ``short_seo.json`` for a Short (LLM-generated, parsed + normalized). (~4109 tok)
+- `short_seo_builder.py` — Build ``short_seo.json`` for a Short (LLM-generated, parsed + normalized). (~5382 tok)
 - `source_map.py` — Build ``short_source_map.json`` linking a Short back to long-video scenes. (~2731 tok)
 - `status.py` — Summarize Shorts state for UI + orphaned-Short recovery (recover_stale_short / force_terminate_orphaned_shorts / short_owner_is_alive). (~2300 tok)
 - `status.py` — Summarize Shorts state for the jobs list / Shorts tab. (~3554 tok)
@@ -1141,7 +1161,7 @@
 
 - `__init__.py` — Shorts-only asset layer (T4). (~186 tok)
 - `image_prompt.py` — ChatGPT image-prompt builder for Shorts AI-fallback scenes. (~6530 tok)
-- `prepare.py` — Shorts ``prepare_assets`` (T5). (~5220 tok)
+- `prepare.py` — Shorts ``prepare_assets`` (T5). (~5368 tok)
 - `scene_resolver.py` — Shorts per-scene asset cascade (T5). (~3977 tok)
 - `span_candidates.py` — Shorts visual-span asset service. (~3984 tok)
 
@@ -1159,7 +1179,7 @@
 ## src/video_agent/shorts/builder/stages/
 
 - `media.py` — Asset, audio, SEO, render & lifecycle stages for the Short builder. (~6941 tok)
-- `scenes.py` — Scene-generation stage cluster for the Short builder. (~22855 tok)
+- `scenes.py` — Scene-generation stage cluster for the Short builder. (~23681 tok)
 - `script.py` — Script generation, QA, anti-AI review & humanization stages. (~7496 tok)
 - `visual_acquisition.py` — PR C report-only visual metadata acquisition stage (spec v4.0.3). (~4072 tok)
 - `visual_beats.py` — PR E visual beat-planning stage. (~2336 tok)
@@ -1171,12 +1191,12 @@
 ## src/video_agent/shorts/infographic/
 
 - `__init__.py` (~41 tok)
-- `build.py` — Orchestrate the infographic-short pipeline (plan → poster → QA → voice → render). (~2200 tok)
+- `build.py` — Orchestrate static infographic Shorts (plan → poster → QA → music → render). (~3902 tok)
 - `plan.py` — LLM-driven infographic poster plan (pick format + fill), validated. (~736 tok)
-- `poster_prompt.py` — Per-format 9:16 infographic poster prompts (AI-only, text baked in). (~963 tok)
+- `poster_prompt.py` — Per-format 9:16 infographic poster prompts (AI-only, text baked in). (~1048 tok)
 - `poster.py` — Generate the infographic poster PNG via the injected image function. (~460 tok)
 - `qa.py` — Deterministic text-presence QA gate over a poster's read-back text. (~343 tok)
-- `render_props.py` — Render props for the Remotion InfographicShort composition. (~370 tok)
+- `render_props.py` — Render props for the Remotion InfographicShort composition. (~380 tok)
 - `render.py` — Render an infographic short via Remotion (direct InfographicShort composition). (~650 tok)
 - `schema.py` — Poster-plan schema + validation for infographic shorts. (~528 tok)
 - `seo.py` — SEO/title artifact for infographic Shorts, reusing the shipped Shorts title rules. (~544 tok)
@@ -1189,10 +1209,10 @@
 - `audio_fit.py` — Audio-fit & sync validation for scene durations. (~1889 tok)
 - `checks.py` — Script, scene structure, audio-fit, and graphic payload validators. (~16000 tok)
 - `graphic_checks.py` — Graphic-scene detection and graphic payload field validation. (~7162 tok)
-- `issues.py` — Pre-acquisition validation for Shorts structured graphic intents (spec v7 §18). (~1167 tok)
-- `repairs.py` — repair_five_error_bread_payoff_layout, repair_missing_graphic_checklist_scene, repair_excess_graphic (~8097 tok)
-- `scene_structure.py` — Whole-short scene structure validation, repair plan & pacing. (~13495 tok)
-- `script_checks.py` — Script-level validation: word budget, candidate validation, checklist cap. (~4800 tok)
+- `issues.py` — Pre-acquisition validation for Shorts structured graphic intents (spec v7 §18). (~1278 tok)
+- `repairs.py` — repair_five_error_bread_payoff_layout, repair_missing_graphic_checklist_scene, repair_excess_graphic (~11366 tok)
+- `scene_structure.py` — Whole-short scene structure validation, repair plan & pacing. (~14095 tok)
+- `script_checks.py` — Script-level validation: word budget, candidate validation, checklist cap. (~4940 tok)
 - `script_checks.py` — Script-level validation: word budget, candidate validation, checklist cap. (~4609 tok)
 
 ## src/video_agent/stages/
@@ -1215,7 +1235,7 @@
 - `app.py` — API: 1 endpoints (~355 tok)
 - `dashboard.html` — Video Agent Dashboard (~42369 tok)
 - `run_all_pipeline.py` — stop_request_path, is_run_locked, execute_run_all (~9787 tok)
-- `shorts_studio.html` — Shorts Studio (~66682 tok)
+- `shorts_studio.html` — Shorts Studio (~66845 tok)
 
 ## src/video_agent/web/routes/
 
@@ -1227,7 +1247,7 @@
 - `dashboard.py` — Dashboard page route. (~153 tok)
 - `jobs.py` — Job CRUD and control routes. (~3256 tok)
 - `run.py` — Run-all and run-batch pipeline routes. (~1362 tok)
-- `shorts_studio.py` — API: 3 endpoints (~9875 tok)
+- `shorts_studio.py` — API: 3 endpoints (~9911 tok)
 - `shorts.py` — Backend API for the Shorts Autopilot (spec §18). (~2492 tok)
 - `stages.py` — Stage-run/promote/auto routes plus scene asset generation. (~6244 tok)
 - `timeline.py` — Timeline and logs routes. (~5981 tok)
@@ -1254,6 +1274,7 @@
 - `test_briefing_script_length_contract.py` — Regression: the script + script_qa BRIEFING length contract is content-driven. (~771 tok)
 - `test_browser_worker_cdp_attach.py` — CDP attach failures surface as a structured 503, never a generic 500. (~866 tok)
 - `test_browser_worker_chrome.py` — test_runtime_returns_503_when_cdp_unreachable, test_cdp_url_defaults_to_localhost, test_cdp_url_resp (~481 tok)
+- `test_browser_worker_gemini_image_fallback.py` — bug-511: when ChatGPT image gen fails twice, fall back to Gemini. (~2236 tok)
 - `test_color_mix.py` — Tests for OKLab-based per-video accent colour resolution (bug-466). (~1858 tok)
 - `test_complete_stage_resume.py` — Regression guard for ``_complete_stage`` resume pointer (I2). (~707 tok)
 - `test_content_strategy_prompts.py` — test_script_prompt_demands_specific_pain_hook_after_45, test_script_prompt_requires_actionable_speci (~1077 tok)
@@ -1307,23 +1328,25 @@
 - `test_script_stage.py` — channel_path, idea_payload, valid_script_payload, valid_scenes_payload (~10502 tok)
 - `test_short_graphic_image_migration.py` — test_video_covered_marker_never_skips_ai_for_graphic_scenes, test_video_covered_marker_uses_native_v (~1894 tok)
 - `test_short_title_formulas.py` — Shorts titles use the 4 scroll-stopper formulas, <=40 chars, age-framed. (~1403 tok)
+- `test_shorts_api.py` — Shorts Autopilot v5 — Phase 7: backend API + status/source-url. (~6610 tok)
 - `test_shorts_asset_schedule.py` — Compiled-schedule + manifest-adapter tests (spec v3.2.3 §15/§16/§16.1/§17, §41.2). (~4174 tok)
-- `test_shorts_audio_sync.py` — test_audio_visual_delta_uses_tail_constants, test_audio_visual_delta_pass_threshold, test_audio_visu (~477 tok)
+- `test_shorts_audio_sync.py` — test_audio_visual_delta_uses_tail_constants, test_audio_visual_delta_pass_threshold, test_audio_visu (~1046 tok)
 - `test_shorts_audio.py` — Shorts Autopilot v5 — Phase 5: music resolution + ffmpeg mix command. (~2283 tok)
 - `test_shorts_autopilot_trigger_race.py` — Regression for bug-460: Shorts autopilot auto-trigger silently dropped. (~1270 tok)
 - `test_shorts_autopilot.py` — Shorts Autopilot v5 — Phase 1 foundation tests. (~5243 tok)
 - `test_shorts_call_budget.py` — test_call_budget_summary_has_required_fields, test_call_budget_classifies_provider_errors_separately (~832 tok)
 - `test_shorts_frames.py` — Frame-contract parity tests (spec v3.2.3 §14.1). (~584 tok)
-- `test_shorts_idea_preservation.py` — test_extracts_numbered_promise_and_avoids_bare_number_false_positives, test_range_count_contract_use (~9976 tok)
+- `test_shorts_idea_preservation.py` — test_extracts_numbered_promise_and_avoids_bare_number_false_positives, test_range_count_contract_use (~12256 tok)
 - `test_shorts_llm_history.py` — test_recorder_logs_prompt_and_response, test_recorder_supports_two_arg_call_shape, test_recorder_log (~1004 tok)
 - `test_shorts_pipeline_new_quality_stages.py` — fn, background_fn, tts_fn, mix_fn (~3129 tok)
 - `test_shorts_remotion_contract.py` — Source-inspection contracts for the Shorts Remotion renderer. (~447 tok)
 - `test_shorts_render_handoff.py` — test_prepared_short_props_drop_report_only_schedule_and_embed_enforced_schedule, test_prepared_short (~2589 tok)
 - `test_shorts_retention_plan.py` — test_retention_plan_fallback_writes_required_fields, test_retention_plan_parses_llm_json_when_enable (~2344 tok)
+- `test_shorts_scene_duration_targets.py` — Spec v4 §4.3 — tighter CTA/tip scene-duration targets. (~479 tok)
 - `test_shorts_scene_fit_repair.py` — Regression tests for QA storm fix v2.2. (~5336 tok)
 - `test_shorts_seo_context_leak.py` — Regression tests for SEO context-leak fix (spec v1.2). (~2137 tok)
 - `test_shorts_stale_recovery.py` — Orphaned-Short recovery: a synchronous build that dies mid-stage leaves (~1649 tok)
-- `test_shorts_studio.py` — client, test_job_queue_active_jobs_returns_pending_and_running, test_rendered_shorts_copy_hashtags_w (~5066 tok)
+- `test_shorts_studio.py` — client, test_job_queue_active_jobs_returns_pending_and_running, test_rendered_shorts_copy_hashtags_w (~5806 tok)
 - `test_shorts_transition_polish.py` — Source-inspection contracts for the Shorts anti-slideshow polish. (~656 tok)
 - `test_shorts_v6_ai_roles.py` — Spec v6 — AI role contract + temporary conversations. (~3901 tok)
 - `test_shorts_validate_scenes_repair.py` — repair_visual_only_unreadable injects the missing item's text into the scene (~1188 tok)
@@ -1367,30 +1390,34 @@
 ## tests/shorts_build/
 
 - `conftest.py` — Shorts Autopilot v5 — Phase 3/4: prompts, source map, seo, QA, build_short. (~2399 tok)
+- `test_audio_render.py` — test_audio_fit_guard_runs_after_tts_before_mix_and_render, tts_fn, test_audio_fit_small_tail_shortag (~3481 tok)
 - `test_build_orchestration.py` — test_short_stage_retry_clears_stale_completion_and_error, test_build_short_pass_renders_and_writes_a (~12444 tok)
+- `test_cta_duration_contract.py` — bug-505 / Codex 20260709-214518: CTA duration and funnel contracts must agree. (~5878 tok)
 - `test_graphic_layout_port.py` — Regression tests for the long-form graphic-card port into the Shorts pipeline. (~2546 tok)
+- `test_original_bgm.py` — test_original_bgm_is_deterministic_and_has_no_external_audio_inputs, test_original_bgm_seed_changes_ (~919 tok)
 - `test_qa_issues.py` — test_suppress_stale_hook_fidelity, test_repairable_point_grouping, test_count_promise_soft_when_coun (~6327 tok)
 - `test_scene_script_coverage.py` — bug-503 / Codex task 20260709-202252: deterministic source-fidelity coverage guard. (~2018 tok)
 - `test_scene_stages.py` — test_phase15_graphic_layouts_preserved_by_scene_normalizer, test_scene_normalizer_backfills_source_s (~18633 tok)
 - `test_script_candidate_validation.py` — test_rejects_partial_script_too_few_blocks, test_rejects_script_not_starting_at_zero, test_rejects_m (~2033 tok)
 - `test_script_stages.py` — test_short_script_prompt_has_retention_and_language_rules, test_v13_script_prompt_uses_calibrated_wo (~1613 tok)
+- `test_seo_topic_keyword.py` — Topic-keyword SEO contract (operator feedback 2026-07-10). (~1788 tok)
 - `test_seo.py` — test_short_seo_prompt_prefers_broad_nutrition_tags_over_nutricion45, test_short_seo_prompt_uses_high (~1668 tok)
 
 ## tests/shorts_build/infographic/
 
 - `__init__.py` (~0 tok)
-- `test_build.py` — image_fn, llm_fn, read_text_fn, tts_fn (~1140 tok)
+- `test_build.py` — image_fn, llm_fn, read_text_fn, music_fn (~1789 tok)
 - `test_infographic_seo.py` — test_build_infographic_seo_writes_title_aligned_with_hook, llm_fn (~338 tok)
 - `test_paths.py` — test_infographic_artifact_names_exist (~75 tok)
 - `test_plan.py` — test_build_poster_plan_parses_validates_and_sets_age, llm_fn, test_invalid_then_valid_retries, llm_f (~378 tok)
 - `test_poster_prompt.py` — test_prompt_contains_title_and_all_item_labels, test_numbered_tips_prompt_requests_numbers, test_war (~458 tok)
 - `test_poster.py` — test_generate_poster_writes_png_logs_and_passes_raw_body, fake_image_fn (~383 tok)
 - `test_qa.py` — test_pass_when_all_text_present, test_fail_lists_missing_labels, test_unavailable_reader_yields_qa_u (~223 tok)
-- `test_render_props.py` — test_props_reference_poster_and_audio_and_duration (~338 tok)
+- `test_render_props.py` — test_props_reference_poster_and_audio_and_duration (~370 tok)
 - `test_render.py` — test_render_command_targets_infographic_composition_with_auto_concurrency (~312 tok)
 - `test_schema.py` — test_valid_category_grid_plan_has_no_issues, test_unknown_format_is_flagged, test_category_grid_item (~429 tok)
 - `test_voiceover.py` — test_narration_starts_with_hook_line, test_narration_reads_every_item_and_ends_with_cta (~187 tok)
-- `test_wiring.py` — test_worker_dispatches_infographic_command, test_studio_command_for_short_type, image_fn, llm_fn (~1038 tok)
+- `test_wiring.py` — test_worker_dispatches_infographic_command, test_studio_command_for_short_type, image_fn, llm_fn (~2616 tok)
 
 ## tools/
 

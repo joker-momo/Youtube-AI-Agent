@@ -1,7 +1,12 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-07-10T15:34:58.075Z
-> Files: 1029 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-07-10T16:55:23.099Z
+> Files: 1032 tracked | Anatomy hits: 0 | Misses: 0
+
+## ../../../../Users/joker/
+
+- `.zprofile` — Added by OrbStack: command-line tools and integration (~64 tok)
+- `.zshrc` (~183 tok)
 
 ## ../../../../Users/joker/.claude/
 
@@ -107,6 +112,7 @@
 ## ../../../../private/tmp/claude-501/-Volumes-DATA-YBT-Studio-Youtube-AI-Agent/d2f804b5-a6f5-462e-b8fd-8f82e456667e/scratchpad/
 
 - `inspect_gemini.py` — Live-inspect the Gemini image page via CDP while GeminiImageDriver waits. (~568 tok)
+- `poster_only_demo.py` — One-off: run just plan -> poster (no voice/music/render) for a demo on a (~606 tok)
 - `regen_mundial.py` — Regen the Mundial job's comparison graphics + thumbnails with the fixed prompts. (~506 tok)
 - `watch_job.sh` — Background watcher for the Mundial long-form job. (~584 tok)
 - `watch_short.sh` — Watch the short-01 rebuild. Exit (re-invoke Claude) on queue terminal state, (~482 tok)
@@ -1196,7 +1202,7 @@
 - `__init__.py` (~41 tok)
 - `build.py` — Orchestrate static infographic Shorts (plan → poster → QA → music → render). (~5678 tok)
 - `plan.py` — LLM-driven infographic poster plan (pick format + fill), validated. (~935 tok)
-- `poster_prompt.py` — Per-format 9:16 infographic poster prompts (AI-only, text baked in). (~1830 tok)
+- `poster_prompt.py` — Per-format 9:16 infographic poster prompts (AI-only, text baked in). (~2259 tok)
 - `poster.py` — Generate the infographic poster PNG via the injected image function. (~532 tok)
 - `qa.py` — Deterministic text-presence QA gate over a poster's read-back text. (~343 tok)
 - `render_props.py` — Render props for the Remotion InfographicShort composition. (~380 tok)
@@ -1415,7 +1421,7 @@
 - `test_infographic_seo.py` — test_build_infographic_seo_writes_title_aligned_with_hook, llm_fn (~338 tok)
 - `test_paths.py` — test_infographic_artifact_names_exist (~75 tok)
 - `test_plan.py` — test_build_poster_plan_parses_validates_and_sets_age, llm_fn, test_invalid_then_valid_retries, llm_f (~378 tok)
-- `test_poster_prompt.py` — test_prompt_contains_title_and_all_item_labels, test_numbered_tips_prompt_requests_numbers, test_war (~1551 tok)
+- `test_poster_prompt.py` — test_prompt_contains_title_and_all_item_labels, test_numbered_tips_prompt_requests_numbers, test_war (~2522 tok)
 - `test_poster.py` — test_generate_poster_writes_png_logs_and_passes_raw_body, fake_image_fn (~383 tok)
 - `test_qa.py` — test_pass_when_all_text_present, test_fail_lists_missing_labels, test_unavailable_reader_yields_qa_u (~223 tok)
 - `test_render_props.py` — test_props_reference_poster_and_audio_and_duration (~370 tok)

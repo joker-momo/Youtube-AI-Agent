@@ -53,13 +53,19 @@ def _format_block(plan: dict[str, Any]) -> str:
         )
     if fmt == "myth_vs_truth":
         rows = [
-            f'"Mito: {str(i.get("label") or "").strip()}" -> "Verdad: {str(i.get("note") or "").strip()}"'
-            for i in items
+            f'Row {n}: MITO {n} card = "{str(i.get("label") or "").strip()}"; '
+            f'VERDAD {n} card = "{str(i.get("note") or "").strip()}"'
+            for n, i in enumerate(items, 1)
         ]
         return (
-            "Layout: stacked MYTH-vs-TRUTH rows. Each row has TWO lines: the myth line "
-            "with a red CROSS (X) and the word \"Mito:\", then directly under it the truth "
-            "line with a green CHECK and the word \"Verdad:\". Rows in order: "
+            "Layout: a TWO-COLUMN grid of rounded rectangle cards — a MITO column on "
+            "the left (light red/pink card backgrounds) and a VERDAD column on the "
+            "right (light green card backgrounds), each numbered pair aligned on the "
+            "same row. Each Mito card starts with a small numbered red circular badge "
+            "and a red ribbon tag reading \"MITO n\", then a red CROSS (X) icon and the "
+            "myth text. Each Verdad card starts with a small numbered green circular "
+            "badge and a green ribbon tag reading \"VERDAD n\", then a green CHECK icon "
+            "and the truth text. One small relevant photo/icon per card. Rows: "
             + "; ".join(rows) + "."
         )
     if fmt == "timeline_routine":
@@ -97,19 +103,40 @@ def _brand_identity_line(channel_config: dict[str, Any] | None) -> str:
     name = str(((channel_config or {}).get("channel") or {}).get("name") or "").strip()
     if not name:
         return ""
-    # A full "Name: Tagline" channel name is too long for a corner tag; use just
-    # the part before the colon (short, still recognizable) for the on-screen mark.
-    short_name = name.split(":", 1)[0].strip() or name
     return (
         f'\n\nBrand identity (creative direction): "{name}". Match a calm, '
         f"trustworthy, editorial wellness tone consistent with this identity. "
-        f"Additionally, add a BOTTOM BANNER: a solid-color bar spanning the full "
-        f'width at the very bottom of the poster, with the channel name "{short_name}" '
-        f"in bold white or cream text centered inside it — clearly legible at a "
-        f"glance, like a YouTube channel watermark bar. Keep the banner short "
-        f"(one line, ~5-8% of the poster height) so it never covers or crowds any "
-        f"item's text, icon, or the numbered list above it."
+        f"Additionally, add ONE small rounded brand badge near the bottom of the "
+        f'poster: a checkmark icon + the text "{name}" inside a thin bordered pill, '
+        f"small and unobtrusive — this is the ONLY on-screen brand mark, do not add "
+        f"any other banner, bar, or repeat of the channel name elsewhere. Any small "
+        f"decorative accent near this badge should be thematically tied to the "
+        f"poster's real topic (matching the header's decorative icons), never a "
+        f"fixed generic motif repeated across every topic. Do NOT add any mascot "
+        f"character, cartoon person, or speech bubble anywhere on the poster."
     )
+
+
+def _header_style_line(subtitle: str) -> str:
+    line = (
+        "HEADER STYLE: split the title across two bold lines with a color change "
+        "between them (e.g., first line dark navy, second line a warm accent red or "
+        "orange) for strong editorial-magazine impact."
+    )
+    if subtitle:
+        line += (
+            " Render the subtitle as a small rounded PILL/badge shape in a solid "
+            "brand-accent color (green) with bold white text, centered just below "
+            "the title."
+        )
+    line += (
+        " Add two small decorative icons flanking a central circular topic icon just "
+        "under the header — simple, thematically related to the topic (e.g., weather "
+        "icons either side of a joint for a joint-pain-and-weather topic, a moon and "
+        "clock for a sleep topic) — purely decorative, no extra words. Add a thin "
+        "dotted horizontal line separating the header from the content below."
+    )
+    return line
 
 
 def build_poster_body(plan: dict[str, Any], channel_config: dict[str, Any] | None = None) -> str:
@@ -119,6 +146,7 @@ def build_poster_body(plan: dict[str, Any], channel_config: dict[str, Any] | Non
     body = _BASE + "\n\n" + f'Big title at the top: "{title}".'
     if subtitle:
         body += f' Subtitle under it: "{subtitle}".'
+    body += "\n\n" + _header_style_line(subtitle)
     body += "\n\n" + _format_block(plan)
     body += _brand_identity_line(channel_config)
     return body

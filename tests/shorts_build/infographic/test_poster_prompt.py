@@ -66,15 +66,23 @@ def test_poster_prompt_enforces_label_vs_note_type_hierarchy():
     assert "label" in lowered and "bold" in lowered
 
 
-def test_myth_vs_truth_layout_renders_mito_verdad_pairs():
+def test_myth_vs_truth_layout_renders_two_column_numbered_cards():
+    """Operator reference (2026-07-10): a sample myth/truth poster used TWO
+    side-by-side columns (Mito cards left / Verdad cards right, numbered,
+    color-tinted), not a single stacked column. Redesigned to match, minus
+    the mascot/speech-bubble the operator explicitly excluded."""
     from video_agent.shorts.infographic.poster_prompt import build_poster_body
     body = build_poster_body({
         "poster_format": "myth_vs_truth", "title": "Mitos del café",
         "items": [{"label": "el café deshidrata", "note": "hidrata casi igual"}],
     })
-    assert "Mito: el café deshidrata" in body
-    assert "Verdad: hidrata casi igual" in body
+    assert "el café deshidrata" in body
+    assert "hidrata casi igual" in body
+    assert "two-column" in body.lower() or "two column" in body.lower()
+    assert "MITO 1" in body and "VERDAD 1" in body
     assert "red CROSS" in body and "green CHECK" in body
+    # No mascot/speech-bubble treatment (operator explicitly scoped it out).
+    assert "mascot" not in body.lower()
 
 
 def test_timeline_routine_layout_renders_times_in_order():
@@ -101,27 +109,81 @@ def test_checklist_score_layout_renders_checkboxes_and_score_line():
     assert "4+ = vas bien" in body
 
 
-def test_poster_body_carries_channel_brand_identity_as_bottom_banner():
-    """Operator decision (2026-07-10, final): a corner tag (even a "visible logo"
-    one) still under-delivered — the operator referenced a sample poster with a
-    solid-color BOTTOM BANNER BAR carrying the channel name, and asked for exactly
-    that element (no mascot, no speech bubble, no trust badge — scoped down from
-    the full reference). Must not contradict the base prompt's "no watermark" rule."""
+def test_poster_body_carries_channel_brand_identity_without_watermark_ban():
+    """Operator iterated: corner tag (too faint) -> bottom banner + separate trust
+    badge (redundant, two brand marks saying the same thing) -> FINAL: a single
+    small badge near the bottom showing the full channel name, no bottom banner.
+    Must not contradict the base prompt's "no watermark" rule."""
     from video_agent.shorts.infographic.poster_prompt import build_poster_body, _BASE
     body = build_poster_body(
         {"poster_format": "numbered_tips", "title": "Foods For Eyes",
          "items": [{"label": f"i{n}"} for n in range(5)]},
         channel_config={"channel": {"name": "Vida Plena 45+: Salud y Bienestar"}},
     )
-    assert "Vida Plena 45+" in body
-    assert "banner" in body.lower()
-    assert "bottom" in body.lower()
-    # Scoped down: no mascot / speech bubble / trust badge additions.
-    assert "mascot" not in body.lower()
-    assert "badge" not in body.lower()
+    assert "Vida Plena 45+: Salud y Bienestar" in body
+    assert "add a mascot" not in body.lower()
     # The exception must be carved out of the base "no watermark" rule, not just
     # bolted on afterward (bug: the base rule silently won, AI skipped the tag).
     assert "except the channel brand" in _BASE.lower()
+
+
+def test_poster_header_uses_two_tone_title_and_decorative_accents():
+    """Operator reference (2026-07-10): visual polish pass on the header — a
+    two-line, two-color bold title, a rounded pill badge for the subtitle, small
+    decorative topic icons, and a dotted separator under the header. No mascot
+    (explicitly excluded by the operator)."""
+    from video_agent.shorts.infographic.poster_prompt import build_poster_body
+    body = build_poster_body({
+        "poster_format": "numbered_tips", "title": "Foods For Eyes",
+        "subtitle": "Cuida tu vista",
+        "items": [{"label": f"i{n}"} for n in range(5)],
+    })
+    lowered = body.lower()
+    assert "two lines" in lowered or "two bold lines" in lowered
+    assert "pill" in lowered or "badge" in lowered
+    assert "dotted" in lowered
+    assert "mascot" not in lowered
+
+
+def test_poster_body_adds_single_brand_badge_no_duplicate_banner():
+    """Operator follow-up: the badge originally read "Fuente oficial: {short_name}"
+    while a SEPARATE bottom banner also showed the channel name — two marks saying
+    the same thing. Final ask: change the badge text to the full channel name and
+    drop the redundant banner entirely."""
+    from video_agent.shorts.infographic.poster_prompt import build_poster_body
+    body = build_poster_body(
+        {"poster_format": "numbered_tips", "title": "Foods For Eyes",
+         "items": [{"label": f"i{n}"} for n in range(5)]},
+        channel_config={"channel": {"name": "Vida Plena 45+: Salud y Bienestar"}},
+    )
+    lowered = body.lower()
+    assert "vida plena 45+: salud y bienestar" in lowered
+    assert "fuente oficial" not in lowered  # dropped prefix, use the full name instead
+    # Only ONE brand mark instruction (the badge) -- no separate bottom banner/bar.
+    assert "add a bottom banner" not in lowered
+
+
+def test_brand_badge_has_no_hardcoded_leaf_motif():
+    """Bug found via operator question ("sao poster banh mi lai gen ra co hinh la"):
+    a fixed "green leaf icon accents" instruction was baked into EVERY poster's
+    brand-identity line regardless of topic (coffee, bread, sleep...) -- unlike the
+    header's topic-adaptive decorative icons. Operator chose to drop the fixed
+    motif entirely and let decorative accents near the badge follow the topic,
+    same as the header icons."""
+    from video_agent.shorts.infographic.poster_prompt import build_poster_body
+    body = build_poster_body(
+        {"poster_format": "numbered_tips", "title": "Foods For Eyes",
+         "items": [{"label": f"i{n}"} for n in range(5)]},
+        channel_config={"channel": {"name": "Vida Plena 45+: Salud y Bienestar"}},
+    )
+    lowered = body.lower()
+    assert "leaf" not in lowered
+    # Still asks for SOME small decorative accent near the badge, just topic-driven.
+    assert "thematically" in lowered or "topic" in lowered
+    assert "only on-screen brand mark" in lowered
+    # A "do NOT add a mascot" instruction is fine (reinforces the exclusion); an
+    # instruction to actually ADD one would not be.
+    assert "add a mascot" not in lowered and "add a speech bubble" not in lowered
 
 
 def test_poster_body_omits_brand_line_when_no_channel_name_configured():

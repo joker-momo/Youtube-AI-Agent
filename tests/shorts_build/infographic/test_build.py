@@ -1,7 +1,17 @@
 import json
+import wave
 from pathlib import Path
 
 from video_agent.shorts.infographic.build import run_infographic_short
+
+
+def _write_wav(path: Path, seconds: float, *, rate: int = 24000) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(b"\x00\x00" * int(rate * seconds))
 
 
 def _deps(qa_text):
@@ -95,6 +105,126 @@ def test_qa_disabled_renders_without_reader(tmp_path):
     assert qa["verdict"] == "skipped"
 
 
+def test_voice_enabled_extends_duration_to_voice_length_plus_padding(tmp_path):
+    image_fn, llm_fn, read_text_fn, music_fn, render_fn = _deps("vista i0 i1 i2 i3 i4 i5")
+    short_dir = tmp_path / "job-1" / "shorts" / "short-01"
+
+    def voice_fn(sd, plan, cfg):
+        p = Path(sd) / "audio" / "short_narration.wav"
+        _write_wav(p, 6.0)
+        return p
+
+    captured_mix = {}
+
+    def mix_fn(narration_path, bgm_path, mixed_path, cfg, duration_sec):
+        captured_mix["duration_sec"] = duration_sec
+        mixed_path.parent.mkdir(parents=True, exist_ok=True)
+        mixed_path.write_bytes(b"m4a")
+        return True
+
+    cfg = {**CFG, "shorts": {"infographic": {
+        "voice": {"enabled": True, "padding_sec": 2.5, "min_duration_sec": 8.0, "max_duration_sec": 45.0},
+    }}}
+    status = run_infographic_short(
+        short_dir, cfg, {"topic": "vista despues de los 60"},
+        image_fn=image_fn, llm_fn=llm_fn, read_text_fn=read_text_fn, music_fn=music_fn,
+        render_fn=render_fn, voice_fn=voice_fn, mix_fn=mix_fn,
+    )
+    assert status["rendered"] is True
+    assert status["audio_mode"] == "voice_plus_music"
+    assert status["voice_duration_sec"] == 6.0
+    assert status["duration_sec"] == 8.5  # 6.0 + 2.5 padding
+    assert captured_mix["duration_sec"] == 8.5
+    props = json.loads((short_dir / "json" / "short_render_props.json").read_text())
+    assert props["audio"] == "jobs/short-01/audio/infographic_mix.m4a"
+    assert props["durationInFrames"] == round(8.5 * 30)
+
+
+def test_voice_duration_clamped_to_min_and_max(tmp_path):
+    image_fn, llm_fn, read_text_fn, music_fn, render_fn = _deps("vista i0 i1 i2 i3 i4 i5")
+
+    def mix_fn(narration_path, bgm_path, mixed_path, cfg, duration_sec):
+        mixed_path.parent.mkdir(parents=True, exist_ok=True)
+        mixed_path.write_bytes(b"m4a")
+        return True
+
+    cfg = {**CFG, "shorts": {"infographic": {
+        "voice": {"enabled": True, "padding_sec": 1.0, "min_duration_sec": 10.0, "max_duration_sec": 20.0},
+    }}}
+
+    # Very short speech -> clamped up to min_duration_sec.
+    short_dir_a = tmp_path / "job-1" / "shorts" / "short-a"
+
+    def voice_fn_short(sd, plan, c):
+        p = Path(sd) / "audio" / "short_narration.wav"
+        _write_wav(p, 2.0)
+        return p
+
+    status_a = run_infographic_short(
+        short_dir_a, cfg, {"topic": "vista"}, image_fn=image_fn, llm_fn=llm_fn,
+        read_text_fn=read_text_fn, music_fn=music_fn, render_fn=render_fn,
+        voice_fn=voice_fn_short, mix_fn=mix_fn,
+    )
+    assert status_a["duration_sec"] == 10.0
+
+    # Very long speech -> clamped down to max_duration_sec.
+    short_dir_b = tmp_path / "job-1" / "shorts" / "short-b"
+
+    def voice_fn_long(sd, plan, c):
+        p = Path(sd) / "audio" / "short_narration.wav"
+        _write_wav(p, 40.0)
+        return p
+
+    status_b = run_infographic_short(
+        short_dir_b, cfg, {"topic": "vista"}, image_fn=image_fn, llm_fn=llm_fn,
+        read_text_fn=read_text_fn, music_fn=music_fn, render_fn=render_fn,
+        voice_fn=voice_fn_long, mix_fn=mix_fn,
+    )
+    assert status_b["duration_sec"] == 20.0
+
+
+def test_voice_disabled_by_default_keeps_music_only_behavior(tmp_path):
+    """Backward compat: no shorts.infographic.voice config at all -> unchanged
+    music_only path (existing channels/tests must not need any changes)."""
+    image_fn, llm_fn, read_text_fn, music_fn, render_fn = _deps("vista i0 i1 i2 i3 i4 i5")
+    short_dir = tmp_path / "job-1" / "shorts" / "short-01"
+    status = run_infographic_short(
+        short_dir, CFG, {"topic": "vista"},
+        image_fn=image_fn, llm_fn=llm_fn, read_text_fn=read_text_fn, music_fn=music_fn, render_fn=render_fn,
+    )
+    assert status["audio_mode"] == "music_only"
+    assert "voice_duration_sec" not in status
+    assert status["duration_sec"] == 15.0
+
+
+def test_mix_failure_falls_back_to_music_only():
+    """If the real mixer fails (bad ffmpeg filter, missing codec...), the Short
+    must still publish with the music bed rather than fail outright."""
+    from video_agent.shorts.infographic import build as build_mod
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        image_fn, llm_fn, read_text_fn, music_fn, render_fn = _deps("vista i0 i1 i2 i3 i4 i5")
+        short_dir = Path(td) / "job-1" / "shorts" / "short-01"
+
+        def voice_fn(sd, plan, cfg):
+            p = Path(sd) / "audio" / "short_narration.wav"
+            _write_wav(p, 5.0)
+            return p
+
+        def failing_mix_fn(narration_path, bgm_path, mixed_path, cfg, duration_sec):
+            return False
+
+        cfg = {**CFG, "shorts": {"infographic": {"voice": {"enabled": True}}}}
+        status = build_mod.run_infographic_short(
+            short_dir, cfg, {"topic": "vista"}, image_fn=image_fn, llm_fn=llm_fn,
+            read_text_fn=read_text_fn, music_fn=music_fn, render_fn=render_fn,
+            voice_fn=voice_fn, mix_fn=failing_mix_fn,
+        )
+        assert status["rendered"] is True
+        assert status["audio_mode"] == "music_only"
+
+
 def test_music_bed_loops_one_licensed_track_for_the_static_duration(tmp_path, monkeypatch):
     from video_agent.shorts.infographic import build as build_mod
 
@@ -154,3 +284,57 @@ def test_music_bed_uses_original_procedural_source_when_configured(tmp_path, mon
         "short_dir": tmp_path / "short-01", "duration_sec": 15,
         "seed_key": "short-01", "bitrate": "160k",
     }
+
+
+def test_mix_voice_with_music_uses_infographic_volume_not_narrated_default(monkeypatch, tmp_path):
+    """Regression: the mixer fell back to _mix_bgm_with_narration's -24dB
+    narrated-Shorts default (shorts.music has no bgm_gain_db key at all), so the
+    BGM was nearly inaudible under voice. Infographic must reuse its OWN,
+    already-tuned music_volume_db (the same level the music-only bed uses)."""
+    from video_agent.shorts.infographic import build as build_mod
+
+    captured = {}
+
+    def fake_mix(narration_path, bgm_path, mixed_path, **kwargs):
+        captured.update(kwargs)
+        mixed_path.parent.mkdir(parents=True, exist_ok=True)
+        mixed_path.write_bytes(b"m4a")
+        return True
+
+    monkeypatch.setattr(build_mod, "_mix_bgm_with_narration", fake_mix)
+    narration = tmp_path / "short_narration.wav"
+    _write_wav(narration, 5.0)
+    bgm = tmp_path / "infographic_bgm.m4a"
+    bgm.write_bytes(b"m4a")
+
+    cfg = {"shorts": {
+        "infographic": {"music_volume_db": -14.0},
+        "music": {"voice_gain_db": -4.5, "duck_db": 8.0},
+    }}
+    build_mod._mix_voice_with_music(narration, bgm, tmp_path / "out.m4a", cfg, 7.5)
+    assert captured["bgm_gain_db"] == -14.0
+    # Gentler than the narrated-Shorts default (8dB): music stays audible under
+    # voice instead of near-silent for the whole speech portion (bug-519).
+    assert captured["duck_db"] == 4.0
+
+
+def test_mix_voice_with_music_defaults_to_audible_bgm_level_without_config(monkeypatch, tmp_path):
+    from video_agent.shorts.infographic import build as build_mod
+
+    captured = {}
+
+    def fake_mix(narration_path, bgm_path, mixed_path, **kwargs):
+        captured.update(kwargs)
+        mixed_path.parent.mkdir(parents=True, exist_ok=True)
+        mixed_path.write_bytes(b"m4a")
+        return True
+
+    monkeypatch.setattr(build_mod, "_mix_bgm_with_narration", fake_mix)
+    narration = tmp_path / "short_narration.wav"
+    _write_wav(narration, 5.0)
+    bgm = tmp_path / "infographic_bgm.m4a"
+    bgm.write_bytes(b"m4a")
+
+    build_mod._mix_voice_with_music(narration, bgm, tmp_path / "out.m4a", {}, 7.5)
+    # Must NOT silently fall through to the narrated pipeline's quiet -24dB default.
+    assert captured["bgm_gain_db"] > -20.0

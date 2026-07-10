@@ -152,9 +152,13 @@ def test_infographic_short_writes_live_progress_stages(tmp_path):
     assert stage_by_name["plan"] == "completed"
     assert stage_by_name["poster"] == "in_progress"
     assert stage_by_name["render"] == "pending"
-    # Terminal status keeps the full completed stage list.
+    # Terminal status keeps the full stage list; voice/mix are "skipped" (voice
+    # disabled by default) rather than "completed" — no-op stages must read as such.
     final_stages = {s["name"]: s["status"] for s in status["stages"]}
-    assert all(v == "completed" for v in final_stages.values()), final_stages
+    assert final_stages["voice"] == "skipped"
+    assert final_stages["mix"] == "skipped"
+    non_skipped = {k: v for k, v in final_stages.items() if k not in ("voice", "mix")}
+    assert all(v == "completed" for v in non_skipped.values()), final_stages
 
 
 def test_studio_active_state_recognizes_infographic_render_command():

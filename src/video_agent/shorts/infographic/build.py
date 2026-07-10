@@ -9,6 +9,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from video_agent.assets.audio_ops import _mix_bgm_with_narration
 from video_agent.shorts import manifest as manifest_mod
 from video_agent.shorts import music_selector, paths
 from video_agent.shorts.idea_store import read_short_ideas, write_studio_render_run
@@ -17,10 +18,90 @@ from video_agent.shorts.infographic.poster import generate_poster
 from video_agent.shorts.infographic.qa import qa_poster
 from video_agent.shorts.infographic.render_props import build_infographic_render_props
 from video_agent.shorts.infographic.seo import build_infographic_seo
+from video_agent.shorts.infographic.voiceover import synthesize_infographic_voiceover
 from video_agent.storage.atomic import atomic_write_json
 
 DEFAULT_STATIC_DURATION_SEC = 15.0
 _ORIGINAL_PROCEDURAL_SOURCE = "procedural_original"
+
+
+def _voice_options(channel_config: dict) -> tuple[bool, float, float, float]:
+    """(enabled, padding_sec, min_duration_sec, max_duration_sec) for infographic voice.
+
+    Disabled by default (backward compatible with existing music-only channels);
+    a channel opts in via ``shorts.infographic.voice.enabled: true``.
+    """
+    cfg = ((channel_config.get("shorts") or {}).get("infographic") or {}).get("voice") or {}
+    return (
+        bool(cfg.get("enabled", False)),
+        float(cfg.get("padding_sec", 2.5)),
+        float(cfg.get("min_duration_sec", 8.0)),
+        float(cfg.get("max_duration_sec", 45.0)),
+    )
+
+
+def _wav_duration_seconds(path: Path) -> float:
+    import wave
+
+    with wave.open(str(path), "rb") as handle:
+        return handle.getnframes() / float(handle.getframerate())
+
+
+def _mix_voice_with_music(
+    narration_path: Path, bgm_path: Path, mixed_path: Path, channel_config: dict, duration_sec: float
+) -> bool:
+    """Real default mixer: pad narration to the full Short length, then blend with
+    the music bed using the shared sidechain-duck + loudnorm + limiter primitive.
+
+    BGM base level reuses ``shorts.infographic.music_volume_db`` (already tuned
+    and proven audible in music-only mode) — ``shorts.music`` has no ``bgm_gain_db``
+    of its own (it's the narrated-Shorts profile, where the mixer's generic -24dB
+    default is fine), so falling back to that made the BGM barely audible here.
+    Ducking uses ``shorts.infographic.voice_duck_db`` (default 4dB, gentler than
+    narrated Shorts' 8dB): an infographic Short's music is the ambience for a still
+    image, not a bed under constantly-changing scenes, so it should stay clearly
+    audible under voice rather than near-silent for the whole speech portion.
+    (Tried disabling loudnorm first, expecting it was erasing the gain boost —
+    measured QUIETER across the board instead, since loudnorm's makeup gain is
+    what keeps the whole mix audible; reverted, loudnorm stays on.)
+    """
+    music_cfg = (channel_config.get("shorts") or {}).get("music") or {}
+    infographic_cfg = (channel_config.get("shorts") or {}).get("infographic") or {}
+    bgm_gain_db = float(infographic_cfg.get("music_volume_db", -14.0))
+    # amix's duration=first (inside _mix_bgm_with_narration) matches the NARRATION
+    # track's own length, so pad it to the full Short duration first — otherwise the
+    # BGM's outro padding would be truncated to the raw speech length.
+    padded_path = narration_path.parent / "short_narration_padded.wav"
+    try:
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", str(narration_path),
+                "-af", f"apad=whole_dur={duration_sec:.3f}",
+                str(padded_path),
+            ],
+            check=True, capture_output=True,
+        )
+        return _mix_bgm_with_narration(
+            padded_path, bgm_path, mixed_path,
+            voice_gain_db=float(music_cfg.get("voice_gain_db", -4.5)),
+            bgm_gain_db=bgm_gain_db,
+            # Gentler ducking than narrated Shorts (default 8dB): an infographic
+            # Short's music IS the ambience for a still image, not a bed under
+            # constantly-varied narrated scenes, so it should stay audible under
+            # voice, not near-silent (measured: loudnorm's makeup gain is what
+            # keeps the track audible at all — disabling it measured QUIETER
+            # across the board, so it stays on; duck_db is the real lever).
+            duck_db=float(infographic_cfg.get("voice_duck_db", 4.0)),
+            target_lufs=float(music_cfg.get("target_lufs", -13.6)),
+            target_tp=float(music_cfg.get("target_tp_dbtp", 0.0)),
+            target_lra=float(music_cfg.get("target_lra", 4.8)),
+            out_sample_rate=int(music_cfg.get("sample_rate", 44100)),
+            out_bitrate=str(music_cfg.get("bitrate", "128k")),
+        )
+    except Exception:
+        return False
+    finally:
+        padded_path.unlink(missing_ok=True)
 
 
 def _static_options(channel_config: dict, source: dict) -> tuple[float, bool, str]:
@@ -110,31 +191,44 @@ def run_infographic_short(
     read_text_fn: Callable[[Path], str] | None = None,
     render_fn: Callable[..., Path],
     music_fn: Callable[..., Path] | None = None,
+    voice_fn: Callable[[Path, dict, dict], Path] | None = None,
+    mix_fn: Callable[[Path, Path, Path, dict, float], bool] | None = None,
     max_poster_attempts: int = 3,
 ) -> dict[str, Any]:
     """Synchronous orchestrator. ``image_fn`` is async (the only awaited dep), so it is
     driven with a fresh ``asyncio.run`` per poster generation; ``llm_fn``/``music_fn``/
     ``render_fn`` are plain sync callables — some (the real ``chatgpt_fn``) use
     ``asyncio.run`` internally, so this function must NOT itself run inside an event
-    loop (nested ``asyncio.run`` raises)."""
+    loop (nested ``asyncio.run`` raises).
+
+    ``voice_fn``/``mix_fn`` add narration (opt-in via ``shorts.infographic.voice.enabled``):
+    when on, the Short's duration follows the synthesized speech length (+padding,
+    clamped) instead of the fixed config duration."""
     short_dir = Path(short_dir)
     short_dir.mkdir(parents=True, exist_ok=True)
+
+    voice_enabled, voice_padding, voice_min, voice_max = _voice_options(channel_config)
+    skip = frozenset() if voice_enabled else frozenset({"voice", "mix"})
 
     # Live progress: the Renders tab reads short_status.json, so each stage
     # transition is persisted immediately — an in-flight short must be visible
     # in the UI, not appear only when the whole build finishes.
-    stage_names = ("plan", "poster", "poster_qa", "music", "seo", "render_props", "render")
+    stage_names = ("plan", "poster", "poster_qa", "voice", "music", "mix", "seo", "render_props", "render")
 
     def _progress(current: str) -> None:
         idx = stage_names.index(current)
+
+        def stage_status(n: int, name: str) -> str:
+            if name in skip:
+                return "skipped"
+            return "completed" if n < idx else "in_progress" if n == idx else "pending"
+
         atomic_write_json(short_dir / paths.SHORT_STATUS_FILE, {
             "short_type": "infographic",
             "status": "generating",
             "rendered": False,
             "stages": [
-                {"name": name, "status": (
-                    "completed" if n < idx else "in_progress" if n == idx else "pending"
-                )}
+                {"name": name, "status": stage_status(n, name)}
                 for n, name in enumerate(stage_names)
             ],
         })
@@ -148,12 +242,12 @@ def run_infographic_short(
     if read_text_fn is None:
         # QA disabled: generate the poster once and proceed (no text gate). The
         # AI-only garble risk is accepted; nothing blocks the render.
-        asyncio.run(generate_poster(short_dir, plan, image_fn))
+        asyncio.run(generate_poster(short_dir, plan, image_fn, channel_config))
         verdict = {"verdict": "skipped", "missing": []}
     else:
         verdict = {"verdict": "qa_unavailable", "missing": []}
         for _ in range(max_poster_attempts):
-            asyncio.run(generate_poster(short_dir, plan, image_fn))
+            asyncio.run(generate_poster(short_dir, plan, image_fn, channel_config))
             verdict = qa_poster(
                 short_dir / "assets" / paths.SHORT_POSTER_IMAGE_NAME, plan, read_text_fn=read_text_fn
             )
@@ -177,10 +271,30 @@ def run_infographic_short(
         atomic_write_json(short_dir / paths.SHORT_STATUS_FILE, status)
         return status
 
-    _progress("music")
     duration, ken_burns, music_track = _static_options(channel_config, source)
+
+    voice_duration_sec: float | None = None
+    narration_path: Path | None = None
+    if voice_enabled:
+        _progress("voice")
+        vfn = voice_fn or synthesize_infographic_voiceover
+        narration_path = Path(vfn(short_dir, plan, channel_config))
+        voice_duration_sec = round(_wav_duration_seconds(narration_path), 2)
+        duration = max(voice_min, min(voice_max, voice_duration_sec + voice_padding))
+
+    _progress("music")
     music_fn = music_fn or prepare_infographic_music_bed
     audio_path = music_fn(short_dir, music_track, channel_config, duration)
+
+    audio_mode = "music_only"
+    if voice_enabled and narration_path is not None:
+        _progress("mix")
+        mfn = mix_fn or _mix_voice_with_music
+        mixed_path = short_dir / "audio" / "infographic_mix.m4a"
+        if mfn(narration_path, Path(audio_path), mixed_path, channel_config, duration):
+            audio_path = mixed_path
+            audio_mode = "voice_plus_music"
+        # else: mixer failed — fall back to the music-only bed (already built).
 
     _progress("seo")
     # SEO/title artifact (writes json/short_seo.json via the shipped Short SEO path:
@@ -202,18 +316,27 @@ def run_infographic_short(
 
     status["rendered"] = bool(Path(out).exists())
     status["stages"] = [
-        {"name": name, "status": "completed" if status["rendered"] or name != "render" else "failed"}
+        {
+            "name": name,
+            "status": (
+                "skipped" if name in skip
+                else "completed" if (status["rendered"] or name != "render")
+                else "failed"
+            ),
+        }
         for name in stage_names
     ]
     status["status"] = "rendered" if status["rendered"] else "failed"
     status["video_path"] = f"{short_dir.name}/outputs/{Path(out).name}"
-    status["audio_mode"] = "music_only"
+    status["audio_mode"] = audio_mode
     status["music_track"] = music_track
     status["music_source"] = str(
         ((channel_config.get("shorts") or {}).get("infographic") or {}).get("music_source")
         or _ORIGINAL_PROCEDURAL_SOURCE
     )
     status["duration_sec"] = duration
+    if voice_duration_sec is not None:
+        status["voice_duration_sec"] = voice_duration_sec
     atomic_write_json(short_dir / paths.SHORT_STATUS_FILE, status)
     return status
 

@@ -266,7 +266,7 @@ shorts:
   # One readable 9:16 poster, held still with a music-only bed.
   # This is intentionally separate from narrated, multi-scene Shorts.
   infographic:
-    duration_sec: 15
+    duration_sec: 15   # fallback length only when voice.enabled is false
     ken_burns: false
     # Synthesize a unique, traceable instrumental bed from math primitives.
     # No sample, artist reference, or third-party audio file is used.
@@ -275,6 +275,19 @@ shorts:
     music_volume_db: -14
     music_fade_in_sec: 0.16
     music_fade_out_sec: 0.45
+    # Sidechain ducking under the voice track (voice_plus_music mode only). Gentler
+    # than narrated Shorts' 8dB: this music IS the ambience for a still poster, not
+    # a bed under constantly-changing scenes, so it must stay clearly audible while
+    # Elena speaks, not near-silent for the whole narration.
+    voice_duck_db: 4.0
+    # Elena (MeloTTS, see shorts.tts below) reads the poster's hook + items + cta.
+    # When enabled, the Short's real length follows the spoken narration instead
+    # of the fixed duration_sec above.
+    voice:
+      enabled: true
+      padding_sec: 2.5        # breathing room after the narration ends
+      min_duration_sec: 8.0
+      max_duration_sec: 45.0  # YouTube Shorts ceiling is 60s; leave headroom
   # Visual span / compiled visual timeline (spec v4.0.3). Enforced mode makes
   # the compiled schedule the renderer contract for Shorts; PR D quality flow
   # remains report_only until semantic/detector adapters are available.

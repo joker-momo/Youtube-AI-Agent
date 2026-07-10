@@ -57,7 +57,15 @@ def _mix_bgm_with_narration(
     out_sample_rate: int = 44100,
     out_bitrate: str = "128k",
     stereo: bool = True,
+    apply_loudnorm: bool = True,
 ) -> bool:
+    """``apply_loudnorm=False`` skips the final whole-track loudness renormalization
+    (keeps sidechain ducking + a peak limiter). Narrated Shorts want loudnorm's
+    consistency across varied, longer narration; short single-image infographic
+    Shorts do NOT — loudnorm re-normalizes the ENTIRE mixed signal to one integrated
+    loudness target regardless of the voice/BGM balance set upstream, so raising the
+    BGM's gain to make it audible had no effect until this flag existed (bug-519).
+    """
     if not narration_path.exists() or not bgm_path.exists():
         return False
     ratio = max(3.0, min(12.0, 1.5 + duck_db * 0.7))
@@ -65,12 +73,13 @@ def _mix_bgm_with_narration(
     # Apply alimiter after loudnorm: hard ceiling at TP-aware level to prevent
     # clipping when mixed peaks ride the loudness target.
     limiter_ceiling_db = min(target_tp, -1.0)
+    loudnorm_stage = f"loudnorm=I={target_lufs}:TP={target_tp}:LRA={target_lra}," if apply_loudnorm else ""
     filter_complex = (
         f"[0:a]volume={voice_gain_db}dB[vox];"
         f"[1:a]volume={bgm_gain_db}dB,aloop=loop=-1:size=2147483647[bgmraw];"
         f"[bgmraw][vox]sidechaincompress=threshold=0.03:ratio={ratio:.2f}:attack=20:release=300:makeup=1[bgmduck];"
         f"[vox][bgmduck]amix=inputs=2:duration=first:dropout_transition=2:normalize=0,"
-        f"{pan}loudnorm=I={target_lufs}:TP={target_tp}:LRA={target_lra},"
+        f"{pan}{loudnorm_stage}"
         f"alimiter=limit={limiter_ceiling_db}dB[out]"
     )
     cmd = [

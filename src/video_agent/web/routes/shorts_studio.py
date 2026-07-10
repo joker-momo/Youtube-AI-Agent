@@ -50,7 +50,7 @@ class GenerateIdeasRequest(BaseModel):
 class RenderIdeasRequest(BaseModel):
     idea_ids: list[str]
     force: bool = False
-    short_type: str = "narrated"  # "narrated" (default multi-scene) | "infographic"
+    short_type: str = "infographic"  # "infographic" (default: 1 poster + music bed) | "narrated" (legacy multi-scene)
 
 
 def command_for_short_type(short_type: str) -> str:
@@ -153,7 +153,12 @@ def _queued_or_running_synthesis_state(job_dir: Path, active_jobs: list[dict[str
         command = str(item.get("command") or "")
         if command in ("shorts_generate_ideas", "shorts_prepare_drafts", "shorts_autopilot"):
             return "ideas_generating"
-        if command in ("shorts_render_selected_ideas", "shorts_confirm_render", "shorts_render_one"):
+        if command in (
+            "shorts_render_selected_ideas",
+            "shorts_render_infographic",
+            "shorts_confirm_render",
+            "shorts_render_one",
+        ):
             return "rendering_selected"
     if _is_file_locked(shorts_paths.render_selected_lock_path(job_dir)):
         return "rendering_selected"
@@ -701,7 +706,7 @@ def post_shorts_studio_render_ideas(
     # Normalize ONCE so the routing, duplicate check, payload and message all agree
     # (e.g. "Infographic" / " infographic " must not route infographic while the dup
     # guard looks for a differently-cased key).
-    short_type = str(req.short_type or "narrated").strip().lower()
+    short_type = str(req.short_type or "infographic").strip().lower()
 
     # Prevent rendering if already rendered (unless force=True). Duplicate detection
     # is keyed by (idea_id, short_type): the SAME idea may have one narrated Short AND

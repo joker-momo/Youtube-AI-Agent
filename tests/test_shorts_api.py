@@ -484,20 +484,63 @@ def test_worker_shorts_autopilot_with_short_id_rebuilds_only_that_short(tmp_path
     assert result["status"] in ("completed", "completed_with_warnings")
 
 
-# --- §19.5 Short detail drawer (7 tabs) ------------------------------------
+# --- §19.5 Short detail drawer (dynamic tabs) --------------------------------
 
-def test_dashboard_html_has_short_detail_drawer_with_seven_tabs():
-    """Dashboard must include a Short detail drawer with 7 tabs per spec
-    §19.5: Overview | Script | Scenes | Source Map | SEO | QA | Render."""
+def test_shorts_studio_html_has_short_detail_drawer_with_dynamic_tabs():
+    """Shorts Studio must include a Short detail drawer whose tabs render
+    DYNAMICALLY from the artifacts that actually exist (spec §19.5 evolved:
+    the drawer moved from dashboard.html to shorts_studio.html, and the old
+    seven hardcoded tabs showed 'not found' for most shorts — e.g. an
+    infographic short has no script/scenes at all)."""
     from pathlib import Path as _P
-    html = _P("src/video_agent/web/dashboard.html").read_text(encoding="utf-8")
+    html = _P("src/video_agent/web/shorts_studio.html").read_text(encoding="utf-8")
     # drawer DOM marker
     assert 'id="short-drawer"' in html, "missing #short-drawer"
     # opener wired from short cards
     assert "openShortDrawer" in html, "missing openShortDrawer() JS"
-    # 7 tab names appear as tab buttons
+    # dynamic tab resolution: probe artifacts, render only what exists
+    assert "resolveShortDetailTabs" in html, "missing dynamic tab resolution"
+    # canonical json/ artifact locations probed first (legacy root fallback)
+    assert "json/short_script.json" in html
+    assert "json/short_scenes.json" in html
+    # infographic-only artifacts get their own tabs when present
+    assert "json/poster_plan.json" in html
+    assert "json/original_bgm.json" in html
+    # narrated tab set still declared
     for tab in ("Overview", "Script", "Scenes", "Source Map", "SEO", "QA", "Render"):
-        assert f'data-tab="{tab.lower().replace(" ", "-")}"' in html, f"missing tab: {tab}"
+        assert f"'{tab}'" in html, f"missing tab declaration: {tab}"
+
+
+def test_shorts_studio_render_button_uses_infographic_flow():
+    """The Render Short button must always use the NEW infographic flow
+    (1 poster + auto music bed, no voiceover). Regression: the old button
+    never sent short_type, so the server defaulted to the legacy narrated
+    pipeline and the user got an unwanted voiceover short."""
+    from pathlib import Path as _P
+    html = _P("src/video_agent/web/shorts_studio.html").read_text(encoding="utf-8")
+    assert "'infographic')\">Render Short" in html, "render button must request infographic"
+    assert "'narrated')\">" not in html, "UI must not offer the legacy narrated flow"
+    # spRenderIdea must forward short_type and fall back to infographic
+    assert "short_type: shortType || 'infographic'" in html, "spRenderIdea does not default to infographic"
+
+
+def test_renders_tab_video_url_resolves_from_job_root():
+    """The render card's <video> src must prepend shorts/ to the manifest's
+    shorts-relative video_path. Regression bug-514: the raw path was passed to
+    /artifact which resolves from the JOB root, so the player got a 404 and
+    showed MEDIA_ELEMENT_ERROR: Format error."""
+    from pathlib import Path as _P
+    html = _P("src/video_agent/web/shorts_studio.html").read_text(encoding="utf-8")
+    assert "d.video_path.startsWith('shorts/') ? d.video_path : 'shorts/' + d.video_path" in html
+
+
+def test_render_ideas_request_defaults_to_infographic():
+    """Server-side default must match the new flow: clients that omit
+    short_type get the infographic pipeline, never the legacy narrated one."""
+    from video_agent.web.routes.shorts_studio import RenderIdeasRequest, command_for_short_type
+    req = RenderIdeasRequest(idea_ids=["idea-01"])
+    assert req.short_type == "infographic"
+    assert command_for_short_type(req.short_type) == "shorts_render_infographic"
 
 
 # --- §2.1 dead-code cleanup -------------------------------------------------

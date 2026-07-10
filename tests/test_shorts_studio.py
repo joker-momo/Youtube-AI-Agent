@@ -84,12 +84,15 @@ def test_shorts_studio_renders_cache_does_not_keep_loading_placeholder():
     assert "stateKey === LAST_RENDERS_JSON_BY_JOB[jobId] && !rendersStillLoading" in html
 
 
-def test_shorts_studio_displays_qa_scenes_attempts():
+def test_shorts_studio_has_no_legacy_narrated_qa_ui():
+    """The narrated scenes-QA surface (QA-attempt chips, autopilot panel,
+    background-sources viewer) was removed with the infographic-only flow
+    (2026-07-10); it must not creep back into shorts_studio.html."""
     html = (Path(__file__).parents[1] / "src" / "video_agent" / "web" / "shorts_studio.html").read_text(encoding="utf-8")
 
-    assert "function renderQaScenesAttempts" in html
-    assert "QA Scenes:" in html
-    assert "qa_scenes_attempts" in html
+    assert "renderQaScenesAttempts" not in html
+    assert "spViewBackgroundSources" not in html
+    assert "Shorts Autopilot" not in html.split("shorts_autopilot: 'Shorts Autopilot'")[1]
 
 
 @pytest.mark.parametrize("html_name", ["shorts_studio.html"])
@@ -443,14 +446,16 @@ def test_shorts_studio_render_selected_enqueues_new_command(client: TestClient, 
         encoding="utf-8",
     )
 
+    # Default short_type is the NEW infographic flow (poster + music bed).
     response = client.post("/shorts-studio/jobs/job-1/ideas/render", json={"idea_ids": ["idea-01"], "force": False})
 
     assert response.status_code == 202, response.text
     body = response.json()
-    assert body["command"] == "shorts_render_selected_ideas"
+    assert body["command"] == "shorts_render_infographic"
     row = JobQueue(tmp_path / "queue.db").get_job("job-1")
     assert row is not None
-    assert row["command"] == "shorts_render_selected_ideas"
+    assert row["command"] == "shorts_render_infographic"
+    assert json.loads(row["payload"])["short_type"] == "infographic"
 
 
 def test_shorts_studio_get_ideas_returns_associated_short(client: TestClient, tmp_path: Path):
@@ -497,6 +502,7 @@ def test_shorts_studio_render_selected_rejects_already_rendered(client: TestClie
                 {
                     "short_id": "short-01",
                     "idea_id": "idea-01",
+                    "short_type": "infographic",
                     "status": "completed",
                     "rendered": True,
                 }

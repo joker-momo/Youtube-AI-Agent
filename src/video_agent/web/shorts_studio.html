@@ -1225,10 +1225,8 @@ function renderJobsList(jobs) {
           <div class="job-count"><b>${j.stages_done}</b>/${j.stages_total}</div>
           <button class="job-stop" data-action="stop-job" data-job="${escapeHtml(j.job_id)}" ${stopDisabled} title="${escapeHtml(stopTitle)}">Stop</button>
           <button class="job-del" data-action="delete-job" data-job="${escapeHtml(j.job_id)}" ${deleteDisabled} title="${escapeHtml(deleteTitle)}">×</button>
-          <button class="job-stop" onclick="openShortsFor('${escapeHtml(j.job_id)}')" title="Shorts Autopilot">🎬</button>
         </div>
       </div>
-      <div class="job-shorts-chip" id="shorts-chip-${escapeHtml(j.job_id)}" style="font-size:11px;color:var(--muted);margin-top:4px"></div>
       <div class="job-stage">
         <span class="state-dot ${state}"></span>
         <span>${escapeHtml(STAGE_LABEL[j.current_stage] || j.current_stage || 'pending')}</span>
@@ -1257,25 +1255,11 @@ function renderJobsList(jobs) {
     }
     card.onclick = () => selectJob(j.job_id);
 	    root.appendChild(card);
-	    refreshShortsChip(j.job_id);
 	  }
 	  if (!jobs.length) root.innerHTML = '<div class="empty" style="min-height:320px">Chưa có job nào.</div>';
 	}
 
-	async function refreshShortsChip(jobId) {
-	  const el = document.getElementById('shorts-chip-' + jobId);
-	  if (!el) return;
-	  try {
-	    const r = await fetch('/jobs/' + encodeURIComponent(jobId) + '/shorts');
-	    if (!r.ok) { el.textContent = 'Shorts: none'; return; }
-	    const data = await r.json();
-	    el.textContent = 'Shorts: ' + (data.label || 'none');
-	  } catch (e) {
-	    el.textContent = 'Shorts: none';
-	  }
-	}
-
-async function stopJob(jobId) {
+	async function stopJob(jobId) {
   if (!jobId) return;
   if (!confirm(`Stop running job "${jobId}"?`)) return;
   try {
@@ -1875,7 +1859,6 @@ function renderStep(jobId, s, idx, fallbackStartedAt = null) {
     </div>
     <div class="step-body">
       ${renderProgressHtml}
-      ${s.name === 'shorts_autopilot' ? renderShortsTimelineStage(jobId, s) : ''}
       <div class="stage-actions" id="actions-${s.name}"></div>
       <div class="insight-mount" id="insight-${s.name}"></div>
       <div class="io-grid">
@@ -1919,300 +1902,6 @@ function renderStep(jobId, s, idx, fallbackStartedAt = null) {
   }
 
   return el;
-}
-
-function renderShortsTimelineStage(jobId, stage) {
-  const sp = stage.sub_progress || {};
-  const shorts = sp.shorts || [];
-  if (!shorts.length) {
-    return `
-      <div style="margin:10px 0;padding:12px;border:1px dashed var(--line-strong);border-radius:8px;color:var(--muted)">
-        Shorts are child artifacts of this long video job. They will appear here after Review PASS.
-      </div>`;
-  }
-  return `
-    <div style="margin:10px 0 12px;display:grid;gap:12px">
-      ${shorts.map(short => renderShortPipelineCard(jobId, short)).join('')}
-    </div>`;
-}
-
-function renderShortPipelineCard(jobId, short) {
-  const sid = short.short_id || '';
-  const video = short.video_path ? '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(short.video_path) : '';
-  const statusColor = short.status === 'rendered' ? '#166534' : (short.status === 'needs_review' ? '#b45309' : '#334155');
-  const steps = short.steps || [];
-  const qaScenesAttempts = renderQaScenesAttempts(short);
-  return `
-    <div style="display:grid;grid-template-columns:minmax(150px,190px) 1fr;gap:14px;padding:12px;border:1px solid var(--line-strong);border-radius:10px;background:var(--bg-soft)">
-      <div style="width:100%;aspect-ratio:9/16;background:#0f172a;border-radius:9px;overflow:hidden;box-shadow:0 10px 24px rgba(15,23,42,.18)">
-        ${video
-          ? `<video src="${video}" controls preload="metadata" style="width:100%;height:100%;object-fit:cover"></video>`
-          : ''}
-      </div>
-      <div style="min-width:0">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
-          <div style="font-weight:800;font-size:16px">${escapeHtml(sid)}${short.title ? ` — ${escapeHtml(short.title)}` : ''} <span style="color:${statusColor}">· ${escapeHtml(short.status || '')}</span></div>
-          <div style="font-size:12px;color:var(--muted);display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-            <span>QA: ${escapeHtml(short.qa_verdict || '-')}</span>${qaScenesAttempts}
-          </div>
-        </div>
-        <div style="margin-top:4px;font-size:13px;color:var(--text);line-height:1.35">${escapeHtml(short.hook || '')}</div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:6px;margin-top:10px">
-          ${steps.map(step => renderShortSubstep(step)).join('')}
-        </div>
-        ${renderBackgroundLive(short.background_live)}
-        <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">
-          ${video ? `<a class="action-btn primary" href="${video}" target="_blank">Play Short</a>` : ''}
-          ${video ? `<a class="action-btn" href="${video}" download>Download MP4</a>` : ''}
-          <button class="action-btn" onclick="openShortDetail('${escapeHtml(jobId)}','${escapeHtml(sid)}')">Details</button>
-          <button class="action-btn" onclick="spViewBackgroundSources('${escapeHtml(jobId)}','${escapeHtml(sid)}', this)">🎬 Background sources</button>
-          <button class="action-btn" onclick="regenShort('${escapeHtml(jobId)}','${escapeHtml(sid)}')">Regenerate</button>
-        </div>
-        <div class="bg-sources-panel" style="display:none;margin-top:10px"></div>
-      </div>
-    </div>`;
-}
-
-// Color per background source so an operator can scan, at a glance, which scenes
-// used Pexels video vs photo vs ChatGPT-generated images vs placeholders.
-function bgSourceBadgeStyle(source) {
-  const s = String(source || '').toLowerCase();
-  if (s.includes('pexels video')) return 'background:#dbeafe;color:#1e40af';
-  if (s.includes('pexels photo') || s.includes('pixabay')) return 'background:#cffafe;color:#155e63';
-  if (s.includes('chatgpt')) return 'background:#dcfce7;color:#166534';
-  if (s.includes('graphic fallback')) return 'background:#ffedd5;color:#9a3412';
-  if (s.includes('placeholder')) return 'background:#fee2e2;color:#991b1b';
-  if (s.includes('graphic')) return 'background:#fef9c3;color:#854d0e';
-  if (s.includes('local')) return 'background:#ede9fe;color:#5b21b6';
-  return 'background:#f3f4f6;color:#374151';
-}
-
-// Live banner shown while the Background Assets stage resolves each scene's
-// source. Streams "scene X/N · <source>" so the operator can watch sourcing
-// happen in realtime (the card re-renders on each shorts-timeline refresh).
-function renderBackgroundLive(bl) {
-  if (!bl || bl.status !== 'in_progress') return '';
-  const cur = bl.current_scene, tot = bl.total_scenes;
-  const counter = (cur && tot) ? `scene ${cur}/${tot}` : 'starting…';
-  const src = bl.last_source
-    ? ` · <span style="font-weight:700;border-radius:999px;padding:1px 8px;${bgSourceBadgeStyle(bl.last_source)}">${escapeHtml(bl.last_source)}</span>`
-    : '';
-  const sid = bl.last_scene_id ? ` <span style="color:var(--muted)">(${escapeHtml(bl.last_scene_id)})</span>` : '';
-  return `
-    <div style="margin-top:12px;padding:16px 20px;border:4px solid #dc2626;border-radius:12px;background:#fef2f2;font-size:22px;display:flex;align-items:center;gap:12px;color:#b91c1c;box-shadow:0 6px 16px rgba(220,38,38,0.4)">
-      <span class="ws-dot live" style="width:16px;height:16px;background-color:#dc2626;box-shadow:0 0 8px #dc2626"></span>
-      <span style="font-weight:900">🎬 ĐANG LẤY ẢNH NỀN — ${counter}${sid}</span><span style="font-size:18px">${src}</span>
-    </div>`;
-}
-
-// Verdict pill style for Visual Local QA outcomes shown per scene.
-function qaVerdictBadge(v) {
-  const t = String(v || '').toUpperCase();
-  let style = 'background:#f3f4f6;color:#374151', label = t || '—';
-  if (t === 'PASS') { style = 'background:#dcfce7;color:#166534'; label = '✓ PASS'; }
-  else if (t === 'FAIL') { style = 'background:#fee2e2;color:#991b1b'; label = '✗ FAIL'; }
-  else if (t === 'SKIP') { style = 'background:#e2e8f0;color:#475569'; label = '⊘ SKIP'; }
-  else if (t === 'CAPABILITY_REDUCED') { style = 'background:#fef9c3;color:#854d0e'; label = '◐ REDUCED'; }
-  return `<span style="font-size:11px;font-weight:700;border-radius:999px;padding:2px 9px;${style}">${escapeHtml(label)}</span>`;
-}
-
-// Build scene_id -> {route, verdict} from visual_span_asset_qa.json. A span whose
-// visual_route is not native_video_candidate is a non-video (graphic/generated)
-// route and is intentionally SKIPPED by the local-QA stage (it only validates
-// stock VIDEO), so we surface that as SKIP rather than a missing verdict.
-function buildSceneQaMap(qaDoc) {
-  const map = {};
-  const spans = (qaDoc && Array.isArray(qaDoc.spans)) ? qaDoc.spans : [];
-  for (const sp of spans) {
-    const route = String(sp.visual_route || 'native_video_candidate');
-    const verdict = route !== 'native_video_candidate'
-      ? 'SKIP'
-      : String((sp.qa || {}).verdict || '').toUpperCase();
-    for (const sid of (sp.scene_ids || [])) {
-      map[String(sid)] = { route, verdict, status: sp.final_selection_status };
-    }
-  }
-  return map;
-}
-
-// scene_id -> compiled-schedule track. The compiled asset schedule is the RENDER
-// source of truth: the visual-span pipeline (visual_local_qa) replaces many
-// scenes' background-stage pick with a validated Pexels VIDEO, so background_report
-// (written earlier, at acquisition) is stale. Read the schedule to show reality.
-function buildSceneScheduleMap(csDoc) {
-  const map = {};
-  const tracks = (csDoc && Array.isArray(csDoc.tracks)) ? csDoc.tracks : [];
-  for (const t of tracks) {
-    for (const sid of (t.scene_ids || [])) map[String(sid)] = t;
-  }
-  return map;
-}
-
-// Resolve the human source label from the ACTUAL rendered track, keeping the
-// finer ChatGPT label (infographic vs lifestyle) from background_report when the
-// schedule only says "ai_generated".
-function scheduleSourceLabel(t, brLabel) {
-  const prov = String(t.provider || '').toLowerCase();
-  const smk = String(t.source_media_kind || '').toLowerCase();
-  if (smk === 'native_video') {
-    if (prov.includes('pexels')) return 'Pexels video';
-    if (prov.includes('pixabay')) return 'Pixabay video';
-    return (prov ? prov.charAt(0).toUpperCase() + prov.slice(1) : 'Stock') + ' video';
-  }
-  if (prov === 'ai_generated') {
-    return (brLabel && brLabel.toLowerCase().includes('chatgpt')) ? brLabel : 'ChatGPT image';
-  }
-  if (prov.includes('pexels')) return 'Pexels photo';
-  if (prov.includes('pixabay')) return 'Pixabay photo';
-  return brLabel || (prov ? prov.charAt(0).toUpperCase() + prov.slice(1) : 'Unknown');
-}
-
-async function spViewBackgroundSources(jobId, shortId, btn) {
-  const panel = btn.closest('div').parentElement.querySelector('.bg-sources-panel');
-  if (!panel) return;
-  if (panel.style.display !== 'none') { panel.style.display = 'none'; return; }
-  panel.style.display = 'block';
-  panel.innerHTML = '<div style="color:var(--muted);font-size:12px">Loading scenes & QA…</div>';
-  const art = (p) => '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent('shorts/' + shortId + '/json/' + p) + '&t=' + Date.now();
-  try {
-    // background_report = per-scene acquisition detail (query / attribution / motion).
-    // compiled_asset_schedule = what actually renders (authoritative source + asset path).
-    // visual_span_asset_qa = pass/fail/skip verdict. All optional except background_report.
-    const [r, rcs, rqa] = await Promise.all([
-      fetch(art('background_report.json')),
-      fetch(art('compiled_asset_schedule.json')).catch(() => null),
-      fetch(art('visual_span_asset_qa.json')).catch(() => null),
-    ]);
-    if (!r.ok) { panel.innerHTML = '<div style="color:var(--muted);font-size:12px">No background report yet for this Short.</div>'; return; }
-    const data = JSON.parse(await r.text());
-    const scenes = Array.isArray(data.scenes) ? data.scenes : [];
-    if (!scenes.length) { panel.innerHTML = '<div style="color:var(--muted);font-size:12px">No scenes in background report.</div>'; return; }
-    let qaMap = {}, schedMap = {};
-    if (rqa && rqa.ok) { try { qaMap = buildSceneQaMap(JSON.parse(await rqa.text())); } catch (_) {} }
-    if (rcs && rcs.ok) { try { schedMap = buildSceneScheduleMap(JSON.parse(await rcs.text())); } catch (_) {} }
-    const hasQa = Object.keys(qaMap).length > 0;
-    const hasSched = Object.keys(schedMap).length > 0;
-    // Resolved (actual) source per scene: schedule wins, background_report fallback.
-    const resolvedSrc = (s) => {
-      const t = schedMap[String(s.scene_id)];
-      return t ? scheduleSourceLabel(t, s.background_source) : (s.background_source || 'Unknown');
-    };
-    // Summary counts by resolved source + QA verdict.
-    let nVideo = 0, nChatgpt = 0, nGraphic = 0, nOther = 0;
-    let qPass = 0, qFail = 0, qSkip = 0, qReduced = 0;
-    for (const s of scenes) {
-      const src = resolvedSrc(s).toLowerCase();
-      if (src.includes('video')) nVideo++;
-      else if (src.includes('chatgpt')) nChatgpt++;
-      else if (src.includes('graphic')) nGraphic++;
-      else nOther++;
-      const v = (qaMap[String(s.scene_id)] || {}).verdict;
-      if (v === 'PASS') qPass++; else if (v === 'FAIL') qFail++;
-      else if (v === 'SKIP') qSkip++; else if (v === 'CAPABILITY_REDUCED') qReduced++;
-    }
-    const chip = (label, style) => `<span style="font-size:11px;font-weight:700;border-radius:999px;padding:2px 10px;${style}">${label}</span>`;
-    const summary = `
-      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#f8fafc">
-        ${chip('Total ' + scenes.length + ' scenes', 'background:#1e293b;color:#fff')}
-        ${chip('🎞 Pexels video ' + nVideo, bgSourceBadgeStyle('pexels video'))}
-        ${chip('🖼 ChatGPT ' + nChatgpt, bgSourceBadgeStyle('chatgpt'))}
-        ${nGraphic ? chip('▦ Graphic ' + nGraphic, bgSourceBadgeStyle('graphic')) : ''}
-        ${nOther ? chip('? Other ' + nOther, 'background:#f3f4f6;color:#374151') : ''}
-        ${hasQa ? `<span style="color:var(--line-strong,#cbd5e1)">|</span>
-          <span style="font-size:11px;color:var(--muted);font-weight:700">Visual QA:</span>
-          ${chip('✓ ' + qPass, 'background:#dcfce7;color:#166534')}
-          ${qFail ? chip('✗ ' + qFail, 'background:#fee2e2;color:#991b1b') : ''}
-          ${qReduced ? chip('◐ ' + qReduced, 'background:#fef9c3;color:#854d0e') : ''}
-          ${chip('⊘ skip ' + qSkip, 'background:#e2e8f0;color:#475569')}`
-        : `<span style="font-size:11px;color:var(--muted)">Visual QA: not run yet</span>`}
-      </div>
-      ${hasSched ? '' : '<div style="font-size:11px;color:#9a3412;margin-bottom:8px">⚠ Compiled schedule not found — showing acquisition-time sources (may differ from final render).</div>'}`;
-    const rows = scenes.map(s => {
-      const qa = qaMap[String(s.scene_id)];
-      const qaBadge = (hasQa && qa) ? qaVerdictBadge(qa.verdict) : '';
-      const track = schedMap[String(s.scene_id)];
-      const src = resolvedSrc(s);
-      // Stale acquisition source, shown struck-through when the render upgraded it.
-      const acq = s.background_source || '';
-      const stale = (acq && acq !== src)
-        ? ` <span style="font-size:10px;color:var(--muted-2,#94a3b8);text-decoration:line-through" title="acquisition-time pick (replaced by render)">${escapeHtml(acq)}</span>`
-        : '';
-      const motion = s.motion ? ` · <span style="color:var(--muted)">${escapeHtml(s.motion)}</span>` : '';
-      const q = s.query ? `<div style="font-size:11px;color:var(--muted-2,#94a3b8);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(s.query)}">${escapeHtml((s.query || '').slice(0, 90))}</div>` : '';
-      const lnk = s.source_url ? `<div style="font-size:11px;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(s.source_url)}"><a href="${escapeHtml(s.source_url)}" target="_blank" style="color:var(--blue);text-decoration:none">🔗 ${escapeHtml(s.source_url)}</a></div>` : '';
-      // Inline 9:16 preview of the ACTUAL rendered background. Prefer the compiled
-      // track's asset_ref (the visual-span video when upgraded); fall back to the
-      // background-stage <scene>.mp4 / <scene>_preview.jpg.
-      const artBase = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=';
-      const thumbStyle = 'width:34px;height:60px;flex:none;object-fit:cover;border-radius:5px;background:#0f172a';
-      let thumb = '';
-      if (s.scene_id) {
-        const isVideo = track ? String(track.source_media_kind || '').toLowerCase() === 'native_video' : (s.media_kind !== 'image');
-        // asset_ref like "jobs/<id>/assets/visual_spans/x.mp4" → take the part after "/assets/".
-        const rel = track && track.asset_ref ? (track.asset_ref.split('/assets/')[1] || '') : '';
-        if (isVideo) {
-          const vidPath = rel ? ('shorts/' + shortId + '/assets/' + rel) : ('shorts/' + shortId + '/assets/' + s.scene_id + '.mp4');
-          const vidUrl = artBase + encodeURIComponent(vidPath) + '#t=0.1';
-          thumb = `<video src="${vidUrl}" muted preload="metadata" playsinline
-                     onmouseover="this.play()" onmouseout="this.pause();this.currentTime=0.1"
-                     onerror="this.style.display='none'"
-                     style="${thumbStyle};cursor:pointer"></video>`;
-        } else {
-          const imgPath = 'shorts/' + shortId + '/assets/' + s.scene_id + '_preview.jpg';
-          thumb = `<img src="${artBase + encodeURIComponent(imgPath)}" loading="lazy" onerror="this.style.display='none'" style="${thumbStyle}">`;
-        }
-      }
-      return `
-        <div style="border:1px solid var(--line);border-radius:8px;padding:7px 9px;background:#fff;display:flex;gap:9px;align-items:flex-start">
-          ${thumb}
-          <div style="min-width:0;flex:1">
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-              <span style="font-weight:700;font-size:12px;min-width:38px">${escapeHtml(s.scene_id || '')}</span>
-              <span style="font-size:11px;font-weight:700;border-radius:999px;padding:2px 9px;${bgSourceBadgeStyle(src)}">${escapeHtml(src)}</span>
-              ${stale}
-              ${qaBadge}
-              <span style="font-size:11px">${motion}</span>
-            </div>
-            ${q}
-            ${lnk}
-          </div>
-        </div>`;
-    }).join('');
-    panel.innerHTML = `<div style="font-weight:700;font-size:12px;margin-bottom:6px">🎬 Scenes & Visual QA</div>${summary}<div style="display:grid;gap:6px">${rows}</div>`;
-  } catch (e) {
-    panel.innerHTML = '<div style="color:var(--muted);font-size:12px">Failed to load scenes & QA.</div>';
-  }
-}
-
-function renderQaScenesAttempts(short) {
-  const raw = short && short.qa_scenes_attempts;
-  if (raw === undefined || raw === null || raw === '') return '';
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n < 0) return '';
-  // Optional breakdown: deterministic structural repairs vs. Gemini product
-  // quality repairs (set by short_builder). Shown only when present.
-  const struct = Number(short.qa_scenes_structural_attempts);
-  const prod = Number(short.qa_scenes_product_attempts);
-  const parts = [];
-  if (Number.isFinite(struct) && struct > 0) parts.push('struct ' + Math.trunc(struct));
-  if (Number.isFinite(prod) && prod > 0) parts.push('prod ' + Math.trunc(prod));
-  const breakdown = parts.length ? ' (' + parts.join(' · ') + ')' : '';
-  const label = 'QA Scenes: ' + String(Math.trunc(n)) + 'x' + breakdown;
-  const title = 'Number of scene-QA runs for this Short'
-    + (parts.length ? ' — structural = deterministic validation repairs, product = Gemini product-quality repairs' : '');
-  return `<span title="${escapeHtml(title)}" style="border:1px solid var(--line);border-radius:999px;padding:1px 6px;background:#fff;color:var(--muted);white-space:nowrap">${escapeHtml(label)}</span>`;
-}
-
-function renderShortSubstep(step) {
-  const st = step.status || 'pending';
-  const icon = st === 'completed' ? '✓' : st === 'skipped' ? '○' : st === 'failed' ? '×' : '○';
-  const color = st === 'completed' ? '#166534' : st === 'skipped' ? '#64748b' : st === 'failed' ? '#b91c1c' : '#64748b';
-  const label = step.label || step.name || '';
-  return `
-    <div style="border:1px solid var(--line-strong);border-radius:8px;padding:7px 8px;background:#fff;display:flex;gap:6px;align-items:center;min-width:0">
-      <span style="color:${color};font-weight:800">${icon}</span>
-      <span style="font-size:12px;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(label)}</span>
-    </div>`;
 }
 
 function renderFile(jobId, f) {
@@ -3373,178 +3062,50 @@ function toggleIdeasPanel() {
   }
 }
 
-// ---- Shorts Autopilot panel ----
-let SHORTS_PANEL_OPEN = false;
-let SHORTS_JOB_ID = null;
-let SHORTS_POLL = null;
-
-function toggleShortsPanel() {
-  SHORTS_PANEL_OPEN = !SHORTS_PANEL_OPEN;
-  document.getElementById('shorts-body').style.display = SHORTS_PANEL_OPEN ? '' : 'none';
-  document.getElementById('shorts-caret').textContent = SHORTS_PANEL_OPEN ? '‹ collapse' : '› expand';
-  if (SHORTS_PANEL_OPEN) refreshShorts();
-}
-
-function openShortsFor(jobId) {
-  SHORTS_JOB_ID = jobId;
-  if (!SHORTS_PANEL_OPEN) toggleShortsPanel();
-  else refreshShorts();
-  document.getElementById('shorts-section').scrollIntoView({behavior: 'smooth', block: 'start'});
-}
-
-function _shortsJob() { return SHORTS_JOB_ID || SELECTED_ID; }
-
-async function refreshShorts() {
-  const jobId = _shortsJob();
-  const statusEl = document.getElementById('shorts-status');
-  const grid = document.getElementById('shorts-grid');
-  if (!jobId) { statusEl.textContent = 'Select a job (click 🎬 on a job card).'; grid.innerHTML = ''; return; }
-  try {
-    const r = await fetch('/jobs/' + encodeURIComponent(jobId) + '/shorts');
-    if (!r.ok) { statusEl.textContent = 'No shorts info for ' + jobId; grid.innerHTML = ''; return; }
-	    const data = await r.json();
-	    statusEl.innerHTML = '<b>' + escapeHtml(jobId) + '</b> — Shorts: ' + escapeHtml(data.label || 'none')
-	      + (data.running ? ' <span style="color:var(--red)">●</span>' : '')
-	      + renderShortsProgress(data);
-	    renderShortsCards(jobId, data);
-    if (data.running && !SHORTS_POLL) {
-      SHORTS_POLL = setInterval(refreshShorts, 5000);
-    } else if (!data.running && SHORTS_POLL) {
-      clearInterval(SHORTS_POLL); SHORTS_POLL = null;
-    }
-  } catch (e) {
-    statusEl.textContent = 'Error loading shorts: ' + e;
-	  }
-	}
-
-	function renderShortsProgress(data) {
-	  const shorts = data.shorts || [];
-	  if (!data.running && shorts.length === 0) return '';
-	  const source = shorts.length ? '✓ source snapshot' : (data.running ? '↻ source snapshot' : '○ source snapshot');
-	  const plan = shorts.length ? '✓ plan' : (data.running ? '↻ plan' : '○ plan');
-	  const items = [source, plan];
-	  for (let i = 1; i <= Math.max(3, shorts.length); i++) {
-	    const sid = 'short-0' + i;
-	    const s = shorts.find(x => x.short_id === sid);
-	    if (s?.status === 'rendered') items.push('✓ ' + sid + ' rendered');
-	    else if (s?.status === 'needs_review') items.push('! ' + sid + ' needs review');
-	    else if (data.running) items.push((i === 1 ? '↻ ' : '○ ') + sid + (i === 1 ? ' generating' : ' pending'));
-	    else items.push('○ ' + sid + ' pending');
-	  }
-	  return '<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px">'
-	    + items.map(x => '<span style="font-size:11px;border:1px solid var(--border);border-radius:999px;padding:2px 6px">' + escapeHtml(x) + '</span>').join('')
-	    + '</div>';
-	}
-
-function renderShortsCards(jobId, data) {
-  const grid = document.getElementById('shorts-grid');
-  const shorts = data.shorts || [];
-  if (shorts.length === 0) {
-    grid.innerHTML = '<div style="font-size:12px;color:var(--muted)">No Shorts yet. Click "Gen Video Shorts".</div>';
-    return;
-  }
-  grid.innerHTML = shorts.map(s => {
-    const sid = s.short_id;
-    const base = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent('shorts/' + sid + '/');
-	    const video = s.video_path ? ('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(s.video_path)) : '';
-	    const artifact = (name) => '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent('shorts/' + sid + '/' + name);
-	    const chipColor = s.status === 'rendered' ? '#1a7f37' : (s.status === 'needs_review' ? '#b35900' : '#666');
-    const qaScenesAttempts = renderQaScenesAttempts(s);
-    const needsReview = s.status === 'needs_review';
-    return `
-      <div class="idea-card" style="display:flex;gap:10px">
-        <div style="width:90px;height:160px;background:#111;border-radius:6px;overflow:hidden;flex:0 0 auto">
-        </div>
-        <div style="flex:1;min-width:0">
-          <div style="font-weight:600">${escapeHtml(sid)}${s.title ? ` — ${escapeHtml(s.title)}` : ''} · ${escapeHtml(s.format || '')}
-            <span style="color:${chipColor};font-weight:700">· ${escapeHtml(s.status || '')}</span></div>
-          <div style="font-size:12px;margin:4px 0">${escapeHtml(s.hook || '')}</div>
-	          <div style="font-size:11px;color:var(--muted);display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-	            <span>${s.duration_sec ? s.duration_sec + 's · ' : ''}QA: ${escapeHtml(s.qa_verdict || '-')}</span>${qaScenesAttempts}
-	            <span>Music: ${escapeHtml(s.music_track || '-')} · Kokoro ef_dora 1.07</span>
-	          </div>
-	          <div style="font-size:11px;color:var(--muted);margin-top:3px">
-	            Source: <a href="${artifact('short_source_map.json')}" target="_blank">Source Map</a> ·
-	            <a href="${artifact('short_script.json')}" target="_blank">Script</a> ·
-	            <a href="${artifact('short_scenes.json')}" target="_blank">Scenes</a> ·
-	            <a href="${artifact('short_seo.json')}" target="_blank">SEO</a> ·
-	            <a href="${artifact('short_qa.json')}" target="_blank">QA</a>
-	          </div>
-	          <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px">
-	            ${video ? `<a class="action-btn" href="${video}" target="_blank">▶ Play</a>
-	                       <a class="action-btn" href="${video}" download>⬇ MP4</a>` : ''}
-	            ${cover ? `<a class="action-btn" href="${cover}" download>⬇ Cover</a>` : ''}
-	            <button class="action-btn" onclick="copyShortSeo('${escapeHtml(jobId)}','${escapeHtml(sid)}')">Copy SEO</button>
-	            <button class="action-btn primary" onclick="openShortDrawer('${escapeHtml(jobId)}','${escapeHtml(sid)}')">Details</button>
-	            <button class="action-btn" onclick="spViewBackgroundSources('${escapeHtml(jobId)}','${escapeHtml(sid)}', this)">🎬 Background sources</button>
-	            <a class="action-btn" href="${artifact('short_source_map.json')}" target="_blank">Source Map</a>
-	            <a class="action-btn" href="${artifact('short_qa.json')}" target="_blank">View QA</a>
-	            ${needsReview
-              ? `<button class="action-btn primary" onclick="regenShort('${escapeHtml(jobId)}','${escapeHtml(sid)}')">Regenerate</button>`
-              : `<button class="action-btn" onclick="rerenderShort('${escapeHtml(jobId)}','${escapeHtml(sid)}')">Render again</button>
-                 <button class="action-btn" onclick="markShortUploaded('${escapeHtml(jobId)}','${escapeHtml(sid)}')">Mark uploaded</button>`}
-          </div>
-        </div>
-        <div class="bg-sources-panel" style="display:none;margin-top:10px;grid-column:1/-1"></div>
-      </div>`;
-  }).join('');
-}
-
-async function genVideoShorts(force) {
-  const jobId = _shortsJob();
-  if (!jobId) { alert('Select a job first (click 🎬 on a job card).'); return; }
-  const btn = document.getElementById('gen-shorts-btn');
-  btn.disabled = true; btn.textContent = 'Starting…';
-  try {
-    const r = await fetch('/jobs/' + encodeURIComponent(jobId) + '/shorts/autopilot', {
-      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({force: !!force}),
-    });
-    const data = await r.json();
-    if (data.status === 'legacy_detected') {
-      if (confirm('Legacy Shorts detected. Force regenerate (archive old + rebuild)?')) return genVideoShorts(true);
-    }
-  } catch (e) { alert('Failed to start Shorts: ' + e); }
-  finally { btn.disabled = false; btn.textContent = 'Gen Video Shorts'; }
-  setTimeout(refreshShorts, 1500);
-}
-
-async function regenShort(jobId, shortId) {
-  await fetch('/jobs/' + encodeURIComponent(jobId) + '/shorts/' + encodeURIComponent(shortId) + '/regenerate', {method: 'POST'});
-  setTimeout(refreshShorts, 1500);
-}
-async function rerenderShort(jobId, shortId) {
-  await fetch('/jobs/' + encodeURIComponent(jobId) + '/shorts/' + encodeURIComponent(shortId) + '/render', {method: 'POST'});
-  setTimeout(refreshShorts, 1500);
-  // Also kick the Shorts Studio renders tab if it's the active view, so the
-  // progress poller can attach without waiting for the user to tab-switch.
-  if (ACTIVE_PAGE === 'shorts' && SHORTS_SELECTED_JOB === jobId) {
-    [500, 1500, 3500, 6000].forEach((ms) => {
-      setTimeout(() => loadShortsRendersTab(jobId), ms);
-    });
-  }
-}
-	async function markShortUploaded(jobId, shortId) {
-  const url = prompt('YouTube URL for this Short (optional):', '') || '';
-  await fetch('/jobs/' + encodeURIComponent(jobId) + '/shorts/' + encodeURIComponent(shortId) + '/uploaded', {
-    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({youtube_url: url}),
-  });
-	  refreshShorts();
-		}
-
+// Each tab lists its candidate artifact paths (canonical json/ location
+	// first, legacy root fallback). Tabs whose artifact does not exist are NOT
+	// rendered — an infographic short shows only Overview/Poster/SEO/Render,
+	// a narrated short shows its script/scenes/QA tabs. No dead "not found" tabs.
 	const SHORT_DETAIL_TABS = [
-	  ['Overview', 'short_status.json'],
-	  ['Script', 'short_script.json'],
-	  ['Scenes', 'short_scenes.json'],
-	  ['Source Map', 'short_source_map.json'],
-	  ['SEO', 'short_seo.json'],
-	  ['QA', 'short_qa.json'],
-	  ['Render', 'short_render_props.json'],
+	  ['Overview', ['short_status.json']],
+	  ['Script', ['json/short_script.json', 'short_script.json']],
+	  ['Scenes', ['json/short_scenes.json', 'short_scenes.json']],
+	  ['Source Map', ['json/short_source_map.json', 'short_source_map.json']],
+	  ['SEO', ['json/short_seo.json', 'short_seo.json']],
+	  ['QA', ['json/short_scenes_qa.json', 'json/short_qa.json', 'short_qa.json']],
+	  ['Poster Plan', ['json/poster_plan.json']],
+	  ['Poster QA', ['json/poster_qa.json']],
+	  ['BGM', ['json/original_bgm.json']],
+	  ['Render', ['json/short_render_props.json', 'short_render_props.json']],
 	];
 
+	// Cache of resolved artifact paths per short: label -> resolved path.
+	let SHORT_DETAIL_AVAILABLE = null;
+	let SHORT_DETAIL_KEY = '';
+
+	async function resolveShortDetailTabs(jobId, shortId) {
+	  const key = jobId + '/' + shortId;
+	  if (SHORT_DETAIL_KEY === key && SHORT_DETAIL_AVAILABLE) return SHORT_DETAIL_AVAILABLE;
+	  const found = new Map();
+	  await Promise.all(SHORT_DETAIL_TABS.map(async ([label, candidates]) => {
+	    for (const rel of candidates) {
+	      const p = 'shorts/' + shortId + '/' + rel;
+	      const url = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(p);
+	      try {
+	        const r = await fetch(url);
+	        if (r.ok) { found.set(label, { path: p, text: await r.text() }); return; }
+	      } catch (e) { /* unreachable server: treat as missing */ }
+	    }
+	  }));
+	  SHORT_DETAIL_AVAILABLE = found;
+	  SHORT_DETAIL_KEY = key;
+	  return found;
+	}
+
 	// Public alias used by Short cards + spec test marker.
-	// 7 spec tabs (rendered dynamically): data-tab="overview" data-tab="script"
-	// data-tab="scenes" data-tab="source-map" data-tab="seo" data-tab="qa"
-	// data-tab="render"
+	// Tabs render dynamically from the artifacts that actually exist:
+	// data-tab="overview" data-tab="script" data-tab="scenes"
+	// data-tab="source-map" data-tab="seo" data-tab="qa" data-tab="render"
 	window.openShortDrawer = function (jobId, shortId, tabName) {
 	  return openShortDetail(jobId, shortId, tabName || 'Overview');
 	};
@@ -3553,26 +3114,22 @@ async function rerenderShort(jobId, shortId) {
 	  document.getElementById('short-drawer').style.display = 'block';
 	  document.getElementById('short-detail-title').textContent = shortId + ' detail';
 	  document.getElementById('short-detail-subtitle').textContent = jobId;
+	  const content = document.getElementById('short-detail-content');
+	  content.textContent = 'Loading…';
+	  const available = await resolveShortDetailTabs(jobId, shortId);
+	  const labels = SHORT_DETAIL_TABS.map(([label]) => label).filter((l) => available.has(l));
+	  if (!labels.includes(tabName)) tabName = labels[0] || 'Overview';
 	  const tabs = document.getElementById('short-detail-tabs');
-	  tabs.innerHTML = SHORT_DETAIL_TABS.map(([label]) => {
+	  tabs.innerHTML = labels.map((label) => {
 	    const slug = label.toLowerCase().replace(/ /g, '-');
 	    return `<button class="action-btn ${label === tabName ? 'primary' : ''}" data-tab="${slug}" onclick="openShortDrawer('${escapeHtml(jobId)}','${escapeHtml(shortId)}','${escapeHtml(label)}')">${escapeHtml(label)}</button>`;
 	  }).join('');
-	  const entry = SHORT_DETAIL_TABS.find(([label]) => label === tabName) || SHORT_DETAIL_TABS[0];
-	  const artifactPath = 'shorts/' + shortId + '/' + entry[1];
-	  const url = '/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(artifactPath);
-	  const content = document.getElementById('short-detail-content');
+	  const entry = available.get(tabName);
+	  if (!entry) { content.textContent = 'No artifacts found for this short.'; return; }
 	  try {
-	    const r = await fetch(url);
-	    if (!r.ok) { content.textContent = artifactPath + ' not found'; return; }
-	    const text = await r.text();
-	    try {
-	      content.textContent = JSON.stringify(JSON.parse(text), null, 2);
-	    } catch (e) {
-	      content.textContent = text;
-	    }
+	    content.textContent = JSON.stringify(JSON.parse(entry.text), null, 2);
 	  } catch (e) {
-	    content.textContent = 'Failed to load ' + artifactPath + ': ' + e;
+	    content.textContent = entry.text;
 	  }
 	}
 
@@ -3580,37 +3137,7 @@ async function rerenderShort(jobId, shortId) {
 	  document.getElementById('short-drawer').style.display = 'none';
 	}
 
-	async function copyShortSeo(jobId, shortId) {
-	  // SEO lives under json/ in the canonical layout; older shorts kept it at root.
-	  const candidates = [
-	    'shorts/' + shortId + '/json/short_seo.json',
-	    'shorts/' + shortId + '/json/seo.json',
-	    'shorts/' + shortId + '/short_seo.json',
-	    'shorts/' + shortId + '/seo.json',
-	  ];
-	  let text = null;
-	  for (const path of candidates) {
-	    const r = await fetch('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(path));
-	    if (r.ok) { text = await r.text(); break; }
-	  }
-	  if (text === null) { alert('SEO artifact not found'); return; }
-	  await navigator.clipboard.writeText(text);
-	  showToast('Short SEO copied');
-	}
-
-async function updateShortsSourceUrl() {
-	  const jobId = _shortsJob();
-	  if (!jobId) { alert('Select a job first.'); return; }
-	  const long_video_url = prompt('Long video URL:', '') || '';
-	  await fetch('/jobs/' + encodeURIComponent(jobId) + '/shorts/source-url', {
-	    method: 'POST',
-	    headers: {'Content-Type': 'application/json'},
-	    body: JSON.stringify({long_video_url}),
-	  });
-	  refreshShorts();
-	}
-
-// ---- Shorts Studio Page ----
+	// ---- Shorts Studio Page ----
 let SHORTS_SELECTED_JOB = null;
 let SHORTS_ACTIVE_TAB = 'ideas';
 let SHORTS_JOBS_CACHE = [];
@@ -3776,7 +3303,7 @@ async function loadShortsIdeasTab(jobId) {
               ${badgeHtml}
             </div>
           </div>
-          ${idea.associated_short ? '' : `<button class="action-btn primary" style="flex-shrink:0" onclick="spRenderIdea('${escapeHtml(idea.idea_id)}', this)">Render Short</button>`}
+          ${idea.associated_short ? '' : `<button class="action-btn primary" style="flex-shrink:0" onclick="spRenderIdea('${escapeHtml(idea.idea_id)}', this, 'infographic')">Render Short</button>`}
         </div>
         <div style="font-size:12px;margin-top:8px"><strong>Hook:</strong> ${escapeHtml(idea.hook_text || '')}</div>
         <div style="font-size:12px;margin-top:4px"><strong>Pain:</strong> ${escapeHtml(idea.viewer_pain || '')}</div>
@@ -4134,10 +3661,7 @@ function renderShortReviewNotice(jobId, d) {
     : '';
   return `
     <div class="short-needs-review-notice">
-      QA stopped on a hard blocker. Review the generated script or scenes and try Regenerate.${detail}${blockerList}
-      <div style="margin-top:8px">
-        <button class="action-btn primary" onclick="regenShort('${escapeHtml(jobId)}','${escapeHtml(d.short_id || '')}')">Regenerate</button>
-      </div>
+      QA stopped on a hard blocker. Delete this Short and render it again.${detail}${blockerList}
     </div>`;
 }
 
@@ -4418,8 +3942,6 @@ function renderSingleCardHtml(jobId, d, idx, shortsSeoData, isOpen) {
           ${escapeHtml(d.short_id)} ${d.idea_id ? '— ' + escapeHtml(d.idea_id) : ''}
           ${d.title ? ` <span style="font-weight: normal; color: var(--muted-2); font-size: 13px; margin-left: 8px;">— ${escapeHtml(d.title)}</span>` : ''}
         </div>
-        <div class="code">${escapeHtml(d.format || '')} · ${escapeHtml(d.qa_verdict || '-')}</div>
-        <div style="margin-top:5px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:11px">${renderQaScenesAttempts(d)}</div>
       </div>
       <!-- Progress % and ETA like the long video -->
       <div class="rc-progress" style="text-align: right; margin-right: 14px; min-width: 100px;">
@@ -4433,7 +3955,11 @@ function renderSingleCardHtml(jobId, d, idx, shortsSeoData, isOpen) {
     
     <div class="render-card-body">
       ${st === 'rendered' ? (() => {
-        const shortVideoUrl = d.video_path ? ('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(d.video_path)) : '';
+        // Manifest video_path is relative to the shorts/ dir; the artifact
+        // endpoint resolves from the JOB root, so prepend shorts/ (bug-514:
+        // the raw path 404'd and the player showed "Format error").
+        const shortVideoPath = d.video_path ? (d.video_path.startsWith('shorts/') ? d.video_path : 'shorts/' + d.video_path) : '';
+        const shortVideoUrl = shortVideoPath ? ('/jobs/' + encodeURIComponent(jobId) + '/artifact?path=' + encodeURIComponent(shortVideoPath)) : '';
         const shortSeo = shortsSeoData[d.short_id] || d.seo || {};
         const shortTitle = shortSeo.title || d.title || d.short_id;
         const shortDesc = shortSeo.description || '';
@@ -4484,7 +4010,7 @@ function renderSingleCardHtml(jobId, d, idx, shortsSeoData, isOpen) {
               <div class="tag-chips">${shortTagsHtml || '<span style="font-size:12px;color:var(--muted)">(missing)</span>'}</div>
             </div>
             <div style="font-size:11px;color:var(--muted-2);padding:4px 0">
-              ${escapeHtml(shortLang)} · AI disclosure: ${shortAiDisclosure ? 'yes' : 'no'} · ${escapeHtml(d.format || '-')} · ${(d.source_scene_ids || []).length} source scenes
+              ${escapeHtml(shortLang)} · AI disclosure: ${shortAiDisclosure ? 'yes' : 'no'}
             </div>
           </div>
         </div>
@@ -4506,17 +4032,13 @@ function renderSingleCardHtml(jobId, d, idx, shortsSeoData, isOpen) {
         ${st === 'needs_review' ? renderShortReviewNotice(jobId, d) : ''}
       `}
       
-      ${renderBackgroundLive(d.background_live || (d.stages || []).find(s => s.name === 'background'))}
 
       <div class="rc-actions" style="margin-top:14px;display:flex;gap:8px;border-top:1px solid var(--line);padding-top:12px;align-items:center">
         <button class="action-btn warn" onclick="spStopShort('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', this)" ${isRunning ? '' : 'disabled'}>Stop</button>
-        <button class="action-btn" onclick="spResumeShort('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', '${escapeHtml(st)}', this)" ${isStoppedOrFailed ? '' : 'disabled'}>Resume</button>
         <button class="action-btn" onclick="spViewPromptHistory('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', this)">📜 Prompt history</button>
-        <button class="action-btn" onclick="spViewBackgroundSources('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', this)">🎬 Scenes & QA</button>
         <div style="flex:1"></div>
         <button class="action-btn danger" onclick="spDeleteShort('${escapeHtml(jobId)}', '${escapeHtml(d.short_id)}', this)" ${isRunning ? 'disabled' : ''}>Delete</button>
       </div>
-      <div class="bg-sources-panel" style="display:none;margin-top:10px;grid-column:1/-1"></div>
     </div>
   </div>`;
 }
@@ -4739,14 +4261,14 @@ async function spDeleteIdeas() {
   finally { btn.disabled = false; btn.textContent = orig; }
 }
 
-async function spRenderIdea(ideaId, btn) {
+async function spRenderIdea(ideaId, btn, shortType) {
   if (!SHORTS_SELECTED_JOB || !ideaId) return;
   const orig = btn.textContent;
   btn.disabled = true; btn.textContent = '⏳ Enqueuing…';
   try {
     const r = await fetch('/shorts-studio/jobs/' + encodeURIComponent(SHORTS_SELECTED_JOB) + '/ideas/render', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({idea_ids: [ideaId], force: false}),
+      body: JSON.stringify({idea_ids: [ideaId], force: false, short_type: shortType || 'infographic'}),
     });
     if (!r.ok) { const d = await r.json().catch(() => ({})); showToast('Render failed: ' + (d.detail?.error || d.detail || r.statusText)); btn.disabled = false; btn.textContent = orig; return; }
     showToast('Render enqueued');
@@ -4790,57 +4312,6 @@ async function spStopShort(jobId, shortId, btn) {
     setTimeout(() => refreshShortsDetail(), 1000);
   } catch (e) {
     showToast('Stop request failed');
-    btn.disabled = false; btn.textContent = orig;
-  }
-}
-
-async function spResumeShort(jobId, shortId, currentStatus, btn) {
-  if (!jobId || !shortId) return;
-  const orig = btn.textContent;
-  btn.disabled = true; btn.textContent = 'Resuming…';
-  try {
-    let url = '';
-    let method = 'POST';
-    let body = null;
-    
-    if (currentStatus === 'ready_for_render') {
-      url = '/shorts-studio/jobs/' + encodeURIComponent(jobId) + '/confirm-render';
-      body = JSON.stringify({ short_ids: [shortId] });
-    } else {
-      // Check if preceding generation stages are completed
-      const draft = (window.SHORTS_DRAFTS_CACHE || []).find(d => d.short_id === shortId);
-      const stages = draft ? (draft.stages || []) : [];
-      const genStages = ['script', 'qa_script', 'scenes', 'qa_scenes', 'seo'];
-      const needsRegen = genStages.some(name => {
-        const stage = stages.find(s => s.name === name);
-        return !stage || stage.status !== 'completed';
-      });
-
-      
-      if (needsRegen) {
-        url = '/jobs/' + encodeURIComponent(jobId) + '/shorts/' + encodeURIComponent(shortId) + '/regenerate';
-      } else {
-        url = '/jobs/' + encodeURIComponent(jobId) + '/shorts/' + encodeURIComponent(shortId) + '/render';
-      }
-    }
-    
-    const r = await fetch(url, {
-      method: method,
-      headers: body ? { 'Content-Type': 'application/json' } : {},
-      body: body
-    });
-    
-    if (!r.ok) {
-      const d = await r.json().catch(() => ({}));
-      showToast('Failed to resume: ' + (d.detail?.error || d.detail || r.statusText));
-      btn.disabled = false; btn.textContent = orig;
-      return;
-    }
-    
-    showToast('Resume enqueued');
-    setTimeout(() => refreshShortsDetail(), 1000);
-  } catch (e) {
-    showToast('Network error');
     btn.disabled = false; btn.textContent = orig;
   }
 }

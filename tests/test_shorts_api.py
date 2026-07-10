@@ -534,6 +534,22 @@ def test_renders_tab_video_url_resolves_from_job_root():
     assert "d.video_path.startsWith('shorts/') ? d.video_path : 'shorts/' + d.video_path" in html
 
 
+def test_renders_tab_polls_while_job_renders_even_with_no_running_draft():
+    """Regression: the renders-list poll only started when an EXISTING draft
+    looked 'running', so an in-flight infographic short never appeared when the
+    list was empty or held only old finished shorts. The poll decision must be
+    job-status driven and happen before any early return."""
+    from pathlib import Path as _P
+    html = _P("src/video_agent/web/shorts_studio.html").read_text(encoding="utf-8")
+    assert "function ensureRendersListPoll" in html
+    assert "jobEntry.shorts_status === 'rendering_selected'" in html
+    # generating (infographic live progress status) counts as running
+    assert "d.status === 'generating'" in html
+    # poll decision precedes the empty-drafts early return
+    fn = html.split("async function loadShortsRendersTab", 1)[1]
+    assert fn.index("ensureRendersListPoll(jobId, anyRunning)") < fn.index("No rendered shorts yet. Select an idea")
+
+
 def test_render_ideas_request_defaults_to_infographic():
     """Server-side default must match the new flow: clients that omit
     short_type get the infographic pipeline, never the legacy narrated one."""

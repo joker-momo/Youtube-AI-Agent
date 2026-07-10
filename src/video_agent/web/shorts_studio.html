@@ -4043,6 +4043,27 @@ function renderSingleCardHtml(jobId, d, idx, shortsSeoData, isOpen) {
   </div>`;
 }
 
+// Keep the renders list refreshing while the job renders (or a draft is in
+// progress) so in-flight cards appear without a manual refresh; stop the poll
+// once everything is terminal.
+function ensureRendersListPoll(jobId, active) {
+  if (active) {
+    if (!window.SHORTS_RENDERS_LIST_POLL) {
+      window.SHORTS_RENDERS_LIST_POLL = setInterval(() => {
+        if (ACTIVE_PAGE !== 'shorts' || SHORTS_SELECTED_JOB !== jobId) {
+          clearInterval(window.SHORTS_RENDERS_LIST_POLL);
+          window.SHORTS_RENDERS_LIST_POLL = null;
+          return;
+        }
+        loadShortsRendersTab(jobId);
+      }, 4000);
+    }
+  } else if (window.SHORTS_RENDERS_LIST_POLL) {
+    clearInterval(window.SHORTS_RENDERS_LIST_POLL);
+    window.SHORTS_RENDERS_LIST_POLL = null;
+  }
+}
+
 async function loadShortsRendersTab(jobId) {
   const container = document.getElementById('shorts-tab-renders');
   if (!container) return;
@@ -4056,8 +4077,26 @@ async function loadShortsRendersTab(jobId) {
     const data = await r.json();
     const drafts = data.drafts || [];
     window.SHORTS_DRAFTS_CACHE = drafts;
+
+    // Decide list-polling BEFORE any early return. A render can be running
+    // while the drafts list is empty (worker not started yet) or contains only
+    // OLD finished shorts (bug: the new in-flight card never appeared because
+    // no draft looked "running", so nothing ever re-fetched the list).
+    const jobEntry = (SHORTS_JOBS_CACHE || []).find(j => j.job_id === jobId) || {};
+    const jobIsRendering = jobEntry.shorts_status === 'rendering_selected';
+    const draftsRunning = drafts.some(d => {
+      const activeStages = d.stages || [];
+      return activeStages.some(s => s.status === 'in_progress')
+        || (d.status && d.status.includes('progress'))
+        || d.status === 'rendering' || d.status === 'generating' || d.status === 'queued';
+    });
+    const anyRunning = draftsRunning || jobIsRendering;
+    ensureRendersListPoll(jobId, anyRunning);
+
     if (!drafts.length) {
-      container.innerHTML = '<div class="ideas-empty">No rendered shorts yet. Select an idea and click "Render Short".</div>';
+      container.innerHTML = anyRunning
+        ? '<div class="ideas-empty">Render starting… waiting for the worker to pick up the job.</div>'
+        : '<div class="ideas-empty">No rendered shorts yet. Select an idea and click "Render Short".</div>';
       delete LAST_RENDERS_JSON_BY_JOB[jobId];
       return;
     }
@@ -4097,32 +4136,7 @@ async function loadShortsRendersTab(jobId) {
     }
     LAST_RENDERS_JSON_BY_JOB[jobId] = stateKey;
 
-    // Check if any draft has active rendering to start duration ticker
-    const anyRunning = drafts.some(d => {
-      const activeStages = d.stages || [];
-      return activeStages.some(s => s.status === 'in_progress') || (d.status && d.status.includes('progress')) || d.status === 'rendering' || d.status === 'queued';
-    });
     if (anyRunning) startStageDurationTicker();
-
-    // Keep the renders list itself refreshing while any draft is queued/in
-    // progress so the per-Short progress poller picks up as soon as the
-    // worker flips the status. Without this we'd only refresh on tab switch
-    // and the bar never attaches.
-    if (anyRunning) {
-      if (!window.SHORTS_RENDERS_LIST_POLL) {
-        window.SHORTS_RENDERS_LIST_POLL = setInterval(() => {
-          if (ACTIVE_PAGE !== 'shorts' || SHORTS_SELECTED_JOB !== jobId) {
-            clearInterval(window.SHORTS_RENDERS_LIST_POLL);
-            window.SHORTS_RENDERS_LIST_POLL = null;
-            return;
-          }
-          loadShortsRendersTab(jobId);
-        }, 4000);
-      }
-    } else if (window.SHORTS_RENDERS_LIST_POLL) {
-      clearInterval(window.SHORTS_RENDERS_LIST_POLL);
-      window.SHORTS_RENDERS_LIST_POLL = null;
-    }
 
     // Start progress polling for active renders/audio
     drafts.forEach(d => {

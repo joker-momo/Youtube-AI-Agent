@@ -1,6 +1,6 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-07-10T16:55:23.099Z
+> Auto-maintained by OpenWolf. Last scanned: 2026-07-10T17:27:39.976Z
 > Files: 1032 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../../../../Users/joker/
@@ -1127,7 +1127,7 @@
 - `call_budget.py` — Reason-aware call/retry budget summary for a single Short build. (~1177 tok)
 - `candidate_scorer.py` — Score Short candidates for standalone retention/funnel potential. (~1533 tok)
 - `frames.py` — Canonical seconds→frames contract for the Shorts compiled visual timeline. (~442 tok)
-- `idea_preservation.py` — derive_idea_contract, derive_idea_items, ensure_script_idea_fields, validate_script_idea_contract (~10494 tok)
+- `idea_preservation.py` — derive_idea_contract, derive_idea_items, ensure_script_idea_fields, validate_script_idea_contract (~11097 tok)
 - `idea_prompts.py` — short_ideas_prompt (~1503 tok)
 - `idea_scorer.py` — valid_scene_id_set, normalize_text_key, covers_distinct_parts, has_strong_curiosity_phrase (~2509 tok)
 - `llm_history.py` — Per-Short LLM call history recorder. (~3344 tok)
@@ -1148,7 +1148,7 @@
 - `short_builder.py` — Build one Short end to end: generate → QA (regen loop) → audio → mix → render. (~10242 tok)
 - `short_scene_builder.py` — Spec v6 §2.4 — ChatGPT generates Short scenes AND picks layouts. (~6581 tok)
 - `short_script_builder.py` — Spec v6 §2.3 — Generate + persist a Short script via ChatGPT. (~1524 tok)
-- `short_seo_builder.py` — Build ``short_seo.json`` for a Short (LLM-generated, parsed + normalized). (~5382 tok)
+- `short_seo_builder.py` — Build ``short_seo.json`` for a Short (LLM-generated, parsed + normalized). (~5514 tok)
 - `source_map.py` — Build ``short_source_map.json`` linking a Short back to long-video scenes. (~2731 tok)
 - `status.py` — Summarize Shorts state for UI + orphaned-Short recovery (recover_stale_short / force_terminate_orphaned_shorts / short_owner_is_alive). (~2300 tok)
 - `status.py` — Summarize Shorts state for the jobs list / Shorts tab. (~3554 tok)
@@ -1208,7 +1208,7 @@
 - `render_props.py` — Render props for the Remotion InfographicShort composition. (~380 tok)
 - `render.py` — Render an infographic short via Remotion (direct InfographicShort composition). (~748 tok)
 - `schema.py` — Poster-plan schema + validation for infographic shorts. (~995 tok)
-- `seo.py` — SEO/title artifact for infographic Shorts, reusing the shipped Shorts title rules. (~544 tok)
+- `seo.py` — SEO/title artifact for infographic Shorts, reusing the shipped Shorts title rules. (~668 tok)
 - `voiceover.py` — Narration text for an infographic short (read the poster) + TTS synth. (~492 tok)
 
 ## src/video_agent/shorts/validation/
@@ -1337,7 +1337,7 @@
 - `test_script_length_quality_first.py` — Quality-first script length contract. (~969 tok)
 - `test_script_stage.py` — channel_path, idea_payload, valid_script_payload, valid_scenes_payload (~10502 tok)
 - `test_short_graphic_image_migration.py` — test_video_covered_marker_never_skips_ai_for_graphic_scenes, test_video_covered_marker_uses_native_v (~1894 tok)
-- `test_short_title_formulas.py` — Shorts titles use the 4 scroll-stopper formulas, <=40 chars, age-framed. (~1403 tok)
+- `test_short_title_formulas.py` — Shorts titles use the 4 scroll-stopper formulas, <=40 chars, age-framed. (~1468 tok)
 - `test_shorts_api.py` — Shorts Autopilot v5 — Phase 7: backend API + status/source-url. (~6888 tok)
 - `test_shorts_asset_schedule.py` — Compiled-schedule + manifest-adapter tests (spec v3.2.3 §15/§16/§16.1/§17, §41.2). (~4174 tok)
 - `test_shorts_audio_sync.py` — test_audio_visual_delta_uses_tail_constants, test_audio_visual_delta_pass_threshold, test_audio_visu (~1046 tok)

@@ -16,7 +16,7 @@ IMPORTANT:
 - Generate synthesis ideas only.
 - Do not propose raw excerpts or contiguous scene clips.
 - Each idea should combine multiple source scenes when possible.
-- Prefer 3–5 source scenes for checklist, mistake_list, warning_signs, and top_tips.
+- Prefer 3–5 source scenes for list-style posters (numbered_tips, warning_list, category_grid, checklist_score).
 - Do not create a one-scene idea unless SOURCE LONG VIDEO contains fewer than 2 usable narrated scenes.
 - Every idea must be grounded in source_scene_ids.
 - Use only scene IDs that appear in SOURCE LONG VIDEO.
@@ -40,8 +40,21 @@ IMPORTANT:
 - If the source mentions anxiety, diabetes, blood pressure, dementia, medication, or medical conditions, keep the idea lifestyle-focused.
 - Do not imply replacing medication or professional care.
 
-Allowed formats:
-checklist, mistake_list, warning_signs, myth_truth, problem_solution, top_tips, recap, pain_to_tip
+Every idea becomes ONE static infographic POSTER Short (a single 9:16 poster + music, no narration), so conceive each idea FOR a specific poster layout.
+
+Allowed formats (poster layouts — pick the one the content genuinely fits):
+- numbered_tips: 5-7 practical tips/steps as a numbered list.
+- warning_list: 5-6 mistakes/things to avoid, each with a red X.
+- category_grid: 5-7 items grouped as a labelled grid (foods, habits...).
+- comparison: 4-6 items split into 2 columns (bien vs mal).
+- myth_vs_truth: 3-5 myth->truth pairs the source debunks.
+- timeline_routine: 3-6 moments of the day with clock times (routines, when to eat/drink/sleep).
+- checklist_score: 5-7 self-check criteria the viewer counts for themselves ("¿Cuántos cumples?").
+
+FORMAT DIVERSITY (mandatory):
+- The batch must cover at least 4 distinct formats.
+- Do not use any format more than twice.
+- key_points must be expressible as 3-7 SHORT poster items (a phone viewer reads them in seconds).
 
 Field rules:
 - idea_type must be exactly "synthesis".
@@ -62,7 +75,7 @@ Required output shape:
     {{
       "idea_id": "idea-01",
       "idea_type": "synthesis",
-      "format": "mistake_list",
+      "format": "warning_list",
       "title": "...",
       "hook_text": "...",
       "viewer_pain": "...",

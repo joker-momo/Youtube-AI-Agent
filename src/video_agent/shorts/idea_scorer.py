@@ -144,7 +144,13 @@ def validate_and_score_ideas(raw: dict, source_doc: dict, target_count: int = 10
             overall -= 10
         if covers_distinct_parts(deduped_scene_ids, source_doc):
             overall += 10
-        if str(raw_idea.get("format") or "") in {"checklist", "mistake_list", "warning_signs"} and len(deduped_scene_ids) >= 3:
+        list_style_formats = {
+            # poster layouts whose value grows with multi-scene synthesis
+            "numbered_tips", "warning_list", "category_grid", "checklist_score",
+            # legacy narrated names kept for previously stored ideas
+            "checklist", "mistake_list", "warning_signs", "top_tips",
+        }
+        if str(raw_idea.get("format") or "") in list_style_formats and len(deduped_scene_ids) >= 3:
             overall += 8
         if has_strong_curiosity_phrase(f"{raw_idea.get('title', '')} {raw_idea.get('hook_text', '')}"):
             overall += 5
@@ -154,7 +160,7 @@ def validate_and_score_ideas(raw: dict, source_doc: dict, target_count: int = 10
             {
                 "idea_id": original_idea_id or "idea",
                 "idea_type": "synthesis",
-                "format": str(raw_idea.get("format") or "pain_to_tip"),
+                "format": str(raw_idea.get("format") or "numbered_tips"),
                 "title": str(raw_idea.get("title") or "").strip(),
                 "hook_text": str(raw_idea.get("hook_text") or "").strip(),
                 "viewer_pain": str(raw_idea.get("viewer_pain") or "").strip(),

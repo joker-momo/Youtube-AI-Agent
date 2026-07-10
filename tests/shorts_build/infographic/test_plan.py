@@ -31,3 +31,20 @@ def test_invalid_then_valid_retries():
     plan = build_poster_plan(CFG, {"topic": "habitos"}, llm_fn)
     assert plan["poster_format"] == "numbered_tips"
     assert calls["n"] == 2
+
+
+def test_plan_prompt_pins_format_when_source_carries_one():
+    from video_agent.shorts.infographic.plan import _prompt
+    p = _prompt({}, {"topic": "café", "poster_format": "myth_vs_truth"}, 45, "")
+    assert 'Use poster_format "myth_vs_truth"' in p
+    # Unknown/legacy-unmappable format falls back to free choice.
+    p2 = _prompt({}, {"topic": "café", "poster_format": "garbage"}, 45, "")
+    assert "Pick the best poster_format" in p2
+
+
+def test_plan_prompt_documents_new_format_item_fields():
+    from video_agent.shorts.infographic.plan import _prompt
+    p = _prompt({}, {"topic": "café"}, 45, "")
+    assert "myth_vs_truth" in p and "timeline_routine" in p and "checklist_score" in p
+    assert '"time"' in p          # timeline items need a clock time
+    assert "score_line" in p      # checklist_score footer

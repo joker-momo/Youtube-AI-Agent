@@ -64,3 +64,38 @@ def test_poster_prompt_enforces_label_vs_note_type_hierarchy():
     lowered = body.lower()
     assert "typographic hierarchy" in lowered
     assert "label" in lowered and "bold" in lowered
+
+
+def test_myth_vs_truth_layout_renders_mito_verdad_pairs():
+    from video_agent.shorts.infographic.poster_prompt import build_poster_body
+    body = build_poster_body({
+        "poster_format": "myth_vs_truth", "title": "Mitos del café",
+        "items": [{"label": "el café deshidrata", "note": "hidrata casi igual"}],
+    })
+    assert "Mito: el café deshidrata" in body
+    assert "Verdad: hidrata casi igual" in body
+    assert "red CROSS" in body and "green CHECK" in body
+
+
+def test_timeline_routine_layout_renders_times_in_order():
+    from video_agent.shorts.infographic.poster_prompt import build_poster_body
+    body = build_poster_body({
+        "poster_format": "timeline_routine", "title": "Tu día sin insomnio",
+        "items": [{"label": "café suave", "time": "7:00"},
+                  {"label": "sin pantallas", "time": "22:00"}],
+    })
+    assert "TIMELINE" in body.upper()
+    assert "7:00 — café suave" in body
+    assert "22:00 — sin pantallas" in body
+
+
+def test_checklist_score_layout_renders_checkboxes_and_score_line():
+    from video_agent.shorts.infographic.poster_prompt import build_poster_body
+    body = build_poster_body({
+        "poster_format": "checklist_score", "title": "¿Cuántos cumples?",
+        "items": [{"label": "duermo siete horas"}],
+        "score_line": "4+ = vas bien",
+    })
+    assert "checkbox" in body.lower()
+    assert "duermo siete horas" in body
+    assert "4+ = vas bien" in body

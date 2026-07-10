@@ -49,6 +49,35 @@ def _format_block(plan: dict[str, Any]) -> str:
             "Layout: a NUMBERED warning list, each row a food photo + a red CROSS (X) mark "
             "+ a short caution. Rows: " + "; ".join(rows) + "."
         )
+    if fmt == "myth_vs_truth":
+        rows = [
+            f'"Mito: {str(i.get("label") or "").strip()}" -> "Verdad: {str(i.get("note") or "").strip()}"'
+            for i in items
+        ]
+        return (
+            "Layout: stacked MYTH-vs-TRUTH rows. Each row has TWO lines: the myth line "
+            "with a red CROSS (X) and the word \"Mito:\", then directly under it the truth "
+            "line with a green CHECK and the word \"Verdad:\". Rows in order: "
+            + "; ".join(rows) + "."
+        )
+    if fmt == "timeline_routine":
+        rows = [
+            f"{str(i.get('time') or '').strip()} — {str(i.get('label') or '').strip()}"
+            for i in items
+        ]
+        return (
+            "Layout: a vertical DAY TIMELINE from top (morning) to bottom (night): a "
+            "connected line with a dot per moment, the clock time LARGE and bold beside "
+            "each dot, an icon and the activity label next to it. Moments in order: "
+            + "; ".join(rows) + "."
+        )
+    if fmt == "checklist_score":
+        score_line = str(plan.get("score_line") or "").strip()
+        return (
+            "Layout: a SELF-CHECK list, each row an empty checkbox (☐) + one short "
+            "criterion. Rows: " + "; ".join(labels) + "."
+            + (f' At the bottom, a highlighted score band: "{score_line}".' if score_line else "")
+        )
     if fmt == "comparison":
         groups_sorted = sorted({str(x.get("group") or "") for x in items})
         first_group = groups_sorted[0] if groups_sorted else ""

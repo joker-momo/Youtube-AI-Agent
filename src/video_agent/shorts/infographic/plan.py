@@ -5,7 +5,11 @@ from collections.abc import Callable
 from typing import Any
 
 from video_agent.audience_age import resolve_target_min_age
-from video_agent.shorts.infographic.schema import POSTER_FORMATS, validate_poster_plan
+from video_agent.shorts.infographic.schema import (
+    POSTER_FORMATS,
+    resolve_poster_format,
+    validate_poster_plan,
+)
 
 _MAX_RETRIES = 2
 
@@ -14,16 +18,27 @@ def _prompt(channel_config: dict, source: dict, min_age: int, feedback: str) -> 
     topic = str(source.get("topic") or source.get("title") or "").strip()
     fmts = ", ".join(sorted(POSTER_FORMATS))
     fb = f"\nFIX THESE ISSUES FROM THE LAST ATTEMPT:\n{feedback}\n" if feedback else ""
+    pinned = resolve_poster_format(str(source.get("poster_format") or ""))
+    format_line = (
+        f'Use poster_format "{pinned}" (the idea was conceived for this layout).\n'
+        if pinned
+        else f"Pick the best poster_format for this topic from: {fmts}.\n"
+    )
     return (
         "Return ONE raw JSON object for a Spanish infographic-poster Short.\n"
         f"Audience: adultos {min_age}+ (Spain-first es-ES). Topic: {topic}.\n"
-        f"Pick the best poster_format for this topic from: {fmts}.\n"
-        "Schema: {\"poster_format\": one of the above, \"title\": <=6 words, "
+        + format_line +
+        "Schema: {\"poster_format\": one of " + fmts + ", \"title\": <=6 words, "
         "\"subtitle\": optional short, \"hook_line\": <=40 chars scroll-stopper that names a "
-        "topic word, \"items\": array of {\"label\": 1-3 words, \"note\": short (warning_list only), "
-        "\"group\": 'bien'|'mal' (comparison only)}, \"cta\": short}. Item counts: category_grid 5-7, "
-        "numbered_tips 5-7, warning_list 5-6, comparison 4-6 split into 2 groups. No invented stats/"
-        "claims/credentials. Output ONLY the JSON." + fb
+        "topic word, \"items\": array of {\"label\": short, \"note\": short (warning_list: caution; "
+        "myth_vs_truth: la verdad, REQUIRED), \"group\": 'bien'|'mal' (comparison only), "
+        "\"time\": '7:00' style clock time (timeline_routine only, REQUIRED)}, "
+        "\"score_line\": short self-score band like '4+ = vas bien' (checklist_score only), "
+        "\"cta\": short}.\n"
+        "Item counts: category_grid 5-7, numbered_tips 5-7, warning_list 5-6, comparison 4-6 "
+        "split into 2 groups, myth_vs_truth 3-5 (label = the myth <=6 words, note = the truth), "
+        "timeline_routine 3-6 in chronological order, checklist_score 5-7 (label = a self-check "
+        "criterion <=4 words). No invented stats/claims/credentials. Output ONLY the JSON." + fb
     )
 
 

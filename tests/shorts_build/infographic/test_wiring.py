@@ -200,3 +200,39 @@ def test_infographic_run_writes_studio_render_run(tmp_path):
     assert run["generation_id"] == "ideas-gen-7"
     assert run["rendered_count"] == 1
     assert run["mode"] == "synthesis_ideas"
+
+
+def test_render_selected_ideas_passes_idea_format_to_poster_plan(tmp_path):
+    """The idea's format (alias-mapped) must seed the poster plan so the LLM
+    does not re-pick a random layout for an idea conceived as, say, a
+    mistake_list -> warning_list poster."""
+    from video_agent.shorts.infographic.build import render_selected_infographic_ideas
+
+    job = tmp_path / "job-1"
+    ideas_path = paths.short_ideas_path(job)
+    ideas_path.parent.mkdir(parents=True, exist_ok=True)
+    ideas_path.write_text(json.dumps({"ideas": [
+        {"idea_id": "idea-1", "title": "Errores con café", "topic": "café",
+         "format": "mistake_list"},
+    ]}), encoding="utf-8")
+
+    seen_prompts: list[str] = []
+    image_fn, base_llm, music_fn, render_fn = _fake_deps()
+
+    def llm_fn(prompt):
+        seen_prompts.append(prompt)
+        if "poster_format" in prompt and "SEO" not in prompt:
+            return json.dumps({"poster_format": "warning_list", "title": "Errores café",
+                               "hook_line": "Errores con tu café diario",
+                               "items": [{"label": f"e{n}", "note": "n"} for n in range(5)],
+                               "cta": "Sigue"})
+        return base_llm(prompt)
+
+    render_selected_infographic_ideas(
+        job, {"audience": {"age_range": [45, 75]}, "channel": {"name": "V"}},
+        ["idea-1"], image_fn=image_fn, llm_fn=llm_fn, music_fn=music_fn, render_fn=render_fn,
+        read_text_fn=None,
+    )
+    plan_prompts = [p for p in seen_prompts if "poster_format" in p and "Schema" in p]
+    assert plan_prompts, "no poster-plan prompt captured"
+    assert 'Use poster_format "warning_list"' in plan_prompts[0]

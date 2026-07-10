@@ -256,6 +256,10 @@ def render_selected_infographic_ideas(
             "topic": idea.get("topic") or title,
             "title": title,
             "pillar": idea.get("pillar") or "",
+            # The idea was conceived FOR a poster layout; seed the plan with it
+            # (alias-mapped from legacy narrated formats) instead of letting the
+            # plan LLM re-pick a random one.
+            "poster_format": str(idea.get("format") or ""),
         }
         short_id = f"short-{n:02d}_{idea_id}_{ts}_{_slug(title or idea_id)}"
         short_dir = long_job_dir / "shorts" / short_id

@@ -240,3 +240,47 @@ def test_render_selected_ideas_passes_idea_format_to_poster_plan(tmp_path):
     plan_prompts = [p for p in seen_prompts if "poster_format" in p and "Schema" in p]
     assert plan_prompts, "no poster-plan prompt captured"
     assert 'Use poster_format "warning_list"' in plan_prompts[0]
+
+
+def test_infographic_seo_not_flagged_as_narrated_label_reading_short():
+    """Bug (2026-07-11): a checklist_score infographic Short about bread quality
+    naturally uses words like "harina"/"ingredientes" as legitimate checklist
+    content (e.g. "Harina integral primero", "Ingredientes claros") -- but
+    idea_preservation._is_label_reading_short is a NARRATED-pipeline-only
+    heuristic (for a specific "gira el paquete" bread-label Short archetype)
+    that fired on this keyword overlap alone, blocking every infographic
+    checklist about bread/nutrition after 2 SEO retries.
+
+    Root cause: build_infographic_seo's short_script dict carried no "format"
+    marker, so the narrated-only check had no way to know to skip it."""
+    from video_agent.shorts.infographic.seo import build_infographic_seo
+
+    plan = {
+        "title": "¿Este pan te conviene?",
+        "hook_line": "Pan: mira antes de elegir",
+        "items": [
+            {"label": "Ingredientes claros", "note": "..."},
+            {"label": "Harina integral primero", "note": "..."},
+            {"label": "Poca sal", "note": "..."},
+            {"label": "Te sienta bien", "note": "..."},
+            {"label": "Ración adecuada", "note": "..."},
+        ],
+        "cta": "Compara antes de comprar",
+    }
+
+    def llm_fn(prompt):
+        import json
+        if "SEO copywriter" in prompt:
+            return json.dumps({
+                "title": "¿Este pan te conviene? (45+)",
+                "description": "Revisa 5 señales antes de elegir tu pan de cada día.",
+                "hashtags": ["#pan", "#alimentacionsaludable", "#vida45plus"],
+                "pinned_comment": "¿Cuántas señales cumple tu pan?",
+            })
+        return "{}"
+
+    import tempfile
+    from pathlib import Path
+    with tempfile.TemporaryDirectory() as td:
+        seo = build_infographic_seo(Path(td), "short-01", plan, {"audience": {"age_range": [45, 75]}}, llm_fn)
+        assert seo["title"]

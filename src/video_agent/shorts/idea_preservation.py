@@ -495,6 +495,15 @@ def _is_error_based_short(script: dict[str, Any]) -> bool:
 
 
 def _is_label_reading_short(script: dict[str, Any]) -> bool:
+    # This is a NARRATED-pipeline-only heuristic for one specific idea archetype
+    # ("gira el paquete" bread-label Shorts). Infographic Shorts have their own
+    # topic-keyword SEO contract (short_seo_builder._seo_topic_issues) and use
+    # ordinary topic vocabulary ("harina", "ingredientes") as legitimate checklist/
+    # warning-list content without being that narrated archetype — keyword overlap
+    # alone must not misfire here (bug: a bread checklist_score got blocked after
+    # 2 SEO retries because 2 of its items happened to contain those words).
+    if str(script.get("short_format") or "").lower() == "infographic":
+        return False
     text = _seo_script_text(script)
     found = {term for term in _LABEL_READING_TERMS if term in text}
     return len(found) >= 2

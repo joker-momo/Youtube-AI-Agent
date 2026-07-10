@@ -42,6 +42,12 @@ def build_infographic_seo(
         "hook": plan.get("hook_line") or plan.get("title") or "",
         "narration": build_narration_text(plan),
         "cta": plan.get("cta") or "",
+        # Marks this as NOT a narrated Short so idea_preservation's narrated-only
+        # archetype checks (e.g. the "gira el paquete" label-reading heuristic)
+        # don't fire on ordinary infographic vocabulary overlap (bug: a bread
+        # checklist_score mentioning "harina"/"ingredientes" as legitimate
+        # checklist content got misdetected as that specific narrated format).
+        "short_format": "infographic",
     }
     return build_short_seo(
         Path(long_job_dir),

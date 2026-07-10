@@ -85,10 +85,16 @@ def repair_missing_graphic_checklist_scene(
     )
     if graphic_count >= MAX_GRAPHIC_SCENES_PER_SHORT:
         return False
+
     def _title(scene: dict[str, Any]) -> str:
-        title = str(scene.get("on_screen_text") or "").strip() or str(
-            (scene.get("layout_payload") or {}).get("title") if isinstance(scene.get("layout_payload"), dict) else ""
-        ).strip()
+        title = (
+            str(scene.get("on_screen_text") or "").strip()
+            or str(
+                (scene.get("layout_payload") or {}).get("title")
+                if isinstance(scene.get("layout_payload"), dict)
+                else ""
+            ).strip()
+        )
         return title[:48] or "GUÍA VISUAL"
 
     def _graphic_payload(scene: dict[str, Any], layout: str) -> dict[str, Any]:
@@ -147,11 +153,36 @@ def repair_missing_graphic_checklist_scene(
 
     def _target_layout(scene: dict[str, Any]) -> str:
         text = _joined_scene_text(scene).lower()
-        if any(term in text for term in ("1 o 2", "una o dos", "opción a", "opcion a", "opción b", "opcion b", " vs ")):
+        if any(
+            term in text
+            for term in (
+                "1 o 2",
+                "una o dos",
+                "opción a",
+                "opcion a",
+                "opción b",
+                "opcion b",
+                " vs ",
+            )
+        ):
             return "graphic_comparison"
-        if sum(1 for term in ("porción", "porcion", "palma", "plato", "hidrato", "rebanada") if term in text) >= 2:
+        if (
+            sum(
+                1
+                for term in ("porción", "porcion", "palma", "plato", "hidrato", "rebanada")
+                if term in text
+            )
+            >= 2
+        ):
             return "graphic_plate_ratio"
-        if sum(1 for term in ("etiqueta", "fibra", "azúcar", "azucar", "ingrediente", "por 100 g") if term in text) >= 2:
+        if (
+            sum(
+                1
+                for term in ("etiqueta", "fibra", "azúcar", "azucar", "ingrediente", "por 100 g")
+                if term in text
+            )
+            >= 2
+        ):
             return "graphic_label_callout"
         return "graphic_checklist"
 
@@ -213,9 +244,7 @@ def repair_excess_graphic_scenes(
     loops straight to a hard blocker. ``graphic_repair_targets`` decides which
     graphics to keep vs. convert.
     """
-    graphic_count = sum(
-        1 for s in scenes if str(s.get("layout") or "").startswith("graphic_")
-    )
+    graphic_count = sum(1 for s in scenes if str(s.get("layout") or "").startswith("graphic_"))
     if graphic_count <= MAX_GRAPHIC_SCENES_PER_SHORT:
         return False
     if is_explicit_graphic_led(script):
@@ -319,7 +348,11 @@ def estimate_fits(narration: str, duration: float, tol: float = SCENE_FIT_TOLERA
         dur = float(duration)
     except (TypeError, ValueError):
         dur = 0.0
-    return estimate_spanish_narration_sec(str(narration or "")) <= dur + tol
+    # Compare at the 0.1s granularity the pipeline actually plans in — run-8
+    # went terminal because est 4.8044s vs (4.5+0.3)=4.8s failed by 4ms of
+    # float dust (bug-508).
+    est = round(estimate_spanish_narration_sec(str(narration or "")), 1)
+    return est <= round(dur + tol, 1)
 
 
 def split_narration_sentences(text: str) -> list[str]:
@@ -347,15 +380,83 @@ def _alternate_motion(original: str) -> str:
     return "crop_shift"
 
 
+def _build_split_scenes(
+    scene: dict[str, Any], left: str, right: str, cap: float
+) -> list[dict[str, Any]]:
+    """Materialize a two-scene split of ``scene`` carrying ``left``/``right``
+    narration halves. Preserves coverage/provenance; the second half gets no
+    invented on-screen text and a distinct camera motion."""
+    base_id = str(scene.get("id") or "")
+    first = dict(scene)
+    second = dict(scene)
+    first["id"] = f"{base_id}a" if base_id else base_id
+    second["id"] = f"{base_id}b" if base_id else base_id
+    first["narration"] = left
+    second["narration"] = right
+    first["duration_sec"] = _fit_duration(left, cap)
+    second["duration_sec"] = _fit_duration(right, cap)
+    # Do not invent on-screen/caption text for the second segment.
+    second["on_screen_text"] = ""
+    second["caption"] = ""
+    second.pop("layout_payload", None)
+    # When both halves share the same b-roll visual_prompt, give the second beat
+    # a distinct camera motion so the pair does not read as a static slideshow.
+    if str(scene.get("visual_prompt") or "").strip():
+        second["motion"] = _alternate_motion(str(scene.get("motion") or ""))
+    covers = list(scene.get("covers_items") or [])
+    first["covers_items"] = list(covers)
+    second["covers_items"] = list(covers)
+    src = list(scene.get("source_scene_ids") or [])
+    first["source_scene_ids"] = list(src)
+    second["source_scene_ids"] = list(src)
+    return [first, second]
+
+
 def try_mechanical_split(scene: dict[str, Any]) -> list[dict[str, Any]] | None:
     """Split a scene at an existing sentence boundary into two scenes that each
     fit the layout cap. Returns ``None`` if no clean split makes every segment
     fit — never invents or rewords narration."""
     narration = str(scene.get("narration") or "")
     sentences = split_narration_sentences(narration)
-    if len(sentences) < 2:
-        return None
     layout = str(scene.get("layout") or "")
+    if len(sentences) < 2:
+        # A single sentence that overflows its cap can still split cleanly at a
+        # clause boundary (comma / connector) for real-footage short_* layouts —
+        # the same rule the scene-builder prompt teaches ("split at a natural
+        # clause boundary, keeping every word"). Run-4 live repro: a 12-word
+        # short_pain sentence (~5.3s) could neither extend (cap 4.5) nor
+        # sentence-split, so it burned LLM attempts on a mechanical problem.
+        if layout in SUPPORTED_GRAPHIC_LAYOUTS:
+            return None
+        clauses = [c.strip() for c in re.split(r",\s+", narration) if c.strip()]
+        if len(clauses) < 2:
+            # No comma — fall back to a coordinating connector (' y adelanta …',
+            # run-7b live repro: a 10-word single sentence in a 4.5s-capped
+            # short_tip had no comma to split at and the run went terminal).
+            # Split BEFORE the connector so the second half reads naturally.
+            m = re.search(r"\s(y|e|o|pero|mientras)\s", narration)
+            if not m:
+                return None
+            left = narration[: m.start()].strip()
+            right = narration[m.start() :].strip()
+            if not left or not right:
+                return None
+            cap_try = scene_hard_cap(layout)
+            if not (estimate_fits(left, cap_try) and estimate_fits(right, cap_try)):
+                return None
+            sentences = [left, right]
+            return _build_split_scenes(scene, sentences[0], sentences[1], cap_try)
+        # Rebuild the two halves preserving the comma on the left half.
+        sentences = []
+        for i in range(len(clauses) - 1):
+            left = ", ".join(clauses[: i + 1]) + ","
+            right = ", ".join(clauses[i + 1 :])
+            sentences = [left, right]
+            cap_try = scene_hard_cap(layout)
+            if estimate_fits(left, cap_try) and estimate_fits(right, cap_try):
+                break
+        if len(sentences) != 2:
+            return None
     # A GRAPHIC scene that carries a concrete visual_prompt cannot be split: both
     # halves inherit the SAME rendered graphic card, producing two redundant
     # adjacent graphics (and double-counting against the graphic cap). Inventing a
@@ -375,32 +476,7 @@ def try_mechanical_split(scene: dict[str, Any]) -> list[dict[str, Any]] | None:
         left = " ".join(sentences[:i]).strip()
         right = " ".join(sentences[i:]).strip()
         if estimate_fits(left, cap) and estimate_fits(right, cap):
-            base_id = str(scene.get("id") or "")
-            first = dict(scene)
-            second = dict(scene)
-            first["id"] = f"{base_id}a" if base_id else base_id
-            second["id"] = f"{base_id}b" if base_id else base_id
-            first["narration"] = left
-            second["narration"] = right
-            first["duration_sec"] = _fit_duration(left, cap)
-            second["duration_sec"] = _fit_duration(right, cap)
-            # Do not invent on-screen/caption text for the second segment.
-            second["on_screen_text"] = ""
-            second["caption"] = ""
-            second.pop("layout_payload", None)
-            # When both halves share the same b-roll visual_prompt, give the
-            # second beat a distinct camera motion so the pair does not read as a
-            # static slideshow. Pure motion change — invents no visual content.
-            if str(scene.get("visual_prompt") or "").strip():
-                second["motion"] = _alternate_motion(str(scene.get("motion") or ""))
-            # Preserve coverage + provenance on both halves.
-            covers = list(scene.get("covers_items") or [])
-            first["covers_items"] = list(covers)
-            second["covers_items"] = list(covers)
-            src = list(scene.get("source_scene_ids") or [])
-            first["source_scene_ids"] = list(src)
-            second["source_scene_ids"] = list(src)
-            return [first, second]
+            return _build_split_scenes(scene, left, right, cap)
     return None
 
 
@@ -450,6 +526,134 @@ def _idea_labels_from_script(script: dict[str, Any] | None) -> list[str]:
     return labels
 
 
+def repair_slideshow_density(
+    scenes: list[dict[str, Any]], issues: list[SceneValidationIssue]
+) -> bool:
+    """Turn an over-decorated footage tip back into a footage-led scene.
+
+    A ``short_tip``/``short_pain`` with three or more ``layout_payload.items``
+    is counted as another checklist even though its narration and source
+    coverage already carry the idea. When it follows a real checklist, this
+    can create a deterministic ``slideshow_risk`` retry loop. Remove only the
+    redundant list payload from the exact scene named by the validator; keep
+    narration, visible headline/caption, provenance, and coverage unchanged.
+    """
+    target_ids = {
+        str(issue.scene_id)
+        for issue in issues
+        if issue.type == "slideshow_risk"
+        and issue.severity == "repairable_error"
+        and issue.scene_id
+    }
+    changed = False
+    for scene in scenes:
+        scene_id = str(scene.get("id") or scene.get("scene_id") or "")
+        if scene_id not in target_ids:
+            continue
+        layout = str(scene.get("layout") or "")
+        if layout == "short_checklist":
+            # Run-5 live deadlock (bug-505): with three adjacent dense scenes
+            # (graphic_step_list + graphic_checklist + short_checklist) the
+            # validator names the short_checklist as the densest target, but
+            # this repair only knew how to strip payloads from tip/pain — so
+            # slideshow_risk stayed unrepairable and the run escalated to
+            # script compression until the budget died. Demote the named
+            # short_checklist to a footage-led short_tip: same narration and
+            # coverage, no list decoration — breaking both the checklist_like
+            # count and the consecutive-dense run.
+            scene["layout"] = "short_tip"
+            scene.pop("layout_payload", None)
+            changed = True
+            continue
+        if layout.startswith("graphic_"):
+            # Run-7 live repro: TWO graphic_checklist scenes trip hard_dense
+            # (graphic_checklist >= 2) and the validator names the densest
+            # GRAPHIC as the target. Demote that one graphic back to footage —
+            # narration/coverage kept — so one varied graphic remains.
+            _demote_graphic_to_short_tip(scene)
+            changed = True
+            continue
+        if layout not in {"short_tip", "short_pain"}:
+            continue
+        payload = scene.get("layout_payload")
+        if not isinstance(payload, dict) or len(list(payload.get("items") or [])) < 3:
+            continue
+        scene.pop("layout_payload", None)
+        changed = True
+    return changed
+
+
+def normalize_pre_cta_scene_metadata(scenes: list[dict[str, Any]]) -> bool:
+    """Remove stale CTA semantics from a non-CTA scene before the real CTA.
+
+    This also repairs resumed artifacts produced by older relocation logic,
+    where the narration was already split but the cloned ``short_tip`` still
+    carried ``retention_function=cta`` and was classified as a second end card.
+    """
+    changed = False
+    for idx, scene in enumerate(scenes[:-1]):
+        next_scene = scenes[idx + 1]
+        if str(scene.get("layout") or "") == "short_cta":
+            continue
+        if str(next_scene.get("layout") or "") != "short_cta":
+            continue
+        if str(scene.get("retention_function") or "") != "cta":
+            continue
+        scene["retention_function"] = "payoff"
+        scene["rhythm_tag"] = "payoff"
+        scene["pattern_interrupt"] = "face_cut"
+        changed = True
+    return changed
+
+
+def normalize_cta_scene_narration(scenes: list[dict[str, Any]]) -> bool:
+    """Keep non-CTA sentences OUT of the short_cta scene (bug-505 repro 2).
+
+    The scene builder sometimes merges the script's payoff sentence into the
+    final short_cta scene ("No obtendrás una sentencia... Descubre ... en el
+    canal." = 18 words ≈ 8.4s), which cannot fit any sane CTA cap — and a plain
+    mechanical split would produce TWO short_cta scenes (tripping cta_dominates).
+    Relocate the leading non-CTA sentences into their own short_tip payoff scene
+    inserted just before the CTA, preserving every word; the short_cta scene
+    keeps only the channel-direction sentence(s). Returns True when changed.
+    """
+    for idx in range(len(scenes) - 1, -1, -1):
+        scene = scenes[idx]
+        if str(scene.get("layout") or "") != "short_cta":
+            continue
+        sentences = split_narration_sentences(str(scene.get("narration") or ""))
+        if len(sentences) < 2:
+            return False
+        # CTA sentences carry the channel direction; everything before the first
+        # one is payoff/setup content that belongs in its own scene.
+        first_cta = next((i for i, s in enumerate(sentences) if "canal" in s.lower()), None)
+        if not first_cta:  # None (no channel sentence) or 0 (CTA starts the scene)
+            return False
+        prefix = " ".join(sentences[:first_cta]).strip()
+        cta_text = " ".join(sentences[first_cta:]).strip()
+        tip_cap = scene_hard_cap("short_tip")
+        cta_cap = scene_hard_cap("short_cta")
+        payoff = dict(scene)
+        payoff["id"] = f"{scene.get('id') or 'cta'}pre"
+        payoff["layout"] = "short_tip"
+        payoff["narration"] = prefix
+        payoff["duration_sec"] = _fit_duration(prefix, tip_cap)
+        payoff["retention_function"] = "payoff"
+        payoff["rhythm_tag"] = "payoff"
+        payoff["pattern_interrupt"] = "face_cut"
+        # Do not carry CTA-specific text onto the payoff half.
+        payoff["on_screen_text"] = ""
+        payoff["caption"] = ""
+        payoff.pop("layout_payload", None)
+        if str(scene.get("visual_prompt") or "").strip():
+            payoff["motion"] = _alternate_motion(str(scene.get("motion") or ""))
+        scene["narration"] = cta_text
+        scene["duration_sec"] = _fit_duration(cta_text, cta_cap)
+        scenes.insert(idx, payoff)
+        return True
+    return False
+
+
 def deterministic_scene_fit_repair(
     scenes: list[dict[str, Any]],
     script: dict[str, Any] | None = None,
@@ -465,6 +669,15 @@ def deterministic_scene_fit_repair(
     logs: list[dict[str, Any]] = []
     regen_needed = False
 
+    if normalize_pre_cta_scene_metadata(scenes):
+        modes.append("cta_metadata_normalized")
+
+    # Normalize FIRST: a short_cta scene that absorbed the payoff sentence can
+    # never fit by extend/split alone (a split would clone the short_cta layout
+    # and trip cta_dominates). Relocate non-CTA sentences to their own scene.
+    if normalize_cta_scene_narration(scenes):
+        modes.append("cta_payoff_relocated")
+
     i = 0
     while i < len(scenes):
         scene = scenes[i]
@@ -474,11 +687,31 @@ def deterministic_scene_fit_repair(
             dur = float(scene.get("duration_sec") or 0.0)
         except (TypeError, ValueError):
             dur = 0.0
-        if not narration.strip() or estimate_fits(narration, dur):
+        cap = scene_hard_cap(layout)
+        # A scene needs repair when the narration overflows its planned duration
+        # OR the planned duration violates the layout hard cap (run-7b: a 4.9s
+        # short_tip whose 4.6s narration "fit" 4.9s was skipped here, leaving the
+        # duration_cap blocker unrepaired and the run terminal).
+        over_cap = dur > cap
+        if not narration.strip() or (estimate_fits(narration, dur) and not over_cap):
+            i += 1
+            continue
+        if over_cap and estimate_fits(narration, cap):
+            # Clamp: narration fits within the cap — shrink the scene to it.
+            scene["duration_sec"] = _fit_duration(narration, cap)
+            modes.append("clamp")
+            logs.append(
+                {
+                    "scene_id": scene.get("id"),
+                    "layout": layout,
+                    "duration_sec": dur,
+                    "hard_cap_sec": cap,
+                    "repair_mode_attempted": "clamp",
+                }
+            )
             i += 1
             continue
 
-        cap = scene_hard_cap(layout)
         est = estimate_spanish_narration_sec(narration)
         log: dict[str, Any] = {
             "scene_id": scene.get("id"),
@@ -526,6 +759,33 @@ def deterministic_scene_fit_repair(
             logs.append(log)
             i += 1
             continue
+
+        # C2. Over-cap GRAPHIC: demote to footage and retry extend/split.
+        # A graphic scene whose single sentence exceeds its cap is otherwise
+        # unrepairable (graphics never split — two identical cards; the clamp
+        # refuses when the estimate exceeds cap+tolerance), so runs burned
+        # their scene budget on it (idea-02 live repro: an ~5.1s
+        # graphic_step_list sentence at cap 4.5). Losing one card to keep the
+        # words intact beats losing the whole Short.
+        if layout in SUPPORTED_GRAPHIC_LAYOUTS:
+            _demote_graphic_to_short_tip(scene)
+            new_cap = scene_hard_cap(str(scene.get("layout") or ""))
+            if estimate_fits(narration, new_cap):
+                scene["duration_sec"] = _fit_duration(narration, new_cap)
+                log["repair_mode_attempted"] = "demote_graphic_extend"
+                modes.append("demote_graphic_extend")
+                logs.append(log)
+                i += 1
+                continue
+            if len(scenes) < max_count:
+                parts = try_mechanical_split(scene)
+                if parts:
+                    scenes[i : i + 1] = parts
+                    log["repair_mode_attempted"] = "demote_graphic_split"
+                    modes.append("demote_graphic_split")
+                    logs.append(log)
+                    i += len(parts)
+                    continue
 
         # D. Unfixable mechanically — defer to LLM regeneration.
         log["repair_mode_attempted"] = "regen_required"

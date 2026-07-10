@@ -273,7 +273,9 @@ def test_action_specific_repair_hints():
     assert "Hook narration is too long" in inst
     assert "Current narration is too long for a single graphic_label_callout" in inst
     assert "Quote narration is too long" in inst
-    assert "CTA narration is too long" in inst
+    # bug-505: CTA fit repair keeps the funnel wording and sizes the duration,
+    # instead of the old "CTA narration is too long -> shorten to shopping CTA".
+    assert "Keep the CTA wording" in inst
     assert "one short sentence" in inst
 
 

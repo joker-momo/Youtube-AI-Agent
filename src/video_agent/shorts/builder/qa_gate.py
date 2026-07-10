@@ -151,24 +151,35 @@ def _qa_blocker_details(result: dict[str, Any]) -> list[str]:
     are excluded here.
     """
     details: list[str] = []
+    has_structured_issues = False
+    structured_issues_are_soft_only = True
     for item in result.get("issues") or []:
         if isinstance(item, str):
             details.append(item)
             continue
         if not isinstance(item, dict):
             continue
+        has_structured_issues = True
         severity = str(item.get("severity") or "").lower()
         itype = str(item.get("type") or "").lower()
         if itype == "slideshow_risk" or severity == "warning":
             continue
+        structured_issues_are_soft_only = False
         if severity in {"blocking_error", "repairable_error", "major", "critical"} or (
             severity not in {"", "minor", "info"}
         ):
             details.append(str(item.get("detail") or item.get("type") or "issue"))
-    for rc in result.get("required_changes") or []:
-        rc_str = rc if isinstance(rc, str) else str(rc)
-        if rc_str and rc_str not in details:
-            details.append(rc_str)
+    # Required changes explain how to repair the structured issues; they are
+    # not independent blockers. Appending them unconditionally reintroduced a
+    # slideshow-only REPAIR PLAN after the slideshow issue itself was filtered,
+    # causing the terminal gate to report a false hard blocker. Keep them only
+    # when a real blocker was found, or when the provider returned no structured
+    # issues at all.
+    if details or not has_structured_issues or not structured_issues_are_soft_only:
+        for rc in result.get("required_changes") or []:
+            rc_str = rc if isinstance(rc, str) else str(rc)
+            if rc_str and rc_str not in details:
+                details.append(rc_str)
     return details
 
 

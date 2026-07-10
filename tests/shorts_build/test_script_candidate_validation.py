@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import pytest
 from video_agent.shorts.validation.checks import validate_full_short_script_candidate
 from video_agent.shorts.validation.script_checks import (
     cta_beat_has_channel_direction,
     repair_cta_beat_channel_direction,
 )
+
 
 def test_rejects_partial_script_too_few_blocks():
     script = {
@@ -259,3 +259,48 @@ def test_validator_accepts_natural_cta_naming_long_video_content():
     )
     assert "missing_expected_funnel_cta" not in errors
     assert "cta_beat_missing_channel_direction" not in errors
+
+
+# ── bug-504: model CTA laundered into a strict operator override ─────────────
+# build_source_map copies the script's own natural CTA into source_map.funnel.cta.
+# acceptable_funnel_ctas then treated any non-generic source_map CTA as an
+# OPERATOR override (strict exact-phrase), so every script REGENERATION whose
+# natural CTA varied slightly ('y sueño', 'Mira...') was rejected with
+# missing_expected_funnel_cta + cta_beat_missing_channel_direction even though
+# it carried 'canal' — a 5-attempt reject storm ending in failed_hard_blocker.
+# Only short_plan.funnel.cta is a real operator override.
+
+def _cafe_script(cta: str) -> dict:
+    return {
+        "beats": [
+            {"time_sec": "0-3", "purpose": "hook", "narration": "PRUÉBALO 7 DÍAS."},
+            {"time_sec": "3-8", "purpose": "setup", "narration": "Si no sabes si el café influye, sigue este método."},
+            {"time_sec": "8-15", "purpose": "payoff", "narration": "Registra sin cambiar nada."},
+            {"time_sec": "15-20", "purpose": "payoff", "narration": "Verás tendencias."},
+            {"time_sec": "20-25", "purpose": "cta", "narration": cta},
+        ],
+        "cta": cta,
+    }
+
+
+def test_model_derived_source_map_cta_is_not_a_strict_override():
+    """Regeneration with a slightly different natural CTA (still 'canal') must pass."""
+    source_map = {"funnel": {"cta": "Descubre el error del café sin azúcar en el canal."}}
+    script = _cafe_script("Descubre el error del café sin azúcar y sueño en el canal.")
+    errors = validate_full_short_script_candidate(script, {"target_duration_sec": 35}, source_map)
+    assert "missing_expected_funnel_cta" not in errors, errors
+    assert "cta_beat_missing_channel_direction" not in errors, errors
+
+
+def test_operator_plan_cta_stays_strict():
+    """A real operator override in short_plan.funnel.cta is still exact-phrase."""
+    plan = {"target_duration_sec": 35, "funnel": {"cta": "Guarda este truco del café."}}
+    script = _cafe_script("Descubre el error del café en el canal.")
+    errors = validate_full_short_script_candidate(script, plan)
+    assert "missing_expected_funnel_cta" in errors
+
+
+def test_cta_beat_channel_direction_accepts_natural_variation():
+    source_map = {"funnel": {"cta": "Descubre el error del café sin azúcar en el canal."}}
+    script = _cafe_script("Mira el error del café sin azúcar en el canal.")
+    assert cta_beat_has_channel_direction(script, {}, source_map)

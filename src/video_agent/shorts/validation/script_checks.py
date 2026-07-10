@@ -60,8 +60,13 @@ def acceptable_funnel_ctas(
     """Every CTA phrasing the deterministic gates accept, preferred first.
 
     Contract (kept in sync with the script prompt):
-    - An explicit, SPECIFIC funnel cta (source_map/short_plan operator override)
-      is strict — it is the only accepted phrasing (unchanged legacy behavior).
+    - An explicit, SPECIFIC funnel cta set by the OPERATOR (short_plan.funnel.cta)
+      is strict — it is the only accepted phrasing.
+    - source_map.funnel.cta is NOT an operator signal: build_source_map copies the
+      script's own natural CTA into it, so treating it as strict turned the model's
+      previous output into a fake override and rejected every regeneration whose
+      natural CTA varied slightly — a reject storm ending in failed_hard_blocker
+      (bug-504). It stays in the accepted list as a valid phrasing only.
     - Otherwise the model writes a NATURAL CTA that names the parent long
       video's content in its own words, so no exact phrase can be predicted —
       the gate only requires the channel direction (the word 'canal'). The
@@ -73,13 +78,10 @@ def acceptable_funnel_ctas(
     from video_agent.shorts.source_map import is_generic_cta, resolve_funnel_cta
 
     funnel_cfg = ((channel_config or {}).get("shorts") or {}).get("funnel") or {}
-    explicit = str(
-        ((source_map or {}).get("funnel") or {}).get("cta")
-        or ((short_plan or {}).get("funnel") or {}).get("cta")
-        or ""
-    ).strip()
-    if explicit and not is_generic_cta(funnel_cfg, explicit):
-        return [explicit]
+    operator_cta = str(((short_plan or {}).get("funnel") or {}).get("cta") or "").strip()
+    if operator_cta and not is_generic_cta(funnel_cfg, operator_cta):
+        return [operator_cta]
+    source_map_cta = str(((source_map or {}).get("funnel") or {}).get("cta") or "").strip()
 
     accepted: list[str] = []
     if channel_config is not None:
@@ -93,7 +95,8 @@ def acceptable_funnel_ctas(
         if resolved:
             accepted.append(resolved)
     for fallback in (
-        explicit,  # a generic explicit stays acceptable
+        operator_cta,  # a generic operator cta stays acceptable
+        source_map_cta,  # previous script's natural CTA: acceptable, never strict
         str(funnel_cfg.get("default_cta_without_url") or ""),
         str(funnel_cfg.get("default_cta_with_url") or ""),
         "Vídeo completo en el canal.",

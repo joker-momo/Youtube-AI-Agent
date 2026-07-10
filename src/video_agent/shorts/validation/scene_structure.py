@@ -579,8 +579,10 @@ def validate_scene_structure(
                 )
 
         narration = str(scene.get("narration") or "")
-        estimated_scene_audio = estimate_spanish_narration_sec(narration)
-        if narration.strip() and estimated_scene_audio > dur + 0.3:
+        # Round to the 0.1s planning granularity — the raw float defeated the
+        # 0.3s tolerance by milliseconds (run-8: est 4.8044 vs 4.8, bug-508).
+        estimated_scene_audio = round(estimate_spanish_narration_sec(narration), 1)
+        if narration.strip() and estimated_scene_audio > round(dur + 0.3, 1):
             issues.append(
                 SceneValidationIssue(
                     type="scene_narration_fit",
@@ -686,11 +688,24 @@ def validate_scene_structure(
         and graphic_count == 0
     )
     if needs_checklist_graphic:
+        # Only a HARD requirement when some scene actually qualifies for a
+        # deterministic/LLM graphic conversion. When no scene passes
+        # _missing_graphic_candidate, forcing a card would fabricate structure
+        # that is not in the narration — an unrepairable deadlock that burned
+        # the whole retry budget (run-9, bug-509). Clean footage wins then.
+        any_candidate = any(
+            _missing_graphic_candidate(scene)
+            or (
+                isinstance(scene.get("layout_payload"), dict)
+                and len(list((scene.get("layout_payload") or {}).get("items") or [])) >= 2
+            )
+            for scene in scenes
+        )
         issues.append(
             SceneValidationIssue(
                 type="missing_graphic_required",
                 scene_id=None,
-                severity="repairable_error",
+                severity="repairable_error" if any_candidate else "warning",
                 detail=(
                     "Checklist/explainer Short has no graphic scene. Structured list, "
                     "portion, plate, or component beats need at least one ChatGPT-generated infographic."
@@ -805,13 +820,15 @@ def build_scene_repair_plan(
             (scene for scene in scenes if _scene_id(scene, -1) == only_issue.scene_id), {}
         )
         if str(original.get("layout") or "") == "short_cta":
-            only_issue.instructions = [f"- Set {only_issue.scene_id} duration_sec to 2.6-2.8."]
+            cta_min, _cta_target, cta_hard = LAYOUT_DURATION_TARGETS["short_cta"]
+            line = (
+                f"- Set {only_issue.scene_id} duration_sec to fit its spoken CTA "
+                f"(~words/2.25 sec), within {cta_min:.1f}-{cta_hard:.1f}."
+            )
+            only_issue.instructions = [line]
             return {
                 "repair_mode": "shorten_cta_duration",
-                "instructions": [
-                    "REPAIR PLAN:",
-                    f"- Set {only_issue.scene_id} duration_sec to 2.6-2.8.",
-                ],
+                "instructions": ["REPAIR PLAN:", line],
                 "suggested_scene_plan": [],
             }
 
@@ -821,7 +838,10 @@ def build_scene_repair_plan(
         "- You must fix the listed scene IDs and not reintroduce the same violation.",
         "- target_duration_sec is a soft planning target; do not stretch scenes to reach 35 sec.",
         "- Final total may be 28-34 sec, or any 20-60 sec duration, if pacing and audio-fit are strong.",
-        "- Keep s02-s06 as realistic short_tip/short_pain scenes, not short_checklist.",
+        # Do NOT blanket-coerce layouts: valid graphic_step_list/graphic_checklist
+        # scenes must survive a repair pass (bug-505 — the old wording forced
+        # s02-s06 to short_tip/short_pain, contradicting valid graphics).
+        "- Keep realistic footage scenes as short_tip/short_pain (not short_checklist); existing valid graphic_* scenes may stay as graphics.",
     ]
     suggested_scene_plan: list[dict[str, Any]] = []
 
@@ -866,11 +886,17 @@ def build_scene_repair_plan(
                         ]
                     )
                 elif layout == "short_cta":
+                    # NEVER swap in an off-topic canned CTA (old hardcoded
+                    # shopping lines violated topic fidelity AND the funnel
+                    # gate, bug-505). The funnel CTA wording is the contract —
+                    # fit the DURATION to it instead.
+                    cta_hard = LAYOUT_DURATION_TARGETS["short_cta"][2]
                     issue_instrs.extend(
                         [
                             f"- Fix {issue.scene_id}:",
-                            "  - CTA narration is too long.",
-                            '  - Shorten to: "Guárdalo para la compra." or "Úsalo en el súper."',
+                            "  - Keep the CTA wording (channel direction + the video's specific topic).",
+                            f"  - Increase the scene duration_sec to match the spoken CTA (~words/2.25 sec), up to the {cta_hard:.1f}s hard cap.",
+                            "  - Only if it still cannot fit, tighten filler words while preserving 'canal' and the topic phrase.",
                         ]
                     )
                 else:
@@ -887,7 +913,11 @@ def build_scene_repair_plan(
                     )
             else:
                 if layout == "short_cta":
-                    issue_instrs.append(f"- Set {issue.scene_id} duration_sec to 2.6-2.8.")
+                    cta_min, _cta_target, cta_hard = LAYOUT_DURATION_TARGETS["short_cta"]
+                    issue_instrs.append(
+                        f"- Set {issue.scene_id} duration_sec to fit its spoken CTA "
+                        f"(~words/2.25 sec), within {cta_min:.1f}-{cta_hard:.1f}."
+                    )
                 else:
                     issue_instrs.append(f"- Fix {issue.scene_id}: {issue.detail}")
                     issue_instrs.append(

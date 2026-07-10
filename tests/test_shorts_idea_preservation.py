@@ -704,15 +704,18 @@ def test_latest_loop_cta_only_repair_plan_is_mechanical_and_specific():
             type="duration_cap",
             scene_id="s08",
             severity="repairable_error",
-            detail="Scene s08 (short_cta) duration 3.9s exceeds hard max 2.8s.",
+            detail="Scene s08 (short_cta) duration 6.2s exceeds hard max 5.5s.",
         )
     ]
 
     plan = build_scene_repair_plan(scenes, issues, script=_five_error_script())
     instructions = "\n".join(plan["instructions"])
 
-    assert "Set s08 duration_sec to 2.6-2.8" in instructions
-    assert "Keep s02-s06 as realistic short_tip/short_pain scenes, not short_checklist." not in instructions
+    # bug-505: the repair sizes the CTA duration to its spoken words within the
+    # layout range instead of the old fixed 2.6-2.8 (which could not fit a
+    # 12-word funnel CTA).
+    assert "Set s08 duration_sec to fit its spoken CTA" in instructions
+    assert "Keep s02-s06 as realistic short_tip/short_pain scenes" not in instructions
     assert "Convert one checklist-like scene" not in instructions
 
 
@@ -742,7 +745,10 @@ def test_v19_slideshow_repair_plan_keeps_item_scenes_footage_led():
     plan = build_scene_repair_plan(scenes_doc["scenes"], [issue], script=script)
     instructions = "\n".join(plan["instructions"])
 
-    assert "Keep s02-s06 as realistic short_tip/short_pain scenes, not short_checklist." in instructions
+    # bug-505: the header no longer blanket-coerces s02-s06 — valid graphic_*
+    # scenes may stay as graphics through a repair pass.
+    assert "Keep realistic footage scenes as short_tip/short_pain" in instructions
+    assert "existing valid graphic_* scenes may stay as graphics" in instructions
     assert "Do not convert good footage-led item scenes into short_checklist scenes." in instructions
     assert "Convert one checklist-like scene" not in instructions
 

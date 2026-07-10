@@ -9,9 +9,9 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
-
+from typing import Any
 
 # Spec v6 §3.1 — every call uses a fresh temp conversation.
 TEMPORARY_CONVERSATIONS = True
@@ -63,7 +63,7 @@ def log_llm_call(entry: LLMCallLog) -> None:
 
 # --- async ↔ sync bridge so the builder layer stays synchronous --------------
 
-def make_sync_sender(async_send: Callable[[str], "asyncio.Future[str]"]) -> SyncSender:
+def make_sync_sender(async_send: Callable[[str], asyncio.Future[str]]) -> SyncSender:
     """Wrap an ``async (prompt)->str`` so callers can use a plain ``fn(prompt)``.
 
     Every invocation creates a fresh event loop (or reuses the running one via
@@ -105,7 +105,7 @@ async def chatgpt_send_with_recovery(
     loop treats it as a provider failure, not a creative scene-QA failure."""
     from video_agent.shorts.short_scene_builder import is_provider_error_text
 
-    text = await client.chatgpt_send(prompt, response_timeout_ms=response_timeout_ms)
+    text = await _send_absorbing_503(client, prompt, response_timeout_ms)
     if not is_provider_error_text(text):
         return text
 
@@ -115,7 +115,7 @@ async def chatgpt_send_with_recovery(
         if not cleared:
             # Cookie clear failed -> escalate straight to profile-reset fallback.
             await _safe_profile_reset(client)
-        text = await client.chatgpt_send(prompt, response_timeout_ms=response_timeout_ms)
+        text = await _send_absorbing_503(client, prompt, response_timeout_ms)
         if not is_provider_error_text(text):
             return text
 
@@ -124,8 +124,34 @@ async def chatgpt_send_with_recovery(
     # raise ChatGPTProviderError on.
     _log_provider_error(max_provider_retries + 1, text, action="profile_reset_fallback")
     if await _safe_profile_reset(client):
-        text = await client.chatgpt_send(prompt, response_timeout_ms=response_timeout_ms)
+        text = await _send_absorbing_503(client, prompt, response_timeout_ms)
     return text
+
+
+# Backoff schedule (seconds) for a 503 from the browser-worker: the runtime is
+# booting (bug-497 made CDP attach fail FAST with a structured 503), so the
+# client absorbs the boot window instead of failing the whole render job in
+# seconds (bug-507, run-6: worker started while Chromium was still booting).
+_HTTP_503_BACKOFF_SEC = (5.0, 10.0, 20.0, 30.0, 45.0)
+
+
+async def _send_absorbing_503(client: Any, prompt: str, response_timeout_ms: int) -> str:
+    """chatgpt_send, retrying with backoff while the browser-worker returns 503."""
+    last_exc: Exception | None = None
+    for delay in (*_HTTP_503_BACKOFF_SEC, None):
+        try:
+            return await client.chatgpt_send(prompt, response_timeout_ms=response_timeout_ms)
+        except Exception as exc:
+            if getattr(exc, "status_code", None) != 503 or delay is None:
+                raise
+            last_exc = exc
+            print(
+                f"[shorts.llm] browser-worker 503 (runtime booting?); retrying in {delay:.0f}s",
+                file=sys.stderr,
+                flush=True,
+            )
+            await asyncio.sleep(delay)
+    raise last_exc  # pragma: no cover — loop always raises or returns
 
 
 async def _safe_clear_cookies(client: Any) -> bool:

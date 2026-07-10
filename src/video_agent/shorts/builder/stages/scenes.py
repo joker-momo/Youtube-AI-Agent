@@ -654,6 +654,20 @@ def _scenes_generate_and_normalize(ctx, loop):
             ok=True,
         )
 
+    # Repair resumed artifacts created by the older CTA-relocation path even
+    # when no narration-fit error remains to trigger the fit-repair block.
+    if validate_scenes.normalize_pre_cta_scene_metadata(scenes):
+        short_scenes["scenes"] = scenes
+        state.current_scenes_version += 1
+        state.latest_scene_validation_ok = False
+        state.latest_scene_validation_version = None
+        _recorder.record_event(
+            "deterministic",
+            "cta_metadata_normalized",
+            {"attempt": scenes_attempts},
+            ok=True,
+        )
+
     structure_issues = validate_scenes.validate_scene_structure(
         scenes,
         scenes_doc=short_scenes,
@@ -668,11 +682,19 @@ def _scenes_generate_and_normalize(ctx, loop):
         if i.severity in ("blocking_error", "repairable_error")
         and i.type in HARD_SCENE_VALIDATION_TYPES
     ]
-    if any(i.type == "scene_narration_fit" for i in hard_errors):
+    if (
+        any(i.type == "scene_narration_fit" for i in hard_errors)
+        and not loop.fit_failure_counted_this_attempt
+    ):
         # Count the original LLM scene fit failure before deterministic repair.
         # Repair may split/condense the scene and remove the fit issue while
         # still leaving an invalid scene plan; repeated originals should still
         # escalate to script compression instead of burning scene retries.
+        # MUST honor the per-attempt guard like the other two counting sites:
+        # unguarded, a single attempt was double-counted (build-time must_split
+        # signal + this validation hit) and instantly tripped the >=2
+        # escalation, so EVERY scenes roll burned a script-compression attempt
+        # instead of using its scene-repair budget (bug-510, run-10).
         loop.scene_fit_failures += 1
         loop.fit_failure_counted_this_attempt = True
     # Run deterministic fit-repair whenever ANY duration/narration-fit
@@ -724,6 +746,41 @@ def _scenes_generate_and_normalize(ctx, loop):
                 script=short_script,
                 attempt=scenes_attempts,
             )
+
+    # A footage-led tip can inherit a 3+ item card payload from generation or
+    # a narration split. That makes it count as another checklist and can leave
+    # slideshow_risk as the only blocker until the outer retry budget expires.
+    # Normalize only the exact validator target, preserving spoken content and
+    # source coverage, then revalidate before spending another LLM call.
+    slideshow_issues = [
+        issue
+        for issue in structure_issues
+        if issue.type == "slideshow_risk" and issue.severity == "repairable_error"
+    ]
+    if validate_scenes.repair_slideshow_density(scenes, slideshow_issues):
+        short_scenes["scenes"] = scenes
+        short_scenes["total_duration_sec"] = round(
+            sum(float(scene.get("duration_sec") or 0.0) for scene in scenes),
+            1,
+        )
+        state.current_scenes_version += 1
+        state.latest_scene_validation_ok = False
+        state.latest_scene_validation_version = None
+        _recorder.record_event(
+            "deterministic",
+            "slideshow_density_repair",
+            {
+                "attempt": scenes_attempts,
+                "scene_ids": [issue.scene_id for issue in slideshow_issues if issue.scene_id],
+            },
+            ok=True,
+        )
+        structure_issues = validate_scenes.validate_scene_structure(
+            scenes,
+            scenes_doc=short_scenes,
+            script=short_script,
+            attempt=scenes_attempts,
+        )
 
     atomic_write_json(_jd / paths.SHORT_SCENES_FILE, short_scenes)
 
@@ -892,6 +949,12 @@ def _scenes_structural_repair(ctx, loop):
             pass
         else:
             stop_scene_retries = True
+    # Script regeneration resets scenes_attempts to 1. If the combined outer
+    # budget is already exhausted, waiting for local attempt 2 is impossible;
+    # enter the same terminal classifier now. It will WARN-and-continue when
+    # only slideshow_risk remains and still FAIL for every real blocker.
+    if loop.total_regeneration_attempts >= max_regen:
+        stop_scene_retries = True
 
     if stop_scene_retries:
         active_memory_blockers = [

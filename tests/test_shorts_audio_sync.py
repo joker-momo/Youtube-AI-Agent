@@ -61,9 +61,10 @@ def test_tail_repair_prefers_final_scene():
 
 def test_tail_repair_distributes_backward_when_needed():
     from video_agent.shorts import validate_scenes
-    # s08 (CTA) already at its 2.8s hard max → tail must go to the prior scene.
-    doc = _scenes(("s06", "short_tip", 3.0), ("s07", "short_tip", 3.0), ("s08", "short_cta", 2.8))
-    out = validate_scenes.extend_scene_durations_for_audio_tail(doc, 8.4)
+    # s08 (CTA) already at its hard max (5.5s since bug-505) → tail must go to
+    # the prior scene.
+    doc = _scenes(("s06", "short_tip", 3.0), ("s07", "short_tip", 3.0), ("s08", "short_cta", 5.5))
+    out = validate_scenes.extend_scene_durations_for_audio_tail(doc, 11.1)
     assert out["changed"] is True
     ids = [d["scene_id"] for d in out["tail_repair_distribution"]]
     assert "s07" in ids and "s08" not in ids, ids

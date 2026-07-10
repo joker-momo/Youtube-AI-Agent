@@ -65,7 +65,12 @@ LAYOUT_DURATION_TARGETS = {
     "short_tip": (3.2, 4.0, 4.5),
     "short_checklist": (3.0, 4.5, 5.0),
     "short_pain": (3.2, 4.0, 4.5),
-    "short_cta": (2.0, 2.6, 2.8),
+    # short_cta hard max must fit the spoken funnel CTA contract: cta_max_words
+    # defaults to 12 words ≈ 5.3s at 2.25 wps. The old 2.8s cap made a valid
+    # topic-carrying CTA mathematically impossible (scene_narration_fit always
+    # failed -> repair/compression storm -> failed_hard_blocker, bug-505).
+    # 3.5s stays the pacing target (warning beyond); 5.5s is the hard cap.
+    "short_cta": (2.0, 3.5, 5.5),
     "graphic_checklist": (4.2, 5.0, 5.0),
     "graphic_step_list": (3.0, 4.0, 4.5),
     "graphic_label_callout": (3.5, 5.0, 5.0),

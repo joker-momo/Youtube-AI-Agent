@@ -74,11 +74,12 @@ def _default_sync_image_gen(prompt: str, out_path: str | Path) -> None:
     # Default to localhost since the script is mostly run natively on host machine now
     browser_worker_url = os.environ.get("BROWSER_WORKER_URL", "http://localhost:8001")
     client = BrowserClient(browser_worker_url)
-    # Presenter identity: attach the configured reference photo (CHANNEL_CONFIG
-    # env) and add the conditional instruction so any person in the image IS the
-    # channel presenter; person-less scenes ignore the reference.
-    persona_ref = resolve_persona_reference()
-    if persona_ref:
+    # Presenter identity is TEXT-ONLY (bug-488): the reference-photo attachment
+    # was dropped everywhere — ChatGPT sometimes echoed the attachment verbatim
+    # and uploads failed to register. When a persona is configured, append the
+    # descriptive instruction so any person in the image matches the presenter;
+    # nothing is attached.
+    if resolve_persona_reference():
         prompt = prompt + PERSONA_SCENE_INSTRUCTION
     asyncio.run(
         client.generate_image(
@@ -86,7 +87,6 @@ def _default_sync_image_gen(prompt: str, out_path: str | Path) -> None:
             project_name=_project_name_from_out_path(out_path),
             out_path=str(out_path),
             aspect_ratio="9:16",
-            attachment_path=persona_ref or None,
         )
     )
 

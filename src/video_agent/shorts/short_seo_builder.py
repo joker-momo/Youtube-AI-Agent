@@ -68,6 +68,72 @@ def _title_issues(title: str, hook: str) -> list[str]:
     return issues
 
 
+def _topic_tokens(short_plan: dict) -> set[str]:
+    """Content words of the Short's actual TOPIC (idea title / topic / pillar).
+
+    Used to enforce the topic-keyword SEO contract: a title like "Si tienes más
+    de 45, descubre tu ritmo" carries audience+benefit but NO topic, so YouTube
+    cannot classify the Short (operator audit scored such a title 53/100).
+    """
+    parts = " ".join(
+        str(short_plan.get(k) or "") for k in ("title", "topic", "pillar", "detected_pillar")
+    )
+    return _title_content_tokens(parts)
+
+
+def _seo_topic_issues(
+    title: str, description: str, hashtags: list[str], topic_tokens: set[str]
+) -> list[str]:
+    """Deterministic topic-keyword checks (feed the SEO retry loop).
+
+    1. Title must contain a topic keyword (inside its scroll-stopper formula).
+    2. Description's FIRST sentence must contain a topic keyword.
+    3. At least one hashtag must be topic-specific (e.g. #caféysalud), because
+       generic wellness tags alone never surface the Short in topic searches.
+    """
+    if not topic_tokens:
+        return []
+    issues: list[str] = []
+    keyword_list = ", ".join(sorted(topic_tokens))
+    if not (_title_content_tokens(title) & topic_tokens):
+        issues.append(
+            "Title carries no topic keyword — YouTube cannot classify the Short. "
+            f"Work one of these topic words into the formula: {keyword_list}."
+        )
+    first_sentence = re.split(r"[.!?\n]", str(description or ""), maxsplit=1)[0]
+    if not (_title_content_tokens(first_sentence) & topic_tokens):
+        issues.append(
+            "Description's FIRST sentence must contain the main topic keyword "
+            f"naturally (one of: {keyword_list})."
+        )
+    stems = {t[:4] for t in topic_tokens}
+    normalized_tags = []
+    for tag in hashtags:
+        decomposed = unicodedata.normalize("NFKD", str(tag).lower().lstrip("#"))
+        normalized_tags.append("".join(c for c in decomposed if not unicodedata.combining(c)))
+    if not any(any(stem in tag for stem in stems) for tag in normalized_tags):
+        issues.append(
+            "No hashtag is topic-specific — add at least one combining the topic "
+            "with the benefit (e.g. #caféysalud style) built from: " + keyword_list + "."
+        )
+    return issues
+
+
+def _seo_engagement_issue(description: str) -> str | None:
+    """The description body (before the trailing hashtags) must END with one
+    short question that invites a comment — early interaction is what the
+    algorithm rewards in the first hour (operator audit 2026-07-10)."""
+    body = re.sub(r"(?:\s*#[^#\s]+)+\s*$", "", str(description or "").strip()).strip()
+    if not body:
+        return None  # covered by other checks; nothing to anchor a question to
+    if body.endswith("?"):
+        return None
+    return (
+        "Description must END with ONE short engagement question inviting a "
+        "comment (e.g. \"¿Qué error cometes más? \") placed right before the hashtags."
+    )
+
+
 def _hard_trim_title(title: str) -> str:
     """Last-resort guarantee that a title is <= MAX_SHORT_TITLE_CHARS."""
     t = (title or "").strip()
@@ -277,10 +343,15 @@ def build_short_seo(
         blocking = [i for i in issues if i.severity == "blocking_error"]
         repairable = [i for i in issues if i.severity == "repairable_error"]
         title_problems = _title_issues(title, hook)
+        topic_tokens = _topic_tokens(short_plan)
+        topic_problems = _seo_topic_issues(title, description, hashtags, topic_tokens)
+        engagement_problem = _seo_engagement_issue(description)
+        if engagement_problem:
+            topic_problems = [*topic_problems, engagement_problem]
         if blocking:
             detail = "; ".join(i.detail for i in blocking)
             raise ValueError(f"SEO idea fidelity validation failed: {detail}")
-        if not repairable and not title_problems:
+        if not repairable and not title_problems and not topic_problems:
             break
         if attempt >= MAX_SEO_RETRIES:
             # Idea fidelity is a hard contract — still fails loudly.
@@ -309,6 +380,21 @@ def build_short_seo(
                 seo["title"] = fallback
             else:
                 seo["title"] = _hard_trim_title(title)
+            # Topic hashtag is deterministically repairable: prepend a tag built
+            # from the strongest topic token so the Short stays searchable even
+            # when the model kept emitting only generic wellness tags. Title and
+            # description keep the best LLM attempt (retries carry the burden).
+            if topic_problems and topic_tokens:
+                stems = {t[:4] for t in topic_tokens}
+                has_topical = any(
+                    any(stem in tag.lstrip("#") for stem in stems) for tag in seo["hashtags"]
+                )
+                if not has_topical:
+                    topic_tag = "#" + sorted(topic_tokens, key=len, reverse=True)[0]
+                    seo["hashtags"] = ([topic_tag] + seo["hashtags"])[:5]
+                    seo["description"] = _description_with_spaced_hashtags(
+                        seo["description"], seo["hashtags"]
+                    )
             break
         # Regenerate SEO with cumulative feedback so the model can self-correct.
         feedback_parts = []
@@ -318,6 +404,11 @@ def build_short_seo(
             feedback_parts.append(
                 "TITLE FIXES REQUIRED (scroll-stopper contract):\n"
                 + "\n".join(f"- {p}" for p in title_problems)
+            )
+        if topic_problems:
+            feedback_parts.append(
+                "TOPIC KEYWORD FIXES REQUIRED (SEO classification contract):\n"
+                + "\n".join(f"- {p}" for p in topic_problems)
             )
         retry_feedback = "\n\n".join(feedback_parts)
 

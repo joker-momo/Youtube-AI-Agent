@@ -154,10 +154,12 @@ def short_script_prompt(
     from video_agent.shorts.validation.script_checks import funnel_cta_max_words
 
     cta_max_words = funnel_cta_max_words(channel_config)
-    explicit_cta = (
-        (source_artifacts or {}).get("funnel", {}).get("cta")
-        or short_plan.get("funnel", {}).get("cta")
-    )
+    # Only the OPERATOR's short_plan.funnel.cta is an explicit override.
+    # source_artifacts/source_map funnel.cta carries the previous script's own
+    # natural CTA (build_source_map copies it back), so using it here would
+    # demand the model reproduce its old wording verbatim on every rebuild
+    # (bug-504 reject storm) — keep prompt and validator on the same rule.
+    explicit_cta = short_plan.get("funnel", {}).get("cta")
     source_title = str((source_artifacts or {}).get("source_video_title") or "")
     if explicit_cta and not is_generic_cta(funnel_cfg, explicit_cta):
         cta_rule = (
@@ -464,6 +466,14 @@ def short_seo_prompt(
         "- es-ES, adults 45+ register.\n"
         "- Do NOT use \"ancianos\", \"abuelos\", \"seniors\", \"personas mayores\", or any age-shaming wording.\n\n"
         f"{_SPANISH_NATURALNESS}\n"
+        "PRIMARY TOPIC KEYWORD (SEO classification — YouTube cannot recommend a Short it cannot classify):\n"
+        f"- Identify the ONE concrete topic noun of this Short (e.g. \"café\", \"pan\", \"sueño\") from the idea title seed ({title_seed or 'infer from script'}), pillar and script.\n"
+        "- The TITLE must contain that topic keyword INSIDE the chosen scroll-stopper formula. A title carrying only audience + vague benefit "
+        "(e.g. \"Si tienes más de 45, descubre tu ritmo\") is INVALID — the viewer and the algorithm cannot tell what the video is about.\n"
+        "- The DESCRIPTION's first sentence must contain the same topic keyword naturally, PLUS one broad wellness search phrase "
+        "that honestly matches the script (e.g. \"hábitos saludables\", \"alimentación saludable\", \"dormir mejor\", \"bienestar diario\") "
+        "— the topic keyword tells YouTube WHAT the video is about, the broad phrase connects it to what people actually search.\n"
+        "- At least ONE hashtag must be topic-specific, ideally a topic+benefit compound (e.g. \"#caféysalud\", \"#hábitosdecafé\") — generic wellness tags alone are not enough.\n\n"
         "SEO KEYWORD STRATEGY:\n"
         "- Use one high-volume broad search keyword when it honestly matches the script, then narrow it with Spain-first 45+ intent.\n"
         "- Combine one broad search keyword with the actual payoff/pain and the 45+ frame; do not publish a generic title that could target any Spanish-speaking market.\n"
@@ -481,6 +491,8 @@ def short_seo_prompt(
         "- Vary which formula you use across Shorts; do not open every title the same way.\n\n"
         "DESCRIPTION RULES:\n"
         "- 1 to 3 short sentences in es-ES that echo the script payoff (do NOT just repeat the title).\n"
+        "- The LAST sentence before the hashtags must be ONE short engagement question that invites a comment "
+        "(natural, tied to the script, answerable in a few words — e.g. \"¿Qué error cometes más?\").\n"
         "- End the description with the same 3-5 hashtags returned in the hashtags array.\n"
         "- No links to other channels, no sponsor text, no calls to subscribe.\n\n"
         "HASHTAG RULES:\n"
@@ -488,7 +500,7 @@ def short_seo_prompt(
         "- For bread/pan-related Shorts, hashtags MUST match the actual script topic. Use 3-5 tags; base options are #alimentacionsaludable, #comerpan, #vida45plus, #shorts. Pick the remaining tag from the real content: label-reading/package/ingredient list => #panintegral, #etiquetanutricional or #comprasaludable; plate/complete meal => #platosaludable; general nutrition => #nutricion. Do NOT force #nutricion when a more specific tag better matches the Short.\n"
         "- Every hashtag MUST be semantically tied to the actual script topic (mental health, sleep, nutrition, joints, balance, etc.).\n"
         "- FORBIDDEN unless the script is genuinely about that exact topic: #gym, #fitness, #workout, #crossfit, #musculacion, #pesas, #cardio, #abs, #motivation, #mindset, #shortsviral, #fyp, #parati, #viral, #foryou, #trending.\n"
-        "- Prefer specific, topical Spain-Spanish wellness tags such as #saludmental, #bienestar, #descanso, #sueño, #mindfulness, #estres, #ansiedad, #alimentacionsaludable, #platosaludable, #nutricion, #vida45plus, #saludable, #autocuidado — but ONLY if they actually match the script.\n"
+        "- Prefer specific, topical Spain-Spanish wellness tags such as #saludmental, #bienestar, #descanso, #sueño, #mindfulness, #estres, #ansiedad, #alimentacionsaludable, #platosaludable, #nutricion, #vida45plus, #saludable, #autocuidado, #habitos, #habitossaludables, #bienestarysalud — but ONLY if they actually match the script.\n"
         "- For nutrition Shorts, prefer broad viewer-search terms like #alimentacionsaludable or #platosaludable over invented age-number nutrition hashtags.\n"
         "- #shorts does not improve targeting or distribution; prefer omitting it. If used at all, only ever as the last of 5, never first.\n\n"
         "PINNED COMMENT RULES:\n"
@@ -792,7 +804,7 @@ def short_scene_prompt_v6(
         "- Never create a 7–12 sec scene to hit the target.\n"
         "- The CTA scene MUST speak the FULL script cta, INCLUDING its specific topic phrase (exact wording preferred); size its duration to those words (a 10–14 word CTA is ~3.5–5.0 sec). Never trim, shorten, or drop the topic or any clause from the CTA to hit a tighter duration.\n"
         "- Keep simple one-line tip scenes 3.2–4.0 sec ideal, 4.5 sec hard max; use 4.5 sec only when the visual action needs it.\n"
-        "- Normal lifestyle scenes should be short: hook/opening 1.8–2.8 sec hard max 3.0; myth/setup 2.0–3.0 hard max 3.2; tip/lifestyle reinforcement 2.2–4.2 hard max 5.0; short_checklist 3.0–4.5 hard max 5.0; CTA 1.8–2.6 hard max 2.8.\n"
+        "- Normal lifestyle scenes should be short: hook/opening 1.8–2.8 sec hard max 3.0; myth/setup 2.0–3.0 hard max 3.2; tip/lifestyle reinforcement 2.2–4.2 hard max 5.0; short_checklist 3.0–4.5 hard max 5.0; CTA sized to its spoken words (~words/2.25 sec), 2.0–3.5 preferred, hard max 5.5.\n"
         "- If a narration beat is too long for one scene, split it into two scenes at a clause boundary, preserving every word across the two — never drop or compress. Size each scene's duration to its VERBATIM narration; do not shorten words to hit a duration. Prefer spending the full duration budget on MORE verbatim scenes over squeezing content out of fewer.\n"
         "- Do not repeat the same idea or title for too long.\n"
         "- total_duration_sec must equal the sum of all scene duration_sec values.\n"
@@ -819,7 +831,7 @@ def short_scene_prompt_v6(
         "  - graphic_evidence_nugget: max 6–8 spoken words\n"
         "  - graphic_warning: max 7–9 spoken words\n"
         "  - short_quote: max 8–10 spoken words\n"
-        "  - short_cta: speaks the FULL script cta including its specific topic (exact wording preferred; may exceed the other caps); split across two cta-styled scenes only if very long\n\n"
+        "  - short_cta: speaks ONLY the script cta sentence, in full, including its specific topic (exact wording preferred; may exceed the other caps). NEVER merge a preceding payoff/setup sentence into the short_cta scene — give that sentence its own short_tip scene right before the CTA.\n\n"
         "ALLOWED SHORT LAYOUTS ONLY:\n"
         "- short_hook\n"
         "- short_pain\n"
@@ -1289,7 +1301,7 @@ def gemini_scenes_qa_prompt(channel_config: dict, short_script: dict, short_scen
         "- target_duration_sec is a soft planning target; do not ask to stretch scenes to exactly 35 sec.\n"
         "- A 28–34 sec Short can be acceptable when pacing is strong and narration audio fits.\n"
         "- Scene count policy: 5–8 scenes by default, 6–9 for checklist/explainer, 4–6 for simple hook-tip-CTA.\n"
-        "- Normal lifestyle scene timing guidance: hook/opening 1.8–2.8 sec; myth/setup 2.0–3.0 sec; tip/lifestyle reinforcement 2.2–4.2 sec; CTA 1.8–2.6 sec.\n"
+        "- Normal lifestyle scene timing guidance: hook/opening 1.8–2.8 sec; myth/setup 2.0–3.0 sec; tip/lifestyle reinforcement 2.2–4.2 sec; CTA sized to its spoken words (2.0–3.5 preferred, hard max 5.5) — do not fail a CTA scene for carrying the full funnel CTA.\n"
         "- First scene layout must be \"short_hook\".\n"
         "- Last scene must be \"short_cta\" if the script has a CTA.\n"
         "- Allowed layouts:\n"

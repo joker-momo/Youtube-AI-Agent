@@ -14,8 +14,9 @@ def test_props_reference_poster_and_audio_and_duration():
     assert props["durationInFrames"] == 28 * 30
     assert props["music"] == "shorts_sleep_stress"
     assert props["width"] == 1080 and props["height"] == 1920
-    assert props["kenBurns"] is True
-    # Ken Burns capped so baked-in poster text is never cropped.
+    # A music-only infographic holds one poster completely still for readability.
+    assert props["kenBurns"] is False
+    # Any explicit Ken Burns motion remains capped so baked-in poster text is never cropped.
     assert props["kenBurnsScaleMax"] <= 1.02
     # Overlays OFF by default (safe area — poster carries all text).
     assert props["showSubscribeCue"] is False

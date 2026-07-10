@@ -10,7 +10,11 @@ _BASE = (
     "wellness audience. Render ALL the Spanish text below EXACTLY as written, spelled "
     "correctly with accents, large and legible on a phone. Use simple realistic food/"
     "object photos or clean flat icons per item. Keep generous margins; do not crop any "
-    "text. Add NO other text, no watermark, no logo, no captions beyond what is listed."
+    "text. Add NO other text, no watermark, no logo, no captions beyond what is listed. "
+    "STRICT TYPOGRAPHIC HIERARCHY: render each item's short label/sub-heading LARGE and "
+    "extra-BOLD, and any explanation/note text clearly smaller and lighter beneath it — "
+    "a phone viewer must understand the poster from the bold labels alone, without "
+    "reading the small text."
 )
 
 

@@ -50,3 +50,17 @@ def test_comparison_prompt_requests_two_columns():
 def test_prompt_forbids_extra_text_and_is_spanish_poster():
     p = build_poster_prompt(_plan("category_grid", [{"label": "Chía"}] * 5))
     assert "no other text" in p.lower() or "only the text" in p.lower()
+
+
+def test_poster_prompt_enforces_label_vs_note_type_hierarchy():
+    """Operator audit (82/100): item sub-headings must be much larger/bolder
+    than the small explanation text — a phone viewer should get the message
+    from the sub-headings alone."""
+    from video_agent.shorts.infographic.poster_prompt import build_poster_body
+    body = build_poster_body({
+        "poster_format": "warning_list", "title": "Errores con café",
+        "items": [{"label": "Mismo efecto", "note": "no todos los cafés sientan igual"}],
+    })
+    lowered = body.lower()
+    assert "typographic hierarchy" in lowered
+    assert "label" in lowered and "bold" in lowered

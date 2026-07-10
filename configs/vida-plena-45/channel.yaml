@@ -263,6 +263,18 @@ visual:
     bg: "assets/brand_bg_soft.mp4"
 shorts:
   enabled: true
+  # One readable 9:16 poster, held still with a music-only bed.
+  # This is intentionally separate from narrated, multi-scene Shorts.
+  infographic:
+    duration_sec: 15
+    ken_burns: false
+    # Synthesize a unique, traceable instrumental bed from math primitives.
+    # No sample, artist reference, or third-party audio file is used.
+    music_source: "procedural_original"
+    music_bitrate: "192k"
+    music_volume_db: -14
+    music_fade_in_sec: 0.16
+    music_fade_out_sec: 0.45
   # Visual span / compiled visual timeline (spec v4.0.3). Enforced mode makes
   # the compiled schedule the renderer contract for Shorts; PR D quality flow
   # remains report_only until semantic/detector adapters are available.

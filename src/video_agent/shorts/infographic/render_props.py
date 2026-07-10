@@ -13,6 +13,7 @@ def build_infographic_render_props(
     duration_sec: float,
     music_track: str,
     channel_name: str,
+    ken_burns: bool = False,
 ) -> dict[str, Any]:
     return {
         "poster": poster_ref,
@@ -23,7 +24,7 @@ def build_infographic_render_props(
         "height": 1920,
         "fps": _FPS,
         "durationInFrames": max(1, round(float(duration_sec) * _FPS)),
-        "kenBurns": True,
+        "kenBurns": ken_burns,
         # Cap the zoom so baked-in poster text is never cropped at any frame.
         "kenBurnsScaleMax": 1.02,
         # Overlays OFF by default: the poster already carries all text; a subscribe

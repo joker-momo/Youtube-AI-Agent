@@ -137,12 +137,11 @@ def _dispatch_queue_job(
 
 
 def _run_short_infographic_job(job: dict, *, job_dir: Path, channel_path: Path, client: BrowserClient) -> None:
-    """Build infographic Shorts (one dense AI poster + voiceover) for selected ideas."""
+    """Build static infographic Shorts (one AI poster + licensed music bed)."""
     import json as _json
 
     from video_agent.shorts.infographic.build import render_selected_infographic_ideas
     from video_agent.shorts.infographic.render import make_infographic_render_fn
-    from video_agent.shorts.infographic.voiceover import synthesize_infographic_voiceover
     from video_agent.utils.json_io import read_yaml
 
     payload: dict = {}
@@ -166,7 +165,6 @@ def _run_short_infographic_job(job: dict, *, job_dir: Path, channel_path: Path, 
         idea_ids,
         image_fn=client.generate_image,  # async; awaited inside run_infographic_short
         llm_fn=chatgpt_fn,
-        tts_fn=synthesize_infographic_voiceover,
         render_fn=make_infographic_render_fn(channel_config),
         read_text_fn=None,  # v1: QA disabled
         force=force,
@@ -363,13 +361,30 @@ def _run_shorts_render_selected_ideas_job(job: dict, *, job_dir: Path, channel_p
             **kwargs,
         )
 
-    render_selected_short_ideas(
+    run_summary = render_selected_short_ideas(
         job_dir,
         channel_config,
         idea_ids,
         build_short_fn=build_short_fn,
         force=force,
     )
+    # Surface per-idea build failures as a FAILED queue job (bug-506): the run
+    # summary carries them, but swallowing them here logged "Successfully
+    # finished" while no video was rendered — masking real errors (e.g. the
+    # fail-closed unconverted-graphic guard after a ChatGPT image timeout).
+    if isinstance(run_summary, dict):
+        errors = list(run_summary.get("errors") or [])
+        rendered = int(run_summary.get("rendered_count") or 0)
+        attempted = int(run_summary.get("attempted_render_count") or 0)
+        run_failed = str(run_summary.get("status") or "") == "failed"
+        # A QA hard-blocker path reports status=failed with an EMPTY errors list
+        # (run-8), so gate on the run status too — never mark the queue job
+        # successful when nothing rendered.
+        if (errors or run_failed) and attempted and not rendered:
+            detail = " | ".join(str(e) for e in errors) or "run status=failed (QA hard blocker; see qa_decision_summary.json)"
+            raise RuntimeError(
+                "shorts_render_selected_ideas produced no rendered Short; errors: " + detail
+            )
 
 
 def _run_short_render_job(job: dict, *, job_dir: Path, channel_path: Path) -> None:

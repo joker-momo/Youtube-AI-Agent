@@ -1,7 +1,7 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-07-10T08:29:07.567Z
-> Files: 1024 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-07-10T08:44:13.466Z
+> Files: 1028 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../../../../Users/joker/.claude/
 
@@ -960,6 +960,7 @@
 - `2026-06-23-reflink-materialize.md` — Reflink Media Materialization Implementation Plan (~3258 tok)
 - `2026-06-27-shorts-asset-layer-decoupling.md` — Shorts ↔ Long Asset Layer Decoupling — Implementation Plan (~6300 tok)
 - `2026-07-09-infographic-short.md` — Infographic Short Implementation Plan (~14415 tok)
+- `2026-07-10-poster-format-idea-alignment.md` — Poster-Format Idea Alignment Implementation Plan (~732 tok)
 
 ## docs/superpowers/specs/
 
@@ -1121,6 +1122,8 @@
 - `candidate_scorer.py` — Score Short candidates for standalone retention/funnel potential. (~1533 tok)
 - `frames.py` — Canonical seconds→frames contract for the Shorts compiled visual timeline. (~442 tok)
 - `idea_preservation.py` — derive_idea_contract, derive_idea_items, ensure_script_idea_fields, validate_script_idea_contract (~10494 tok)
+- `idea_prompts.py` — short_ideas_prompt (~1503 tok)
+- `idea_scorer.py` — valid_scene_id_set, normalize_text_key, covers_distinct_parts, has_strong_curiosity_phrase (~2509 tok)
 - `llm_history.py` — Per-Short LLM call history recorder. (~3344 tok)
 - `llm.py` — Shorts AI role wiring (spec v6 §2 + §3). (~2084 tok)
 - `original_bgm.py` — Create reproducible, original background music for Shorts. (~3492 tok)
@@ -1191,14 +1194,14 @@
 ## src/video_agent/shorts/infographic/
 
 - `__init__.py` (~41 tok)
-- `build.py` — Orchestrate static infographic Shorts (plan → poster → QA → music → render). (~3902 tok)
-- `plan.py` — LLM-driven infographic poster plan (pick format + fill), validated. (~736 tok)
-- `poster_prompt.py` — Per-format 9:16 infographic poster prompts (AI-only, text baked in). (~1048 tok)
+- `build.py` — Orchestrate static infographic Shorts (plan → poster → QA → music → render). (~3978 tok)
+- `plan.py` — LLM-driven infographic poster plan (pick format + fill), validated. (~935 tok)
+- `poster_prompt.py` — Per-format 9:16 infographic poster prompts (AI-only, text baked in). (~1443 tok)
 - `poster.py` — Generate the infographic poster PNG via the injected image function. (~460 tok)
 - `qa.py` — Deterministic text-presence QA gate over a poster's read-back text. (~343 tok)
 - `render_props.py` — Render props for the Remotion InfographicShort composition. (~380 tok)
 - `render.py` — Render an infographic short via Remotion (direct InfographicShort composition). (~650 tok)
-- `schema.py` — Poster-plan schema + validation for infographic shorts. (~528 tok)
+- `schema.py` — Poster-plan schema + validation for infographic shorts. (~995 tok)
 - `seo.py` — SEO/title artifact for infographic Shorts, reusing the shipped Shorts title rules. (~544 tok)
 - `voiceover.py` — Narration text for an infographic short (read the poster) + TTS synth. (~492 tok)
 
@@ -1394,6 +1397,7 @@
 - `test_build_orchestration.py` — test_short_stage_retry_clears_stale_completion_and_error, test_build_short_pass_renders_and_writes_a (~12444 tok)
 - `test_cta_duration_contract.py` — bug-505 / Codex 20260709-214518: CTA duration and funnel contracts must agree. (~5878 tok)
 - `test_graphic_layout_port.py` — Regression tests for the long-form graphic-card port into the Shorts pipeline. (~2546 tok)
+- `test_idea_prompt_poster_formats.py` — Idea generation must target the 7 poster formats (operator decision (~408 tok)
 - `test_original_bgm.py` — test_original_bgm_is_deterministic_and_has_no_external_audio_inputs, test_original_bgm_seed_changes_ (~919 tok)
 - `test_qa_issues.py` — test_suppress_stale_hook_fidelity, test_repairable_point_grouping, test_count_promise_soft_when_coun (~6327 tok)
 - `test_scene_script_coverage.py` — bug-503 / Codex task 20260709-202252: deterministic source-fidelity coverage guard. (~2018 tok)
@@ -1415,7 +1419,7 @@
 - `test_qa.py` — test_pass_when_all_text_present, test_fail_lists_missing_labels, test_unavailable_reader_yields_qa_u (~223 tok)
 - `test_render_props.py` — test_props_reference_poster_and_audio_and_duration (~370 tok)
 - `test_render.py` — test_render_command_targets_infographic_composition_with_auto_concurrency (~312 tok)
-- `test_schema.py` — test_valid_category_grid_plan_has_no_issues, test_unknown_format_is_flagged, test_category_grid_item (~429 tok)
+- `test_schema.py` — test_valid_category_grid_plan_has_no_issues, test_unknown_format_is_flagged, test_category_grid_item (~1040 tok)
 - `test_voiceover.py` — test_narration_starts_with_hook_line, test_narration_reads_every_item_and_ends_with_cta (~187 tok)
 - `test_wiring.py` — test_worker_dispatches_infographic_command, test_studio_command_for_short_type, image_fn, llm_fn (~2616 tok)
 

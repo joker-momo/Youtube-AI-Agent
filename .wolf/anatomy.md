@@ -1,7 +1,7 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-07-10T17:27:39.976Z
-> Files: 1032 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-07-11T05:47:21.858Z
+> Files: 1036 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../../../../Users/joker/
 
@@ -928,6 +928,19 @@
 
 - `short_builder.py` — Build one Short end to end: generate → QA (regen loop) → audio → mix → render. (~39141 tok)
 
+## .worktrees/shorts-graphic-layout-system/src/video_agent/shorts/
+
+- `prompts.py` — Strict, JSON-only, Spain-first prompts for Short script / scene / QA generation. (~28283 tok)
+
+## .worktrees/shorts-graphic-layout-system/src/video_agent/shorts/assets/
+
+- `image_prompt.py` — ChatGPT image-prompt builder for Shorts AI-fallback scenes. (~7241 tok)
+
+## .worktrees/shorts-graphic-layout-system/src/video_agent/shorts/validation/
+
+- `_constants.py` — Module-level tuning constants for shorts validation checks. (~1324 tok)
+- `graphic_checks.py` — Graphic-scene detection and graphic payload field validation. (~7411 tok)
+
 ## Agent Bridge (added 2026-07-01)
 
 - `.claude/rules/agent-bridge.md` — Claude Code startup rule for reading bridge inbox and replying through the CLI. (~350 tok)
@@ -1206,7 +1219,7 @@
 - `__init__.py` (~41 tok)
 - `build.py` — Orchestrate static infographic Shorts (plan → poster → QA → music → render). (~5678 tok)
 - `plan.py` — LLM-driven infographic poster plan (pick format + fill), validated. (~935 tok)
-- `poster_prompt.py` — Per-format 9:16 infographic poster prompts (AI-only, text baked in). (~2259 tok)
+- `poster_prompt.py` — Per-format 9:16 infographic poster prompts (AI-only, text baked in). (~2445 tok)
 - `poster.py` — Generate the infographic poster PNG via the injected image function. (~532 tok)
 - `qa.py` — Deterministic text-presence QA gate over a poster's read-back text. (~343 tok)
 - `render_props.py` — Render props for the Remotion InfographicShort composition. (~380 tok)
@@ -1248,7 +1261,7 @@
 - `app.py` — API: 1 endpoints (~355 tok)
 - `dashboard.html` — Video Agent Dashboard (~42369 tok)
 - `run_all_pipeline.py` — stop_request_path, is_run_locked, execute_run_all (~9787 tok)
-- `shorts_studio.html` — Shorts Studio (~58436 tok)
+- `shorts_studio.html` — Shorts Studio (~58578 tok)
 
 ## src/video_agent/web/routes/
 
@@ -1260,7 +1273,7 @@
 - `dashboard.py` — Dashboard page route. (~153 tok)
 - `jobs.py` — Job CRUD and control routes. (~3256 tok)
 - `run.py` — Run-all and run-batch pipeline routes. (~1362 tok)
-- `shorts_studio.py` — API: 3 endpoints (~9911 tok)
+- `shorts_studio.py` — API: 3 endpoints (~10083 tok)
 - `shorts.py` — Backend API for the Shorts Autopilot (spec §18). (~2492 tok)
 - `stages.py` — Stage-run/promote/auto routes plus scene asset generation. (~6244 tok)
 - `timeline.py` — Timeline and logs routes. (~5981 tok)
@@ -1360,7 +1373,7 @@
 - `test_shorts_scene_fit_repair.py` — Regression tests for QA storm fix v2.2. (~5336 tok)
 - `test_shorts_seo_context_leak.py` — Regression tests for SEO context-leak fix (spec v1.2). (~2137 tok)
 - `test_shorts_stale_recovery.py` — Orphaned-Short recovery: a synchronous build that dies mid-stage leaves (~1649 tok)
-- `test_shorts_studio.py` — client, test_job_queue_active_jobs_returns_pending_and_running, test_rendered_shorts_copy_hashtags_w (~5806 tok)
+- `test_shorts_studio.py` — client, test_job_queue_active_jobs_returns_pending_and_running, test_rendered_shorts_copy_hashtags_w (~6213 tok)
 - `test_shorts_transition_polish.py` — Source-inspection contracts for the Shorts anti-slideshow polish. (~656 tok)
 - `test_shorts_v6_ai_roles.py` — Spec v6 — AI role contract + temporary conversations. (~3901 tok)
 - `test_shorts_validate_scenes_repair.py` — repair_visual_only_unreadable injects the missing item's text into the scene (~1188 tok)

@@ -733,8 +733,7 @@ async def auto_thumbnail_image_stage(
     # seo.thumbnail_path: use public-relative path of the primary thumbnail.
     # staticFile()-compatible so Remotion Studio can load it in Thumbnail.tsx.
     public_ref = f"jobs/{job_dir.name}/outputs/{primary.name}"
-    seo["thumbnail_path"] = public_ref
-    _write_json(seo_path, seo)
+    _persist_thumbnail_path(seo_path, seo, public_ref)
 
     if errors:
         logger.log(
@@ -744,3 +743,23 @@ async def auto_thumbnail_image_stage(
 
     _complete_stage(job_dir, stage_name, seo_path)
     return seo_path
+
+
+def _persist_thumbnail_path(seo_path: Path, seo_snapshot: dict, public_ref: str) -> dict:
+    """Attach ``thumbnail_path`` to seo.json via a serialized single-field update.
+
+    bug-528/bug-529: the thumbnail stage reads seo.json at start, then spends
+    ~40 minutes on image generation while whisper_timestamps concurrently
+    rewrites the description's chapter block. A fresh-read-then-full-write
+    only NARROWED the race; ``operator.update_seo_fields`` eliminates it —
+    an exclusive lock around read-merge-write, and this writer only ever
+    touches its OWN field, so it can never resurrect a stale snapshot of
+    fields it does not own."""
+    from video_agent.operator import update_seo_fields
+
+    # NO stale-snapshot fallback (bug-529 acceptance rule): if the current
+    # artifact is unreadable, failing the stage loudly is safer than silently
+    # resurrecting a full stale snapshot over newer fields written by
+    # concurrent stages. ``seo_snapshot`` is intentionally unused for writing.
+    del seo_snapshot
+    return update_seo_fields(seo_path, {"thumbnail_path": public_ref})

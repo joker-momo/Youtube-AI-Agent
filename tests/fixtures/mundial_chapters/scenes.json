@@ -1,0 +1,445 @@
+{
+ "total_duration_sec": 930,
+ "scenes": [
+  {
+   "id": "scene-01",
+   "audio_offset_sec": 0.0,
+   "duration_sec": 11.37,
+   "narration": "Si después de los 45 un partido nocturno te deja tres días sin energía, quizá no necesitas renunciar al Mundial, sino prepararlo mejor.\n\nTodavía puedes disfrutarlo.",
+   "on_screen_text": "Tres días sin energía",
+   "caption": "Un partido especial no tiene por qué convertirse en varios días de cansancio."
+  },
+  {
+   "id": "scene-02",
+   "audio_offset_sec": 11.37,
+   "duration_sec": 9.54,
+   "narration": "El primer ajuste empieza antes de encender la tele: elige el partido que de verdad quieres ver.\n\nNo todos los encuentros merecen robarte sueño.",
+   "on_screen_text": "Elige el partido",
+   "caption": "El primer ajuste empieza antes de encender la tele."
+  },
+  {
+   "id": "scene-03",
+   "audio_offset_sec": 20.91,
+   "duration_sec": 8.76,
+   "narration": "Mira el calendario, decide uno o dos momentos especiales, y protege las noches de alrededor.\n\nAhí está el primer alivio.",
+   "on_screen_text": "Protege las noches",
+   "caption": "Decide uno o dos momentos especiales."
+  },
+  {
+   "id": "scene-04",
+   "audio_offset_sec": 29.67,
+   "duration_sec": 6.34,
+   "narration": "No se trata de aguantar más.\n\nSe trata de pagar menos factura al día siguiente.",
+   "on_screen_text": "Menos factura al día siguiente",
+   "caption": "No se trata de aguantar más. Se trata de pagar menos factura al día siguiente."
+  },
+  {
+   "id": "scene-05",
+   "audio_offset_sec": 36.01,
+   "duration_sec": 11.61,
+   "narration": "Muchas personas de más de 45 años notan lo mismo: una noche corta ya no se recupera igual que a los 25.\n\nAntes bastaba con dormir un poco más al día siguiente.",
+   "on_screen_text": "Una noche corta pesa más",
+   "caption": "Una noche corta ya no se recupera igual que a los 25."
+  },
+  {
+   "id": "scene-06",
+   "audio_offset_sec": 47.62,
+   "duration_sec": 12.54,
+   "narration": "Ahora, si encadenas dos partidos tarde, quizá aparece niebla mental, hambre rara, mal humor, pesadez en el cuerpo o una concentración que no termina de arrancar.\n\nNo es falta de carácter.",
+   "on_screen_text": "No es falta de carácter",
+   "caption": "Encadenar dos partidos tarde puede dejar varios síntomas al día siguiente."
+  },
+  {
+   "id": "scene-07",
+   "audio_offset_sec": 60.16,
+   "duration_sec": 15.32,
+   "narration": "El descanso funciona como una cuenta corriente. Puedes hacer un gasto puntual, pero si gastas varias noches seguidas, el saldo baja rápido.\n\nPor eso el Mundial puede disfrutarse mejor con una estrategia, no con improvisación.",
+   "on_screen_text": "Una estrategia, no improvisación",
+   "caption": "El descanso funciona como una cuenta corriente."
+  },
+  {
+   "id": "scene-08",
+   "audio_offset_sec": 75.48,
+   "duration_sec": 12.12,
+   "narration": "Empieza por escoger. Si un partido empieza muy tarde, pregúntate: ¿es un encuentro que me ilusiona de verdad, o lo voy a ver por inercia?\n\nEsa pregunta ya cambia la noche.",
+   "on_screen_text": "¿Ilusión o inercia?",
+   "caption": "Pregúntate si el partido te ilusiona de verdad o lo vas a ver por inercia."
+  },
+  {
+   "id": "scene-09",
+   "audio_offset_sec": 87.6,
+   "duration_sec": 13.05,
+   "narration": "Si mañana tienes una cita importante, trabajo, cuidado de familia o una mañana exigente, quizá te compense ver el resumen.\n\nSi al día siguiente puedes ir con más calma, ese partido especial encaja mejor.",
+   "on_screen_text": "Mañana también cuenta",
+   "caption": "Si mañana tienes una mañana exigente, quizá te compense ver el resumen."
+  },
+  {
+   "id": "scene-10",
+   "audio_offset_sec": 100.65,
+   "duration_sec": 10.85,
+   "narration": "Este filtro parece pequeño, pero cambia mucho. Evita convertir una noche bonita en una cadena de cansancio.\n\nElige ilusión, no agotamiento.",
+   "on_screen_text": "Elige ilusión",
+   "caption": "Evita convertir una noche bonita en una cadena de cansancio."
+  },
+  {
+   "id": "scene-11",
+   "audio_offset_sec": 111.5,
+   "duration_sec": 9.28,
+   "narration": "Una vez elegido el partido, prepara el día como si fueras a hacer una actividad un poco fuera de horario.\n\nNo hace falta obsesionarse.",
+   "on_screen_text": "Prepara el día",
+   "caption": "Prepara el día como si fueras a hacer una actividad fuera de horario."
+  },
+  {
+   "id": "scene-12",
+   "audio_offset_sec": 120.78,
+   "duration_sec": 10.52,
+   "narration": "Basta con ajustar tres momentos: la tarde, la cena y el final del encuentro.\n\nNo son grandes cambios. Son señales claras para tu descanso.",
+   "on_screen_text": "Tres momentos",
+   "caption": "Basta con ajustar tres momentos: la tarde, la cena y el final del encuentro."
+  },
+  {
+   "id": "scene-13",
+   "audio_offset_sec": 131.3,
+   "duration_sec": 12.58,
+   "narration": "Por la tarde, evita llegar al partido ya agotado. Si puedes, baja un poco el ritmo antes.\n\nNo llenes la última hora con recados, discusiones, tareas pendientes y móvil sin parar.",
+   "on_screen_text": "Baja el ritmo antes",
+   "caption": "Evita llegar al partido ya agotado."
+  },
+  {
+   "id": "scene-14",
+   "audio_offset_sec": 143.88,
+   "duration_sec": 11.81,
+   "narration": "El cuerpo no cambia de marcha de golpe. Si vas acelerado todo el día, el partido no empieza a las nueve o a las diez.\n\nEmpieza con el cansancio acumulado desde la mañana.",
+   "on_screen_text": "No cambia de marcha de golpe",
+   "caption": "El partido empieza con el cansancio acumulado desde la mañana."
+  },
+  {
+   "id": "scene-15",
+   "audio_offset_sec": 155.69,
+   "duration_sec": 16.56,
+   "narration": "La razón es sencilla: cuando pasas muchas horas en tensión, el cuerpo mantiene señales de alerta.\n\nEs como dejar un motor encendido en el garaje. Aunque el coche no se mueva, sigue consumiendo. Una noche de fútbol encima de ese desgaste pesa más.",
+   "on_screen_text": "El cuerpo sigue consumiendo",
+   "caption": "Una noche de fútbol encima de ese desgaste pesa más."
+  },
+  {
+   "id": "scene-16",
+   "audio_offset_sec": 172.25,
+   "duration_sec": 15.7,
+   "narration": "Prueba algo concreto. Dos horas antes del partido, deja preparada una cosa del día siguiente: la ropa, el desayuno, una lista breve o la bolsa si tienes que salir.\n\nEso evita que, al terminar, la cabeza diga: todavía queda todo por hacer.",
+   "on_screen_text": "Dos horas antes",
+   "caption": "Deja preparada una cosa del día siguiente."
+  },
+  {
+   "id": "scene-17",
+   "audio_offset_sec": 187.95,
+   "duration_sec": 10.25,
+   "narration": "Preparar mañana también protege esta noche.\n\nSi el día lo permite, una siesta corta puede ayudarte. La palabra importante es corta.",
+   "on_screen_text": "La palabra importante es corta",
+   "caption": "Preparar mañana también protege esta noche."
+  },
+  {
+   "id": "scene-18",
+   "audio_offset_sec": 198.2,
+   "duration_sec": 16.19,
+   "narration": "Entre 15 y 30 minutos suele ser suficiente para dar un respiro sin entrar en un sueño demasiado profundo.\n\nMejor después de comer o a primera hora de la tarde. Si la haces muy tarde, puede robarte sueño cuando quieras acostarte después del partido.",
+   "on_screen_text": "15 a 30 minutos",
+   "caption": "Entre 15 y 30 minutos suele ser suficiente."
+  },
+  {
+   "id": "scene-19",
+   "audio_offset_sec": 214.39,
+   "duration_sec": 12.72,
+   "narration": "Lo que pasa por dentro es parecido a cerrar los ojos en un banco tranquilo antes de seguir caminando.\n\nNo estás intentando dormir media tarde. Estás quitando un poco de peso a la mochila.",
+   "on_screen_text": "Quitar peso a la mochila",
+   "caption": "Estás quitando un poco de peso a la mochila."
+  },
+  {
+   "id": "scene-20",
+   "audio_offset_sec": 227.11,
+   "duration_sec": 13.87,
+   "narration": "Pon alarma. Si sabes que te cuesta despertarte, siéntate en el sofá en vez de meterte en la cama.\n\nBaja la luz, deja el móvil lejos y acepta que descansar también cuenta aunque no llegues a dormir profundamente.",
+   "on_screen_text": "Pon alarma",
+   "caption": "Baja la luz, deja el móvil lejos."
+  },
+  {
+   "id": "scene-21",
+   "audio_offset_sec": 240.98,
+   "duration_sec": 22.81,
+   "narration": "Un ejemplo muy real: imagina que el partido empieza a las 22:00. Comes sobre las 14:00, descansas 20 minutos a las 15:30, das un paseo suave a media tarde y llegas a la noche con otra sensación.\n\nNo con energía infinita, sino con menos desgaste.\n\nNo busques dormir mucho. Busca llegar menos vacío.",
+   "on_screen_text": "22:00",
+   "caption": "Comes sobre las 14:00, descansas 20 minutos a las 15:30 y das un paseo suave."
+  },
+  {
+   "id": "scene-22",
+   "audio_offset_sec": 263.79,
+   "duration_sec": 15.66,
+   "narration": "Otro punto clave es la cafeína. Aquí no hay una regla única, porque cada persona la tolera de forma distinta.\n\nHay quien toma café por la tarde y duerme bien. Hay quien toma uno a las cinco y mira el techo a las dos de la madrugada.",
+   "on_screen_text": "Cada persona la tolera de forma distinta",
+   "caption": "No hay una regla única con la cafeína."
+  },
+  {
+   "id": "scene-23",
+   "audio_offset_sec": 279.45,
+   "duration_sec": 20.78,
+   "narration": "Si te pasa esto, no lo ignores. Para los partidos nocturnos, prueba a poner una hora límite.\n\nPor ejemplo, dejar café, té con cafeína, bebidas energéticas o refrescos con cafeína desde media tarde. Si necesitas algo caliente durante el partido, prueba una infusión sin cafeína o agua con hielo y una rodaja de limón.",
+   "on_screen_text": "Desde media tarde",
+   "caption": "Dejar café, té con cafeína, bebidas energéticas o refrescos con cafeína desde media tarde."
+  },
+  {
+   "id": "scene-24",
+   "audio_offset_sec": 300.23,
+   "duration_sec": 16.25,
+   "narration": "Aquí entra en juego una idea simple: la cafeína no da energía nueva, tapa la señal de cansancio durante un rato.\n\nEs como poner cinta adhesiva sobre una luz roja del salpicadero. La luz molesta menos, pero el coche sigue necesitando atención.",
+   "on_screen_text": "La cafeína no da energía nueva",
+   "caption": "La cafeína tapa la señal de cansancio durante un rato."
+  },
+  {
+   "id": "scene-25",
+   "audio_offset_sec": 316.48,
+   "duration_sec": 22.54,
+   "narration": "También conviene vigilar la cantidad. A veces no es el café de después de comer, sino la suma: café de la mañana, otro después de comer, té por la tarde y refresco durante el partido.\n\nSi al día siguiente estás nervioso, cansado y con sueño ligero, prueba a reducir una pieza, no todas a la vez.\n\nAjusta por experiencia, no por orgullo.",
+   "on_screen_text": "Ajusta por experiencia, no por orgullo",
+   "caption": "Prueba a reducir una pieza, no todas a la vez."
+  },
+  {
+   "id": "scene-26",
+   "audio_offset_sec": 339.02,
+   "duration_sec": 19.04,
+   "narration": "La cena también decide parte de la noche. Antes de un partido tarde, una cena muy pesada puede dejarte con digestión lenta, sed, reflujo o calor corporal.\n\nUna cena demasiado escasa puede hacer que acabes picando cualquier cosa de madrugada. El punto medio suele funcionar mejor.",
+   "on_screen_text": "El punto medio suele funcionar mejor",
+   "caption": "Una cena muy pesada o una cena demasiado escasa."
+  },
+  {
+   "id": "scene-27",
+   "audio_offset_sec": 358.06,
+   "duration_sec": 24.76,
+   "narration": "Piensa en una cena sencilla, unas dos o tres horas antes si puedes. Algo con proteína ligera, verduras cocinadas o ensalada que te siente bien, y una ración moderada de hidrato si lo necesitas.\n\nPor ejemplo: tortilla francesa con verduras y una rebanada de pan; pescado con patata cocida; yogur natural con fruta y un puñado pequeño de frutos secos si cenas poco; o una crema de verduras con huevo cocido.",
+   "on_screen_text": "Cena sencilla",
+   "caption": "Tortilla francesa con verduras, pescado con patata cocida o crema de verduras con huevo cocido."
+  },
+  {
+   "id": "scene-28",
+   "audio_offset_sec": 382.82,
+   "duration_sec": 14.35,
+   "narration": "Detrás de esto hay una razón muy práctica. Cuando el estómago trabaja a pleno rendimiento, el cuerpo no se siente listo para dormir.\n\nEs como intentar apagar una cocina mientras todos los fogones siguen encendidos.",
+   "on_screen_text": "El cuerpo no se siente listo para dormir",
+   "caption": "Es como intentar apagar una cocina mientras todos los fogones siguen encendidos."
+  },
+  {
+   "id": "scene-29",
+   "audio_offset_sec": 397.17,
+   "duration_sec": 22.59,
+   "narration": "Durante el partido, si te apetece picar, prepara antes una opción concreta.\n\nUn bol pequeño de fruta cortada, palitos de zanahoria, un puñado medido de frutos secos, yogur natural o una tostada pequeña. Evita comer directamente de una bolsa grande. La atención está en el fútbol, y la mano no siempre se entera de cuánto lleva.",
+   "on_screen_text": "Prepara antes una opción concreta",
+   "caption": "Evita comer directamente de una bolsa grande."
+  },
+  {
+   "id": "scene-30",
+   "audio_offset_sec": 419.76,
+   "duration_sec": 6.72,
+   "narration": "No necesitas una cena perfecta.\n\nNecesitas una cena que no te complique la noche.",
+   "on_screen_text": "No necesitas una cena perfecta",
+   "caption": "Necesitas una cena que no te complique la noche."
+  },
+  {
+   "id": "scene-31",
+   "audio_offset_sec": 426.48,
+   "duration_sec": 22.38,
+   "narration": "Y después llega el momento que más se olvida: el final del partido. Si termina tarde, muchas personas apagan la tele y se meten en la cama con el móvil.\n\nVen comentarios, polémicas, análisis, mensajes del grupo, vídeos repetidos de la jugada clave. Sin darse cuenta, el cuerpo ya está cansado, pero el cerebro sigue en estadio lleno.",
+   "on_screen_text": "El cerebro sigue en estadio lleno",
+   "caption": "El cuerpo ya está cansado, pero el cerebro sigue en estadio lleno."
+  },
+  {
+   "id": "scene-32",
+   "audio_offset_sec": 448.86,
+   "duration_sec": 20.13,
+   "narration": "La luz intensa y las pantallas pueden retrasar la sensación de sueño, sobre todo si el contenido te activa. No hace falta convertir la casa en una cueva.\n\nBasta con bajar la intensidad. Apaga la pantalla grande, evita quedarte atrapado en el móvil y deja una luz cálida y baja si necesitas moverte por casa.",
+   "on_screen_text": "Basta con bajar la intensidad",
+   "caption": "Apaga la pantalla grande, evita quedarte atrapado en el móvil y deja una luz cálida y baja."
+  },
+  {
+   "id": "scene-33",
+   "audio_offset_sec": 468.99,
+   "duration_sec": 11.83,
+   "narration": "El cuerpo lee la luz como una señal. Una luz fuerte a medianoche puede parecerle un amanecer falso.\n\nEs como decirle al cerebro: sigue abierto, todavía hay actividad.",
+   "on_screen_text": "El cuerpo lee la luz como una señal",
+   "caption": "Una luz fuerte a medianoche puede parecerle un amanecer falso."
+  },
+  {
+   "id": "scene-34",
+   "audio_offset_sec": 480.82,
+   "duration_sec": 15.9,
+   "narration": "Prueba una regla clara: diez minutos de cierre sin pantalla. Baño, dientes, vaso de agua si lo necesitas, preparar la habitación y respirar despacio.\n\nSi quieres comentar el partido, manda un mensaje breve y deja el debate para mañana.",
+   "on_screen_text": "Diez minutos de cierre sin pantalla",
+   "caption": "Baño, dientes, vaso de agua, preparar la habitación y respirar despacio."
+  },
+  {
+   "id": "scene-35",
+   "audio_offset_sec": 496.72,
+   "duration_sec": 3.76,
+   "narration": "La noche se recupera en los últimos minutos.",
+   "on_screen_text": "La noche se recupera en los últimos minutos",
+   "caption": "La noche se recupera en los últimos minutos."
+  },
+  {
+   "id": "scene-36",
+   "audio_offset_sec": 500.48,
+   "duration_sec": 21.34,
+   "narration": "También ayuda bajar las revoluciones emocionales. Un partido intenso no solo altera horarios.\n\nTambién mueve adrenalina, enfado, alegría, tensión o frustración. Si ha habido penaltis, prórroga o una jugada polémica, el cuerpo no entiende que estás sentado en el salón. Puede reaccionar como si hubieras corrido.",
+   "on_screen_text": "Baja las revoluciones emocionales",
+   "caption": "Un partido intenso no solo altera horarios."
+  },
+  {
+   "id": "scene-37",
+   "audio_offset_sec": 521.82,
+   "duration_sec": 13.07,
+   "narration": "El cuerpo hace esto porque emoción y alerta viajan juntas. Cuando algo importa, sube la activación.\n\nEs como una radio con el volumen alto: aunque cambie la canción, el volumen sigue fuerte.",
+   "on_screen_text": "Emoción y alerta viajan juntas",
+   "caption": "Cuando algo importa, sube la activación."
+  },
+  {
+   "id": "scene-38",
+   "audio_offset_sec": 534.89,
+   "duration_sec": 21.79,
+   "narration": "Por eso necesitas un pequeño ritual de salida. No tiene que ser espiritual ni complicado.\n\nPuede ser escribir en una nota: “mañana veo el resumen”. Puede ser estirar suavemente cuello y hombros durante dos minutos. Puede ser sentarte en silencio, con los pies en el suelo, y hacer seis respiraciones lentas.",
+   "on_screen_text": "Pequeño ritual de salida",
+   "caption": "Escribir en una nota, estirar cuello y hombros o hacer seis respiraciones lentas."
+  },
+  {
+   "id": "scene-39",
+   "audio_offset_sec": 556.68,
+   "duration_sec": 11.13,
+   "narration": "Si has visto el partido con otras personas, evita cerrar la noche con una discusión larga.\n\nEl análisis táctico puede esperar. Tu descanso, no siempre.",
+   "on_screen_text": "El análisis táctico puede esperar",
+   "caption": "El análisis táctico puede esperar. Tu descanso, no siempre."
+  },
+  {
+   "id": "scene-40",
+   "audio_offset_sec": 567.81,
+   "duration_sec": 13.77,
+   "narration": "Aquí no se trata de apagar la emoción.\n\nSe trata de no meterla entera en la almohada.\n\nAhora viene la parte que muchas personas agradecen entender: por qué todo esto suele pesar más después de los 45.",
+   "on_screen_text": "No meterla entera en la almohada",
+   "caption": "Se trata de no meterla entera en la almohada."
+  },
+  {
+   "id": "scene-41",
+   "audio_offset_sec": 581.58,
+   "duration_sec": 19.84,
+   "narration": "Con los años, el sueño puede hacerse más sensible. Hay más despertares, el sueño profundo puede sentirse menos abundante, y algunas personas notan que les cuesta más volver a dormirse de madrugada.\n\nNo significa que estés roto. Significa que tu sistema de descanso necesita señales más claras.",
+   "on_screen_text": "Señales más claras",
+   "caption": "Tu sistema de descanso necesita señales más claras."
+  },
+  {
+   "id": "scene-42",
+   "audio_offset_sec": 601.42,
+   "duration_sec": 20.96,
+   "narration": "Imagina el sueño como una tela. Cuando eres joven, quizá la tela aguanta varios tirones.\n\nMás adelante, puede seguir siendo resistente, pero conviene tratarla con más cuidado. Si tiras una noche por el partido, no pasa nada. Si tiras varias noches seguidas, aparecen las marcas.",
+   "on_screen_text": "El sueño como una tela",
+   "caption": "Si tiras varias noches seguidas, aparecen las marcas."
+  },
+  {
+   "id": "scene-43",
+   "audio_offset_sec": 622.38,
+   "duration_sec": 19.69,
+   "narration": "Además, dormir poco no solo da sueño. Puede aumentar el apetito, reducir la paciencia, empeorar la memoria del día y hacer que apetezcan alimentos más intensos.\n\nMuchas personas no lo relacionan. Piensan: “estoy raro”. Pero quizá el cuerpo solo está pidiendo regularidad.",
+   "on_screen_text": "El cuerpo pide regularidad",
+   "caption": "Dormir poco no solo da sueño."
+  },
+  {
+   "id": "scene-44",
+   "audio_offset_sec": 642.07,
+   "duration_sec": 13.08,
+   "narration": "Por eso la estrategia no es vivir con miedo a una noche especial. La estrategia es elegir, preparar y recuperar.\n\nTu descanso no pide perfección.\n\nPide señales repetidas.",
+   "on_screen_text": "Elegir, preparar y recuperar",
+   "caption": "La estrategia es elegir, preparar y recuperar."
+  },
+  {
+   "id": "scene-45",
+   "audio_offset_sec": 655.15,
+   "duration_sec": 19.06,
+   "narration": "Al día siguiente, la recuperación empieza por la mañana. La tentación es dormir hasta muy tarde o hacer una siesta larguísima. A veces puede apetecer, y en un día libre no pasa nada por descansar un poco más.\n\nPero si quieres volver a tu ritmo, conviene no desordenar todo el reloj interno.",
+   "on_screen_text": "La recuperación empieza por la mañana",
+   "caption": "Conviene no desordenar todo el reloj interno."
+  },
+  {
+   "id": "scene-46",
+   "audio_offset_sec": 674.21,
+   "duration_sec": 16.37,
+   "narration": "Empieza con luz natural. Abre la ventana, sal al balcón, baja a comprar el pan o da un paseo corto. La luz de la mañana ayuda al cuerpo a entender que el día ha empezado.\n\nEs como poner en hora un reloj que se ha retrasado durante la noche.",
+   "on_screen_text": "Empieza con luz natural",
+   "caption": "Abre la ventana, sal al balcón o da un paseo corto."
+  },
+  {
+   "id": "scene-47",
+   "audio_offset_sec": 690.58,
+   "duration_sec": 21.71,
+   "narration": "Luego, movimiento suave. No hace falta entrenar fuerte. Un paseo de 15 a 30 minutos, movilidad de hombros, unas sentadillas asistidas si te van bien, o simplemente caminar después de comer.\n\nEl objetivo no es castigarte por haber trasnochado. El objetivo es activar circulación, ánimo y claridad.",
+   "on_screen_text": "Movimiento suave",
+   "caption": "El objetivo es activar circulación, ánimo y claridad."
+  },
+  {
+   "id": "scene-48",
+   "audio_offset_sec": 712.29,
+   "duration_sec": 18.03,
+   "narration": "Mantén comidas bastante normales. No compenses con ayunos extremos ni con atracones porque “ya está el día perdido”. Un desayuno sencillo, comida equilibrada y cena tranquila ayudan más que intentar arreglarlo todo de golpe.\n\nVuelve al ritmo sin pelearte contigo.",
+   "on_screen_text": "Vuelve al ritmo",
+   "caption": "No compenses con ayunos extremos ni con atracones."
+  },
+  {
+   "id": "scene-49",
+   "audio_offset_sec": 730.32,
+   "duration_sec": 20.2,
+   "narration": "Si necesitas siesta al día siguiente, vuelve a hacerla corta. Una cabezada de 20 minutos puede ayudar. Dormir dos horas por la tarde puede dejarte despejado a las ocho y despierto a la una.\n\nSi ocurre una vez, no pasa nada. Si se repite, el descanso se convierte en una rueda difícil de parar.",
+   "on_screen_text": "Siesta corta",
+   "caption": "Una cabezada de 20 minutos puede ayudar."
+  },
+  {
+   "id": "scene-50",
+   "audio_offset_sec": 750.52,
+   "duration_sec": 21.7,
+   "narration": "Otro detalle útil: no llenes el día siguiente de tareas pesadas si puedes evitarlo. Si sabes que vas a ver un partido importante, no pongas justo después una mañana cargada de gestiones, compras grandes o decisiones complicadas. Esto no siempre depende de ti, claro. Pero cuando puedas elegir, elige con cabeza.",
+   "on_screen_text": "Elige con cabeza",
+   "caption": "No llenes el día siguiente de tareas pesadas si puedes evitarlo."
+  },
+  {
+   "id": "scene-51",
+   "audio_offset_sec": 772.22,
+   "duration_sec": 24.29,
+   "narration": "Piensa en una persona que quiere ver una semifinal tarde. El plan no sería solo “me acuesto cuando acabe”. El plan sería: esa tarde bajo un poco el ritmo, ceno ligero, preparo lo de mañana, veo el partido, corto pantallas al terminar y al día siguiente salgo a caminar con luz natural. No es perfecto. Es realista.\n\nY lo realista se sostiene mejor.",
+   "on_screen_text": "Un plan realista",
+   "caption": "No es perfecto. Es realista."
+  },
+  {
+   "id": "scene-52",
+   "audio_offset_sec": 796.51,
+   "duration_sec": 24.44,
+   "narration": "Hay señales que conviene no normalizar. Si el insomnio aparece muchas noches, si te duermes sin querer durante el día, si los ronquidos son intensos, si te despiertas con sensación de ahogo, o si la fatiga no mejora aunque intentes ordenar horarios, consulta con un profesional sanitario.\n\nEste contenido es informativo; si tienes dolor, mareos o una condición médica, consulta con un profesional.",
+   "on_screen_text": "No normalices estas señales",
+   "caption": "Consulta con un profesional sanitario."
+  },
+  {
+   "id": "scene-53",
+   "audio_offset_sec": 820.95,
+   "duration_sec": 28.51,
+   "narration": "Pedir orientación no es exagerar. A veces el sueño se altera por estrés, medicación, dolor, respiración, cambios hormonales, problemas digestivos u otros factores. No hace falta ponerle nombre por tu cuenta. Lo sensato es observar, anotar y pedir ayuda si se repite.\n\nUna forma práctica de hacerlo es apuntar durante una semana tres datos: a qué hora te acuestas, cuántas veces te despiertas y cómo te levantas del 1 al 5.",
+   "on_screen_text": "Tres datos durante una semana",
+   "caption": "Apuntar durante una semana tres datos."
+  },
+  {
+   "id": "scene-54",
+   "audio_offset_sec": 849.46,
+   "duration_sec": 51.08,
+   "narration": "No necesitas una aplicación sofisticada. Una libreta sirve. Esa información puede ayudarte a detectar patrones y explicar mejor lo que te ocurre.\n\nEscuchar el cuerpo también es una forma de cuidarlo.\n\nLo bueno de esta estrategia es que no sirve solo para el Mundial. Sirve para una boda, una cena familiar, un viaje, una fiesta de verano, una final de tenis, una obra de teatro que termina tarde o una noche especial con amigos.\n\nLa pregunta es la misma: ¿cómo disfruto sin romper varios días de energía?\n\nLa respuesta cabe en cinco gestos. Elige bien la noche. Llega con menos cansancio acumulado. Cuida cafeína y cena. Baja luz y pantallas al terminar. Recupera al día siguiente con luz, movimiento suave y horarios razonables.",
+   "on_screen_text": "La respuesta cabe en cinco gestos",
+   "caption": "La respuesta cabe en cinco gestos."
+  },
+  {
+   "id": "scene-55",
+   "audio_offset_sec": 900.54,
+   "duration_sec": 29.85,
+   "narration": "No son normas rígidas. Son palancas. El bienestar práctico empieza cuando adaptas, no cuando copias.\n\nSi esta noche hay partido, prueba solo dos cambios. Por ejemplo: decide antes la hora límite para el móvil y prepara una cena sencilla. Si este enfoque te ayuda, suscríbete a Vida Plena 45+, comenta qué hábito probarás en el próximo partido y mira otro vídeo del canal para seguir cuidando tu descanso con hábitos sencillos.",
+   "on_screen_text": "Prueba solo dos cambios",
+   "caption": "Suscríbete a Vida Plena 45+."
+  }
+ ]
+}

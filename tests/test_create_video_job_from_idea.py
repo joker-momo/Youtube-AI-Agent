@@ -223,7 +223,16 @@ def test_create_job_from_full_idea_preserves_explicit_job_id(client: TestClient,
     assert (tmp_path / "Manual.Job_01" / "job.json").exists()
 
 
-def test_existing_video_history_filters_by_channel_id_and_prefers_seo_title(tmp_path: Path):
+def test_existing_video_history_filters_by_channel_id_and_prefers_seo_title(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # Isolate from the real channel's published_videos.json: with 10+ published
+    # videos the history limit fills up before the job-dir scan this test
+    # exercises (broke silently when the channel published its 10th video).
+    from video_agent.web.services import video_job_creator
+
+    monkeypatch.setattr(video_job_creator, "load_published_videos", lambda *a, **k: [])
+
     matching = tmp_path / "matching"
     matching.mkdir()
     (matching / "job.json").write_text(

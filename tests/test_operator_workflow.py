@@ -409,6 +409,26 @@ def test_promote_operator_artifact_repairs_channel_name_line_break_in_descriptio
     assert "00:00 - Inicio\n01:30 - Rutina tranquila" in promoted["description"]
 
 
+def test_canonicalize_channel_name_repairs_display_prefix_of_tagged_name():
+    """Channel configs use 'Name: Tagline' as the official name, but prose in
+    descriptions refers to the channel by the display prefix ('Vida Plena
+    45+'). Wrap repair must cover both forms, not just the full name."""
+    from video_agent.operator import _canonicalize_channel_name_whitespace
+
+    cfg = {"channel": {"name": "Vida Plena 45+: Salud y Bienestar"}}
+
+    fixed = _canonicalize_channel_name_whitespace(
+        "En Vida\nPlena 45+ comparte habitos sencillos.", cfg
+    )
+    assert "Vida Plena 45+ comparte" in fixed
+    assert "Vida\nPlena" not in fixed
+
+    fixed_full = _canonicalize_channel_name_whitespace(
+        "Vida Plena\n45+:\nSalud y Bienestar ofrece consejos.", cfg
+    )
+    assert "Vida Plena 45+: Salud y Bienestar ofrece" in fixed_full
+
+
 def test_promote_operator_qa_normalizes_gemini_response(tmp_path):
     raw_path = tmp_path / "script_qa.raw.txt"
     raw_path.write_text(

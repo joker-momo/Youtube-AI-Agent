@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import fcntl
 import json
+import math
 import re
+import unicodedata
 from html import escape
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,7 +14,7 @@ from video_agent.contracts import repo_root
 from video_agent.operator_validators import load_operator_channel_config, validate_operator_artifact
 from video_agent.style_dna import is_valid_hex, load_style_dna
 from video_agent.utils.json_io import read_json, read_yaml, write_json
-from video_agent.storage.atomic import atomic_write_text
+from video_agent.storage.atomic import atomic_write_json, atomic_write_text
 from video_agent.utils.validation import validate_json
 
 ARTIFACT_SCHEMAS = {
@@ -258,11 +261,21 @@ def _normalize_youtube_description(desc: str) -> str:
 def _canonicalize_channel_name_whitespace(text: str, channel_config: dict[str, Any] | None) -> str:
     channel = (channel_config or {}).get("channel") or {}
     channel_name = str(channel.get("name") or "").strip()
-    parts = channel_name.split()
-    if len(parts) < 2:
-        return text
-    pattern = r"\s+".join(re.escape(part) for part in parts)
-    return re.sub(pattern, channel_name, text, flags=re.IGNORECASE)
+    # Configs may use an official 'Name: Tagline' form while descriptions refer
+    # to the channel by the display prefix alone ('Vida Plena 45+'). Repair
+    # wraps of both forms; full name first so a wrapped full name is not
+    # half-fixed by the shorter prefix pattern.
+    candidates = [channel_name]
+    display_prefix = channel_name.split(":", 1)[0].strip()
+    if display_prefix and display_prefix != channel_name:
+        candidates.append(display_prefix)
+    for name in candidates:
+        parts = name.split()
+        if len(parts) < 2:
+            continue
+        pattern = r"\s+".join(re.escape(part) for part in parts)
+        text = re.sub(pattern, name.replace("\\", r"\\"), text, flags=re.IGNORECASE)
+    return text
 
 
 def _score_and_sort_seo_variants(seo: dict[str, Any]) -> dict[str, Any]:
@@ -282,105 +295,411 @@ def _score_and_sort_seo_variants(seo: dict[str, Any]) -> dict[str, Any]:
 # must start at exactly 00:00 for the player to enable chapters at all.
 _TIMESTAMP_TOKEN_RE = re.compile(r"\d{1,2}:\d{2}")
 
+# Spanish function words that carry no topical signal for section↔scene
+# matching (already accent-stripped, ≥4 chars — shorter words are dropped by
+# the tokenizer anyway).
+_SECTION_MATCH_STOPWORDS = frozenset({
+    "para", "pero", "como", "esta", "este", "esto", "estos", "estas",
+    "todo", "toda", "todos", "todas", "cada", "unos", "unas",
+    "otro", "otra", "otros", "otras", "ellos", "ellas", "usted",
+    "sobre", "entre", "cuando", "donde", "tambien", "porque",
+    "desde", "hasta", "tiene", "tienen", "hacer", "hace",
+    "puede", "pueden", "algo", "alguien", "antes", "despues",
+    "luego", "ahora", "siempre", "nunca", "durante", "mientras",
+    "aunque", "sino", "segun", "misma", "mismo", "muy",
+})
+
+# Minimum share of sections (beyond the first) that must find a positive
+# narration match before anchored boundaries replace even spacing.
+_SECTION_ANCHOR_MIN_MATCH_RATIO = 0.6
+
+# YouTube ignores chapter blocks containing chapters shorter than 10 seconds.
+_MIN_CHAPTER_GAP_SEC = 10.0
+
 
 def _format_mmss(seconds: float) -> str:
     seconds = max(0, int(round(seconds)))
     return f"{seconds // 60:02d}:{seconds % 60:02d}"
 
 
+def _section_match_tokens(text: str) -> set[str]:
+    """Accent-stripped content-word tokens, crudely stemmed to 6 chars."""
+    normalized = unicodedata.normalize("NFKD", text.lower())
+    normalized = "".join(c for c in normalized if not unicodedata.combining(c))
+    words = re.findall(r"[a-z]+", normalized)
+    return {w[:6] for w in words if len(w) >= 4 and w not in _SECTION_MATCH_STOPWORDS}
+
+
+def _scene_texts(scenes: list[dict[str, Any]]) -> list[str]:
+    return [
+        " ".join(str(s.get(k) or "") for k in ("narration", "on_screen_text", "caption"))
+        for s in scenes
+    ]
+
+
+def _scene_offsets(scenes: list[dict[str, Any]]) -> list[float]:
+    """Per-scene start offsets. Prefer whisper-aligned ``audio_offset_sec``
+    (ground truth for what the viewer hears) over summing planned
+    ``duration_sec`` (drifts from real audio; bug-529)."""
+    have_audio = sum(
+        1 for s in scenes if isinstance(s.get("audio_offset_sec"), (int, float))
+    )
+    if have_audio >= max(2, int(len(scenes) * 0.8)):
+        offsets: list[float] = []
+        last = 0.0
+        for s in scenes:
+            raw = s.get("audio_offset_sec")
+            value = float(raw) if isinstance(raw, (int, float)) else last
+            value = max(value, last)  # monotonic guard against bad rows
+            offsets.append(value)
+            last = value
+        return offsets
+    offsets = []
+    cursor = 0.0
+    for s in scenes:
+        offsets.append(cursor)
+        cursor += float(s.get("duration_sec") or 0)
+    return offsets
+
+
+def _norm_section_title(title: str) -> str:
+    return " ".join(sorted(_section_match_tokens(str(title))))
+
+
+def _anchors_from_scene_metadata(
+    sections: list[dict[str, Any]], scenes: list[dict[str, Any]]
+) -> list[int] | None:
+    """Exact anchors when scenes carry explicit section attribution.
+
+    The long-form scene generator now tags every scene with the script section
+    it narrates (``scene["section"]``); this is the PRIMARY, deterministic
+    path — lexical matching below is only the legacy fallback (bug-529)."""
+    titles = [_norm_section_title(str(sec.get("title") or "")) for sec in sections]
+    first_scene: dict[str, int] = {}
+    tagged = 0
+    for idx, scene in enumerate(scenes):
+        raw = str(scene.get("section") or "").strip()
+        if not raw:
+            continue
+        tagged += 1
+        key = _norm_section_title(raw)
+        first_scene.setdefault(key, idx)
+    if tagged < max(2, int(len(scenes) * 0.5)):
+        return None
+    anchors: list[int] = []
+    last = 0
+    for key in titles[1:]:
+        idx = first_scene.get(key)
+        if idx is None or idx <= last:
+            return None  # incomplete/unordered attribution — fall back
+        anchors.append(idx)
+        last = idx
+    return anchors
+
+
+def _anchor_sections_via_plan(
+    sections: list[dict[str, Any]],
+    scenes: list[dict[str, Any]],
+    scenes_plan: dict[str, Any] | None,
+    offsets: list[float],
+) -> list[int] | None:
+    """Constrain each section's anchor to its planned batch scene-range, then
+    pick the best boundary inside that range by windowed IDF-weighted vocabulary
+    affinity (legacy jobs whose scenes lack section attribution)."""
+    if not isinstance(scenes_plan, dict):
+        return None
+    batches = (scenes_plan.get("data") or scenes_plan).get("batches") if isinstance(
+        (scenes_plan.get("data") or scenes_plan), dict
+    ) else None
+    if not isinstance(batches, list) or not batches:
+        return None
+    sid_to_idx = {str(s.get("id")): i for i, s in enumerate(scenes)}
+
+    texts = _scene_texts(scenes)
+    scene_toks = [_section_match_tokens(t) for t in texts]
+    doc_freq: dict[str, int] = {}
+    for ts in scene_toks:
+        for t in ts:
+            doc_freq[t] = doc_freq.get(t, 0) + 1
+    common = {t for t, c in doc_freq.items() if c > max(2, len(scenes) * 0.15)}
+
+    def weights(k: int) -> dict[str, float]:
+        w: dict[str, float] = {}
+        for t in _section_match_tokens(str(sections[k].get("focus") or "")):
+            if t not in common:
+                w[t] = 1.0 / (1 + doc_freq.get(t, 0))
+        for t in _section_match_tokens(str(sections[k].get("title") or "")):
+            if t not in common:
+                w[t] = 2.0 / (1 + doc_freq.get(t, 0))
+        return w
+
+    def batch_range(k: int) -> tuple[int, int] | None:
+        key = _norm_section_title(str(sections[k].get("title") or ""))
+        for b in batches:
+            names = [
+                _norm_section_title(str(x)) for x in (b.get("script_sections") or [])
+            ]
+            if key in names:
+                lo = sid_to_idx.get(str(b.get("scene_start")))
+                hi = sid_to_idx.get(str(b.get("scene_end")))
+                if lo is None or hi is None:
+                    return None
+                return lo, min(hi + 2, len(scenes) - 1)
+        return None
+
+    anchors: list[int] = []
+    prev_anchor = 0
+    for k in range(1, len(sections)):
+        rng = batch_range(k)
+        if rng is None:
+            return None
+        lo, hi = max(rng[0], prev_anchor + 1), rng[1]
+        if lo > hi:
+            lo = hi = min(prev_anchor + 1, len(scenes) - 1)
+        w_cur = weights(k)
+        w_prev = weights(k - 1)
+        # transition score: this section's vocabulary from i onward, the
+        # previous section's vocabulary strictly before i (window of 3).
+        best_score, best_i = float("-inf"), lo
+        for i in range(lo, hi + 1):
+            cur_gain = sum(
+                sum(v for t, v in w_cur.items() if t in scene_toks[j]) * (0.75 ** (j - i))
+                for j in range(i, min(i + 3, len(scenes)))
+            )
+            prev_gain = sum(
+                sum(v for t, v in w_prev.items() if t in scene_toks[j])
+                for j in range(max(lo - 2, 0), i)
+            )
+            score = cur_gain + prev_gain
+            if score > best_score:
+                best_score, best_i = score, i
+        anchors.append(best_i)
+        prev_anchor = best_i
+    return anchors
+
+
+def _anchor_sections_to_scenes(
+    sections: list[dict[str, Any]],
+    scenes: list[dict[str, Any]],
+) -> list[int] | None:
+    """Global fallback: map each section (after the first) to the scene where it
+    starts by keyword overlap (title tokens weigh double), maximum-score strictly
+    increasing assignment via dynamic programming. Returns anchor scene indices
+    for sections[1:], or None when too few sections match to trust the
+    alignment (callers then fall back to evenly spaced boundaries)."""
+    if len(sections) < 2 or len(scenes) < 2:
+        return None
+
+    section_tokens: list[dict[str, float]] = []
+    for section in sections[1:]:
+        title_tokens = _section_match_tokens(str(section.get("title") or ""))
+        focus_tokens = _section_match_tokens(str(section.get("focus") or ""))
+        weights = {t: 1.0 for t in focus_tokens}
+        for t in title_tokens:
+            weights[t] = 2.0
+        section_tokens.append(weights)
+
+    scene_tokens = [_section_match_tokens(t) for t in _scene_texts(scenes)]
+
+    n, m = len(section_tokens), len(scenes)
+    scores = [
+        [sum(w for t, w in tokens.items() if t in scene_tokens[i]) for i in range(m)]
+        for tokens in section_tokens
+    ]
+
+    neg = float("-inf")
+    best = [[neg] * m for _ in range(n)]
+    prev = [[-1] * m for _ in range(n)]
+    for i in range(1, m - (n - 1)):
+        best[0][i] = scores[0][i]
+    for k in range(1, n):
+        running_best, running_idx = neg, -1
+        for i in range(k + 1, m - (n - 1 - k)):
+            if best[k - 1][i - 1] > running_best:
+                running_best, running_idx = best[k - 1][i - 1], i - 1
+            if running_idx >= 0:
+                best[k][i] = running_best + scores[k][i]
+                prev[k][i] = running_idx
+
+    end = max(range(n, m), key=lambda i: best[n - 1][i], default=-1)
+    if end < 0 or best[n - 1][end] == neg:
+        return None
+    anchors = [0] * n
+    k, i = n - 1, end
+    while k >= 0:
+        anchors[k] = i
+        i = prev[k][i]
+        k -= 1
+    matched = sum(1 for k in range(n) if scores[k][anchors[k]] > 0)
+    if matched * 2 < n:
+        return None
+    return anchors
+
+
 def _compute_chapter_timestamps(
     scene_doc: dict[str, Any] | None,
     script: dict[str, Any] | None,
+    scenes_plan: dict[str, Any] | None = None,
+    chapter_overrides: dict[str, Any] | None = None,
 ) -> list[tuple[str, str]]:
-    """Compute up to ~10 YouTube chapter (timestamp, title) pairs from real scenes.
+    """Compute YouTube chapter (timestamp, title) pairs from real scenes.
 
-    Strategy:
-    - Walk every scene in order; track cumulative offset using ``duration_sec``.
-    - Prefer chapter boundaries that align with script sections (when the
-      script provides ``sections``). Otherwise pick evenly spaced boundaries
-      across the scene list and use ``on_screen_text`` / first narration words
-      as the chapter title.
-    - Always emit a first chapter at ``00:00``. Cap at the actual total
-      duration so no chapter exceeds the video length.
-    """
+    Resolution order (bug-529):
+    1. ``chapter_overrides`` — an audited per-job correction artifact
+       (``json/chapter_overrides.json``); validated, never invented.
+    2. Scene-level section attribution (``scene["section"]``) — exact and
+       deterministic; the scene generator persists it going forward.
+    3. Planned batch ranges (``scenes_plan``) + windowed IDF vocabulary
+       affinity — legacy jobs.
+    4. Global keyword DP, then even spacing — sparse metadata.
+
+    Invariants: first chapter 00:00; strictly increasing; >=10s apart; never
+    beyond the real duration; ALL valid sections are kept (no arbitrary cap —
+    YouTube has no 10-chapter limit)."""
     if not isinstance(scene_doc, dict):
         return []
     scenes = scene_doc.get("scenes") or []
     if not isinstance(scenes, list) or not scenes:
         return []
 
+    offsets = _scene_offsets(scenes)
     total_sec = float(scene_doc.get("total_duration_sec") or 0)
-    if total_sec <= 0:
-        total_sec = sum(float(s.get("duration_sec") or 0) for s in scenes)
+    tail = offsets[-1] + float(scenes[-1].get("duration_sec") or 0)
+    total_sec = max(total_sec, tail)
     if total_sec <= 0:
         return []
 
-    section_titles: list[str] = []
+    def _valid_chapter_list(raw: Any) -> list[tuple[str, str]] | None:
+        if not isinstance(raw, list) or len(raw) < 2:
+            return None
+        out: list[tuple[str, str]] = []
+        last = -1.0
+        for row in raw:
+            if isinstance(row, dict):
+                ts, title = str(row.get("timestamp") or ""), str(row.get("title") or "")
+            elif isinstance(row, (list, tuple)) and len(row) == 2:
+                ts, title = str(row[0]), str(row[1])
+            else:
+                return None
+            if not re.fullmatch(r"\d{2}:\d{2}(?::\d{2})?", ts) or not title.strip():
+                return None
+            parts = [int(x) for x in ts.split(":")]
+            sec = parts[-1] + parts[-2] * 60 + (parts[-3] * 3600 if len(parts) == 3 else 0)
+            if sec <= last or (out and sec - last < _MIN_CHAPTER_GAP_SEC) or sec >= total_sec:
+                return None
+            if not out and sec != 0:
+                return None
+            out.append((ts, title.strip()))
+            last = sec
+        return out
+
+    if isinstance(chapter_overrides, dict):
+        validated = _valid_chapter_list(chapter_overrides.get("chapters"))
+        if validated:
+            return validated
+
+    sections: list[dict[str, Any]] = []
     if isinstance(script, dict):
         for section in script.get("sections") or []:
-            title = ""
-            if isinstance(section, dict):
-                title = str(section.get("title") or "").strip()
-            if title:
-                section_titles.append(title)
+            if isinstance(section, dict) and str(section.get("title") or "").strip():
+                sections.append(section)
+    section_titles = [str(s.get("title")).strip() for s in sections]
 
-    # Target between 5 and 10 chapters depending on video length. Roughly one
-    # chapter per 80 seconds of narration; the max(5,...) floor handles very
-    # short videos and the min(10,...) ceiling handles long-form.
+    anchors: list[int] | None = None
+    if len(sections) >= 2:
+        anchors = _anchors_from_scene_metadata(sections, scenes)
+        if anchors is None:
+            anchors = _anchor_sections_via_plan(sections, scenes, scenes_plan, offsets)
+        if anchors is None:
+            anchors = _anchor_sections_to_scenes(sections, scenes)
+
+    if anchors is not None:
+        anchored: list[tuple[str, str]] = [("00:00", section_titles[0])]
+        last_offset = 0.0
+        for title, scene_idx in zip(section_titles[1:], anchors, strict=True):
+            offset = offsets[scene_idx]
+            # Keep EVERY section whose anchor is valid; drop only chapters that
+            # violate YouTube's hard rules (>=10s apart, inside the video).
+            if offset - last_offset < _MIN_CHAPTER_GAP_SEC or offset >= total_sec:
+                continue
+            anchored.append((_format_mmss(offset), title))
+            last_offset = offset
+        if len(anchored) >= 2:
+            return anchored
+
+    # Even-spacing fallback (sparse metadata). Target one chapter per ~80s.
     target_count = max(5, min(10, int(total_sec // 80)))
     if section_titles:
         target_count = max(5, min(target_count, len(section_titles) + 1))
 
-    # Build per-scene cumulative offsets.
-    offsets: list[tuple[float, dict[str, Any]]] = []
-    cursor = 0.0
-    for scene in scenes:
-        offsets.append((cursor, scene))
-        cursor += float(scene.get("duration_sec") or 0)
-
-    # Pick boundary indices evenly across the scene list.
     boundary_indices: list[int] = []
     if target_count == 1:
         boundary_indices = [0]
     else:
         step = (len(scenes) - 1) / (target_count - 1) if len(scenes) > 1 else 0
         for i in range(target_count):
-            idx = int(round(i * step))
-            if idx >= len(scenes):
-                idx = len(scenes) - 1
+            idx = min(int(round(i * step)), len(scenes) - 1)
             if idx not in boundary_indices:
                 boundary_indices.append(idx)
-    # Ensure first chapter is scene index 0.
     if 0 not in boundary_indices:
         boundary_indices.insert(0, 0)
     boundary_indices.sort()
 
     chapters: list[tuple[str, str]] = []
     used_titles: set[str] = set()
+    last_offset = -_MIN_CHAPTER_GAP_SEC
     for chapter_pos, scene_idx in enumerate(boundary_indices):
-        offset, scene = offsets[scene_idx]
-        # First chapter must be 00:00 regardless of rounding.
+        offset = offsets[scene_idx]
+        if chapter_pos > 0 and (offset - last_offset < _MIN_CHAPTER_GAP_SEC or offset >= total_sec):
+            continue
         ts = "00:00" if chapter_pos == 0 else _format_mmss(offset)
         title = ""
         if chapter_pos < len(section_titles):
             title = section_titles[chapter_pos]
+        scene = scenes[scene_idx]
         if not title and isinstance(scene, dict):
             title = str(scene.get("on_screen_text") or "").strip()
             if not title:
                 narration = str(scene.get("narration") or "").strip()
-                # Take the first 4-7 words as a fallback chapter title.
                 title = " ".join(narration.split()[:6]) if narration else ""
         if not title:
             title = f"Capítulo {chapter_pos + 1}"
-        # Capitalize first letter for readability.
         title = title.strip().rstrip(".:,;").strip()
         if title and title.lower() in used_titles:
-            # Skip duplicate titles by tagging with chapter number.
             title = f"{title} ({chapter_pos + 1})"
         used_titles.add(title.lower())
         chapters.append((ts, title))
+        last_offset = offset
 
     return chapters
+
+
+def update_seo_fields(seo_path: Path, updates: dict[str, Any]) -> dict[str, Any]:
+    """Serialized, single-field-safe update of ``seo.json``.
+
+    Concurrent writers (thumbnail stage attaching ``thumbnail_path`` while a
+    chapter migration rewrites ``description``) each held a full stale snapshot
+    and clobbered the other's field on write (bug-528/bug-529). This helper
+    takes an exclusive ``flock`` on a sidecar lock file, re-reads the CURRENT
+    artifact inside the lock, applies ONLY the given fields, and writes
+    atomically — a writer can never resurrect stale values of fields it does
+    not own."""
+    seo_path = Path(seo_path)
+    lock_path = seo_path.with_suffix(seo_path.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "w", encoding="utf-8") as lock_handle:
+        fcntl.flock(lock_handle, fcntl.LOCK_EX)
+        try:
+            current: dict[str, Any] = {}
+            if seo_path.exists():
+                loaded = json.loads(seo_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    current = loaded
+            current.update(updates)
+            atomic_write_json(seo_path, current)
+            return current
+        finally:
+            fcntl.flock(lock_handle, fcntl.LOCK_UN)
 
 
 def _rewrite_description_chapters(description: str, chapters: list[tuple[str, str]]) -> str:
@@ -442,6 +761,8 @@ def _normalize_seo_candidate(
     scene_doc: dict[str, Any] | None = None,
     script: dict[str, Any] | None = None,
     brand_palette: dict[str, Any] | None = None,
+    scenes_plan: dict[str, Any] | None = None,
+    chapter_overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Backfill SEO fields for compatibility with older model/test payloads.
 
@@ -468,7 +789,9 @@ def _normalize_seo_candidate(
             parsed["description"], channel_config
         )
         if scene_doc:
-            chapters = _compute_chapter_timestamps(scene_doc, script)
+            chapters = _compute_chapter_timestamps(
+                scene_doc, script, scenes_plan=scenes_plan, chapter_overrides=chapter_overrides
+            )
             if chapters:
                 parsed["description"] = _rewrite_description_chapters(
                     parsed["description"], chapters
@@ -638,6 +961,12 @@ def promote_operator_artifact(
                 scene_doc=_read_optional_json(_resolve_operator_path(job_dir, "scenes.json")),
                 script=_read_optional_json(_resolve_operator_path(job_dir, "script.json")),
                 brand_palette=load_style_dna(channel_path),
+                scenes_plan=_read_optional_json(
+                    Path(job_dir) / "operator" / "chatgpt" / "scenes_plan.json"
+                ),
+                chapter_overrides=_read_optional_json(
+                    Path(job_dir) / "json" / "chapter_overrides.json"
+                ),
             )
         try:
             validate_json(candidate, schema_path)

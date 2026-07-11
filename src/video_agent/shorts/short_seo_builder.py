@@ -36,7 +36,7 @@ _TITLE_STOPWORDS = {
     "esto", "este", "esta", "con", "por", "para", "más", "mas", "tus", "sus",
     "como", "cada", "sin", "hoy", "eso", "año", "años", "tras", "sobre",
     # 3-letter fillers (only relevant now that the length floor dropped to 3).
-    "muy", "tan", "sus", "les", "nos", "soy", "voy", "doy",
+    "muy", "tan", "les", "nos", "soy", "voy", "doy",
 }
 
 
@@ -179,6 +179,24 @@ def _fallback_title_from_hook(hook: str, min_age: int) -> str:
     """
     prefix = f"Si tienes más de {min_age}: "  # carries the "si tienes más de" signal
     budget = MAX_SHORT_TITLE_CHARS - len(prefix)
+    # Prefer the hook PHRASE: pack leading hook words (stopwords included, so it
+    # reads naturally) while they fit the budget. A single lonely word shipped a
+    # skeletal 'Si tienes más de 45: Mide' on a live render — the fuller
+    # 'Mide tu cansancio' fit all along.
+    content = set(_ordered_content_tokens(hook))
+    packed: list[str] = []
+    used = 0
+    for raw in re.findall(r"\S+", str(hook)):
+        word = raw.strip(" ,.;:!?¡¿-–—…")
+        if not word:
+            continue
+        extra = len(word) + (1 if packed else 0)
+        if used + extra > budget:
+            break
+        packed.append(word)
+        used += extra
+    if packed and any(w in content for w in packed):
+        return prefix + " ".join(packed)
     for word in _ordered_content_tokens(hook):
         if len(word) <= budget and len(prefix + word) <= MAX_SHORT_TITLE_CHARS:
             return prefix + word
@@ -403,6 +421,21 @@ def build_short_seo(
                     seo["description"] = _description_with_spaced_hashtags(
                         seo["description"], seo["hashtags"]
                     )
+            # NEVER ship a hashtags-only description (live repro: the model
+            # returned an empty description on every attempt). Synthesize a
+            # deterministic body from the narration's first sentence plus an
+            # engagement question so the artifact stays useful and on-contract.
+            desc_body = re.sub(
+                r"(?:\s*#[^#\s]+)+\s*$", "", str(seo.get("description") or "").strip()
+            ).strip()
+            if not desc_body:
+                narration = str(short_script.get("narration") or "")
+                first_sentence = re.split(r"(?<=[.!?])\s+", narration.strip())[0].strip()
+                body = (first_sentence or hook or "").strip().rstrip(".")[:150]
+                fallback_body = f"{body}. ¿Y tú, ya lo haces?" if body else "¿Y tú, ya lo haces?"
+                seo["description"] = _description_with_spaced_hashtags(
+                    fallback_body, seo["hashtags"]
+                )
             break
         # Regenerate SEO with cumulative feedback so the model can self-correct.
         feedback_parts = []

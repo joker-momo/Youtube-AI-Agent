@@ -972,6 +972,7 @@
 ## docs/specs/
 
 - `2026-07-11-shorts-graphic-layout-system.md` — Implementation specification for the content-first, brand-as-accent Shorts graphic taxonomy and mobile density contracts. (~1800 tok)
+- `2026-07-11-infographic-end-cta-random-music-excerpts.md` — Contract for a final-three-second Like/Subscribe cue and deterministic topic-track excerpts. (~2200 tok)
 
 ## docs/references/
 
@@ -1436,7 +1437,9 @@
 
 - `__init__.py` (~0 tok)
 - `test_build.py` — image_fn, llm_fn, read_text_fn, music_fn (~3957 tok)
+- `test_engagement_cue_contract.py` — Remotion timing, Spanish state, deterministic motion, and safe-area acceptance contract. (~500 tok)
 - `test_infographic_seo.py` — test_build_infographic_seo_writes_title_aligned_with_hook, llm_fn (~338 tok)
+- `test_music_excerpt.py` — Topic-track mapping, deterministic excerpt bounds, ffmpeg seek, failure semantics, and audit metadata. (~1000 tok)
 - `test_paths.py` — test_infographic_artifact_names_exist (~75 tok)
 - `test_plan.py` — test_build_poster_plan_parses_validates_and_sets_age, llm_fn, test_invalid_then_valid_retries, llm_f (~378 tok)
 - `test_poster_prompt.py` — test_prompt_contains_title_and_all_item_labels, test_numbered_tips_prompt_requests_numbers, test_war (~2522 tok)

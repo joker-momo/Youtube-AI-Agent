@@ -268,9 +268,12 @@ shorts:
   infographic:
     duration_sec: 15   # fallback length only when voice.enabled is false
     ken_burns: false
-    # Synthesize a unique, traceable instrumental bed from math primitives.
-    # No sample, artist reference, or third-party audio file is used.
-    music_source: "procedural_original"
+    # Owner-provided licensed library (assets/music); track picked by topic via
+    # music_selector, deterministic random excerpt per short|track (SHA-256 seed,
+    # never starts at 00:00 on a normal-length track).
+    music_source: "library"
+    music_excerpt_min_offset_sec: 5.0
+    music_excerpt_end_margin_sec: 1.0
     music_bitrate: "192k"
     music_volume_db: -14
     music_fade_in_sec: 0.16

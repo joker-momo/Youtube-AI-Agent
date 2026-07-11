@@ -27,9 +27,13 @@ def build_infographic_render_props(
         "kenBurns": ken_burns,
         # Cap the zoom so baked-in poster text is never cropped at any frame.
         "kenBurnsScaleMax": 1.02,
-        # Overlays OFF by default: the poster already carries all text; a subscribe
-        # cue / channel badge risks covering it (spec safe-area rule).
+        # Legacy full-video banner stays OFF; it is superseded by the end cue and
+        # kept only so stored render props remain valid.
         "showSubscribeCue": False,
+        # Final-3s Like/Subscribe cue (2026-07 engagement spec): mounted only for
+        # the last round(3*fps) frames, so it never covers the poster earlier.
+        "showEngagementCue": True,
+        "engagementCueDurationSec": 3.0,
         # Consumed by build_remotion_commands: which Remotion composition to render and
         # at what concurrency. concurrency MUST stay "auto" — the render-concurrency
         # HARD RULE forbids hardcoding a number; _render_concurrency maps "auto" to the

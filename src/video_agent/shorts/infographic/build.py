@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import hashlib
 import re
 import subprocess
 from collections.abc import Callable
@@ -122,6 +123,49 @@ def _static_options(channel_config: dict, source: dict) -> tuple[float, bool, st
     return duration_sec, bool(cfg.get("ken_burns", False)), music_track
 
 
+def probe_audio_duration_seconds(path: Path) -> float:
+    """Track length in seconds via ffprobe; 0.0 when the file is unreadable."""
+    try:
+        out = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-show_entries", "format=duration",
+                "-of", "csv=p=0", str(path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        return float(out)
+    except (subprocess.CalledProcessError, ValueError, OSError, AttributeError):
+        return 0.0
+
+
+def deterministic_music_excerpt_offset(
+    track_duration_sec: float,
+    required_bed_sec: float,
+    seed_key: str,
+    *,
+    min_offset_sec: float = 5.0,
+    end_margin_sec: float = 1.0,
+) -> float:
+    """Reproducible pseudo-random start offset into a library track.
+
+    Every Short hears a different part of its topic track instead of always the
+    intro, while re-rendering the same Short/track reproduces the same excerpt
+    (the seed is ``short_dir.name|track_key``). SHA-256, never process ``hash()``
+    or unseeded ``random``. A track too short for bed + margins keeps the
+    offset-zero loop fallback."""
+    max_offset_sec = track_duration_sec - required_bed_sec - end_margin_sec
+    # Inclusive range: a track where max == min still has exactly one valid
+    # non-intro start (the minimum offset); only a genuinely too-short track
+    # falls back to the offset-zero loop.
+    if max_offset_sec < min_offset_sec:
+        return 0.0
+    digest = hashlib.sha256(seed_key.encode("utf-8")).hexdigest()
+    fraction = int(digest[:16], 16) / float(0xFFFFFFFFFFFFFFFF)
+    return min_offset_sec + fraction * (max_offset_sec - min_offset_sec)
+
+
 def prepare_infographic_music_bed(
     short_dir: Path, music_track: str, channel_config: dict, duration_sec: float
 ) -> Path:
@@ -151,9 +195,32 @@ def prepare_infographic_music_bed(
     out_path = audio_dir / "infographic_bgm.m4a"
     fade_out_sec = min(float(cfg.get("music_fade_out_sec", 0.45)), duration_sec)
     fade_out_start = max(0.0, duration_sec - fade_out_sec)
+
+    # Deterministic random excerpt (2026-07 engagement spec): topic selection
+    # stays authoritative; the excerpt logic only picks WHERE in the chosen
+    # track the bed starts. An unreadable duration must fail loudly — silently
+    # starting at 00:00 would hide a broken library asset.
+    track_duration_sec = probe_audio_duration_seconds(music_file)
+    if track_duration_sec <= 0.0:
+        raise RuntimeError(
+            f"Could not read duration of library music track {music_file}; "
+            "cannot pick a deterministic excerpt from a broken asset."
+        )
+    seed_key = f"{Path(short_dir).name}|{music_track}"
+    offset_sec = round(
+        deterministic_music_excerpt_offset(
+            track_duration_sec,
+            float(duration_sec),
+            seed_key,
+            min_offset_sec=float(cfg.get("music_excerpt_min_offset_sec", 5.0)),
+            end_margin_sec=float(cfg.get("music_excerpt_end_margin_sec", 1.0)),
+        ),
+        2,
+    )
     subprocess.run(
         [
-            "ffmpeg", "-y", "-stream_loop", "-1", "-i", str(music_file),
+            "ffmpeg", "-y", "-stream_loop", "-1",
+            "-ss", f"{offset_sec:.2f}", "-i", str(music_file),
             "-t", f"{duration_sec:.2f}",
             "-af", (
                 f"volume={float(cfg.get('music_volume_db', -14.0))}dB,"
@@ -165,6 +232,21 @@ def prepare_infographic_music_bed(
         check=True,
         capture_output=True,
     )
+    track_entry = (
+        ((channel_config.get("music_library") or {}).get("tracks") or {}).get(music_track) or {}
+    )
+    # Audit artifact: everything QA needs to reproduce this exact audio bed.
+    atomic_write_json(Path(short_dir) / "json" / "music_selection.json", {
+        "source": "library",
+        "track_key": music_track,
+        "track_title": str(track_entry.get("title") or music_track),
+        "track_file": str(music_file),
+        "track_duration_sec": track_duration_sec,
+        "excerpt_offset_sec": offset_sec,
+        "excerpt_duration_sec": float(duration_sec),
+        "seed_key": seed_key,
+        "selection_mode": "deterministic_random_excerpt",
+    })
     return out_path
 
 
@@ -415,7 +497,7 @@ def render_selected_infographic_ideas(
     # The Studio job badge reads studio_render_run.json BEFORE the manifest, so
     # this run must overwrite any stale doc left by an earlier narrated attempt.
     rendered_count = sum(1 for r in results if r.get("rendered"))
-    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    now = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     write_studio_render_run(long_job_dir, {
         "schema_version": "studio_render_run.v1",
         "source_long_job_id": long_job_dir.name,

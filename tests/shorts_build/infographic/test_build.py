@@ -77,6 +77,8 @@ def test_pass_gate_renders_a_static_poster_with_music_only(tmp_path):
     assert props["music"] == ""
     assert props["durationInFrames"] == 15 * 30
     assert props["kenBurns"] is False
+    assert props["showEngagementCue"] is True
+    assert props["engagementCueDurationSec"] == 3.0
     assert status["audio_mode"] == "music_only"
 
 
@@ -200,8 +202,9 @@ def test_voice_disabled_by_default_keeps_music_only_behavior(tmp_path):
 def test_mix_failure_falls_back_to_music_only():
     """If the real mixer fails (bad ffmpeg filter, missing codec...), the Short
     must still publish with the music bed rather than fail outright."""
-    from video_agent.shorts.infographic import build as build_mod
     import tempfile
+
+    from video_agent.shorts.infographic import build as build_mod
 
     with tempfile.TemporaryDirectory() as td:
         image_fn, llm_fn, read_text_fn, music_fn, render_fn = _deps("vista i0 i1 i2 i3 i4 i5")
@@ -226,6 +229,8 @@ def test_mix_failure_falls_back_to_music_only():
 
 
 def test_music_bed_loops_one_licensed_track_for_the_static_duration(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
     from video_agent.shorts.infographic import build as build_mod
 
     source = tmp_path / "music.mp3"
@@ -233,6 +238,8 @@ def test_music_bed_loops_one_licensed_track_for_the_static_duration(tmp_path, mo
     captured = {}
 
     def fake_run(cmd, **kwargs):
+        if cmd[0] == "ffprobe":  # duration probe for the deterministic excerpt
+            return SimpleNamespace(stdout="214.0")
         captured["cmd"] = cmd
         Path(cmd[-1]).write_bytes(b"m4a")
 

@@ -648,5 +648,9 @@ Short KHÔNG có cover deliverable (YouTube Shorts bỏ qua custom thumbnail). �
 - The planner-facing contract has 10 semantic `graphic_*` layouts. `graphic_evidence_nugget` migrates to `graphic_stat`, `graphic_routine_split` migrates to `graphic_step_list` with optional time, and `graphic_quote_portrait` remains repair-only for compatibility.
 - `numbered_photo_bands` is a `surface_style`, never a new semantic layout. Art direction is content-first with brand colours limited to accents; moving graphic scenes cap list density at 2-4 entries and must not silently truncate source ideas.
 - Linked worktrees do not contain the root checkout's untracked `.venv`; use `/Volumes/DATA/YBT-Studio/Youtube-AI-Agent/.venv/bin/python` for verification from worktrees.
+
+### Decision (2026-07-11): Infographic end CTA and reproducible topic-music excerpts
+- Static infographic Shorts reserve exactly the final 3 seconds for a deterministic Like -> Subscribe -> subscribed/bell cue in the mobile safe area; the rest of the poster remains unobstructed.
+- Topic selection remains authoritative (food -> Fresh Fallen Snow). Library beds use a SHA-256-derived per-short+track offset with a 5s intro guard, persist `json/music_selection.json`, and fail rather than silently using the intro when track duration cannot be probed.
 ### Key Learning (2026-07-11): Shorts ChatGPT graphic prompts need the same anti-template guard
 - Shorts `build_scene_image_prompt()` still injects `style-dna.json` palette, soft-panel, and wellness-magazine directives into every AI fallback graphic. This is distinct from long-form's content-first policy and can recreate the rejected repeated-card look; when changing it, add a prompt-level regression test that asserts scene content and visual treatment lead over a fixed palette/template.

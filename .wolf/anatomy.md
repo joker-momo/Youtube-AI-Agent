@@ -1,7 +1,7 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-07-11T05:47:21.858Z
-> Files: 1036 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-07-11T06:32:42.278Z
+> Files: 1043 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../../../../Users/joker/
 
@@ -911,6 +911,20 @@
 - `ckb.dat` (~7717 tok)
 - `co_FR.dat` (~175 tok)
 
+## .worktrees/infographic-engagement-music-excerpts/remotion/src/shorts/
+
+- `EndEngagementCue.tsx` — Deterministic final-3s Like/Subscribe cue. Mounted by InfographicShort inside (~2089 tok)
+- `InfographicShort.tsx` — Legacy alias: previously a full-video banner; now enables the end cue. (~732 tok)
+
+## .worktrees/infographic-engagement-music-excerpts/src/video_agent/shorts/infographic/
+
+- `build.py` — Orchestrate static infographic Shorts (plan → poster → QA → music → render). (~6657 tok)
+- `render_props.py` — Render props for the Remotion InfographicShort composition. (~443 tok)
+
+## .worktrees/infographic-engagement-music-excerpts/tests/shorts_build/infographic/
+
+- `test_build.py` — image_fn, llm_fn, read_text_fn, music_fn (~4033 tok)
+
 ## .worktrees/refactor-modular-split/src/video_agent/orchestrator/stages/
 
 - `__init__.py` — Facade package: re-exports every public (and private) symbol from all (~1874 tok)
@@ -969,13 +983,13 @@
 
 - `task.md` — Antigravity runtime task tracker table (~454 tok)
 
+## docs/references/
+
+
 ## docs/specs/
 
 - `2026-07-11-shorts-graphic-layout-system.md` — Implementation specification for the content-first, brand-as-accent Shorts graphic taxonomy and mobile density contracts. (~1800 tok)
 - `2026-07-11-infographic-end-cta-random-music-excerpts.md` — Contract for a final-three-second Like/Subscribe cue and deterministic topic-track excerpts. (~2200 tok)
-
-## docs/references/
-
 
 ## docs/superpowers/plans/
 
@@ -1218,7 +1232,7 @@
 ## src/video_agent/shorts/infographic/
 
 - `__init__.py` (~41 tok)
-- `build.py` — Orchestrate static infographic Shorts (plan → poster → QA → music → render). (~5678 tok)
+- `build.py` — Orchestrate static infographic Shorts (plan → poster → QA → music → render). (~6122 tok)
 - `plan.py` — LLM-driven infographic poster plan (pick format + fill), validated. (~935 tok)
 - `poster_prompt.py` — Per-format 9:16 infographic poster prompts (AI-only, text baked in). (~2445 tok)
 - `poster.py` — Generate the infographic poster PNG via the injected image function. (~532 tok)
@@ -1438,6 +1452,7 @@
 - `__init__.py` (~0 tok)
 - `test_build.py` — image_fn, llm_fn, read_text_fn, music_fn (~3957 tok)
 - `test_engagement_cue_contract.py` — Remotion timing, Spanish state, deterministic motion, and safe-area acceptance contract. (~500 tok)
+- `test_build.py` — image_fn, llm_fn, read_text_fn, music_fn (~4604 tok)
 - `test_infographic_seo.py` — test_build_infographic_seo_writes_title_aligned_with_hook, llm_fn (~338 tok)
 - `test_music_excerpt.py` — Topic-track mapping, deterministic excerpt bounds, ffmpeg seek, failure semantics, and audit metadata. (~1000 tok)
 - `test_paths.py` — test_infographic_artifact_names_exist (~75 tok)

@@ -135,8 +135,10 @@ def _repair_degenerate_graphic_payloads(
     graphic_checklist with one item — valid content, wrong container — used to
     raise and fail the whole Short after scenes QA had already passed). A single
     valid entry downgrades the scene to ``graphic_quote_portrait`` (one featured
-    sentence); an oversized list is trimmed to the layout's maximum. Genuinely
-    empty/invalid payloads still fall through to the hard validators.
+    sentence). Oversized CHECKLISTS are NOT trimmed: silently dropping the fifth
+    idea violates idea preservation — the hard validator rejects them so the
+    pipeline requests a simpler/split scene instead. Genuinely empty/invalid
+    payloads still fall through to the hard validators.
     """
     def _downgrade_to_quote(scene: dict, payload: dict, sid: Any, layout: str, text: str) -> None:
         payload.pop("items", None)
@@ -163,11 +165,6 @@ def _repair_degenerate_graphic_payloads(
                 valid = [i for i in items if isinstance(i, str) and i.strip()]
                 if len(valid) == 1:
                     _downgrade_to_quote(scene, payload, sid, str(layout), valid[0])
-                elif len(valid) > 5:
-                    payload["items"] = valid[:5]
-                    warnings.append(
-                        f"Scene {sid}: checklist had {len(valid)} items — trimmed to 5."
-                    )
         elif layout == "graphic_step_list":
             steps = payload.get("steps")
             if isinstance(steps, list):
@@ -359,6 +356,15 @@ def _validate_visual_style_fields(payload: dict, sid: Any, layout: str) -> None:
         payload, "background_mode", ALLOWED_GRAPHIC_BACKGROUND_MODES, sid, layout
     )
     _validate_optional_choice(payload, "surface_style", ALLOWED_GRAPHIC_SURFACE_STYLES, sid, layout)
+    if (
+        payload.get("surface_style") == "numbered_photo_bands"
+        and layout not in NUMBERED_BANDS_COMPATIBLE_LAYOUTS
+    ):
+        compatible = ", ".join(sorted(NUMBERED_BANDS_COMPATIBLE_LAYOUTS))
+        raise ValueError(
+            f"Graphic scene {sid} ({layout}) cannot use surface_style numbered_photo_bands: "
+            f"each band renders one list entry, so it is only valid for {compatible}."
+        )
 
 
 def _validate_title(payload: dict, sid: Any, layout: str) -> None:
@@ -410,8 +416,11 @@ def _validate_plate_ratio(payload: dict, sid: Any, warnings: list[str]) -> None:
 
 def _validate_checklist(payload: dict, sid: Any, warnings: list[str]) -> None:
     items = payload.get("items")
-    if not isinstance(items, list) or not (2 <= len(items) <= 5):
-        raise ValueError(f"graphic_checklist scene {sid} requires 2-5 items.")
+    # 2-4 hard limit (2026-07 density contract): a fifth item is unreadable in a
+    # 2.5-5s scene. Never truncate here — rejecting forces a simpler/split scene
+    # so no idea is silently dropped.
+    if not isinstance(items, list) or not (2 <= len(items) <= 4):
+        raise ValueError(f"graphic_checklist scene {sid} requires 2-4 items.")
     for item in items:
         if not isinstance(item, str) or not item.strip():
             raise ValueError(f"graphic_checklist scene {sid} has an empty item.")
@@ -436,6 +445,10 @@ def _validate_step_list(payload: dict, sid: Any, warnings: list[str]) -> None:
             raise ValueError(f"graphic_step_list scene {sid} has a step with empty text.")
         if len(text) > _STEP_TEXT_MAX:
             warnings.append(f"Scene {sid} step text exceeds {_STEP_TEXT_MAX} chars: '{text}'.")
+        # Optional time prefix (absorbs the legacy graphic_routine_split time
+        # blocks): when present it must be a short non-empty string.
+        if "time" in step:
+            _require_short_string(step.get("time"), _ROUTINE_TIME_MAX, "step.time", sid)
 
 
 def _title_from_payload(payload: dict) -> str:

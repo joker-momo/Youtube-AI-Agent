@@ -246,6 +246,15 @@ def _read_json(path: Path) -> dict[str, Any]:
         return {}
 
 
+def _video_abs_path(job_dir: Path, video_path: str | None) -> str | None:
+    """Absolute on-disk path for a Short's rendered mp4, so the operator can
+    locate it in Finder without a terminal. ``video_path`` (from short_status.json)
+    is relative to the job's ``shorts/`` dir, e.g. ``short-01/outputs/short.mp4``."""
+    if not video_path:
+        return None
+    return str(shorts_paths.shorts_dir(job_dir) / video_path)
+
+
 @router.get("/shorts-studio/state")
 def get_shorts_studio_state(jobs_root: Path = Depends(get_jobs_root)) -> dict[str, Any]:
     busy, active_jobs = system_has_active_job(jobs_root)
@@ -308,6 +317,7 @@ def get_shorts_studio_drafts(job_id: str, jobs_root: Path = Depends(get_jobs_roo
         if _decision:
             merged["qa_decision"] = _decision
         merged["title"] = seo_doc.get("title") or entry.get("hook") or status_doc.get("hook") or ""
+        merged["video_abs_path"] = _video_abs_path(job_dir, merged.get("video_path"))
         merged["source_scene_ids"] = (
             merged.get("source_scene_ids")
             or source_map.get("source_scene_ids")
@@ -381,6 +391,7 @@ def get_shorts_studio_drafts(job_id: str, jobs_root: Path = Depends(get_jobs_roo
             if _decision:
                 merged["qa_decision"] = _decision
             merged["title"] = (seo_doc.get("title") if seo_doc else None) or status_doc.get("hook") or ""
+            merged["video_abs_path"] = _video_abs_path(job_dir, merged.get("video_path"))
             if seo_doc:
                 merged["seo"] = {
                     "short_id": seo_doc.get("short_id") or short_id,

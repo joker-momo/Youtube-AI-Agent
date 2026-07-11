@@ -574,3 +574,12 @@ def test_legacy_chatgpt_shorts_prompt_removed():
     from pathlib import Path as _P
     src = _P("src/video_agent/operator.py").read_text(encoding="utf-8")
     assert "_chatgpt_shorts_script_prompt" not in src, "dead legacy shorts prompt still present"
+
+
+def test_renders_tab_shows_absolute_video_path_with_copy_button():
+    """Operator asked for the mp4's on-disk path to be visible in the UI so they
+    can find it in Finder without a terminal."""
+    from pathlib import Path as _P
+    html = _P("src/video_agent/web/shorts_studio.html").read_text(encoding="utf-8")
+    assert "d.video_abs_path" in html
+    assert "copyText(this, '${escapeJs(d.video_abs_path)}')" in html

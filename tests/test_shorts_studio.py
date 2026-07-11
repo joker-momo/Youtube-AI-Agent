@@ -271,6 +271,40 @@ def test_shorts_studio_drafts_reads_manifest_and_short_status(client: TestClient
     assert body["drafts"][0]["source_scene_ids"] == ["scene-12", "scene-13"]
 
 
+def test_shorts_studio_drafts_includes_absolute_video_path(client: TestClient, tmp_path: Path):
+    """Operator asked for the on-disk path of the rendered mp4 to be shown in the
+    UI (so they can find the file in Finder without a terminal). The drafts
+    endpoint must resolve video_path (relative to the short's own dir) into an
+    absolute filesystem path."""
+    job_dir = _write_job(tmp_path, "job-1")
+    short_dir = shorts_paths.short_dir(job_dir, "short-01")
+    short_dir.mkdir(parents=True, exist_ok=True)
+    outputs_dir = short_dir / "outputs"
+    outputs_dir.mkdir(parents=True, exist_ok=True)
+    (outputs_dir / "short.mp4").write_bytes(b"\x00")
+    (short_dir / shorts_paths.SHORT_STATUS_FILE).write_text(
+        json.dumps({
+            "short_id": "short-01",
+            "status": "rendered",
+            "rendered": True,
+            "video_path": "short-01/outputs/short.mp4",
+        }),
+        encoding="utf-8",
+    )
+    shorts_paths.manifest_path(job_dir).parent.mkdir(parents=True, exist_ok=True)
+    shorts_paths.manifest_path(job_dir).write_text(
+        json.dumps({"status": "completed", "shorts": [
+            {"short_id": "short-01", "status": "rendered", "rendered": True},
+        ]}),
+        encoding="utf-8",
+    )
+
+    body = client.get("/shorts-studio/jobs/job-1/drafts").json()
+
+    draft = body["drafts"][0]
+    assert draft["video_abs_path"] == str(outputs_dir / "short.mp4")
+
+
 def test_shorts_studio_drafts_surfaces_qa_decision_and_failure(client: TestClient, tmp_path: Path):
     """A needs_review Short must surface its structured terminal decision +
     explicit failure reason so the UI can avoid the generic max-regen message."""

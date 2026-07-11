@@ -3976,7 +3976,12 @@ function renderSingleCardHtml(jobId, d, idx, shortsSeoData, isOpen) {
           <div class="short-media-col">
             ${shortVideoUrl
               ? `<video src="${shortVideoUrl}" controls class="short-video-preview" preload="metadata"></video>
-                 <a href="${shortVideoUrl}" download class="action-btn primary" style="justify-content:center;text-align:center;">⬇ Video MP4</a>`
+                 <a href="${shortVideoUrl}" download class="action-btn primary" style="justify-content:center;text-align:center;">⬇ Video MP4</a>
+                 ${d.video_abs_path ? `
+                 <div style="margin-top:6px;display:flex;gap:6px;align-items:center;font-size:10.5px;color:var(--muted);min-width:0">
+                   <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:monospace" title="${escapeHtml(d.video_abs_path)}">${escapeHtml(d.video_abs_path)}</span>
+                   <button class="copy-btn" style="flex:none" onclick="copyText(this, '${escapeJs(d.video_abs_path)}')">copy</button>
+                 </div>` : ''}`
               : `<div style="aspect-ratio:9/16;background:#0f172a;border-radius:10px;display:grid;place-items:center;font-size:12px;color:#64748b;">No video</div>`}
           </div>
           <!-- Right: SEO copy -->

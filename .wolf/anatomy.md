@@ -1,7 +1,7 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-07-11T06:32:42.278Z
-> Files: 1043 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-07-11T21:20:20.893Z
+> Files: 1059 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../../../../Users/joker/
 
@@ -925,6 +925,16 @@
 
 - `test_build.py` — image_fn, llm_fn, read_text_fn, music_fn (~4033 tok)
 
+## .worktrees/infographic-review-fixes/remotion/src/shorts/
+
+- `EndEngagementCue.tsx` — Deterministic final-3s Like/Subscribe cue. Mounted by InfographicShort inside (~2456 tok)
+- `endEngagementCueTiming.ts` — Pure timing/geometry contract for the final-3s engagement cue. (~1393 tok)
+
+## .worktrees/infographic-review-fixes/tests/shorts_build/infographic/
+
+- `test_engagement_cue_timing.py` — EXECUTABLE CTA timing checks (bridge task 20260711-065504 P1-C). (~918 tok)
+- `test_review_fixes.py` — Regression tests for the post-review defects (bridge task 20260711-065504). (~4307 tok)
+
 ## .worktrees/refactor-modular-split/src/video_agent/orchestrator/stages/
 
 - `__init__.py` — Facade package: re-exports every public (and private) symbol from all (~1874 tok)
@@ -988,8 +998,8 @@
 
 ## docs/specs/
 
-- `2026-07-11-shorts-graphic-layout-system.md` — Implementation specification for the content-first, brand-as-accent Shorts graphic taxonomy and mobile density contracts. (~1800 tok)
 - `2026-07-11-infographic-end-cta-random-music-excerpts.md` — Contract for a final-three-second Like/Subscribe cue and deterministic topic-track excerpts. (~2200 tok)
+- `2026-07-11-shorts-graphic-layout-system.md` — Implementation specification for the content-first, brand-as-accent Shorts graphic taxonomy and mobile density contracts. (~1800 tok)
 
 ## docs/superpowers/plans/
 
@@ -1048,6 +1058,7 @@
 
 ## remotion/src/shorts/
 
+- `EndEngagementCue.tsx` — Deterministic final-3s Like/Subscribe cue. Mounted by InfographicShort inside (~2883 tok)
 - `InfographicShort.tsx` — InfographicShort (~598 tok)
 - `loadFonts.ts` — Eagerly preload the Short AND long-form composition fonts so Remotion (~358 tok)
 - `ShortBackground.tsx` — Background media + smart fit + readability overlays (spec §3). (~2072 tok)
@@ -1067,7 +1078,7 @@
 - `operator_json.py` — JSON object extraction, truncated-root repair, and JSON prompt utility helpers. (~2500 tok)
 - `operator_prompts.py` — Prompt template builders for operator ChatGPT/Gemini workflows. (~18526 tok)
 - `operator_validators.py` — class: is_valid, merge, format_report, load_operator_channel_config + 1 more (~4722 tok)
-- `operator.py` — Declares from (~12281 tok)
+- `operator.py` — Declares from (~13912 tok)
 - `persona.py` — Channel presenter identity for AI-generated imagery. (~730 tok)
 - `pipeline.py` — Declares from (~16283 tok)
 - `pipeline.py` — Declares from (~16230 tok)
@@ -1127,7 +1138,7 @@
 
 - `__init__.py` — Facade package: re-exports every public (and private) symbol from all (~2111 tok)
 - `_shared.py` — StageInputMissingError: dag_mode, set_dag_mode, require_stage, resolve_stage_fps (~2939 tok)
-- `assets_thumbnail.py` — auto_idea_research_stage, generate_scene_asset (~8282 tok)
+- `assets_thumbnail.py` — auto_idea_research_stage, generate_scene_asset (~8543 tok)
 - `audio.py` — run_whisper_timestamps_stage (~4140 tok)
 - `elena_lipsync.py` — Long-form ``elena_lipsync`` pipeline stage. (~722 tok)
 - `elena_plan.py` — Long-form ``elena_plan`` pipeline stage (Phase 5). (~712 tok)
@@ -1164,6 +1175,7 @@
 - `idea_scorer.py` — valid_scene_id_set, normalize_text_key, covers_distinct_parts, has_strong_curiosity_phrase (~2509 tok)
 - `llm_history.py` — Per-Short LLM call history recorder. (~3344 tok)
 - `llm.py` — Shorts AI role wiring (spec v6 §2 + §3). (~2084 tok)
+- `music_selector.py` — Single policy owner for Shorts background-music selection. (~1158 tok)
 - `original_bgm.py` — Create reproducible, original background music for Shorts. (~3492 tok)
 - `paths.py` — Canonical storage-layout paths for the Shorts autopilot. (~1993 tok)
 - `paths.py` — Canonical storage-layout paths for the Shorts autopilot. (~1940 tok)
@@ -1180,7 +1192,7 @@
 - `short_builder.py` — Build one Short end to end: generate → QA (regen loop) → audio → mix → render. (~10242 tok)
 - `short_scene_builder.py` — Spec v6 §2.4 — ChatGPT generates Short scenes AND picks layouts. (~6581 tok)
 - `short_script_builder.py` — Spec v6 §2.3 — Generate + persist a Short script via ChatGPT. (~1524 tok)
-- `short_seo_builder.py` — Build ``short_seo.json`` for a Short (LLM-generated, parsed + normalized). (~5514 tok)
+- `short_seo_builder.py` — Build ``short_seo.json`` for a Short (LLM-generated, parsed + normalized). (~5999 tok)
 - `source_map.py` — Build ``short_source_map.json`` linking a Short back to long-video scenes. (~2731 tok)
 - `status.py` — Summarize Shorts state for UI + orphaned-Short recovery (recover_stale_short / force_terminate_orphaned_shorts / short_owner_is_alive). (~2300 tok)
 - `status.py` — Summarize Shorts state for the jobs list / Shorts tab. (~3554 tok)
@@ -1320,6 +1332,7 @@
 - `test_color_mix.py` — Tests for OKLab-based per-video accent colour resolution (bug-466). (~1858 tok)
 - `test_complete_stage_resume.py` — Regression guard for ``_complete_stage`` resume pointer (I2). (~707 tok)
 - `test_content_strategy_prompts.py` — test_script_prompt_demands_specific_pain_hook_after_45, test_script_prompt_requires_actionable_speci (~1077 tok)
+- `test_create_video_job_from_idea.py` — FakeBrowserClient: run_session, client, test_create_job_from_full_idea_writes_idea_and_enqueues_run_ (~2682 tok)
 - `test_dag_current_stage_finalization.py` — Codex bridge 20260704-005810: job.json current_stage remained stale (~914 tok)
 - `test_dag.py` — Unit tests for the parallel-pipeline DAG scheduler (orchestrator/dag.py). (~818 tok)
 - `test_duration_sync_timeline_overflow_warning.py` — Observability guard (review finding #3) for the duration-sync min-scene floor. (~700 tok)
@@ -1345,7 +1358,7 @@
 - `test_operator_prompts.py` — Tests for Spain-first locale-aware operator prompts. (~2394 tok)
 - `test_operator_qa_nested_verdict.py` — Gemini QA sometimes echoes the FULL artifact (which natively carries a ``qa`` (~463 tok)
 - `test_operator_render_prepared_routing.py` — Short job dirs must always render through the prepared-short owner, even from (~678 tok)
-- `test_operator_workflow.py` — test_extract_json_object_ignores_model_wrapper_text, test_write_operator_prompts_writes_script_promp (~6460 tok)
+- `test_operator_workflow.py` — test_extract_json_object_ignores_model_wrapper_text, test_write_operator_prompts_writes_script_promp (~6703 tok)
 - `test_persona_no_attachment.py` — Presenter identity is guided by TEXT, not an attached reference photo. (~399 tok)
 - `test_persona_reference.py` — Presenter identity across AI-generated imagery (persona.py). (~452 tok)
 - `test_pexels_video_metadata_gate.py` — Pexels VIDEO has NO tags/alt metadata, so the tag-overlap strict gate (~688 tok)
@@ -1368,6 +1381,7 @@
 - `test_script_content_depth.py` — Script content-depth rules from the competitor study (2026-06-30). (~345 tok)
 - `test_script_length_quality_first.py` — Quality-first script length contract. (~969 tok)
 - `test_script_stage.py` — channel_path, idea_payload, valid_script_payload, valid_scenes_payload (~10502 tok)
+- `test_seo_chapter_timestamps.py` — Tests for YouTube chapter recomputation incl. section-anchored boundaries (bug-528) + even-spacing fallback. (~4200 tok)
 - `test_short_graphic_image_migration.py` — test_video_covered_marker_never_skips_ai_for_graphic_scenes, test_video_covered_marker_uses_native_v (~1894 tok)
 - `test_short_title_formulas.py` — Shorts titles use the 4 scroll-stopper formulas, <=40 chars, age-framed. (~1468 tok)
 - `test_shorts_api.py` — Shorts Autopilot v5 — Phase 7: backend API + status/source-url. (~6888 tok)
@@ -1404,6 +1418,8 @@
 - `test_thumbnail_distinctive_subject.py` — Thumbnails must show the video's DISTINCTIVE subject, not a generic category. (~282 tok)
 - `test_thumbnail_image_stage.py` — ── _build_thumbnail_prompt ─────────────────────────────────────────────────── (~2787 tok)
 - `test_thumbnail_planner.py` — Spec v1.3 §18 — 42 tests for thumbnail_planner. (~5181 tok)
+- `test_thumbnail_seo_write_race.py` — bug-528 regression: _persist_thumbnail_path must not clobber concurrent seo.json description updates. (~600 tok)
+- `test_thumbnail_seo_write_race.py` — Regression tests for bug-528: thumbnail stage clobbering concurrent seo.json updates. (~658 tok)
 - `test_thumbnail_stage_v13.py` — Spec v1.3 Phase 2 stage integration tests. (~2087 tok)
 - `test_timeline_dag_mode_status.py` — Regression coverage for timeline status derivation during a DAG-mode run (~2188 tok)
 - `test_title_ctr_formula.py` — CTR-first title formula (2026-06-29, option b). (~440 tok)
@@ -1438,12 +1454,14 @@
 - `test_graphic_layout_port.py` — Regression tests for the long-form graphic-card port into the Shorts pipeline. (~2546 tok)
 - `test_graphic_layout_strategy.py` — Acceptance tests for the 10-layout planner taxonomy, surface styles, density limits, legacy compatibility, and ChatGPT art direction. (~1800 tok)
 - `test_idea_prompt_poster_formats.py` — Idea generation must target the 7 poster formats (operator decision (~408 tok)
+- `test_music_selector_pillar.py` — bug-526: ideas carry no pillar, so the raw SPANISH topic/title reaches (~562 tok)
 - `test_original_bgm.py` — test_original_bgm_is_deterministic_and_has_no_external_audio_inputs, test_original_bgm_seed_changes_ (~919 tok)
 - `test_qa_issues.py` — test_suppress_stale_hook_fidelity, test_repairable_point_grouping, test_count_promise_soft_when_coun (~6327 tok)
 - `test_scene_script_coverage.py` — bug-503 / Codex task 20260709-202252: deterministic source-fidelity coverage guard. (~2018 tok)
 - `test_scene_stages.py` — test_phase15_graphic_layouts_preserved_by_scene_normalizer, test_scene_normalizer_backfills_source_s (~18633 tok)
 - `test_script_candidate_validation.py` — test_rejects_partial_script_too_few_blocks, test_rejects_script_not_starting_at_zero, test_rejects_m (~2033 tok)
 - `test_script_stages.py` — test_short_script_prompt_has_retention_and_language_rules, test_v13_script_prompt_uses_calibrated_wo (~1613 tok)
+- `test_seo_fallback_quality.py` — SEO deterministic-fallback quality (live repro 2026-07-11, Mundial idea-02). (~718 tok)
 - `test_seo_topic_keyword.py` — Topic-keyword SEO contract (operator feedback 2026-07-10). (~1788 tok)
 - `test_seo.py` — test_short_seo_prompt_prefers_broad_nutrition_tags_over_nutricion45, test_short_seo_prompt_uses_high (~1668 tok)
 
@@ -1451,8 +1469,8 @@
 
 - `__init__.py` (~0 tok)
 - `test_build.py` — image_fn, llm_fn, read_text_fn, music_fn (~3957 tok)
-- `test_engagement_cue_contract.py` — Remotion timing, Spanish state, deterministic motion, and safe-area acceptance contract. (~500 tok)
 - `test_build.py` — image_fn, llm_fn, read_text_fn, music_fn (~4604 tok)
+- `test_engagement_cue_contract.py` — Remotion timing, Spanish state, deterministic motion, and safe-area acceptance contract. (~500 tok)
 - `test_infographic_seo.py` — test_build_infographic_seo_writes_title_aligned_with_hook, llm_fn (~338 tok)
 - `test_music_excerpt.py` — Topic-track mapping, deterministic excerpt bounds, ffmpeg seek, failure semantics, and audit metadata. (~1000 tok)
 - `test_paths.py` — test_infographic_artifact_names_exist (~75 tok)

@@ -194,3 +194,43 @@ def test_poster_body_omits_brand_line_when_no_channel_name_configured():
     )
     # No crash, no dangling "Brand identity:" line with an empty name.
     assert "Brand identity" not in body
+
+
+def test_poster_base_enforces_consistent_photo_icon_style():
+    """Operator reference (2026-07-11): viral infographic Shorts get their polish
+    from EVERY item photo/icon sharing one rendering style (same lighting, scale,
+    isolated per cell). The base prompt must demand that consistency explicitly,
+    for every format."""
+    from video_agent.shorts.infographic.poster_prompt import build_poster_body
+    body = build_poster_body(_plan("category_grid", [{"label": "Chía"}] * 5))
+    lowered = body.lower()
+    assert "consistent" in lowered
+    assert "lighting" in lowered
+    assert "scale" in lowered
+
+
+def test_numbered_tips_numbers_sit_in_solid_circular_badges():
+    """Operator reference (2026-07-11): sample posters render list numbers inside
+    solid colored circular badges (all badges the same accent color), not as bare
+    digits — that badge repetition is what makes the grid look designed."""
+    from video_agent.shorts.infographic.poster_prompt import build_poster_body
+    body = build_poster_body(_plan("numbered_tips", [{"label": f"tip{i}"} for i in range(5)]))
+    lowered = body.lower()
+    assert "circular badge" in lowered
+    assert "same" in lowered and "color" in lowered
+
+
+def test_warning_list_numbers_sit_in_solid_circular_badges():
+    from video_agent.shorts.infographic.poster_prompt import build_poster_body
+    body = build_poster_body(_plan("warning_list", [{"label": "Pan", "note": "no"}] * 5))
+    assert "circular badge" in body.lower()
+
+
+def test_item_notes_get_tiny_mini_icons():
+    """Operator reference (2026-07-11): sample posters prefix each small benefit
+    note with a tiny matching mini-icon (heart, bolt...) — the base prompt should
+    ask for that so notes read as designed rows, not plain text."""
+    from video_agent.shorts.infographic.poster_prompt import build_poster_body
+    body = build_poster_body(_plan("numbered_tips", [{"label": "Pasas", "note": "mejoran la digestión"}] * 5))
+    lowered = body.lower()
+    assert "mini-icon" in lowered or "mini icon" in lowered

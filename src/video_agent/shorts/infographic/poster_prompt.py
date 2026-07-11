@@ -16,7 +16,12 @@ _BASE = (
     "STRICT TYPOGRAPHIC HIERARCHY: render each item's short label/sub-heading LARGE and "
     "extra-BOLD, and any explanation/note text clearly smaller and lighter beneath it — "
     "a phone viewer must understand the poster from the bold labels alone, without "
-    "reading the small text."
+    "reading the small text. "
+    "VISUAL CONSISTENCY: every item photo/icon must share ONE consistent rendering "
+    "style across the whole poster — same lighting, same scale, each subject cleanly "
+    "isolated within its own cell (no item drawn in a different art style from the "
+    "rest). Prefix each small note/benefit line with a tiny matching mini-icon "
+    "(e.g., a heart for a heart benefit) so notes read as designed rows."
 )
 
 
@@ -38,7 +43,8 @@ def _format_block(plan: dict[str, Any]) -> str:
     if fmt == "numbered_tips":
         return (
             "Layout: a NUMBERED vertical list (1, 2, 3 …), each row an icon + a short "
-            "tip. Numbered items in order: "
+            "tip. Render each number as a bold white digit inside a solid CIRCULAR "
+            "badge, all badges the same accent color. Numbered items in order: "
             + "; ".join(f"{n}. {t}" for n, t in enumerate(labels, 1)) + "."
         )
     if fmt == "warning_list":
@@ -49,7 +55,8 @@ def _format_block(plan: dict[str, Any]) -> str:
         ]
         return (
             "Layout: a NUMBERED warning list, each row a food photo + a red CROSS (X) mark "
-            "+ a short caution. Rows: " + "; ".join(rows) + "."
+            "+ a short caution. Render each number as a bold white digit inside a solid "
+            "red CIRCULAR badge, all badges the same color. Rows: " + "; ".join(rows) + "."
         )
     if fmt == "myth_vs_truth":
         rows = [

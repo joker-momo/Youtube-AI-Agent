@@ -41,9 +41,10 @@ _DEFAULT_STYLE: dict[str, Any] = {
 
 
 def _brand_style_text(style: dict[str, Any]) -> str:
-    """A brand-style directive (palette hex + mood + panel layout) ported from the
-    long-form ``_brand_style`` so shorts cards render ON-brand instead of the
-    generic navy/white/yellow template look."""
+    """Content-first brand directive (2026-07 graphic layout system): the scene's
+    real subject chooses the visual world; the channel palette appears only as
+    small accents. Replaces the earlier palette-locked soft-card treatment that
+    produced the same cream/green wellness card on every graphic."""
     dp = _DEFAULT_STYLE["palette"]
     p = (style or {}).get("palette") or dp
     bg = p.get("background", dp["background"])
@@ -53,16 +54,19 @@ def _brand_style_text(style: dict[str, Any]) -> str:
     text = p.get("text", dp["text"])
     mood = ", ".join((style or {}).get("visual_mood") or _DEFAULT_STYLE["visual_mood"])
     return (
-        f"Brand style — {mood} editorial for a wellness channel for adults 45+ (NOT clickbait). "
-        f"Use ONLY this brand palette (hex): background {bg}, primary panel {primary}, secondary "
-        f"{sec}, accent {accent}, text {text}. Set any text block on a SOFT panel/card in the "
-        f"primary colour {primary} (or the background {bg}) with high-contrast brand text — "
-        f"background {bg} on the primary {primary}, or text {text} on the background {bg} — using "
-        f"the accent {accent} or secondary {sec} ONLY as a small accent (one word, an underline, or "
-        "a marker icon). Do NOT use navy, pure black, stark white blocks, neon, or a harsh full-"
-        "bleed gradient. Lay it out as a calm, premium wellness-magazine card with generous "
-        "padding, rounded corners and a clear text hierarchy. Give any panel a soft drop shadow "
-        "and gentle depth so it feels premium and tactile, never flat."
+        f"Brand style — {mood} wellness for Spanish adults 45+ (NOT clickbait). "
+        "CONTENT-FIRST art direction: the scene's real subject, action and teaching idea choose "
+        "the background, lighting, materials, camera angle and dominant colours. When the content "
+        "is concrete (foods, objects, labels), real, appetizing, consistently lit subject "
+        "photography must dominate the frame. "
+        f"The channel palette (hex) is an ACCENT ONLY, never a full-frame wash: use primary "
+        f"{primary}, accent {accent} or secondary {sec} solely for small marks — a numbered badge, "
+        f"a check/cross marker, one underline, or a small channel pill (text {text} on background "
+        f"{bg} where a small panel is genuinely needed). "
+        "Never force a recurring beige/cream/green wellness card, a repeated soft panel behind "
+        "every text block, a generic icon grid, or a stock-photo collage. No neon and no harsh "
+        "full-bleed gradient. Keep the composition calm, premium and editorial with a clear text "
+        "hierarchy and gentle depth."
     )
 
 
@@ -353,6 +357,39 @@ def _graphic_layout_contract(layout: str, payload: dict[str, Any]) -> str:
     return f"Layout contract: {layout}.\nUse the payload exactly; do not invent extra teaching points."
 
 
+def _surface_style_contract(surface_style: str) -> str:
+    """Prompt directive for the planner-preferred surface families (2026-07
+    content-first system). Legacy surface values need no extra directive."""
+    contracts = {
+        "hero_stat": (
+            "Surface style hero_stat: ONE enormous focal number/fact dominates the frame "
+            "with a much smaller label beneath it — no bullet list, no extra panels."
+        ),
+        "binary_split": (
+            "Surface style binary_split: two contrasting halves with equal visual weight, "
+            "a clear divider, and one marker per side (check on the better side, soft cross "
+            "on the other when the layout implies a judgment)."
+        ),
+        "numbered_photo_bands": (
+            "Surface style numbered_photo_bands: compose the items as 2-4 HORIZONTAL, "
+            "edge-to-edge (full-bleed) photo bands stacked vertically — one band per item, "
+            "each band a real photograph of that item. Each band carries ONE large solid "
+            "CIRCULAR numbered badge (all badges the same accent colour) and a bold label of "
+            "at most four words. Do not add paragraphs, footnotes, invented claims, or a "
+            "separate card around every band."
+        ),
+        "annotated_object": (
+            "Surface style annotated_object: one realistic hero object/label close-up with "
+            "a few clean callout lines pointing at the real details — not a template card."
+        ),
+        "photo_tiles": (
+            "Surface style photo_tiles: clean side-by-side real-photo tiles, one short label "
+            "per tile, consistent lighting and scale across tiles."
+        ),
+    }
+    return contracts.get(surface_style, "")
+
+
 def build_scene_image_prompt(scene: dict[str, Any], query: str, brand_style: str = "") -> str:
     """Build the ChatGPT image prompt for AI fallback scenes.
 
@@ -405,15 +442,24 @@ def build_scene_image_prompt(scene: dict[str, Any], query: str, brand_style: str
     if is_graphic:
         layout_contract = _graphic_layout_contract(graphic_layout, payload if isinstance(payload, dict) else {})
         brand_block = f"{brand_style.strip()}\n" if brand_style.strip() else ""
+        surface_contract = (
+            _surface_style_contract(str(payload.get("surface_style") or ""))
+            if isinstance(payload, dict)
+            else ""
+        )
+        surface_block = f"{surface_contract}\n" if surface_contract else ""
         return (
             "Create a premium vertical editorial image for a Spanish wellness Short for adults 45+. "
             "Replace a flat renderer card with a natural, polished visual that still carries the teaching content exactly. "
+            "Follow a content-first art direction: the teaching content decides the visual world, "
+            "and brand colours appear only as small accents (badge, marker, underline, pill). "
             "Use warm Mediterranean light, realistic textures, tasteful magazine-style composition, and large legible Spanish typography inside mobile safe margins. "
             "Make the first frame useful and readable without zooming. "
             "Do not use a plain beige card, generic icons, stock-photo collage, watermark, tiny text, extra claims, or English wording.\n"
             f"{brand_block}"
             f"{_GRAPHIC_QUALITY_GUARD}\n"
             f"Scene layout: {graphic_layout}\n"
+            f"{surface_block}"
             f"Scene visual idea: {visual_prompt}\n"
             f"Main headline to include exactly: {on_screen or title}\n"
             f"{layout_contract}\n"

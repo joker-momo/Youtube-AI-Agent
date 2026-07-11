@@ -10,6 +10,7 @@ __all__ = [
     "ALLOWED_GRAPHIC_VISUAL_TONES",
     "ALLOWED_GRAPHIC_BACKGROUND_MODES",
     "ALLOWED_GRAPHIC_SURFACE_STYLES",
+    "NUMBERED_BANDS_COMPATIBLE_LAYOUTS",
     "PLATE_RATIO_TOTAL",
     "PLATE_RATIO_EPSILON",
     "MAX_GRAPHIC_SCENES_PER_SHORT",
@@ -75,10 +76,24 @@ ALLOWED_GRAPHIC_BACKGROUND_MODES = {
     "video_blur",
 }
 ALLOWED_GRAPHIC_SURFACE_STYLES = {
+    # Legacy values stay accepted for stored-scene compatibility.
     "none",
     "soft_card",
     "editorial",
     "plate_focus",
+    # Planner-preferred surface families (2026-07 content-first system).
+    "hero_stat",
+    "binary_split",
+    "numbered_photo_bands",
+    "annotated_object",
+    "photo_tiles",
+}
+# numbered_photo_bands only makes sense for list semantics: each band is one
+# list entry. Hero-number/binary layouts have no per-item bands to draw.
+NUMBERED_BANDS_COMPATIBLE_LAYOUTS = {
+    "graphic_checklist",
+    "graphic_warning",
+    "graphic_step_list",
 }
 PLATE_RATIO_TOTAL = 100.0
 PLATE_RATIO_EPSILON = 0.01

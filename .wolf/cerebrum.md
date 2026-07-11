@@ -643,3 +643,8 @@ Short KHÔNG có cover deliverable (YouTube Shorts bỏ qua custom thumbnail). �
 - User rejected long-form graphic cards that looked like one repeated cream/green wellness template. Root cause was `graphic_images.py` injecting style-DNA/palette/soft-panel/wellness-card directives into every ChatGPT graphic prompt, flattening creative details from the script.
 - Fix direction: long-form graphic image prompts use scene-specific art direction only; no channel palette hexes, no `load_style_dna`, no SEO topic-accent color blending, no recurring brand panel. Metadata stamps `style_dna_disabled=true` and scrubs old palette fields.
 - Do not apply this to thumbnail prompts unless explicitly requested. User explicitly said to keep thumbnail prompt unchanged.
+
+### Decision (2026-07-11): Shorts graphic semantics and surface styles are separate
+- The planner-facing contract has 10 semantic `graphic_*` layouts. `graphic_evidence_nugget` migrates to `graphic_stat`, `graphic_routine_split` migrates to `graphic_step_list` with optional time, and `graphic_quote_portrait` remains repair-only for compatibility.
+- `numbered_photo_bands` is a `surface_style`, never a new semantic layout. Art direction is content-first with brand colours limited to accents; moving graphic scenes cap list density at 2-4 entries and must not silently truncate source ideas.
+- Linked worktrees do not contain the root checkout's untracked `.venv`; use `/Volumes/DATA/YBT-Studio/Youtube-AI-Agent/.venv/bin/python` for verification from worktrees.

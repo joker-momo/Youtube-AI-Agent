@@ -956,6 +956,10 @@
 
 - `task.md` — Antigravity runtime task tracker table (~454 tok)
 
+## docs/specs/
+
+- `2026-07-11-shorts-graphic-layout-system.md` — Implementation specification for the content-first, brand-as-accent Shorts graphic taxonomy and mobile density contracts. (~1800 tok)
+
 ## docs/references/
 
 
@@ -1404,6 +1408,7 @@
 - `test_build_orchestration.py` — test_short_stage_retry_clears_stale_completion_and_error, test_build_short_pass_renders_and_writes_a (~12444 tok)
 - `test_cta_duration_contract.py` — bug-505 / Codex 20260709-214518: CTA duration and funnel contracts must agree. (~5878 tok)
 - `test_graphic_layout_port.py` — Regression tests for the long-form graphic-card port into the Shorts pipeline. (~2546 tok)
+- `test_graphic_layout_strategy.py` — Acceptance tests for the 10-layout planner taxonomy, surface styles, density limits, legacy compatibility, and ChatGPT art direction. (~1800 tok)
 - `test_idea_prompt_poster_formats.py` — Idea generation must target the 7 poster formats (operator decision (~408 tok)
 - `test_original_bgm.py` — test_original_bgm_is_deterministic_and_has_no_external_audio_inputs, test_original_bgm_seed_changes_ (~919 tok)
 - `test_qa_issues.py` — test_suppress_stale_hook_fidelity, test_repairable_point_grouping, test_count_promise_soft_when_coun (~6327 tok)

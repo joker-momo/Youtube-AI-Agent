@@ -167,6 +167,10 @@ def test_merged_payoff_cta_scene_is_normalized_not_hard_blocked():
     from video_agent.shorts.visual_beat_planner import _is_cta_scene
 
     assert _is_cta_scene(relocated) is False
+    # The CTA end-frame visual must not follow the payoff into mid-video: the
+    # relocated scene needs its own non-end-card visual prompt (codex reopen).
+    assert relocated.get("visual_prompt") != ctas[0].get("visual_prompt")
+    assert str(relocated.get("visual_prompt") or "").strip()
     # everything fits its layout cap now
     from video_agent.shorts.validation.repairs import estimate_fits, scene_hard_cap
 
@@ -194,6 +198,8 @@ def test_resumed_relocated_payoff_drops_stale_cta_metadata():
             "retention_function": "cta",
             "rhythm_tag": "comment",
             "pattern_interrupt": "graphic_burst",
+            # resumed artifact cloned the CTA end-frame visual too
+            "visual_prompt": _cta_scene(5.4)["visual_prompt"],
         },
         _cta_scene(5.4),
     ]
@@ -206,6 +212,9 @@ def test_resumed_relocated_payoff_drops_stale_cta_metadata():
     assert scenes[0]["rhythm_tag"] == "payoff"
     assert scenes[0]["pattern_interrupt"] != "graphic_burst"
     assert _is_cta_scene(scenes[0]) is False
+    # cloned end-card visual replaced by a payoff-appropriate one
+    assert scenes[0]["visual_prompt"] != scenes[1].get("visual_prompt")
+    assert str(scenes[0]["visual_prompt"] or "").strip()
 
 
 # ── single long sentence in a footage scene: split at clause boundary ────────

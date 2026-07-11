@@ -583,6 +583,14 @@ def repair_slideshow_density(
     return changed
 
 
+# Payoff scenes relocated out of a short_cta must not keep the CTA's end-card
+# visual: this neutral, age-fit prompt renders as a normal mid-video beat.
+_PAYOFF_VISUAL_PROMPT = (
+    "vertical warm candid moment, calm mature adult reflecting at home, "
+    "soft natural light, shallow depth of field"
+)
+
+
 def normalize_pre_cta_scene_metadata(scenes: list[dict[str, Any]]) -> bool:
     """Remove stale CTA semantics from a non-CTA scene before the real CTA.
 
@@ -602,6 +610,10 @@ def normalize_pre_cta_scene_metadata(scenes: list[dict[str, Any]]) -> bool:
         scene["retention_function"] = "payoff"
         scene["rhythm_tag"] = "payoff"
         scene["pattern_interrupt"] = "face_cut"
+        # A resumed artifact may also have cloned the CTA's end-card visual;
+        # only replace it when it IS that clone (identical to the next CTA's).
+        if str(scene.get("visual_prompt") or "") == str(next_scene.get("visual_prompt") or ""):
+            scene["visual_prompt"] = _PAYOFF_VISUAL_PROMPT
         changed = True
     return changed
 
@@ -644,6 +656,8 @@ def normalize_cta_scene_narration(scenes: list[dict[str, Any]]) -> bool:
         # Do not carry CTA-specific text onto the payoff half.
         payoff["on_screen_text"] = ""
         payoff["caption"] = ""
+        # Never carry the CTA end-card visual into the mid-video payoff beat.
+        payoff["visual_prompt"] = _PAYOFF_VISUAL_PROMPT
         payoff.pop("layout_payload", None)
         if str(scene.get("visual_prompt") or "").strip():
             payoff["motion"] = _alternate_motion(str(scene.get("motion") or ""))

@@ -1295,6 +1295,33 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
         _restore_scene_durations(scene_doc, short_duration_snapshot)
         write_json(job_dir / ARTIFACT_SCENES, scene_doc)
         validate_json(scene_doc, root / "schemas/scenes.schema.json")
+    else:
+        # AUTHORITATIVE chapter resync (bug-531): prepare_assets audio-fits the
+        # scene timeline, so only NOW does scene_doc reflect what the viewer
+        # will actually watch. The whisper-stage resync ran earlier against
+        # planned durations and can overshoot the real video length.
+        try:
+            from video_agent.operator import resync_seo_chapters
+
+            chapters = resync_seo_chapters(job_dir, scene_doc=scene_doc)
+            if chapters:
+                logger.log(
+                    "OPERATOR_RENDER_PROGRESS",
+                    {
+                        "job_id": job_id,
+                        "step": "seo_chapters_final_resync",
+                        "chapter_count": len(chapters),
+                    },
+                )
+        except Exception as exc:  # noqa: BLE001 — chapters must never kill a render
+            logger.log(
+                "OPERATOR_RENDER_PROGRESS",
+                {
+                    "job_id": job_id,
+                    "step": "seo_chapters_final_resync_failed",
+                    "error": str(exc)[:200],
+                },
+            )
     branding = _prepare_branding(channel_config)
 
     render_config = channel_config["render"].copy()

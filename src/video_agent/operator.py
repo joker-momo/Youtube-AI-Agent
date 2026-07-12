@@ -674,6 +674,57 @@ def _compute_chapter_timestamps(
     return chapters
 
 
+def resync_seo_chapters(
+    job_dir: Path,
+    scene_doc: dict[str, Any] | None = None,
+    script: dict[str, Any] | None = None,
+) -> list[tuple[str, str]] | None:
+    """Recompute the YouTube chapter block in seo.json from the CURRENT scene
+    timeline and persist it via a race-safe single-field update.
+
+    bug-531: the whisper-stage resync ran while scenes.json still carried the
+    original PLANNED durations (sum ~24.6min) — the audio-fit pass inside the
+    render stage rewrites the timeline (real ~19.8min) afterwards, so the early
+    resync shipped chapters past the video end. This helper is called again
+    from the render path with the FINAL merged scene_doc; description is
+    written through update_seo_fields so concurrent writers (thumbnail stage)
+    are never clobbered. Returns the chapters written, or None when inputs are
+    missing/unchanged."""
+    job_dir = Path(job_dir)
+    seo_path = job_dir / "json" / "seo.json"
+    if not seo_path.exists():
+        return None
+    if scene_doc is None:
+        scenes_path = job_dir / "json" / "scenes.json"
+        if not scenes_path.exists():
+            return None
+        scene_doc = json.loads(scenes_path.read_text(encoding="utf-8"))
+    if script is None:
+        script_path = job_dir / "json" / "script.json"
+        script = (
+            json.loads(script_path.read_text(encoding="utf-8"))
+            if script_path.exists()
+            else None
+        )
+    scenes_plan = _read_optional_json(
+        job_dir / "operator" / "chatgpt" / "scenes_plan.json"
+    )
+    overrides = _read_optional_json(job_dir / "json" / "chapter_overrides.json")
+    chapters = _compute_chapter_timestamps(
+        scene_doc, script, scenes_plan=scenes_plan, chapter_overrides=overrides
+    )
+    if not chapters:
+        return None
+    seo_payload = json.loads(seo_path.read_text(encoding="utf-8"))
+    new_description = _rewrite_description_chapters(
+        str(seo_payload.get("description") or ""), chapters
+    )
+    if new_description == seo_payload.get("description"):
+        return chapters
+    update_seo_fields(seo_path, {"description": new_description})
+    return chapters
+
+
 def update_seo_fields(seo_path: Path, updates: dict[str, Any]) -> dict[str, Any]:
     """Serialized, single-field-safe update of ``seo.json``.
 

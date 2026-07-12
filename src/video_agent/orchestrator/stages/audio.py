@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 
-from video_agent.contracts import ARTIFACT_SCENES, ARTIFACT_SCRIPT, ARTIFACT_SEO, EVENT_LOG
+from video_agent.contracts import ARTIFACT_SCENES, EVENT_LOG
 from video_agent.orchestrator.job_state import load_job
 from video_agent.orchestrator.stages._shared import (
     _AUDIO_SUBPROCESS_ENV,
@@ -336,36 +335,21 @@ def _run_whisper_timestamps_stage_inline(job_dir: Path) -> Path:
     # past actual video length (e.g. last chapter at 16:12 for an 11-min
     # video). Idempotent — safe even if chapters are already correct.
     try:
-        from video_agent.operator import (
-            _compute_chapter_timestamps,
-            _rewrite_description_chapters,
-        )
-        seo_path = _resolve_artifact(job_dir, ARTIFACT_SEO)
-        scenes_path = _resolve_artifact(job_dir, ARTIFACT_SCENES)
-        script_path = _resolve_artifact(job_dir, ARTIFACT_SCRIPT)
-        if seo_path.exists() and scenes_path.exists():
-            seo_obj = json.loads(seo_path.read_text(encoding="utf-8"))
-            scene_doc = json.loads(scenes_path.read_text(encoding="utf-8"))
-            script_obj = (
-                json.loads(script_path.read_text(encoding="utf-8"))
-                if script_path.exists()
-                else None
+        # Early pass only — scenes.json may still carry PLANNED durations here;
+        # the render path re-runs this with the FINAL audio-fit timeline
+        # (bug-531). Writes through update_seo_fields, never a full snapshot.
+        from video_agent.operator import resync_seo_chapters
+
+        new_chapters = resync_seo_chapters(job_dir)
+        if new_chapters:
+            logger.log(
+                "WHISPER_STAGE_PROGRESS",
+                {
+                    "job_id": state.job_id,
+                    "step": "seo_chapters_resynced",
+                    "chapter_count": len(new_chapters),
+                },
             )
-            new_chapters = _compute_chapter_timestamps(scene_doc, script_obj)
-            if new_chapters:
-                seo_obj["description"] = _rewrite_description_chapters(
-                    seo_obj.get("description", ""), new_chapters
-                )
-                from video_agent.utils.json_io import write_json as _wj
-                _wj(seo_path, seo_obj)
-                logger.log(
-                    "WHISPER_STAGE_PROGRESS",
-                    {
-                        "job_id": state.job_id,
-                        "step": "seo_chapters_resynced",
-                        "chapter_count": len(new_chapters),
-                    },
-                )
     except Exception as exc:
         logger.log(
             "WHISPER_STAGE_PROGRESS",

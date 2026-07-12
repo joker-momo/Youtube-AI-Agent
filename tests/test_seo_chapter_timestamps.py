@@ -432,3 +432,51 @@ def test_merged_batches_preserve_scene_section_end_to_end():
     normalized = _normalize_scenes_candidate(dict(merged))
     sections = [s.get("section") for s in normalized["scenes"]]
     assert sections == ["Hook", "Elige tu partido clave", "Plan de energía", "CTA"]
+
+
+# ── bug-531: chapters resynced against the FINAL audio-fit timeline ──────────
+
+def test_resync_seo_chapters_replaces_planned_timeline_overshoot(tmp_path):
+    """Live repro (vida-sana job): the whisper-stage resync ran while
+    scenes.json still carried PLANNED durations (sum ~24.6min); the render
+    stage audio-fits the timeline to ~19.8min afterwards, so shipped chapters
+    overshot the real video end (24:39 on a 20:03 video). The render-path
+    resync must rewrite chapters from the FINAL scene_doc, through the
+    race-safe single-field update (thumbnail_path preserved)."""
+    from video_agent.operator import resync_seo_chapters
+
+    job_dir = tmp_path / "job"
+    (job_dir / "json").mkdir(parents=True)
+    (job_dir / "json" / "script.json").write_text(json.dumps({
+        "sections": [{"title": "Primera parte", "focus": "f"},
+                     {"title": "Segunda parte", "focus": "f"}],
+    }), encoding="utf-8")
+    stale_desc = (
+        "Resumen del vídeo.\n\n"
+        "00:00 - Primera parte\n24:39 - Segunda parte\n\n"
+        "Despedida."
+    )
+    (job_dir / "json" / "seo.json").write_text(json.dumps({
+        "description": stale_desc,
+        "thumbnail_path": "jobs/x/outputs/thumbnail_1.jpg",
+    }, ensure_ascii=False), encoding="utf-8")
+
+    # FINAL audio-fit timeline (in memory, as the render path holds it).
+    final_scene_doc = {
+        "total_duration_sec": 120,
+        "scenes": [
+            {"id": "scene-01", "duration_sec": 60, "audio_offset_sec": 0.0,
+             "narration": "n", "section": "Primera parte"},
+            {"id": "scene-02", "duration_sec": 60, "audio_offset_sec": 60.0,
+             "narration": "n", "section": "Segunda parte"},
+        ],
+    }
+
+    chapters = resync_seo_chapters(job_dir, scene_doc=final_scene_doc)
+
+    assert chapters == [("00:00", "Primera parte"), ("01:00", "Segunda parte")]
+    seo = json.loads((job_dir / "json" / "seo.json").read_text(encoding="utf-8"))
+    assert "24:39" not in seo["description"]
+    assert "01:00 - Segunda parte" in seo["description"]
+    # single-field update: unrelated fields untouched
+    assert seo["thumbnail_path"] == "jobs/x/outputs/thumbnail_1.jpg"

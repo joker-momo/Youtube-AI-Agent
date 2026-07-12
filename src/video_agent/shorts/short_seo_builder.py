@@ -316,17 +316,24 @@ def _title_uniqueness_issues(title: str, sibling_titles: list[str]) -> list[str]
     return issues
 
 
+# Bound on how long the final check-and-write waits for the parent title lock.
+# Module-level so tests can shrink it; the value is a safety cap, not a tuning
+# knob for throughput, and it never touches render concurrency.
+_TITLE_LOCK_TIMEOUT_SEC = 10.0
+
+
 @contextlib.contextmanager
-def _parent_title_lock(lock_path: Path, timeout_sec: float = 10.0):
+def _parent_title_lock(lock_path: Path):
     """Bounded exclusive lock serializing the final title check-and-write.
 
-    Non-blocking acquire with a short poll so a wedged holder can never hang the
-    pipeline; render concurrency is untouched. If the lock can't be taken in
-    ``timeout_sec`` the write proceeds anyway (the fresh re-read already ran) —
-    availability beats a hard stall for a metadata write."""
+    FAIL-CLOSED (spec §Generation final check): if the lock cannot be acquired
+    within the bound, raise instead of yielding — a contended writer must NOT
+    re-read and write outside the lock, or two builders could each pass their
+    own stale snapshot and publish the same title. Non-blocking poll so a wedged
+    holder surfaces as a clear bounded error rather than an unbounded hang."""
     fd = open(lock_path, "a+")
     acquired = False
-    deadline = time.monotonic() + timeout_sec
+    deadline = time.monotonic() + _TITLE_LOCK_TIMEOUT_SEC
     try:
         while True:
             try:
@@ -337,7 +344,11 @@ def _parent_title_lock(lock_path: Path, timeout_sec: float = 10.0):
                 if exc.errno not in (errno.EWOULDBLOCK, errno.EAGAIN):
                     raise
                 if time.monotonic() >= deadline:
-                    break
+                    raise TimeoutError(
+                        f"Could not acquire the parent Short-title lock ({lock_path}) "
+                        f"within {_TITLE_LOCK_TIMEOUT_SEC}s; refusing to write SEO "
+                        "without the lock to avoid a duplicate-title race."
+                    ) from None
                 time.sleep(0.05)
         yield
     finally:

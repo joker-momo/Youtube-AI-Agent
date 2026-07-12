@@ -201,7 +201,9 @@ def _derive_synthesis_shorts_status(job_dir: Path, active_jobs: list[dict[str, A
         and render_run.get("generation_id") == current_generation_id
     ):
         status = render_run.get("status")
-        if status in ("completed", "completed_with_warnings", "failed"):
+        # "cancelled" is a terminal NON-FAILURE state (operator stop, AC8): the
+        # badge must NOT read the red "failed" for a run the user chose to stop.
+        if status in ("completed", "completed_with_warnings", "failed", "cancelled"):
             return status
 
     if ideas and ideas.get("ideas"):
@@ -212,7 +214,7 @@ def _derive_synthesis_shorts_status(job_dir: Path, active_jobs: list[dict[str, A
         status = manifest.get("status")
         if status == "rendered":
             return "completed"
-        if status in ("completed", "completed_with_warnings", "failed"):
+        if status in ("completed", "completed_with_warnings", "failed", "cancelled"):
             return status
     return "none"
 

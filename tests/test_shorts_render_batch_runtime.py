@@ -500,3 +500,93 @@ def test_loop_stop_mid_item_cancels_batch_and_never_starts_later_ideas(tmp_path)
     statuses = [r["status"] for r in result["shorts"]]
     assert statuses == ["cancelled"]
     assert not any(r.get("rendered") for r in result["shorts"])
+
+
+def test_cooperative_stop_makes_every_status_surface_agree_on_cancelled(tmp_path):
+    """AC8 terminal agreement: after a real cooperative-stop loop, render_batch,
+    per-short status/result, manifest top-level, studio_render_run, and the
+    /shorts-studio/state job badge must ALL read cancelled — never failed."""
+    from fastapi.testclient import TestClient
+
+    from video_agent.shorts import paths as sp
+    from video_agent.shorts.infographic.build import render_selected_infographic_ideas
+    from video_agent.web.app import app, get_jobs_root
+
+    job = _make_parent_job(tmp_path, ["idea-01", "idea-02"])
+    # A PRIOR rendered manifest entry must NOT relabel the stopped run completed.
+    prior_manifest = {
+        "mode": "synthesis_ideas", "status": "completed",
+        "shorts": [{"short_id": "short-99_old", "idea_id": "idea-99",
+                    "rendered": True, "status": "rendered"}],
+    }
+    (job / "shorts" / sp.MANIFEST_FILE).write_text(json.dumps(prior_manifest), encoding="utf-8")
+
+    store = RenderBatchStore(job)
+    store.create(batch_id="srb-x", ideas=_ideas("idea-01", "idea-02"),
+                 short_type="infographic", force=False, generation_id="ideas-1")
+    progress = _EventLog(store)
+    _calls, llm_fn, image_fn, music_fn, render_fn = _stage_fns(job, stop_after="plan")
+
+    render_selected_infographic_ideas(
+        job, CFG, ["idea-01", "idea-02"],
+        image_fn=image_fn, llm_fn=llm_fn, music_fn=music_fn, render_fn=render_fn,
+        read_text_fn=None, progress=progress,
+    )
+
+    # 1. batch document
+    assert store.load()["status"] == "cancelled"
+    # 2. per-short status.json written by the in-pipeline guard
+    short_id = next(
+        p.name for p in (job / "shorts").iterdir()
+        if p.is_dir() and p.name.startswith("short-01_idea-01")
+    )
+    st = json.loads((job / "shorts" / short_id / sp.SHORT_STATUS_FILE).read_text())
+    assert st["status"] == "cancelled" and st["rendered"] is False
+    # 3. manifest top-level — the prior rendered entry did NOT win
+    manifest = json.loads((job / "shorts" / sp.MANIFEST_FILE).read_text())
+    assert manifest["status"] == "cancelled"
+    # 4. studio_render_run — cancelled, no failed tally
+    run = json.loads(sp.studio_render_run_path(job).read_text())
+    assert run["status"] == "cancelled"
+    assert run["failed_count"] == 0
+    assert run["cancelled_count"] == 1
+    # 5. /shorts-studio/state job badge
+    app.dependency_overrides[get_jobs_root] = lambda: tmp_path
+    try:
+        client = TestClient(app)
+        state = client.get("/shorts-studio/state").json()
+        job_entry = next(j for j in state["jobs"] if j["job_id"] == "job-1")
+        assert job_entry["shorts_status"] == "cancelled"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_ordinary_all_failed_stays_failed_not_cancelled(tmp_path):
+    """Regression guard: cancelled handling must not relabel a genuine
+    all-failed infographic run — that stays 'failed'."""
+    from video_agent.shorts import paths as sp
+    from video_agent.shorts.infographic import build as build_mod
+
+    job = _make_parent_job(tmp_path, ["idea-01"])
+    store = RenderBatchStore(job)
+    store.create(batch_id="srb-x", ideas=_ideas("idea-01"), short_type="infographic",
+                 force=False, generation_id="ideas-1")
+
+    def boom(*a, **k):
+        raise RuntimeError("poster failed")
+
+    orig = build_mod.run_infographic_short
+    build_mod.run_infographic_short = boom
+    try:
+        build_mod.render_selected_infographic_ideas(
+            job, CFG, ["idea-01"], image_fn=None, llm_fn=lambda p: "",
+            render_fn=lambda *a, **k: Path("x"), progress=BatchProgress(store),
+        )
+    finally:
+        build_mod.run_infographic_short = orig
+
+    run = json.loads(sp.studio_render_run_path(job).read_text())
+    assert run["status"] == "failed"
+    assert run["failed_count"] == 1
+    assert run["cancelled_count"] == 0
+    assert store.load()["status"] == "failed"

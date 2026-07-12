@@ -706,9 +706,12 @@ def render_selected_infographic_ideas(
     except FileNotFoundError:
         doc = {}
     doc["shorts"] = list(doc.get("shorts") or []) + results
-    # Recompute the top-level status: a stale "failed" from an earlier run must
-    # not shadow a Short that just rendered successfully.
-    if any(entry.get("rendered") for entry in doc["shorts"]):
+    # Operator cancellation is a terminal NON-FAILURE state and wins the
+    # top-level badge outright (AC8): a prior rendered entry must NOT relabel a
+    # stopped run as "completed", and the cancelled item must NOT read "failed".
+    if cancelled:
+        doc["status"] = "cancelled"
+    elif any(entry.get("rendered") for entry in doc["shorts"]):
         doc["status"] = "completed"
     elif results:
         doc["status"] = "failed"
@@ -717,22 +720,35 @@ def render_selected_infographic_ideas(
     # The Studio job badge reads studio_render_run.json BEFORE the manifest, so
     # this run must overwrite any stale doc left by an earlier narrated attempt.
     rendered_count = sum(1 for r in results if r.get("rendered"))
+    cancelled_count = sum(1 for r in results if r.get("status") == "cancelled")
+    # Cancelled items are neither rendered nor a failure — exclude them from the
+    # failure tally so a stopped run never shows a red "N failed".
+    failed_count = sum(
+        1 for r in results if not r.get("rendered") and r.get("status") != "cancelled"
+    )
+    if cancelled:
+        run_status = "cancelled"
+    elif rendered_count == len(results) and results:
+        run_status = "completed"
+    elif rendered_count:
+        run_status = "completed_with_warnings"
+    else:
+        run_status = "failed"
     now = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     write_studio_render_run(long_job_dir, {
         "schema_version": "studio_render_run.v1",
         "source_long_job_id": long_job_dir.name,
         "mode": "synthesis_ideas",
         "generation_id": ideas_doc.get("generation_id"),
-        "status": "completed" if rendered_count == len(results) and results else (
-            "completed_with_warnings" if rendered_count else "failed"
-        ),
+        "status": run_status,
         "started_at": now,
         "completed_at": now,
         "selected_idea_count": len(selected),
         "attempted_render_count": len(results),
         "rendered_count": rendered_count,
         "needs_review_count": sum(1 for r in results if r.get("status") == "needs_manual_review"),
-        "failed_count": sum(1 for r in results if not r.get("rendered")),
+        "failed_count": failed_count,
+        "cancelled_count": cancelled_count,
         "skipped_count": 0,
         "blocked_count": 0,
         "warnings": [],

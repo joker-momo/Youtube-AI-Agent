@@ -562,8 +562,11 @@ def render_selected_infographic_ideas(
             if progress is not None:
                 progress.batch_cancelled("operator requested stop")
             break
-        if progress is not None:
-            progress.item_started(idea_id)
+        if progress is not None and not progress.item_started(idea_id):
+            # The stop route cancelled the batch between our flag check and the
+            # item start — halt without touching later pending items (AC8).
+            cancelled = True
+            break
         title = str(idea.get("title") or "")
         source = {
             "topic": idea.get("topic") or title,

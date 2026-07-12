@@ -257,6 +257,21 @@ def stop_job(
     if task is not None and not task.done():
         cancelled = task.cancel("stop requested by operator")
 
+    # AC8 (shorts render batch): the stop must be visible IMMEDIATELY, even
+    # while an expensive in-flight item (poster/LLM/render) is still running —
+    # cancel the durable batch atomically here; the loops tolerate the current
+    # call returning afterwards (late completion is a no-op on cancelled items).
+    batch_cancelled = False
+    try:
+        from video_agent.shorts.render_batch import RenderBatchStore
+
+        batch_store = RenderBatchStore(job_dir)
+        if batch_store.is_active():
+            batch_store.cancel(error="operator requested stop")
+            batch_cancelled = True
+    except Exception:
+        pass
+
     # If a synchronous Short build is orphaned (no live worker owns it), the
     # .stop_requested flag has no consumer — its check_stop only aborts an
     # in-process build. Force any ownerless active short to a terminal status so
@@ -281,6 +296,7 @@ def stop_job(
         "job_id": job_id,
         "stop_requested": True,
         "cancelled": bool(cancelled),
+        "batch_cancelled": batch_cancelled,
         "killed_pids": killed_pids,
         "recovered_shorts": recovered_shorts,
     }

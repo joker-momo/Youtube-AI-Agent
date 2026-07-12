@@ -26,6 +26,10 @@ router = APIRouter()
 _REQUIRED_LONG_ARTIFACTS = ("video.mp4", "script.json", "scenes.json", "seo.json")
 _SHORTS_STUDIO_HTML_PATH = Path(__file__).resolve().parents[1] / "shorts_studio.html"
 
+# Module-level dependency singleton: keeps NEW routes free of Ruff B008
+# (function call in argument default) without churning the legacy routes.
+_JOBS_ROOT_DEP = Depends(get_jobs_root)
+
 
 @router.get("/shorts-studio", response_class=HTMLResponse)
 def get_shorts_studio_page() -> HTMLResponse:
@@ -823,7 +827,7 @@ def post_shorts_studio_render_ideas(
 @router.get("/shorts-studio/jobs/{job_id}/ideas/render-batch")
 def get_shorts_studio_render_batch(
     job_id: str,
-    jobs_root: Path = Depends(get_jobs_root),
+    jobs_root: Path = _JOBS_ROOT_DEP,
 ) -> dict[str, Any]:
     """Durable batch progress snapshot; a stable idle document when none exists."""
     from video_agent.shorts.render_batch import IDLE_SNAPSHOT, RenderBatchStore

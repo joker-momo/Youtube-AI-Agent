@@ -175,6 +175,11 @@ class RenderBatchStore:
     def _finish_item(self, idea_id: str, status: str, **fields: Any) -> dict[str, Any]:
         doc = self._require()
         item = self._item(doc, idea_id)
+        if item.get("status") == "cancelled" or doc.get("status") == "cancelled":
+            # Late arrival after an operator stop: the route already cancelled
+            # the in-flight item, and the expensive call only returned now.
+            # Tolerate it as a no-op — the cancellation outcome stands (AC8).
+            return doc
         if item.get("status") != "running":
             raise ValueError(
                 f"Item {idea_id} is {item.get('status')}, not running — cannot finish it"
@@ -196,6 +201,10 @@ class RenderBatchStore:
     def finish(self) -> dict[str, Any]:
         """Terminal status from item outcomes (spec §8.8)."""
         doc = self._require()
+        if doc.get("status") == "cancelled":
+            # An operator stop landed during the last in-flight item; the
+            # cancellation is the terminal outcome — never overwrite it.
+            return doc
         completed = sum(1 for i in doc["items"] if i.get("status") == "completed")
         failed = sum(1 for i in doc["items"] if i.get("status") == "failed")
         if failed and completed:
@@ -226,11 +235,25 @@ class RenderBatchStore:
         return self._save(doc)
 
     def mark_failed(self, *, error: Any) -> dict[str, Any]:
-        """Whole-batch failure before/without item execution (e.g. enqueue_failed)."""
+        """Whole-batch failure before/without item execution (e.g. enqueue_failed).
+
+        Pending/running items are cancelled so the terminal document keeps the
+        count invariants (remaining_count == 0) — a terminal batch must never
+        show 'failed · N remaining'.
+        """
         doc = self._require()
+        reason = _bounded_error(error)
+        now = _now()
+        for item in doc["items"]:
+            if item.get("status") in ("pending", "running"):
+                item["status"] = "cancelled"
+                item["error"] = reason
+                item["completed_at"] = now
         doc["status"] = "failed"
-        doc["error"] = _bounded_error(error)
-        doc["completed_at"] = _now()
+        doc["error"] = reason
+        doc["completed_at"] = now
+        doc["current_idea_id"] = None
+        doc["current_position"] = None
         return self._save(doc)
 
     # --------------------------------------------------------------- recovery --
@@ -272,8 +295,21 @@ class BatchProgress:
     def __init__(self, store: RenderBatchStore):
         self.store = store
 
-    def item_started(self, idea_id: str) -> None:
+    def is_cancelled(self) -> bool:
+        doc = self.store.load()
+        return bool(doc) and doc.get("status") == "cancelled"
+
+    def item_started(self, idea_id: str) -> bool:
+        """Start the item; False when the batch was cancelled in the meantime.
+
+        Covers the race between a loop's stop-flag check and the item start:
+        an operator stop that lands in that window must halt the loop instead
+        of crashing it.
+        """
+        if self.is_cancelled():
+            return False
         self.store.start_item(idea_id)
+        return True
 
     def item_completed(self, idea_id: str, short_id: str | None) -> None:
         self.store.complete_item(idea_id, short_id=short_id)

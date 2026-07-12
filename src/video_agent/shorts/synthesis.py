@@ -251,6 +251,7 @@ def render_selected_short_ideas(
     failed_count = 0
     skipped_count = 0
 
+    batch_stopped = False
     for idea in selected_ideas:
         idea_id = str(idea.get("idea_id"))
         prior_short_ids = _prior_short_ids_for_idea(long_job_dir, idea_id)
@@ -261,11 +262,15 @@ def render_selected_short_ideas(
             # the item is complete with its prior short (force controls
             # replacement of PRE-batch work, spec §8 restart/resume).
             if progress is not None:
-                progress.item_started(idea_id)
+                if not progress.item_started(idea_id):
+                    batch_stopped = True
+                    break
                 progress.item_completed(idea_id, prior_short_ids[0])
             continue
-        if progress is not None:
-            progress.item_started(idea_id)
+        if progress is not None and not progress.item_started(idea_id):
+            # Stop route cancelled the batch in the check/start window (AC8).
+            batch_stopped = True
+            break
 
         if prior_short_ids and force:
             archive_paths: dict[str, str] = {}
@@ -376,9 +381,10 @@ def render_selected_short_ideas(
             }
         )
 
-    if progress is not None:
+    if progress is not None and not batch_stopped:
         # The stop path raised out above (after batch_cancelled); reaching here
-        # means the batch ran to the end of the selection.
+        # means the batch ran to the end of the selection. finish() itself also
+        # refuses to overwrite a cancelled terminal state.
         progress.batch_finished()
 
     blocked_count = failed_count + needs_review_count

@@ -166,6 +166,17 @@ def _resume_render_batch(job_dir: Path, payload: dict) -> tuple[list[str] | None
             f"render batch {batch_id} ordered idea_ids disagree between the queue "
             f"payload {payload_ids} and the persisted batch {batch_ids} — failing closed"
         )
+    from video_agent.shorts.render_batch import TERMINAL_BATCH_STATES
+
+    if str(doc.get("status")) in TERMINAL_BATCH_STATES:
+        # Idempotent queue retry of an already-terminal batch (e.g. bug-506
+        # raised after batch_finished marked it failed): the outcome stands —
+        # nothing left to render, and re-running would double-execute ideas.
+        logger.info(
+            "Render batch %s for job %s is already terminal (%s); nothing to resume.",
+            batch_id, job_dir.name, doc.get("status"),
+        )
+        return [], BatchProgress(store)
     store.recover_for_resume()
     return store.pending_idea_ids(), BatchProgress(store)
 
@@ -187,11 +198,15 @@ def _run_short_infographic_job(job: dict, *, job_dir: Path, channel_path: Path, 
             payload = {}
     idea_ids = list(payload.get("idea_ids") or [])
     force = bool(payload.get("force"))
-    channel_config = read_yaml(channel_path)
 
     batch_idea_ids, progress = _resume_render_batch(job_dir, payload)
     if batch_idea_ids is not None:
         idea_ids = batch_idea_ids
+        if not idea_ids:
+            # Terminal or fully-drained batch on a queue retry — complete the
+            # queue job without re-running or raising (intentional non-loop).
+            return
+    channel_config = read_yaml(channel_path)
 
     def chatgpt_fn(prompt: str) -> str:
         from video_agent.shorts.llm import chatgpt_send_with_recovery
@@ -380,11 +395,15 @@ def _run_shorts_render_selected_ideas_job(job: dict, *, job_dir: Path, channel_p
             payload = {}
     idea_ids = list(payload.get("idea_ids") or [])
     force = bool(payload.get("force"))
-    channel_config = read_yaml(channel_path)
 
     batch_idea_ids, progress = _resume_render_batch(job_dir, payload)
     if batch_idea_ids is not None:
         idea_ids = batch_idea_ids
+        if not idea_ids:
+            # Terminal or fully-drained batch on a queue retry — complete the
+            # queue job without re-running or raising (intentional non-loop).
+            return
+    channel_config = read_yaml(channel_path)
 
     def chatgpt_fn(prompt: str) -> str:
         from video_agent.shorts.llm import chatgpt_send_with_recovery

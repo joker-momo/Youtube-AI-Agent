@@ -3289,7 +3289,7 @@ async function loadShortsIdeasTab(jobId) {
       container.innerHTML = '<div class="ideas-empty">No ideas found. Click "Generate Ideas".</div>';
       return;
     }
-    container.innerHTML = `<div id="shorts-batch-progress" class="shorts-batch-progress" style="display:none"></div>
+    container.innerHTML = `<div id="shorts-batch-progress" class="shorts-batch-progress" role="status" aria-live="polite" style="display:none"></div>
     <div class="shorts-ideas-toolbar">
       <span style="font-size:12px;color:var(--muted)">${ideas.length} ideas generated</span>
       <button class="action-btn" id="sp-select-all-ideas" onclick="spSelectAllIdeas()">Select all eligible</button>
@@ -3315,7 +3315,7 @@ async function loadShortsIdeasTab(jobId) {
       return `
       <div class="idea-card${idea.associated_short ? ' idea-rendered' : ''}">
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
-          ${idea.associated_short ? '' : `<input type="checkbox" class="shorts-idea-checkbox" data-idea-id="${escapeHtml(idea.idea_id || '')}" onchange="spToggleIdeaSelection(this)">`}
+          ${idea.associated_short ? '' : `<input type="checkbox" class="shorts-idea-checkbox" data-idea-id="${escapeHtml(idea.idea_id || '')}" aria-label="Select ${escapeHtml(idea.title || idea.idea_id || 'idea')} (${escapeHtml(idea.idea_id || '')})" onchange="spToggleIdeaSelection(this)">`}
           <div style="flex:1">
             <div class="idea-card-title">${escapeHtml(idea.title || '')} <span style="font-weight:400;color:var(--muted);font-size:12px">(${escapeHtml(idea.idea_id || '')})</span></div>
             <div style="font-size:12px;color:var(--muted);margin-top:2px">
@@ -3345,33 +3345,46 @@ async function loadShortsIdeasTab(jobId) {
 }
 
 // ---- Multi-idea render batch (sequential; spec 2026-07-13) ----
-// Ordered selection: SHORTS_BATCH_SELECTION preserves click order; Select all
-// uses the current visible idea order. Duplicates are impossible (Set-like).
-let SHORTS_BATCH_SELECTION = [];
+// Ordered selection KEYED BY PARENT JOB: idea IDs like idea-01 repeat across
+// jobs, so one global list would leak checks between jobs (Codex review). Each
+// job keeps its own click-ordered list; same-job polls never reset it.
+let SHORTS_BATCH_SELECTION_BY_JOB = {};
+
+function spSelection() {
+  const job = SHORTS_SELECTED_JOB || '';
+  if (!SHORTS_BATCH_SELECTION_BY_JOB[job]) SHORTS_BATCH_SELECTION_BY_JOB[job] = [];
+  return SHORTS_BATCH_SELECTION_BY_JOB[job];
+}
+
+function spSetSelection(ids) {
+  SHORTS_BATCH_SELECTION_BY_JOB[SHORTS_SELECTED_JOB || ''] = ids;
+}
 
 function spToggleIdeaSelection(cb) {
   const id = cb.getAttribute('data-idea-id');
   if (!id) return;
+  const sel = spSelection();
   if (cb.checked) {
-    if (!SHORTS_BATCH_SELECTION.includes(id)) SHORTS_BATCH_SELECTION.push(id);
+    if (!sel.includes(id)) sel.push(id);
   } else {
-    SHORTS_BATCH_SELECTION = SHORTS_BATCH_SELECTION.filter(x => x !== id);
+    spSetSelection(sel.filter(x => x !== id));
   }
   spUpdateSelectionUi();
 }
 
 function spSelectAllIdeas() {
-  SHORTS_BATCH_SELECTION = [];
+  const sel = [];
   document.querySelectorAll('.shorts-idea-checkbox').forEach(cb => {
     cb.checked = true;
     const id = cb.getAttribute('data-idea-id');
-    if (id && !SHORTS_BATCH_SELECTION.includes(id)) SHORTS_BATCH_SELECTION.push(id);
+    if (id && !sel.includes(id)) sel.push(id);
   });
+  spSetSelection(sel);
   spUpdateSelectionUi();
 }
 
 function spClearIdeaSelection() {
-  SHORTS_BATCH_SELECTION = [];
+  spSetSelection([]);
   document.querySelectorAll('.shorts-idea-checkbox').forEach(cb => { cb.checked = false; });
   spUpdateSelectionUi();
 }
@@ -3380,17 +3393,18 @@ function spRestoreIdeaSelection() {
   // The grid re-renders only when idea data changes; an unrelated poll response
   // must never reset the operator's checkboxes.
   const present = new Set();
+  const sel = spSelection();
   document.querySelectorAll('.shorts-idea-checkbox').forEach(cb => {
     const id = cb.getAttribute('data-idea-id');
     present.add(id);
-    cb.checked = SHORTS_BATCH_SELECTION.includes(id);
+    cb.checked = sel.includes(id);
   });
-  SHORTS_BATCH_SELECTION = SHORTS_BATCH_SELECTION.filter(id => present.has(id));
+  spSetSelection(sel.filter(id => present.has(id)));
   spUpdateSelectionUi();
 }
 
 function spUpdateSelectionUi() {
-  const n = SHORTS_BATCH_SELECTION.length;
+  const n = spSelection().length;
   const count = document.getElementById('sp-selected-count');
   if (count) count.textContent = String(n);
   const btn = document.getElementById('sp-render-selected');
@@ -3401,8 +3415,8 @@ function spUpdateSelectionUi() {
 }
 
 async function spRenderSelected(btn) {
-  if (!SHORTS_SELECTED_JOB || !SHORTS_BATCH_SELECTION.length) return;
-  const selectedIdeaIds = SHORTS_BATCH_SELECTION.slice();
+  if (!SHORTS_SELECTED_JOB || !spSelection().length) return;
+  const selectedIdeaIds = spSelection().slice();
   const orig = btn.textContent;
   btn.disabled = true; btn.textContent = '⏳ Enqueuing…';
   try {

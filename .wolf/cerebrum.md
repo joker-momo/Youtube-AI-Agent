@@ -657,3 +657,8 @@ Short KHÔNG có cover deliverable (YouTube Shorts bỏ qua custom thumbnail). �
 - Topic selection remains authoritative (food -> Fresh Fallen Snow). Library beds use a SHA-256-derived per-short+track offset with a 5s intro guard, persist `json/music_selection.json`, and fail rather than silently using the intro when track duration cannot be probed.
 ### Key Learning (2026-07-11): Shorts ChatGPT graphic prompts need the same anti-template guard
 - Shorts `build_scene_image_prompt()` still injects `style-dna.json` palette, soft-panel, and wellness-magazine directives into every AI fallback graphic. This is distinct from long-form's content-first policy and can recreate the rejected repeated-card look; when changing it, add a prompt-level regression test that asserts scene content and visual treatment lead over a fixed palette/template.
+
+### User Preference (2026-07-12): Thumbnail cho khán giả lớn tuổi = thông tin rõ, không bắt suy nghĩ
+- Nguyên tắc operator: "đọc được là phải thấy hiểu được nội dung, cho người ta biết thông tin để người ta cần thì mới ấn vào, còn chung chung người ta không suy nghĩ ra được."
+- Đây là tiêu chí quyết định mọi thumbnail/title copy: thông tin cụ thể (vật thể + giá trị) > câu gợi tò mò mơ hồ. Curiosity-gap kiểu giấu thông tin KHÔNG hợp nhóm 45-75.
+- Đã mã hoá thành contract: docs/specs/2026-07-12-long-form-thumbnail-copy-audience-fit.md + scorer semantic components + per-variant QA gate (bug-530, 3 vòng Codex-verified). Mọi thay đổi copy sau này phải giữ nguyên tắc này.

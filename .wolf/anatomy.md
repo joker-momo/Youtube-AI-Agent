@@ -1,6 +1,6 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-07-11T21:20:20.893Z
+> Auto-maintained by OpenWolf. Last scanned: 2026-07-12T10:55:14.926Z
 > Files: 1059 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../../../../Users/joker/
@@ -1083,7 +1083,7 @@
 - `pipeline.py` — Declares from (~16283 tok)
 - `pipeline.py` — Declares from (~16230 tok)
 - `style_dna.py` — Shared loader for ``configs/<channel>/style-dna.json`` — the single source of (~604 tok)
-- `thumbnail_planner.py` — Thumbnail prompt planner — spec v1.3. (~10207 tok)
+- `thumbnail_planner.py` — Thumbnail prompt planner — spec v1.3. (~12259 tok)
 - `tts_melo_worker.py` — MeloTTS sidecar worker — runs inside the melo venv, driven over JSON-over-stdio. (~594 tok)
 - `tts.py` — TTSClient: synthesize, synthesize_scene_track, synthesize (~4831 tok)
 

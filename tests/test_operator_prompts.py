@@ -117,16 +117,16 @@ def test_script_prompt_forbids_content_repetition_and_enforces_pacing():
     assert "FORWARD MOMENTUM" in prompt
 
 
-def test_seo_prompt_thumbnail_text_uses_competitor_devices():
-    """Competitor thumbnail study (2026-07-06): imperative+age, negation command,
-    and count devices beat pure emotional hooks in the ES 45+/60+ niche."""
+def test_seo_prompt_thumbnail_text_uses_clear_audience_fit_micro_promises():
+    """Readable but cryptic fragments did not tell ES 45+/60+ viewers what
+    practical value they would receive. Copy must be standalone and dignified."""
     prompt = _chatgpt_seo_prompt(SPAIN_CONFIG, VALID_SCRIPT, VALID_SCENES)
-    assert "3-7 words" in prompt
-    assert "IMPERATIVE + AGE" in prompt
-    assert "NEGATION COMMAND" in prompt
-    assert "COUNT:" in prompt
-    assert "HAZ ESTO DESPUÉS DE LOS 50" in prompt
-    assert "use DIFFERENT devices" in prompt
+    assert "4-7 words" in prompt
+    assert "STANDALONE MICRO-PROMISE" in prompt
+    assert "pain-led clarity" in prompt
+    assert "outcome-led practical hope" in prompt
+    assert "action/decision-led specificity" in prompt
+    assert "without reading the YouTube title" in prompt
     assert "3-5 words ALL-CAPS Spanish emotional hook" not in prompt
 
 
@@ -294,7 +294,11 @@ def test_seo_prompt_for_non_spain_spanish_channel_keeps_language_dynamic():
     assert "Spain-first Spanish wellness" not in prompt
 
 
-def test_seo_prompt_forces_age_device_once_per_set():
+def test_seo_prompt_no_longer_forces_the_age_device():
+    """Superseded by docs/specs/2026-07-12-long-form-thumbnail-copy-audience-fit.md:
+    the imperative+age template is optional — forcing it produced generic copy.
+    Age/number strengthen a candidate but are NOT mandatory."""
     prompt = _chatgpt_seo_prompt(SPAIN_CONFIG, VALID_SCRIPT, VALID_SCENES)
-    assert "MANDATORY: at least ONE of the 3 variants uses device 1" in prompt
-    assert "never two negations" in prompt
+    assert "MANDATORY: at least ONE of the 3 variants uses device 1" not in prompt
+    assert "NOT MANDATORY" in prompt
+    assert "do not force an imperative + age template" in prompt

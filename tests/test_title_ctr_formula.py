@@ -47,3 +47,5 @@ def test_keeps_same_pain_angle_and_complementary_rules():
     p = _p()
     assert "SAME PAIN ANGLE" in p
     assert "COMPLEMENTARY, NOT REPETITIVE" in p
+    assert "STANDALONE MICRO-PROMISE" in p
+    assert "without reading the YouTube title" in p

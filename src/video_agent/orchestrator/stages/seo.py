@@ -143,7 +143,64 @@ def _enforce_seo_language_qa(
         or "es-ES"
     )
     actual_language = seo_payload.get("language")
-    if actual_language == expected_language:
+
+    # Deterministic thumbnail-copy enforcement (bug-530 round 3): the pipeline
+    # renders EVERY title_variants[].thumbnail_text into an expensive thumbnail
+    # image, so each variant must independently satisfy the standalone copy
+    # contract — Gemini's holistic PASS is not sufficient.
+    variant_issues: list[str] = []
+    variant_changes: list[str] = []
+    from video_agent.seo.title_scorer import score_variant
+
+    for index, variant in enumerate(seo_payload.get("title_variants") or []):
+        if not isinstance(variant, dict):
+            continue
+        text = str(variant.get("thumbnail_text") or "").strip()
+        if not text:
+            continue
+        detail = score_variant(variant)["breakdown"]["thumbnail_detail"]
+        problems: list[str] = []
+        if detail.get("trust_penalty", 0) > 0:
+            problems.append("uses fear/miracle/authority or unsupported certainty")
+        if detail.get("vagueness_penalty", 0) > 0:
+            problems.append(
+                "is a context-free fragment (fewer than two semantic signal "
+                "classes, or a deictic hook without a concrete object)"
+            )
+        if detail.get("standalone_value_score", 0) < 12:
+            problems.append(
+                "carries insufficient standalone semantic value (no concrete "
+                "object/value a viewer can grasp without the title)"
+            )
+        if problems:
+            variant_issues.append(
+                f"title_variants[{index}].thumbnail_text '{text}' fails the "
+                f"standalone copy contract: " + "; ".join(problems) + "."
+            )
+            variant_changes.append(
+                f"Rewrite title_variants[{index}].thumbnail_text as a standalone "
+                "micro-promise (concrete object/topic PLUS a pain, outcome, "
+                "action or honest specificity signal), per the audience-fit "
+                "thumbnail copy contract."
+            )
+
+    if actual_language == expected_language and not variant_issues:
+        return
+
+    if variant_issues and actual_language == expected_language:
+        updated = dict(qa_payload)
+        updated["verdict"] = "NEEDS_REWORK"
+        issues = list(updated.get("issues") or [])
+        for entry in variant_issues:
+            if entry not in issues:
+                issues.append(entry)
+        updated["issues"] = issues
+        changes = list(updated.get("required_changes") or [])
+        for entry in variant_changes:
+            if entry not in changes:
+                changes.append(entry)
+        updated["required_changes"] = changes
+        _write_json(qa_output, updated)
         return
 
     issue = (
@@ -167,6 +224,9 @@ def _enforce_seo_language_qa(
     issues = list(updated.get("issues") or [])
     if issue not in issues:
         issues.append(issue)
+    for entry in variant_issues:
+        if entry not in issues:
+            issues.append(entry)
     updated["issues"] = issues
     required = (
         f"Set seo.language to exactly {expected_language} and use "
@@ -175,5 +235,8 @@ def _enforce_seo_language_qa(
     changes = list(updated.get("required_changes") or [])
     if required not in changes:
         changes.append(required)
+    for entry in variant_changes:
+        if entry not in changes:
+            changes.append(entry)
     updated["required_changes"] = changes
     _write_json(qa_output, updated)

@@ -454,6 +454,109 @@ def select_visual_preset(category: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Topic-first visual props (2026-07-12)
+#
+# Category presets describe the topic FAMILY, not the video: a salt/heart hook
+# classified as blood_pressure_circulation_heart used to get "walking shoes on
+# a park path". For a 45–75 viewer the image must restate the hook message by
+# itself, so the concrete objects the hook/title actually NAME become the
+# dominant prop and drive the scene; the preset drops to secondary context.
+# ---------------------------------------------------------------------------
+
+_TOPIC_SCENES: dict[str, str] = {
+    "kitchen": (
+        "Spanish home kitchen or dining table, bright and uncluttered, "
+        "with the topic food in clear focus"
+    ),
+    "market": "Spanish supermarket aisle, labels intentionally blurred",
+    "outdoor": "quiet Mediterranean park path or Spanish street in warm daylight",
+    "bedroom": "warm-lit Spanish bedroom in the evening",
+    "living": "Spanish living room or sofa with warm natural light",
+    "home": "Spanish home interior, simple and uncluttered",
+}
+
+# (exact words, word stems, English visual object, scene key). Order matters
+# only within a text scan — first named object wins the scene. Words match
+# whole tokens; stems match token prefixes; never free substrings, so "pan"
+# cannot fire inside "pantalla".
+_TOPIC_VISUAL_VOCABULARY: tuple[tuple[frozenset[str], tuple[str, ...], str, str], ...] = (
+    (frozenset({"sal", "salero", "sodio"}), (), "a salt shaker and visibly salty foods", "kitchen"),
+    (frozenset({"pan", "panes", "tostada", "tostadas"}), (), "loaves of bread or toast", "kitchen"),
+    (frozenset({"cafe", "cafeina"}), (), "a cup of coffee", "kitchen"),
+    (frozenset({"aceite", "oliva"}), (), "a bottle of olive oil", "kitchen"),
+    (frozenset({"avena"}), (), "a bowl of oats", "kitchen"),
+    (frozenset({"chia"}), (), "a bowl of chia pudding", "kitchen"),
+    (frozenset({"yogur"}), (), "a cup of natural yogurt", "kitchen"),
+    (frozenset({"huevo", "huevos"}), (), "fresh eggs", "kitchen"),
+    (frozenset({"leche"}), (), "a glass of milk", "kitchen"),
+    (frozenset({"queso"}), (), "a piece of cheese", "kitchen"),
+    (frozenset({"fruta", "frutas"}), (), "fresh fruit", "kitchen"),
+    (frozenset({"verdura", "verduras", "ensalada"}), (), "fresh vegetables or a salad plate", "kitchen"),
+    (frozenset({"pescado", "salmon", "sardinas"}), (), "a plate of fish", "kitchen"),
+    (frozenset({"carne"}), (), "a lean meat dish", "kitchen"),
+    (frozenset(), ("legumbr",), "a bowl of legumes", "kitchen"),
+    (frozenset({"nueces"}), ("frutos",), "a handful of nuts", "kitchen"),
+    (frozenset(), ("azucar",), "sugar cubes beside a sugar bowl", "kitchen"),
+    (frozenset({"agua"}), ("hidrat",), "a clear glass of water", "kitchen"),
+    (frozenset({"infusion", "manzanilla"}), (), "a cup of herbal tea", "kitchen"),
+    (frozenset({"sopa", "caldo"}), (), "a bowl of soup", "kitchen"),
+    (frozenset({"cena", "cenas"}), (), "a light dinner plate", "kitchen"),
+    (frozenset(), ("desayun",), "a simple breakfast table", "kitchen"),
+    (frozenset({"plato", "platos", "alimento", "alimentos", "comida", "comidas"}), (), "a prepared plate of everyday food", "kitchen"),
+    (frozenset({"fibra"}), (), "fiber-rich vegetables and legumes", "kitchen"),
+    (frozenset({"colageno"}), (), "collagen-rich foods such as broth, fish, and citrus", "kitchen"),
+    (frozenset(), ("protein",), "a simple high-protein meal", "kitchen"),
+    (frozenset(), ("vitamin",), "vitamin-rich fresh foods", "kitchen"),
+    (frozenset({"corazon"}), (), "heart-healthy fresh foods (vegetables, olive oil, fish)", "kitchen"),
+    (frozenset({"etiqueta", "etiquetas", "envase", "supermercado"}), (), "two food packages compared label to label, labels blurred", "market"),
+    (frozenset({"paseo", "pasos", "andar"}), ("camin",), "walking shoes mid-step", "outdoor"),
+    (frozenset({"escaleras"}), (), "home stairs being climbed", "home"),
+    (frozenset({"ejercicio", "ejercicios"}), ("estir",), "a simple home stretching pose", "living"),
+    (frozenset(), ("muscul",), "a light dumbbell or resistance band", "living"),
+    (frozenset({"pantalla", "pantallas", "movil", "telefono"}), (), "a glowing phone or screen at night", "bedroom"),
+    (frozenset({"dormir", "sueno", "insomnio", "siesta"}), ("duerm",), "a bed with a warm bedside lamp", "bedroom"),
+    (frozenset({"rodilla", "rodillas"}), (), "a hand resting on a knee", "home"),
+    (frozenset({"espalda"}), (), "a hand pressed to the lower back", "home"),
+    (frozenset({"memoria", "olvido", "olvidos"}), (), "house keys and a wall calendar", "home"),
+)
+
+_TOPIC_TOKEN_RE = re.compile(r"[a-z]+")
+
+
+def _match_topic_entry(token: str) -> tuple[str, str] | None:
+    for words, stems, phrase, scene in _TOPIC_VISUAL_VOCABULARY:
+        if token in words or any(token.startswith(stem) for stem in stems):
+            return phrase, scene
+    return None
+
+
+def derive_topic_props(title: str, thumbnail_text: str = "") -> list[str]:
+    """Concrete visual objects the hook/title name, hook-first, max 3.
+
+    Deterministic and offline: whole-token (or stem-prefix) matches against a
+    curated Spanish→visual vocabulary. Hook text is scanned before the title
+    because the hook IS the message the image must restate."""
+    return [phrase for phrase, _ in _derive_topic_visuals(title, thumbnail_text)]
+
+
+def _derive_topic_visuals(title: str, thumbnail_text: str) -> list[tuple[str, str]]:
+    ordered_text = f"{thumbnail_text} {title}"
+    tokens = _TOPIC_TOKEN_RE.findall(
+        normalize_for_thumbnail_classification(ordered_text)
+    )
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for token in tokens:
+        hit = _match_topic_entry(token)
+        if hit and hit[0] not in seen:
+            seen.add(hit[0])
+            out.append(hit)
+        if len(out) >= 3:
+            break
+    return out
+
+
+# ---------------------------------------------------------------------------
 # §9.1 / §9.2 Merge helpers
 # ---------------------------------------------------------------------------
 
@@ -766,20 +869,26 @@ def build_thumbnail_prompt(plan: dict) -> str:
         "Use realistic physical objects only.\n"
         "No icons, stickers, emojis, medical diagrams, or product labels.\n"
         "\n"
-        "Distinctive subject (MANDATORY):\n"
-        "The thumbnail MUST visually feature the SPECIFIC, distinctive subject named in "
-        "the Topic above — the concrete event, activity, place, food, or object that makes "
-        "THIS exact video unique (e.g. if the topic mentions watching a football match or "
-        "the World Cup, a TV showing football / a match must be visibly present) — combined "
-        "with the category prop above. Do NOT fall back to a GENERIC category scene (e.g. a "
-        "plain bedroom/clock for anything sleep-adjacent) that could illustrate any video in "
-        "this niche: a viewer must recognise THIS video's specific topic at a glance.\n"
+        "Message match (MANDATORY):\n"
+        "The viewer is a Spanish adult aged 45-75 scanning a phone feed. From the "
+        "IMAGE ALONE — before reading any text — they must understand what this "
+        f"video offers. The image must SHOW the same message the hook text states "
+        f"(\"{plan.get('thumbnail_text', '')}\"): depict the exact objects the hook "
+        "names, doing or showing the thing the hook promises. Also feature the "
+        "SPECIFIC, distinctive subject named in the Topic above — the concrete "
+        "event, activity, place, food, or object that makes THIS exact video "
+        "unique (e.g. if the topic mentions watching a football match, a TV "
+        "showing a match must be visibly present). Never fall back to a GENERIC "
+        "category scene that could illustrate any video in this niche.\n"
         "\n"
-        "Composition:\n"
-        "Design for YouTube thumbnail readability.\n"
+        "Composition (SIMPLE beats clever):\n"
+        "Design for YouTube thumbnail readability at feed size.\n"
+        "ONE person + the topic prop(s) + a clean, uncluttered background. "
+        "At most 3 distinct objects in the whole frame; every object must help "
+        "tell the hook's message, remove everything else.\n"
         "High contrast, vivid and attention-grabbing while staying photographic "
         "and trustworthy (not over-saturated or fake).\n"
-        "Reserve clean space for the hook text. Avoid clutter; keep ONE clear focal point.\n"
+        "Reserve clean space for the hook text. Keep ONE clear focal point.\n"
         "Strategy graphics: you MAY add ONE bold red arrow, a red cross + green "
         "check, OR large number badges (1, 2, 3) ONLY when the visual strategy "
         "above calls for them, to guide the eye. No emojis, stickers, logos, "
@@ -872,6 +981,7 @@ def plan_thumbnail_prompts(seo: dict, channel_config: dict) -> list[dict]:
             "persona": persona,
             "scene": primary_preset["scene"],
             "main_prop": merge_main_prop(primary_preset, secondary_preset),
+            "topic_props": [],
             "avoid": merge_avoid_lists(
                 primary_preset, secondary_preset, profile["risk_level"]
             ),
@@ -881,6 +991,22 @@ def plan_thumbnail_prompts(seo: dict, channel_config: dict) -> list[dict]:
             "persona_reference": persona_reference,
             "persona_locked": bool(persona_reference),
         }
+        # Topic-first override: when the hook/title name concrete objects,
+        # those objects lead the composition and pick the scene; the category
+        # preset becomes secondary context only (2026-07-12).
+        topic_visuals = _derive_topic_visuals(
+            variant["title"], variant["thumbnail_text"]
+        )
+        if topic_visuals:
+            topic_phrases = [phrase for phrase, _ in topic_visuals]
+            plan["topic_props"] = topic_phrases
+            plan["scene"] = _TOPIC_SCENES[topic_visuals[0][1]]
+            plan["main_prop"] = (
+                f"{'; '.join(topic_phrases)} — the exact objects the hook text "
+                "names. These MUST be the dominant, unmistakable props. "
+                f"Category context (secondary only): {plan['main_prop']}"
+            )
+
         plan["category_safety_rules"] = safety_rules_for_category(
             plan["primary_category"], plan["risk_level"], plan["avoid"]
         )

@@ -502,3 +502,72 @@ def test_persona_identity_lock_only_when_reference_configured():
     for plan in unlocked:
         assert plan["persona_locked"] is False
         assert "RECURRING PRESENTER" not in plan["prompt"]
+
+
+# --- topic-first visual props (2026-07-12) ----------------------------------
+# The image must convey the hook message by itself: the concrete objects the
+# hook/title name become the DOMINANT prop, the category preset drops to
+# secondary context, and the scene follows the topic object class.
+
+_SEO_SALT_HEART = {
+    "title": "4 alimentos que protegen tu corazón y el peligro oculto de la sal",
+    "title_variants": [
+        {
+            "title": "No es el salero: cómo cuidar el corazón después de los 45",
+            "thumbnail_text": "MENOS SAL, CUIDA TU CORAZÓN",
+        }
+    ],
+}
+
+
+def test_derive_topic_props_extracts_salt_and_heart_foods_from_hook():
+    props = tp.derive_topic_props(
+        "No es el salero: cómo cuidar el corazón después de los 45",
+        "MENOS SAL, CUIDA TU CORAZÓN",
+    )
+    joined = " ".join(props).lower()
+    assert "salt" in joined
+    assert props, "hook names concrete objects; extraction must not be empty"
+
+
+def test_salt_heart_plan_prop_shows_salt_not_category_walking_shoes():
+    plans = tp.plan_thumbnail_prompts(_SEO_SALT_HEART, {})
+    prop = plans[0]["main_prop"].lower()
+    scene = plans[0]["scene"].lower()
+    assert "salt" in prop
+    # Category preset (blood_pressure -> walking shoes / park path) must not
+    # lead the composition for a salt/food hook.
+    assert not prop.startswith("walking shoes")
+    assert "park path" not in scene
+    assert "kitchen" in scene or "dining" in scene or "table" in scene
+
+
+def test_prompt_message_match_demands_image_alone_understanding():
+    plans = tp.plan_thumbnail_prompts(_SEO_SALT_HEART, {})
+    prompt = plans[0]["prompt"]
+    assert "IMAGE ALONE" in prompt
+    assert "MENOS SAL, CUIDA TU CORAZÓN" in prompt
+    assert "at most 3" in prompt.lower() or "no more than 3" in prompt.lower()
+
+
+def test_no_topic_object_falls_back_to_category_preset_prop():
+    seo = {
+        "title": "La rutina que cambia tu semana",
+        "title_variants": [
+            {"title": "La rutina que cambia tu semana", "thumbnail_text": "CAMBIA TU SEMANA"}
+        ],
+    }
+    plans = tp.plan_thumbnail_prompts(seo, {})
+    preset = tp.select_visual_preset(plans[0]["primary_category"])
+    assert plans[0]["main_prop"].startswith(str(preset["main_prop"]))
+    assert plans[0]["scene"] == preset["scene"]
+
+
+def test_derive_topic_props_pantalla_is_screen_never_bread():
+    props = tp.derive_topic_props(
+        "Por qué la pantalla te roba el sueño",
+        "APAGA LA PANTALLA POR LA NOCHE",
+    )
+    joined = " ".join(props).lower()
+    assert "screen" in joined or "phone" in joined
+    assert "bread" not in joined

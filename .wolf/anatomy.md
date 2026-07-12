@@ -1,6 +1,6 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-07-12T10:55:14.926Z
+> Auto-maintained by OpenWolf. Last scanned: 2026-07-12T11:38:56.069Z
 > Files: 1059 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../../../../Users/joker/
@@ -1083,7 +1083,7 @@
 - `pipeline.py` — Declares from (~16283 tok)
 - `pipeline.py` — Declares from (~16230 tok)
 - `style_dna.py` — Shared loader for ``configs/<channel>/style-dna.json`` — the single source of (~604 tok)
-- `thumbnail_planner.py` — Thumbnail prompt planner — spec v1.3. (~12259 tok)
+- `thumbnail_planner.py` — Thumbnail prompt planner — spec v1.3. (~12324 tok)
 - `tts_melo_worker.py` — MeloTTS sidecar worker — runs inside the melo venv, driven over JSON-over-stdio. (~594 tok)
 - `tts.py` — TTSClient: synthesize, synthesize_scene_track, synthesize (~4831 tok)
 
@@ -1103,7 +1103,7 @@
 
 ## src/video_agent/browser_worker/
 
-- `app.py` — API: 2 endpoints (~12754 tok)
+- `app.py` — API: 2 endpoints (~12842 tok)
 
 ## src/video_agent/browser_worker/drivers/
 
@@ -1171,7 +1171,7 @@
 - `candidate_scorer.py` — Score Short candidates for standalone retention/funnel potential. (~1533 tok)
 - `frames.py` — Canonical seconds→frames contract for the Shorts compiled visual timeline. (~442 tok)
 - `idea_preservation.py` — derive_idea_contract, derive_idea_items, ensure_script_idea_fields, validate_script_idea_contract (~11097 tok)
-- `idea_prompts.py` — short_ideas_prompt (~1503 tok)
+- `idea_prompts.py` — short_ideas_prompt (~1575 tok)
 - `idea_scorer.py` — valid_scene_id_set, normalize_text_key, covers_distinct_parts, has_strong_curiosity_phrase (~2509 tok)
 - `llm_history.py` — Per-Short LLM call history recorder. (~3344 tok)
 - `llm.py` — Shorts AI role wiring (spec v6 §2 + §3). (~2084 tok)
@@ -1180,7 +1180,7 @@
 - `paths.py` — Canonical storage-layout paths for the Shorts autopilot. (~1993 tok)
 - `paths.py` — Canonical storage-layout paths for the Shorts autopilot. (~1940 tok)
 - `performance_memory.py` — write_performance_memory (~608 tok)
-- `prompts.py` — Strict, JSON-only, Spain-first prompts for Short script / scene / QA generation. (~28248 tok)
+- `prompts.py` — Strict, JSON-only, Spain-first prompts for Short script / scene / QA generation. (~28436 tok)
 - `prompts.py` — Strict, JSON-only, Spain-first prompts for Short script / scene / QA generation. (~26358 tok)
 - `qa_common.py` — Shared QA classes, constants and leaf helpers. (~1986 tok)
 - `qa_normalize.py` — Normalize raw QA issues into structured NormalizedIssue records. (~9104 tok)
@@ -1192,7 +1192,7 @@
 - `short_builder.py` — Build one Short end to end: generate → QA (regen loop) → audio → mix → render. (~10242 tok)
 - `short_scene_builder.py` — Spec v6 §2.4 — ChatGPT generates Short scenes AND picks layouts. (~6581 tok)
 - `short_script_builder.py` — Spec v6 §2.3 — Generate + persist a Short script via ChatGPT. (~1524 tok)
-- `short_seo_builder.py` — Build ``short_seo.json`` for a Short (LLM-generated, parsed + normalized). (~5999 tok)
+- `short_seo_builder.py` — Build ``short_seo.json`` for a Short (LLM-generated, parsed + normalized). (~6191 tok)
 - `source_map.py` — Build ``short_source_map.json`` linking a Short back to long-video scenes. (~2731 tok)
 - `status.py` — Summarize Shorts state for UI + orphaned-Short recovery (recover_stale_short / force_terminate_orphaned_shorts / short_owner_is_alive). (~2300 tok)
 - `status.py` — Summarize Shorts state for the jobs list / Shorts tab. (~3554 tok)
@@ -1246,12 +1246,12 @@
 - `__init__.py` (~41 tok)
 - `build.py` — Orchestrate static infographic Shorts (plan → poster → QA → music → render). (~6122 tok)
 - `plan.py` — LLM-driven infographic poster plan (pick format + fill), validated. (~935 tok)
-- `poster_prompt.py` — Per-format 9:16 infographic poster prompts (AI-only, text baked in). (~2445 tok)
+- `poster_prompt.py` — Per-format 9:16 infographic poster prompts (AI-only, text baked in). (~2863 tok)
 - `poster.py` — Generate the infographic poster PNG via the injected image function. (~532 tok)
 - `qa.py` — Deterministic text-presence QA gate over a poster's read-back text. (~343 tok)
 - `render_props.py` — Render props for the Remotion InfographicShort composition. (~380 tok)
 - `render.py` — Render an infographic short via Remotion (direct InfographicShort composition). (~748 tok)
-- `schema.py` — Poster-plan schema + validation for infographic shorts. (~995 tok)
+- `schema.py` — Poster-plan schema + validation for infographic shorts. (~1170 tok)
 - `seo.py` — SEO/title artifact for infographic Shorts, reusing the shipped Shorts title rules. (~668 tok)
 - `voiceover.py` — Narration text for an infographic short (read the poster) + TTS synth. (~492 tok)
 
@@ -1383,7 +1383,7 @@
 - `test_script_stage.py` — channel_path, idea_payload, valid_script_payload, valid_scenes_payload (~10502 tok)
 - `test_seo_chapter_timestamps.py` — Tests for YouTube chapter recomputation incl. section-anchored boundaries (bug-528) + even-spacing fallback. (~4200 tok)
 - `test_short_graphic_image_migration.py` — test_video_covered_marker_never_skips_ai_for_graphic_scenes, test_video_covered_marker_uses_native_v (~1894 tok)
-- `test_short_title_formulas.py` — Shorts titles use the 4 scroll-stopper formulas, <=40 chars, age-framed. (~1468 tok)
+- `test_short_title_formulas.py` — Shorts titles use the 4 scroll-stopper formulas, <=40 chars, age-framed. (~2039 tok)
 - `test_shorts_api.py` — Shorts Autopilot v5 — Phase 7: backend API + status/source-url. (~6888 tok)
 - `test_shorts_asset_schedule.py` — Compiled-schedule + manifest-adapter tests (spec v3.2.3 §15/§16/§16.1/§17, §41.2). (~4174 tok)
 - `test_shorts_audio_sync.py` — test_audio_visual_delta_uses_tail_constants, test_audio_visual_delta_pass_threshold, test_audio_visu (~1046 tok)
@@ -1474,7 +1474,7 @@
 - `test_infographic_seo.py` — test_build_infographic_seo_writes_title_aligned_with_hook, llm_fn (~338 tok)
 - `test_music_excerpt.py` — Topic-track mapping, deterministic excerpt bounds, ffmpeg seek, failure semantics, and audit metadata. (~1000 tok)
 - `test_paths.py` — test_infographic_artifact_names_exist (~75 tok)
-- `test_plan.py` — test_build_poster_plan_parses_validates_and_sets_age, llm_fn, test_invalid_then_valid_retries, llm_f (~378 tok)
+- `test_plan.py` — test_build_poster_plan_parses_validates_and_sets_age, llm_fn, test_invalid_then_valid_retries, llm_f (~616 tok)
 - `test_poster_prompt.py` — test_prompt_contains_title_and_all_item_labels, test_numbered_tips_prompt_requests_numbers, test_war (~2522 tok)
 - `test_poster.py` — test_generate_poster_writes_png_logs_and_passes_raw_body, fake_image_fn (~383 tok)
 - `test_qa.py` — test_pass_when_all_text_present, test_fail_lists_missing_labels, test_unavailable_reader_yields_qa_u (~223 tok)

@@ -31,11 +31,14 @@ def test_prompt_teaches_scroll_stopper_and_40_char_limit():
 
 
 def test_prompt_lists_all_four_formulas():
+    # Call Out marker changed 2026-07-12 (standalone micro-promise): the old
+    # "escucha esto" example was a banned context-free fragment; the formula
+    # now teaches a topic-named call out ("revisa tu sal").
     p = short_seo_prompt(CFG, PLAN, SCRIPT).lower()
     assert "error al" in p                 # 1 Warning
     assert "60 segundos" in p              # 2 Quick Win
     assert "la verdad científica" in p     # 3 Myth-Buster
-    assert "escucha esto" in p             # 4 Call Out
+    assert "revisa tu sal" in p            # 4 Call Out (topic-named)
 
 
 def test_age_frame_defaults_to_channel_floor():
@@ -121,3 +124,54 @@ def test_fallback_preserves_accents_from_hook():
     fb = _fallback_title_from_hook("El título largo y el pan", 45)
     assert "título" in fb
     assert "titulo" not in fb.lower().replace("título", "")
+
+
+# --- standalone micro-promise for Shorts titles (2026-07-12, mirrors bug-530) --
+
+
+def test_prompt_call_out_example_names_a_topic_not_escucha_esto():
+    """Call Out must end with the concrete topic; 'escucha esto' hides it."""
+    p = short_seo_prompt(CFG, PLAN, SCRIPT)
+    assert "escucha esto" not in p.lower()
+    assert "deja de hacer esto" not in p.lower()
+    low = p.lower()
+    assert "esto" in low or "concrete topic" in low  # ban is explained
+    assert "concrete topic" in low
+
+
+def test_title_issues_flags_deictic_esto_titles():
+    from video_agent.shorts.short_seo_builder import _title_issues
+
+    issues = _title_issues(
+        "Si tienes más de 60, escucha esto", "La sal oculta daña tu corazón"
+    )
+    assert any("esto" in i.lower() for i in issues)
+
+
+def test_title_issues_passes_topic_named_call_out():
+    from video_agent.shorts.short_seo_builder import _title_issues
+
+    issues = _title_issues(
+        "Si tienes más de 60, revisa tu sal", "La sal oculta daña tu corazón"
+    )
+    assert issues == []
+
+
+def test_fallback_title_never_ships_deictic_esto():
+    from video_agent.shorts.short_seo_builder import _fallback_title_from_hook
+
+    # Pathological empty hook — the last-resort title must still name value,
+    # never a context-free 'escucha esto'.
+    fallback = _fallback_title_from_hook("", 60)
+    assert "esto" not in fallback.lower()
+    assert len(fallback) <= 40
+
+
+def test_idea_prompt_requires_topic_object_in_hook_text():
+    from video_agent.shorts.idea_prompts import short_ideas_prompt
+
+    p = short_ideas_prompt(CFG, {"full_narration": "x", "title": "t"})
+    low = p.lower()
+    assert "hook_text" in low
+    assert "concrete topic" in low
+    assert "señales clave" in low  # named as the banned vague pattern

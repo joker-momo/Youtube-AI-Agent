@@ -234,3 +234,47 @@ def test_item_notes_get_tiny_mini_icons():
     body = build_poster_body(_plan("numbered_tips", [{"label": "Pasas", "note": "mejoran la digestión"}] * 5))
     lowered = body.lower()
     assert "mini-icon" in lowered or "mini icon" in lowered
+
+
+# --- message match (2026-07-12, mirrors long-form bug-532) -------------------
+
+
+def _salt_plan() -> dict:
+    return {
+        "poster_format": "numbered_tips",
+        "title": "Auditoría fácil de la sal",
+        "subtitle": "Compara etiquetas sin complicarte",
+        "hook_line": "Sal: compárala en 5 pasos",
+        "items": [
+            {"label": "Lee la sal", "note": "Compara gramos por 100 g"},
+            {"label": "Mira ingredientes", "note": "Anota los añadidos"},
+            {"label": "Comprueba el yodo", "note": "Revisa si es yodada"},
+            {"label": "Valora el formato", "note": "Fina, gruesa o escamas"},
+            {"label": "Calcula el coste", "note": "Precio por kilo"},
+        ],
+        "cta": "Revisa antes de elegir",
+    }
+
+
+def test_poster_prompt_message_match_names_topic_objects():
+    from video_agent.shorts.infographic.poster_prompt import build_poster_body
+
+    body = build_poster_body(_salt_plan())
+    assert "MESSAGE MATCH" in body
+    assert "salt" in body.lower()  # derive_topic_props: sal -> salt objects
+
+
+def test_poster_prompt_message_match_survives_unknown_topic():
+    from video_agent.shorts.infographic.poster_prompt import build_poster_body
+
+    plan = _salt_plan()
+    plan.update(title="Rutina que cambia tu semana", subtitle="", hook_line="Cambia tu semana")
+    plan["items"] = [
+        {"label": "Ordena tu semana", "note": ""},
+        {"label": "Marca un hueco", "note": ""},
+        {"label": "Apunta el logro", "note": ""},
+        {"label": "Repite el ciclo", "note": ""},
+        {"label": "Celebra el avance", "note": ""},
+    ]
+    body = build_poster_body(plan)
+    assert "MESSAGE MATCH" in body  # generic message-match rule still present

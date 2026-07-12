@@ -58,7 +58,10 @@ def test_short_seo_prompt_uses_four_scroll_stopper_formulas_not_old_device():
     assert "error al" in low            # Warning formula
     assert "60 segundos" in low         # Quick Win
     assert "la verdad científica" in low  # Myth-Buster
-    assert "escucha esto" in low        # Call Out
+    # Call Out marker changed 2026-07-12: "escucha esto" was a banned
+    # context-free fragment; the formula now teaches a topic-named call out.
+    assert "si tienes más de" in low    # Call Out
+    assert "escucha esto" not in low
     assert "40" in p
     # Old contradictory rules GONE.
     assert "option B wins" not in p

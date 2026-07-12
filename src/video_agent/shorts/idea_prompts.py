@@ -60,6 +60,7 @@ Field rules:
 - idea_type must be exactly "synthesis".
 - risk_level must be exactly one of: "lifestyle", "soft_health", "medical_sensitive".
 - hook_text must be 2–6 words, uppercase Spanish, suitable for thumbnail/on-screen hook.
+- hook_text must NAME the concrete topic object (CAFÉ, SAL, PAN, ESPALDA…) plus a pain/action/benefit word — a 45+ viewer must understand WHAT it is about from the hook alone. Context-free fragments like "5 SEÑALES CLAVE" or "ESCUCHA ESTO" are banned.
 - narration_seed must be 80–180 words and summarize only the selected source scenes for that idea.
 - key_points must each include source_scene_ids.
 - Every key_points[*].source_scene_ids must be a subset of the idea's source_scene_ids.

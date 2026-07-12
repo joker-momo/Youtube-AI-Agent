@@ -38,6 +38,11 @@ _ITEM_WORD_CAPS: dict[str, int] = {
 }
 _TIME_RE = re.compile(r"^\d{1,2}(?:[:h]\d{0,2})?$")
 
+# Standalone micro-promise (2026-07-12, mirrors long-form bug-530): a poster
+# header hiding its content behind "esto/eso" tells the 45+ viewer nothing —
+# title and hook_line must name the concrete topic.
+_DEICTIC_RE = re.compile(r"\b(esto|eso|aquello)\b", re.IGNORECASE)
+
 
 def resolve_poster_format(fmt: str) -> str:
     """Normalize an idea/plan format to a valid poster format ('' if unknown)."""
@@ -64,6 +69,13 @@ def validate_poster_plan(plan: dict[str, Any]) -> list[str]:
         issues.append("title is empty")
     elif len(title.split()) > _MAX_TITLE_WORDS:
         issues.append(f"title has more than {_MAX_TITLE_WORDS} words")
+    for field in ("title", "hook_line"):
+        value = str(plan.get(field) or "").strip()
+        if value and _DEICTIC_RE.search(value):
+            issues.append(
+                f"{field} hides the content behind 'esto/eso' — name the concrete "
+                "topic object instead (e.g. 'Sal: compárala en 5 pasos')"
+            )
     lo, hi = POSTER_FORMATS[fmt]
     items = _items(plan)
     if not (lo <= len(items) <= hi):

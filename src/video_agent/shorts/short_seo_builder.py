@@ -25,8 +25,13 @@ _TITLE_FORMULA_SIGNALS = (
     re.compile(r"\(sin ", re.IGNORECASE),                    # Quick Win "(Sin …)"
     re.compile(r"la verdad", re.IGNORECASE),                 # Myth-Buster ("¿…? La verdad")
     re.compile(r"si tienes m[aá]s de", re.IGNORECASE),       # Call Out
-    re.compile(r"escucha esto|necesitas saber", re.IGNORECASE),  # Call Out
+    re.compile(r"necesitas saber", re.IGNORECASE),           # Call Out
 )
+
+# Standalone micro-promise (2026-07-12, mirrors long-form bug-530): a title
+# that hides its content behind a bare deictic ("escucha esto", "deja de hacer
+# esto") tells the 45+ viewer nothing — they will not infer, they scroll past.
+_DEICTIC_TITLE_RE = re.compile(r"\b(esto|eso|aquello)\b", re.IGNORECASE)
 # NOTE: a bare "¿…?" is intentionally NOT a formula signal — a plain question
 # like "¿Café en ayunas?" is not a complete Myth-Buster (that needs "La verdad
 # científica"). Each of the 4 formulas above has a stronger, specific marker.
@@ -72,6 +77,12 @@ def _title_issues(title: str, hook: str) -> list[str]:
         issues.append(
             "Title shares no content word with the hook; the first 3 seconds of the "
             "Short must echo the title, so the title must be built from the hook's topic."
+        )
+    if _DEICTIC_TITLE_RE.search(t):
+        issues.append(
+            "Title hides its content behind 'esto/eso' — a context-free fragment. "
+            "Name the concrete topic object and action instead "
+            "(e.g. 'Si tienes más de 60, revisa tu sal', never 'escucha esto')."
         )
     return issues
 
@@ -201,8 +212,9 @@ def _fallback_title_from_hook(hook: str, min_age: int) -> str:
         if len(word) <= budget and len(prefix + word) <= MAX_SHORT_TITLE_CHARS:
             return prefix + word
     # No hook word fits (empty/pathological hook) — a generic Call Out is still a
-    # valid formula and <=40; the hook-alignment check is skipped when hook is empty.
-    return f"Si tienes más de {min_age}, escucha esto"
+    # valid formula and <=40; the hook-alignment check is skipped when hook is
+    # empty. Never 'escucha esto': even the last resort must not ship a deictic.
+    return f"Si tienes más de {min_age}, cuida tu salud"
 
 
 # Generic gym/virality tags that almost never match a Spain-first wellness

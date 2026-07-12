@@ -26,7 +26,7 @@ def test_invalid_then_valid_retries():
         if calls["n"] == 1:
             return json.dumps({"poster_format": "map_grid", "title": "x", "items": []})
         return json.dumps({"poster_format": "numbered_tips", "title": "Tips",
-                           "hook_line": "Si tienes más de 45: haz esto",
+                           "hook_line": "Si tienes más de 45: mejora tus hábitos",
                            "items": [{"label": f"t{n}"} for n in range(5)], "cta": "Sigue"})
     plan = build_poster_plan(CFG, {"topic": "habitos"}, llm_fn)
     assert plan["poster_format"] == "numbered_tips"

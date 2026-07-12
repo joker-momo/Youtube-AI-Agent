@@ -30,6 +30,41 @@ def _labels(plan: dict[str, Any]) -> list[dict[str, Any]]:
     return [i for i in raw if isinstance(i, dict)] if isinstance(raw, list) else []
 
 
+def _message_match_line(plan: dict[str, Any]) -> str:
+    """Topic-first visual contract (2026-07-12, mirrors long-form bug-532).
+
+    The poster imagery must restate the topic by itself: derive the concrete
+    objects the header/items actually name (same deterministic vocabulary the
+    long-form thumbnail planner uses) and demand they appear as the hero/topic
+    imagery, so a 45+ viewer understands the poster without reading small text.
+    """
+    from video_agent.thumbnail_planner import derive_topic_props
+
+    header = " ".join(
+        str(plan.get(k) or "").strip() for k in ("title", "hook_line")
+    ).strip()
+    body_text = " ".join(
+        [str(plan.get("subtitle") or "").strip()]
+        + [str(i.get("label") or "").strip() for i in _labels(plan)]
+    ).strip()
+    props = derive_topic_props(body_text, header)
+
+    line = (
+        "MESSAGE MATCH (MANDATORY): from the imagery and BOLD labels ALONE — "
+        "without reading any small text — a Spanish adult aged 45+ scanning a "
+        "phone feed must understand what this poster is about and what to do. "
+        "Every item's photo/icon must depict that item's own words, never a "
+        "generic wellness image."
+    )
+    if props:
+        line += (
+            " The hero/topic imagery must visibly show: "
+            + "; ".join(props)
+            + " — the exact objects the poster text names."
+        )
+    return line
+
+
 def _format_block(plan: dict[str, Any]) -> str:
     fmt = str(plan.get("poster_format") or "")
     items = _labels(plan)
@@ -154,6 +189,7 @@ def build_poster_body(plan: dict[str, Any], channel_config: dict[str, Any] | Non
     if subtitle:
         body += f' Subtitle under it: "{subtitle}".'
     body += "\n\n" + _header_style_line(subtitle)
+    body += "\n\n" + _message_match_line(plan)
     body += "\n\n" + _format_block(plan)
     body += _brand_identity_line(channel_config)
     return body

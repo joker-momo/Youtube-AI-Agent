@@ -77,3 +77,14 @@ def test_legacy_idea_format_aliases_map_to_poster_formats():
     assert resolve_poster_format("recap") == "category_grid"
     assert resolve_poster_format("timeline_routine") == "timeline_routine"  # identity
     assert resolve_poster_format("unknown_junk") == ""  # unmapped -> let the LLM pick
+
+
+def test_poster_plan_flags_deictic_title_or_hook_line():
+    plan = {
+        "poster_format": "numbered_tips",
+        "title": "No hagas esto cada día",
+        "hook_line": "Escucha esto hoy",
+        "items": [{"label": f"Paso {i}"} for i in range(1, 6)],
+    }
+    issues = validate_poster_plan(plan)
+    assert any("esto" in i.lower() for i in issues)

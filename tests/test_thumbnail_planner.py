@@ -571,3 +571,14 @@ def test_derive_topic_props_pantalla_is_screen_never_bread():
     joined = " ".join(props).lower()
     assert "screen" in joined or "phone" in joined
     assert "bread" not in joined
+
+
+def test_derive_topic_props_pasos_process_steps_never_walking_shoes():
+    """'en 5 pasos' means process steps, not walking — no shoes in a salt poster."""
+    props = tp.derive_topic_props(
+        "Auditoría fácil de la sal Compara etiquetas",
+        "Sal: compárala en 5 pasos",
+    )
+    joined = " ".join(props).lower()
+    assert "salt" in joined
+    assert "walking" not in joined

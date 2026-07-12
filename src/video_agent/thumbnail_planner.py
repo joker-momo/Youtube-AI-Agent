@@ -509,7 +509,10 @@ _TOPIC_VISUAL_VOCABULARY: tuple[tuple[frozenset[str], tuple[str, ...], str, str]
     (frozenset(), ("vitamin",), "vitamin-rich fresh foods", "kitchen"),
     (frozenset({"corazon"}), (), "heart-healthy fresh foods (vegetables, olive oil, fish)", "kitchen"),
     (frozenset({"etiqueta", "etiquetas", "envase", "supermercado"}), (), "two food packages compared label to label, labels blurred", "market"),
-    (frozenset({"paseo", "pasos", "andar"}), ("camin",), "walking shoes mid-step", "outdoor"),
+    # "pasos" is deliberately absent: "en 5 pasos" means PROCESS steps far more
+    # often than walking in this channel's copy (a salt-audit poster once got
+    # walking shoes from it); caminar/paseo/andar carry the walking topics.
+    (frozenset({"paseo", "andar"}), ("camin",), "walking shoes mid-step", "outdoor"),
     (frozenset({"escaleras"}), (), "home stairs being climbed", "home"),
     (frozenset({"ejercicio", "ejercicios"}), ("estir",), "a simple home stretching pose", "living"),
     (frozenset(), ("muscul",), "a light dumbbell or resistance band", "living"),

@@ -28,3 +28,21 @@ def test_is_auth_cookie_preserves_login_drops_bloat():
         assert _is_auth_cookie("gemini", name), name
     assert not _is_auth_cookie("gemini", "_ga")
     assert not _is_auth_cookie("gemini", "CONSENT")
+
+
+def test_safe_asset_path_relative_jobs_prefix_does_not_double(monkeypatch, tmp_path):
+    """A relative out_path that already starts with 'jobs/' must map into the
+    assets root directly — not to '<root>/jobs/…' (which shipped a poster into
+    a stray 'jobs/jobs/…' tree on 2026-07-12)."""
+    from video_agent.browser_worker import app as worker_app
+
+    root = tmp_path / "jobs"
+    root.mkdir()
+    monkeypatch.setenv("WORKER_ASSETS_ROOT", str(root))
+
+    resolved = worker_app._safe_asset_path("jobs/my-job/assets/poster.png")
+    assert resolved == (root / "my-job/assets/poster.png").resolve()
+
+    # Absolute host paths keep working.
+    resolved_abs = worker_app._safe_asset_path(str(root / "my-job/assets/poster.png"))
+    assert resolved_abs == (root / "my-job/assets/poster.png").resolve()

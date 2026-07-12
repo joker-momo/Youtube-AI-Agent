@@ -40,6 +40,11 @@ def _safe_asset_path(out_path: str) -> Path:
     if Path(out_path).is_absolute() and "jobs/" in out_path:
         parts = out_path.split("jobs/", 1)
         out_path = parts[1]
+    elif out_path.startswith("jobs/"):
+        # Relative paths from repo root also carry the 'jobs/' segment; the
+        # assets root itself IS the jobs directory, so keep it un-doubled
+        # (a poster once landed in a stray 'jobs/jobs/…' tree, 2026-07-12).
+        out_path = out_path[len("jobs/"):]
 
     candidate = (root / out_path).resolve() if not Path(out_path).is_absolute() else Path(out_path).resolve()
     try:

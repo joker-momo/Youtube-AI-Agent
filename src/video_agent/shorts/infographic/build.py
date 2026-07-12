@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 import datetime
 import hashlib
+import math
+import os
 import re
 import subprocess
 from collections.abc import Callable
@@ -24,6 +26,10 @@ from video_agent.storage.atomic import atomic_write_json
 
 DEFAULT_STATIC_DURATION_SEC = 15.0
 _ORIGINAL_PROCEDURAL_SOURCE = "procedural_original"
+# Final Like/Subscribe cue length; the cue must OWN its seconds — it may never
+# overlap narration (P1-D), so voice-driven durations reserve at least this tail.
+_ENGAGEMENT_CUE_SEC = 3.0
+
 
 
 def _voice_options(channel_config: dict) -> tuple[bool, float, float, float]:
@@ -68,7 +74,12 @@ def _mix_voice_with_music(
     """
     music_cfg = (channel_config.get("shorts") or {}).get("music") or {}
     infographic_cfg = (channel_config.get("shorts") or {}).get("infographic") or {}
-    bgm_gain_db = float(infographic_cfg.get("music_volume_db", -14.0))
+    # SINGLE-ATTENUATION CONTRACT: prepare_infographic_music_bed already applied
+    # shorts.infographic.music_volume_db when it encoded the bed. Applying it
+    # again here attenuated the music twice (-14dB + -14dB = a nearly silent
+    # -27.8dB bed measured on a real render), so the mixer applies 0dB and lets
+    # ducking be the only additional gain change.
+    bgm_gain_db = 0.0
     # amix's duration=first (inside _mix_bgm_with_narration) matches the NARRATION
     # track's own length, so pad it to the full Short duration first — otherwise the
     # BGM's outro padding would be truncated to the raw speech length.
@@ -123,8 +134,15 @@ def _static_options(channel_config: dict, source: dict) -> tuple[float, bool, st
     return duration_sec, bool(cfg.get("ken_burns", False)), music_track
 
 
+_PROBE_TIMEOUT_SEC = 30
+_ENCODE_TIMEOUT_SEC = 180
+
+
 def probe_audio_duration_seconds(path: Path) -> float:
-    """Track length in seconds via ffprobe; 0.0 when the file is unreadable."""
+    """Track length in seconds via ffprobe; 0.0 when the file is unreadable.
+
+    Bounded by a timeout so a wedged ffprobe can never hang the whole
+    pipeline; NaN/Inf probe output is treated as unreadable."""
     try:
         out = subprocess.run(
             [
@@ -134,9 +152,17 @@ def probe_audio_duration_seconds(path: Path) -> float:
             check=True,
             capture_output=True,
             text=True,
+            timeout=_PROBE_TIMEOUT_SEC,
         ).stdout.strip()
-        return float(out)
-    except (subprocess.CalledProcessError, ValueError, OSError, AttributeError):
+        value = float(out)
+        return value if math.isfinite(value) else 0.0
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        ValueError,
+        OSError,
+        AttributeError,
+    ):
         return 0.0
 
 
@@ -175,6 +201,9 @@ def prepare_infographic_music_bed(
     if music_source == _ORIGINAL_PROCEDURAL_SOURCE:
         from video_agent.shorts.original_bgm import create_original_bgm
 
+        # A channel that switches library -> procedural must not leave a stale
+        # library reproducibility artifact next to a procedural bed.
+        (Path(short_dir) / "json" / paths.SHORT_MUSIC_SELECTION_FILE).unlink(missing_ok=True)
         return create_original_bgm(
             short_dir,
             duration_sec=duration_sec,
@@ -190,6 +219,11 @@ def prepare_infographic_music_bed(
     music_file = resolve_music_file(music_track, channel_config)
     if music_file is None or not music_file.exists():
         raise RuntimeError(f"Infographic Short requires an available music track: {music_track}")
+    duration_sec = float(duration_sec)
+    if not math.isfinite(duration_sec) or duration_sec <= 0.0:
+        raise RuntimeError(
+            f"Infographic music bed requires a finite positive duration, got {duration_sec!r}."
+        )
     audio_dir = Path(short_dir) / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
     out_path = audio_dir / "infographic_bgm.m4a"
@@ -201,49 +235,88 @@ def prepare_infographic_music_bed(
     # track the bed starts. An unreadable duration must fail loudly — silently
     # starting at 00:00 would hide a broken library asset.
     track_duration_sec = probe_audio_duration_seconds(music_file)
-    if track_duration_sec <= 0.0:
+    if not math.isfinite(track_duration_sec) or track_duration_sec <= 0.0:
         raise RuntimeError(
             f"Could not read duration of library music track {music_file}; "
             "cannot pick a deterministic excerpt from a broken asset."
         )
-    seed_key = f"{Path(short_dir).name}|{music_track}"
-    offset_sec = round(
-        deterministic_music_excerpt_offset(
-            track_duration_sec,
-            float(duration_sec),
-            seed_key,
-            min_offset_sec=float(cfg.get("music_excerpt_min_offset_sec", 5.0)),
-            end_margin_sec=float(cfg.get("music_excerpt_end_margin_sec", 1.0)),
-        ),
-        2,
+    # Seed carries the PARENT JOB identity too: two jobs can hold shorts with
+    # identical basenames (short-01_idea-01_...), and those must not share an
+    # excerpt. Re-rendering the same short in the same job stays stable.
+    seed_key = f"{_long_job_dir(short_dir).name}|{Path(short_dir).name}|{music_track}"
+    min_offset_sec = float(cfg.get("music_excerpt_min_offset_sec", 5.0))
+    end_margin_sec = float(cfg.get("music_excerpt_end_margin_sec", 1.0))
+    for name, value in (("music_excerpt_min_offset_sec", min_offset_sec),
+                        ("music_excerpt_end_margin_sec", end_margin_sec)):
+        if not math.isfinite(value) or value < 0.0:
+            raise RuntimeError(
+                f"shorts.infographic.{name} must be finite and non-negative, got {value!r}."
+            )
+    raw_offset = deterministic_music_excerpt_offset(
+        track_duration_sec,
+        duration_sec,
+        seed_key,
+        min_offset_sec=min_offset_sec,
+        end_margin_sec=end_margin_sec,
     )
-    subprocess.run(
-        [
-            "ffmpeg", "-y", "-stream_loop", "-1",
-            "-ss", f"{offset_sec:.2f}", "-i", str(music_file),
-            "-t", f"{duration_sec:.2f}",
-            "-af", (
-                f"volume={float(cfg.get('music_volume_db', -14.0))}dB,"
-                f"afade=t=in:st=0:d={float(cfg.get('music_fade_in_sec', 0.16)):.2f},"
-                f"afade=t=out:st={fade_out_start:.2f}:d={fade_out_sec:.2f}"
-            ),
-            "-c:a", "aac", "-b:a", "192k", "-ar", "44100", str(out_path),
-        ],
-        check=True,
-        capture_output=True,
+    # Rounding for serialization must never push the offset outside the legal
+    # bounds (max could otherwise be exceeded by up to 5ms).
+    max_offset_sec = track_duration_sec - duration_sec - end_margin_sec
+    offset_sec = round(raw_offset, 2)
+    if raw_offset > 0.0 and max_offset_sec > 0.0:
+        offset_sec = min(max(offset_sec, min(min_offset_sec, max_offset_sec)), max_offset_sec)
+    # NOTE (single-attenuation contract): music_volume_db is applied HERE and
+    # only here. The voice mixer must pass bgm_gain_db=0 for this bed — see
+    # _mix_voice_with_music.
+    out_bitrate = str(cfg.get("music_bitrate", "192k"))
+    out_sample_rate = int(
+        ((channel_config.get("shorts") or {}).get("music") or {}).get("sample_rate", 44100)
     )
+    tmp_path = out_path.with_suffix(".tmp.m4a")
+    # Encode to a TEMP file and only replace the final bed after validation —
+    # any failure (timeout, ffmpeg error, corrupt output) removes the temp and
+    # preserves whatever good bed already exists at out_path.
+    try:
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-stream_loop", "-1",
+                "-ss", f"{offset_sec:.2f}", "-i", str(music_file),
+                "-t", f"{duration_sec:.2f}",
+                "-af", (
+                    f"volume={float(cfg.get('music_volume_db', -14.0))}dB,"
+                    f"afade=t=in:st=0:d={float(cfg.get('music_fade_in_sec', 0.16)):.2f},"
+                    f"afade=t=out:st={fade_out_start:.2f}:d={fade_out_sec:.2f}"
+                ),
+                "-c:a", "aac", "-b:a", out_bitrate, "-ar", str(out_sample_rate), str(tmp_path),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=_ENCODE_TIMEOUT_SEC,
+        )
+        # Validate the encode BEFORE it becomes the bed: a truncated/corrupt
+        # file must never reach the mixer or the render.
+        encoded_duration = probe_audio_duration_seconds(tmp_path)
+        if not math.isfinite(encoded_duration) or abs(encoded_duration - duration_sec) > 0.75:
+            raise RuntimeError(
+                f"Encoded music bed duration {encoded_duration}s does not match the "
+                f"requested {duration_sec}s; refusing to use a corrupt bed."
+            )
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    os.replace(tmp_path, out_path)
     track_entry = (
         ((channel_config.get("music_library") or {}).get("tracks") or {}).get(music_track) or {}
     )
     # Audit artifact: everything QA needs to reproduce this exact audio bed.
-    atomic_write_json(Path(short_dir) / "json" / "music_selection.json", {
+    atomic_write_json(Path(short_dir) / "json" / paths.SHORT_MUSIC_SELECTION_FILE, {
         "source": "library",
         "track_key": music_track,
         "track_title": str(track_entry.get("title") or music_track),
         "track_file": str(music_file),
         "track_duration_sec": track_duration_sec,
         "excerpt_offset_sec": offset_sec,
-        "excerpt_duration_sec": float(duration_sec),
+        "excerpt_duration_sec": duration_sec,
         "seed_key": seed_key,
         "selection_mode": "deterministic_random_excerpt",
     })
@@ -357,12 +430,30 @@ def run_infographic_short(
 
     voice_duration_sec: float | None = None
     narration_path: Path | None = None
+    engagement_cue_sec = _ENGAGEMENT_CUE_SEC
+    show_engagement_cue = True
     if voice_enabled:
         _progress("voice")
         vfn = voice_fn or synthesize_infographic_voiceover
         narration_path = Path(vfn(short_dir, plan, channel_config))
         voice_duration_sec = round(_wav_duration_seconds(narration_path), 2)
-        duration = max(voice_min, min(voice_max, voice_duration_sec + voice_padding))
+        # The tail after the voice must fit the engagement cue (P1-D): the cue
+        # may never talk over the narration, so the padding is at least the cue
+        # length. When the max-duration clamp bites, the leftover tail decides
+        # the cue: shrink it, and below the useful minimum disable it entirely.
+        duration = max(
+            voice_min,
+            min(voice_max, voice_duration_sec + max(voice_padding, _ENGAGEMENT_CUE_SEC)),
+        )
+        tail_sec = duration - voice_duration_sec
+        # ALL-OR-NOTHING (review round 2): a shortened cue cannot complete its
+        # press sequence, so either the FULL 3.0s fits after the narration or
+        # the cue is disabled entirely (max-duration clamp cases).
+        if tail_sec >= _ENGAGEMENT_CUE_SEC - 1e-9:
+            engagement_cue_sec = _ENGAGEMENT_CUE_SEC
+        else:
+            show_engagement_cue = False
+            engagement_cue_sec = 0.0
 
     _progress("music")
     music_fn = music_fn or prepare_infographic_music_bed
@@ -391,6 +482,8 @@ def run_infographic_short(
         music_track="",
         channel_name=str((channel_config.get("channel") or {}).get("name") or ""),
         ken_burns=ken_burns,
+        show_engagement_cue=show_engagement_cue,
+        engagement_cue_sec=engagement_cue_sec,
     )
     atomic_write_json(short_dir / "json" / paths.SHORT_RENDER_PROPS_FILE, props)
     _progress("render")
@@ -460,7 +553,20 @@ def render_selected_infographic_ideas(
         source = {
             "topic": idea.get("topic") or title,
             "title": title,
-            "pillar": idea.get("pillar") or "",
+            # Real generated ideas carry NO pillar (bug-526): classify the idea
+            # text once so topic music selection works through this path too —
+            # hook and item labels give the classifier more signal than the
+            # title alone.
+            "pillar": idea.get("pillar") or music_selector.derive_pillar_from_text(
+                " ".join(
+                    [title, str(idea.get("hook") or "")]
+                    + [
+                        str(it.get("label") or "")
+                        for it in (idea.get("content_items") or idea.get("items") or [])
+                        if isinstance(it, dict)
+                    ]
+                )
+            ),
             # The idea was conceived FOR a poster layout; seed the plan with it
             # (alias-mapped from legacy narrated formats) instead of letting the
             # plan LLM re-pick a random one.

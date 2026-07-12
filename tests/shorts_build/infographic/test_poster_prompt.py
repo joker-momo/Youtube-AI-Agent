@@ -114,7 +114,7 @@ def test_poster_body_carries_channel_brand_identity_without_watermark_ban():
     badge (redundant, two brand marks saying the same thing) -> FINAL: a single
     small badge near the bottom showing the full channel name, no bottom banner.
     Must not contradict the base prompt's "no watermark" rule."""
-    from video_agent.shorts.infographic.poster_prompt import build_poster_body, _BASE
+    from video_agent.shorts.infographic.poster_prompt import _BASE, build_poster_body
     body = build_poster_body(
         {"poster_format": "numbered_tips", "title": "Foods For Eyes",
          "items": [{"label": f"i{n}"} for n in range(5)]},

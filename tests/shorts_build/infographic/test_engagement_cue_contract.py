@@ -34,12 +34,12 @@ def test_end_cue_contains_required_spanish_states_and_deterministic_motion() -> 
 
 
 def test_end_cue_declares_mobile_safe_area_bounds() -> None:
+    # The safe-area constants and panel-placement math live in the EXECUTABLE
+    # timing module (endEngagementCueTiming.ts) so tests run the same math the
+    # render uses; the cue component must consume the exported helpers.
+    timing_source = (END_CUE.parent / "endEngagementCueTiming.ts").read_text(encoding="utf-8")
+    for name in ("SAFE_LEFT", "SAFE_RIGHT", "SAFE_TOP", "SAFE_BOTTOM"):
+        assert f"export const {name}" in timing_source
     source = END_CUE.read_text(encoding="utf-8")
-
-    # Named constants make the YouTube overlay-safe region reviewable rather
-    # than hiding magic positioning across nested style objects.
-    assert "SAFE_LEFT" in source
-    assert "SAFE_RIGHT" in source
-    assert "SAFE_TOP" in source
-    assert "SAFE_BOTTOM" in source
-
+    assert "endEngagementCueTiming" in source
+    assert "panelLeftFor" in source and "panelTopFor" in source

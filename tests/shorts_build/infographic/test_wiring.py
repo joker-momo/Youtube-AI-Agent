@@ -124,6 +124,7 @@ def test_infographic_short_writes_live_progress_stages(tmp_path):
     Regression: the infographic pipeline wrote the status file only at the END,
     so an in-flight short was invisible in the UI for the whole render."""
     import json as _json
+
     from video_agent.shorts.infographic.build import run_infographic_short
 
     job = tmp_path / "job-1"
@@ -165,8 +166,9 @@ def test_studio_active_state_recognizes_infographic_render_command():
     """The job badge must show 'rendering_selected' while shorts_render_infographic
     runs. Regression: the active-command list only knew the narrated commands, so
     the UI kept saying ideas_ready during an infographic render."""
-    from video_agent.web.routes.shorts_studio import _queued_or_running_synthesis_state
     from pathlib import Path as _P
+
+    from video_agent.web.routes.shorts_studio import _queued_or_running_synthesis_state
     state = _queued_or_running_synthesis_state(
         _P("/nonexistent/job-x"),
         [{"job_id": "job-x", "command": "shorts_render_infographic"}],

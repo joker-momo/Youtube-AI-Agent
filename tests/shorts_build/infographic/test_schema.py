@@ -1,6 +1,8 @@
 from video_agent.shorts.infographic.schema import (
-    POSTER_FORMATS, validate_poster_plan,
+    POSTER_FORMATS,
+    validate_poster_plan,
 )
+
 
 def _plan(**over):
     base = {

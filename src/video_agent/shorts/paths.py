@@ -48,6 +48,7 @@ SHORT_RENDER_PROPS_FILE = "short_render_props.json"  # builder→render handoff 
 SHORT_POSTER_PLAN_FILE = "poster_plan.json"
 SHORT_POSTER_QA_FILE = "poster_qa.json"
 SHORT_POSTER_IMAGE_NAME = "poster.png"  # under <short_dir>/assets/
+SHORT_MUSIC_SELECTION_FILE = "music_selection.json"  # library-bed reproducibility audit
 # Visual-span + compiled-timeline artifacts (spec v3.2.3 §7). All live under json/.
 SHORT_VISUAL_SPANS_FILE = "visual_spans.json"
 SHORT_VISUAL_SPAN_QA_FILE = "visual_span_qa.json"

@@ -1,8 +1,8 @@
 import asyncio
 from pathlib import Path
 
-from video_agent.shorts.infographic.poster import generate_poster
 from video_agent.orchestrator.image_prompt_log import read_image_prompt_index
+from video_agent.shorts.infographic.poster import generate_poster
 
 
 def test_generate_poster_writes_png_logs_and_passes_raw_body(tmp_path):

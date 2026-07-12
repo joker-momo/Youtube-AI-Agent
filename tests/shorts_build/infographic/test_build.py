@@ -135,11 +135,15 @@ def test_voice_enabled_extends_duration_to_voice_length_plus_padding(tmp_path):
     assert status["rendered"] is True
     assert status["audio_mode"] == "voice_plus_music"
     assert status["voice_duration_sec"] == 6.0
-    assert status["duration_sec"] == 8.5  # 6.0 + 2.5 padding
-    assert captured_mix["duration_sec"] == 8.5
+    # P1-D: the tail after the voice must fit the 3s engagement cue, so the
+    # effective padding is max(padding_sec, 3.0) — the cue never overlaps speech.
+    assert status["duration_sec"] == 9.0  # 6.0 + max(2.5, 3.0)
+    assert captured_mix["duration_sec"] == 9.0
     props = json.loads((short_dir / "json" / "short_render_props.json").read_text())
     assert props["audio"] == "jobs/short-01/audio/infographic_mix.m4a"
-    assert props["durationInFrames"] == round(8.5 * 30)
+    assert props["durationInFrames"] == round(9.0 * 30)
+    assert props["showEngagementCue"] is True
+    assert props["engagementCueDurationSec"] == 3.0
 
 
 def test_voice_duration_clamped_to_min_and_max(tmp_path):
@@ -238,8 +242,12 @@ def test_music_bed_loops_one_licensed_track_for_the_static_duration(tmp_path, mo
     captured = {}
 
     def fake_run(cmd, **kwargs):
-        if cmd[0] == "ffprobe":  # duration probe for the deterministic excerpt
-            return SimpleNamespace(stdout="214.0")
+        if cmd[0] == "ffprobe":
+            # Track probe (offset seed) vs post-encode validation probe: the
+            # encoded bed must report the REQUESTED duration or the guard
+            # rejects it as corrupt.
+            probed = str(cmd[-1])
+            return SimpleNamespace(stdout="15.0" if probed.endswith(".tmp.m4a") else "214.0")
         captured["cmd"] = cmd
         Path(cmd[-1]).write_bytes(b"m4a")
 
@@ -293,11 +301,11 @@ def test_music_bed_uses_original_procedural_source_when_configured(tmp_path, mon
     }
 
 
-def test_mix_voice_with_music_uses_infographic_volume_not_narrated_default(monkeypatch, tmp_path):
-    """Regression: the mixer fell back to _mix_bgm_with_narration's -24dB
-    narrated-Shorts default (shorts.music has no bgm_gain_db key at all), so the
-    BGM was nearly inaudible under voice. Infographic must reuse its OWN,
-    already-tuned music_volume_db (the same level the music-only bed uses)."""
+def test_mix_voice_with_music_applies_no_second_bgm_attenuation(monkeypatch, tmp_path):
+    """P1-B single-attenuation contract: prepare_infographic_music_bed already
+    encodes music_volume_db into the bed, so the voice mixer must pass 0dB —
+    the old code re-applied -14dB and produced a nearly silent -27.8dB bed on a
+    real render (double attenuation)."""
     from video_agent.shorts.infographic import build as build_mod
 
     captured = {}
@@ -319,7 +327,7 @@ def test_mix_voice_with_music_uses_infographic_volume_not_narrated_default(monke
         "music": {"voice_gain_db": -4.5, "duck_db": 8.0},
     }}
     build_mod._mix_voice_with_music(narration, bgm, tmp_path / "out.m4a", cfg, 7.5)
-    assert captured["bgm_gain_db"] == -14.0
+    assert captured["bgm_gain_db"] == 0.0  # bed is pre-attenuated; never twice
     # Gentler than the narrated-Shorts default (8dB): music stays audible under
     # voice instead of near-silent for the whole speech portion (bug-519).
     assert captured["duck_db"] == 4.0

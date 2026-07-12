@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 from video_agent.shorts.infographic.render import build_infographic_render_command
 from video_agent.shorts.infographic.render_props import build_infographic_render_props

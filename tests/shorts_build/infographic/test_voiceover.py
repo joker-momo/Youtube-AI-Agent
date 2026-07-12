@@ -22,8 +22,9 @@ def test_narration_reads_every_item_and_ends_with_cta():
 def test_voiceover_seeds_scene_duration_sec(monkeypatch):
     # Regression: shorts TTS forces dynamic_sync=False and reads scene["duration_sec"];
     # omitting it produced a 44-byte silent wav. The scene must carry a seed duration.
-    import video_agent.shorts.audio as audio_mod
     from pathlib import Path
+
+    import video_agent.shorts.audio as audio_mod
     captured = {}
 
     def fake_synth(short_dir, scene_doc, cfg):

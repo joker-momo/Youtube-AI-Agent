@@ -96,7 +96,9 @@ def test_library_bed_seeks_excerpt_and_writes_reproducibility_artifact(
 
     def fake_run(command, **kwargs):
         if command[0] == "ffprobe":
-            return SimpleNamespace(stdout="214.0")
+            probed = str(command[-1])
+            # post-encode validation probe must report the requested bed length
+            return SimpleNamespace(stdout="15.0" if probed.endswith(".tmp.m4a") else "214.0")
         commands.append(command)
         Path(command[-1]).write_bytes(b"m4a")
         return SimpleNamespace(stdout="")
@@ -105,7 +107,7 @@ def test_library_bed_seeks_excerpt_and_writes_reproducibility_artifact(
     monkeypatch.setattr(
         "video_agent.shorts.audio_mixer.resolve_music_file", lambda *_args: source
     )
-    short_dir = tmp_path / "short-food-01"
+    short_dir = tmp_path / "job-food" / "shorts" / "short-food-01"
 
     build_mod.prepare_infographic_music_bed(
         short_dir, "shorts_daily_habit", cfg, 15.0
@@ -126,7 +128,9 @@ def test_library_bed_seeks_excerpt_and_writes_reproducibility_artifact(
         "track_duration_sec": 214.0,
         "excerpt_offset_sec": pytest.approx(offset),
         "excerpt_duration_sec": 15.0,
-        "seed_key": "short-food-01|shorts_daily_habit",
+        # P2-A: the seed carries the PARENT JOB identity so identical short
+        # basenames in different jobs never share an excerpt.
+        "seed_key": "job-food|short-food-01|shorts_daily_habit",
         "selection_mode": "deterministic_random_excerpt",
     }
 

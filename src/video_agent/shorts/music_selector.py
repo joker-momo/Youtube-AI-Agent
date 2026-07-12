@@ -1,6 +1,7 @@
 """Single policy owner for Shorts background-music selection."""
 from __future__ import annotations
 
+import re
 import unicodedata
 
 # Pillar / topic → music-library track key. See spec §15.1.
@@ -24,36 +25,54 @@ _PILLAR_TO_TRACK = {
 
 FALLBACK_TRACK = "shorts_sleep_stress"
 
-# bug-526: Shorts ideas carry no canonical pillar, so the raw SPANISH title
-# reaches the selector and the exact-match lookup always missed — every
-# infographic Short played the fallback track. Derive the pillar from Spanish
-# keywords (accent-insensitive substring match on normalized text) before
-# falling back. Order matters: the first pillar with a keyword hit wins, and
-# sleep/stress outranks food so "cena ligera para dormir mejor" reads as a
-# sleep topic, not a food one.
-_SPANISH_PILLAR_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("menopause", ("menopausia",)),
-    ("sleep", ("dormir", "sueno", "insomnio", "descans", "acostar", "siesta", "trasnochar")),
-    ("stress", ("estres", "ansiedad", "calma", "carga mental", "preocup", "relaj")),
-    ("exercise", (
-        "ejercicio", "caminar", "caminata", "movimiento", "musculo", "fuerza",
-        "estirar", "estiramiento", "entrena", "sarcopenia", "flexibilidad",
-    )),
-    ("food", (
-        "pan", "comida", "aliment", "comer", "desayun", "cena", "merienda",
-        "receta", "nutri", "fruta", "verdura", "azucar", "proteina", "fibra",
-        "aceite", "cafe", "integral", "etiqueta", "ingrediente", "plato",
-        "cocina", "vitamina", "grasa", "sal ", "legumbre", "cereal",
-        "tostada", "yogur", "avena", "huevo", "queso", "leche", "carne",
-        "pescado", "ensalada", "sopa", "batido", "hidrata", "agua", "snack",
-        "picoteo", "porcion", "saciedad", "satisfecho", "hambre", "digestion",
-    )),
-    ("energy", ("energia", "cansancio", "fatiga", "vitalidad")),
+# bug-526: Shorts ideas carry no canonical pillar, so raw SPANISH titles reach
+# the selector and the exact-match lookup always missed — every infographic
+# Short played the fallback track. Derive the pillar from Spanish vocabulary,
+# matching WHOLE WORDS (or controlled word STEMS via prefix on whole tokens),
+# never free substrings — "pan" must match the word "pan" but not "pantalla".
+# Order matters: the first pillar with a hit wins, and sleep/stress outranks
+# food so "cena ligera para dormir mejor" reads as a sleep topic.
+_SPANISH_PILLAR_VOCABULARY: tuple[tuple[str, frozenset[str], tuple[str, ...]], ...] = (
+    ("menopause", frozenset({"menopausia"}), ()),
+    (
+        "sleep",
+        frozenset({"dormir", "sueno", "insomnio", "siesta", "madrugada"}),
+        ("descans", "acost", "trasnoch", "duerm"),
+    ),
+    (
+        "stress",
+        frozenset({"estres", "ansiedad", "calma", "nervios"}),
+        ("preocup", "relaj", "tension"),
+    ),
+    (
+        "exercise",
+        frozenset({"ejercicio", "ejercicios", "movimiento", "fuerza", "sarcopenia"}),
+        ("muscul", "estir", "entren", "flexib", "camin"),
+    ),
+    (
+        "food",
+        frozenset({
+            "pan", "panes", "comida", "comidas", "comer", "cena", "cenas", "receta",
+            "recetas", "fruta", "frutas", "verdura", "verduras", "fibra", "aceite",
+            "cafe", "integral", "etiqueta", "etiquetas", "plato", "platos", "sal",
+            "agua", "leche", "carne", "pescado", "ensalada", "sopa", "batido",
+            "tostada", "tostadas", "yogur", "avena", "huevo", "huevos", "queso",
+            "snack", "hambre", "satisfecho", "satisfecha", "envase", "supermercado",
+        }),
+        (
+            "aliment", "desayun", "meriend", "nutri", "azucar", "protein",
+            "ingredient", "cocin", "vitamin", "gras", "legumbr", "cereal",
+            "digest", "porcion", "saci", "mastic",
+        ),
+    ),
+    ("energy", frozenset({"energia", "cansancio", "fatiga", "vitalidad"}), ()),
 )
+
+_TOKEN_RE = re.compile(r"[a-z]+")
 
 
 def _normalize(text: str) -> str:
-    """Lowercase and strip accents so 'ALIMENTACIÓN' matches 'aliment'."""
+    """Lowercase and strip accents so 'ALIMENTACIÓN' matches the 'aliment' stem."""
     lowered = str(text or "").strip().lower()
     return "".join(
         ch for ch in unicodedata.normalize("NFKD", lowered) if not unicodedata.combining(ch)
@@ -63,12 +82,18 @@ def _normalize(text: str) -> str:
 def derive_pillar_from_text(text: str) -> str:
     """Canonical pillar for free Spanish topic text; '' when nothing matches.
 
-    Substring match on accent-normalized text; word boundaries are deliberately
-    loose ('aliment' catches alimento/alimentación/alimentar) — false positives
-    only ever change the background track, never the content."""
-    normalized = f" {_normalize(text)} "
-    for pillar, keywords in _SPANISH_PILLAR_KEYWORDS:
-        if any(kw in normalized for kw in keywords):
+    Tokenizes the accent-normalized text and matches whole words or controlled
+    stems against whole tokens only — no free substring matching, so 'pan'
+    never fires on 'pantalla' and 'sal' never fires on 'salir' (stems apply
+    prefix-wise to tokens, exact words must equal the token)."""
+    tokens = _TOKEN_RE.findall(_normalize(text))
+    if not tokens:
+        return ""
+    token_set = set(tokens)
+    for pillar, exact_words, stems in _SPANISH_PILLAR_VOCABULARY:
+        if token_set & exact_words:
+            return pillar
+        if stems and any(tok.startswith(stem) for tok in tokens for stem in stems):
             return pillar
     return ""
 

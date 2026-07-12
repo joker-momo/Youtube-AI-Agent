@@ -1,30 +1,21 @@
 import React from 'react';
 import {AbsoluteFill, Audio, interpolate, Sequence, spring, staticFile, useCurrentFrame, useVideoConfig} from 'remotion';
-
-// YouTube-overlay-safe region for a 1080x1920 Short: keep the panel clear of
-// the action rail and the bottom title/description band. Named constants so
-// the safe area is reviewable rather than hidden in nested style objects.
-const SAFE_LEFT = 120;
-const SAFE_RIGHT = 840;
-const SAFE_TOP = 1050;
-const SAFE_BOTTOM = 1500;
-
-// Fixed internal layout (px, relative to the panel's top-left) so the pressing
-// finger can be keyframed onto EXACT button coordinates — the press animation
-// and the button reaction must land on the same frame at the same spot.
-const PANEL_WIDTH = 600;
-const PANEL_PAD = 36;
-const LIKE_ROW_TOP = PANEL_PAD;              // like row: 36..132
-const LIKE_ROW_HEIGHT = 96;
-const SUBSCRIBE_TOP = LIKE_ROW_TOP + LIKE_ROW_HEIGHT + 28; // 160..268
-const SUBSCRIBE_HEIGHT = 108;
-const BELL_ROW_TOP = SUBSCRIBE_TOP + SUBSCRIBE_HEIGHT + 24; // 292..356
-const PANEL_HEIGHT = BELL_ROW_TOP + 64 + PANEL_PAD;
-
-// Finger press targets (panel-relative): center of the thumb icon, center of
-// the subscribe button.
-const LIKE_TARGET = {x: 190, y: LIKE_ROW_TOP + LIKE_ROW_HEIGHT / 2};
-const SUB_TARGET = {x: PANEL_WIDTH / 2, y: SUBSCRIBE_TOP + SUBSCRIBE_HEIGHT / 2};
+import {
+  BELL_ROW_TOP,
+  LIKE_ICON_BOX,
+  LIKE_TEXT_LEFT,
+  PANEL_HEIGHT,
+  PANEL_WIDTH,
+  panelLeftFor,
+  panelTopFor,
+  pointerOpacityAt,
+  pointerPositionAt,
+  pressFrames,
+  SFX_FILES,
+  sfxFrames,
+  SUBSCRIBE_HEIGHT,
+  SUBSCRIBE_TOP,
+} from './endEngagementCueTiming';
 
 export type EndEngagementCueProps = {
   channelName?: string;
@@ -32,27 +23,27 @@ export type EndEngagementCueProps = {
 
 /**
  * Deterministic final-3s Like/Subscribe cue. Mounted by InfographicShort inside
- * a <Sequence> covering only the last round(3*fps) frames, so local frame 0 is
- * the start of the cue. All motion is Remotion frame math (spring/interpolate).
+ * a <Sequence> covering only the last cue frames, so local frame 0 is the cue
+ * start. All timing/geometry comes from endEngagementCueTiming.ts (pure math,
+ * executable in tests); this file only renders it with Remotion frame motion.
  *
  * Phase timeline (seconds within the cue):
  *   0.0-0.6  panel slides/fades in centered, poster dims by max 18%
- *   0.75     finger presses Like (pop SFX) -> thumb bounces, ME GUSTA active
- *   1.6      finger presses the red SUSCRÍBETE (bell SFX)
+ *   0.75     pointer presses Like (pop SFX) -> thumb bounces, ME GUSTA active
+ *   1.6      pointer presses the red SUSCRÍBETE (bell SFX)
  *   2.1-3.0  hold ✓ SUSCRITO, bell wiggles, channel name visible
  */
 export const EndEngagementCue: React.FC<EndEngagementCueProps> = ({channelName}) => {
   const frame = useCurrentFrame();
   const {fps, width} = useVideoConfig();
   const t = frame / fps; // seconds inside the cue
+  const presses = pressFrames(fps);
 
-  // Panel centered HORIZONTALLY on the video; SAFE_LEFT/RIGHT clamp it if a
-  // composition ever gets narrower than the panel + margins.
-  const panelLeft = Math.max(
-    SAFE_LEFT,
-    Math.min((width - PANEL_WIDTH) / 2, SAFE_RIGHT - PANEL_WIDTH),
-  );
-  const panelTop = SAFE_TOP;
+  // Panel centered HORIZONTALLY on the video (exact math lives in the timing
+  // module so tests execute it: at 1080 wide, panelLeft + PANEL_WIDTH/2 == 540).
+  const panelLeft = panelLeftFor(width);
+  const panelTop = panelTopFor();
+  const sfx = sfxFrames(fps);
 
   // --- entrance: dim + slide-in (0.0-0.6s) ---------------------------------
   const dim = interpolate(t, [0, 0.6], [0, 0.18], {
@@ -66,25 +57,21 @@ export const EndEngagementCue: React.FC<EndEngagementCueProps> = ({channelName})
     extrapolateRight: 'clamp',
   });
 
-  // --- like press (finger arrives 0.70s, presses 0.75s) ---------------------
-  const likePressFrame = Math.round(0.75 * fps);
-  const liked = frame >= likePressFrame;
+  // --- like press ------------------------------------------------------------
+  const liked = frame >= presses.like;
   const likeBounce = spring({
-    frame: Math.max(0, frame - likePressFrame),
+    frame: Math.max(0, frame - presses.like),
     fps,
     config: {damping: 9, stiffness: 220, mass: 0.6},
   });
   const likeScale = liked ? 1 + 0.25 * (1 - Math.abs(likeBounce - 1)) : 1;
 
-  // --- subscribe press (finger arrives 1.55s, presses 1.6s) -----------------
-  // The RED button stays through the whole 1.3-2.1s press phase; the state
-  // flips to SUSCRITO only at 2.1s (spec timeline).
-  const subscribePressFrame = Math.round(1.6 * fps);
-  const subscribedFrame = Math.round(2.1 * fps);
-  const subscribed = frame >= subscribedFrame;
-  const subscribePressed = frame >= subscribePressFrame;
+  // --- subscribe press: the RED button stays through the whole press phase;
+  // the state flips to SUSCRITO only at the subscribed frame (2.1s).
+  const subscribed = frame >= presses.subscribed;
+  const subscribePressed = frame >= presses.subscribe;
   const subscribeBounce = spring({
-    frame: Math.max(0, frame - subscribePressFrame),
+    frame: Math.max(0, frame - presses.subscribe),
     fps,
     config: {damping: 10, stiffness: 200, mass: 0.7},
   });
@@ -98,24 +85,12 @@ export const EndEngagementCue: React.FC<EndEngagementCueProps> = ({channelName})
     {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'},
   );
 
-  // --- pressing finger: keyframed onto the EXACT button targets so the press
-  // and the button reaction share the same frame and the same coordinates.
-  const fingerX = interpolate(
-    t,
-    [0.45, 0.7, 1.3, 1.55, 2.05, 2.3],
-    [PANEL_WIDTH / 2, LIKE_TARGET.x, LIKE_TARGET.x, SUB_TARGET.x, SUB_TARGET.x, PANEL_WIDTH + 80],
-    {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'},
-  );
-  const fingerY = interpolate(
-    t,
-    [0.45, 0.7, 1.3, 1.55, 2.05, 2.3],
-    [PANEL_HEIGHT + 120, LIKE_TARGET.y, LIKE_TARGET.y, SUB_TARGET.y, SUB_TARGET.y, PANEL_HEIGHT + 160],
-    {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'},
-  );
-  const fingerOpacity = interpolate(t, [0.45, 0.6, 2.05, 2.3], [0, 1, 1, 0], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-  });
+  // --- pointer: geometry lives in endEngagementCueTiming.pointerPositionAt so
+  // tests can execute the exact same math the render uses.
+  const pointer = pointerPositionAt(frame, fps);
+  // Opacity comes from the timing module too: fully invisible before the
+  // subscribed frame, so the pointer can never cover the bell/channel row.
+  const pointerOpacity = pointerOpacityAt(frame, fps);
   // Quick dip exactly on each press frame (4-frame squeeze) — synced with the
   // button springs keyed on the same frames.
   const pressDip = (pressFrame: number) =>
@@ -123,7 +98,7 @@ export const EndEngagementCue: React.FC<EndEngagementCueProps> = ({channelName})
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
     });
-  const fingerScale = pressDip(likePressFrame) * pressDip(subscribePressFrame);
+  const pointerScale = pressDip(presses.like) * pressDip(presses.subscribe);
 
   const likeColor = liked ? '#1B66C9' : '#4B5563';
 
@@ -131,11 +106,11 @@ export const EndEngagementCue: React.FC<EndEngagementCueProps> = ({channelName})
     <AbsoluteFill>
       {/* Press sound effects — self-synthesized (ffmpeg sine synthesis), no
           third-party audio. Fired exactly on the press frames. */}
-      <Sequence from={likePressFrame} name="LikePopSfx">
-        <Audio src={staticFile('sfx/like_pop.wav')} volume={0.7} />
+      <Sequence from={sfx.likePop} name="LikePopSfx">
+        <Audio src={staticFile(SFX_FILES.likePop)} volume={0.7} />
       </Sequence>
-      <Sequence from={subscribePressFrame} name="BellSfx">
-        <Audio src={staticFile('sfx/bell_ding.wav')} volume={0.6} />
+      <Sequence from={sfx.bellDing} name="BellSfx">
+        <Audio src={staticFile(SFX_FILES.bellDing)} volume={0.6} />
       </Sequence>
 
       {/* Poster dim — capped at 18% per spec. */}
@@ -155,35 +130,41 @@ export const EndEngagementCue: React.FC<EndEngagementCueProps> = ({channelName})
           fontFamily: 'Montserrat, "Helvetica Neue", Arial, sans-serif',
         }}
       >
-        {/* Like row — fixed position so the finger target is exact. */}
-        <div
+        {/* Like thumb at its EXPLICIT box (LIKE_ICON_BOX) — LIKE_TARGET is
+            derived from this exact geometry, so the pointer press lands
+            centered inside the thumb, never on the text. */}
+        <svg
+          width={LIKE_ICON_BOX.size}
+          height={LIKE_ICON_BOX.size}
+          viewBox="0 0 24 24"
           style={{
             position: 'absolute',
-            top: LIKE_ROW_TOP,
-            left: 0,
-            width: PANEL_WIDTH,
-            height: LIKE_ROW_HEIGHT,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 24,
+            left: LIKE_ICON_BOX.left,
+            top: LIKE_ICON_BOX.top,
+            transform: `scale(${likeScale})`,
           }}
         >
-          <svg
-            width={96}
-            height={96}
-            viewBox="0 0 24 24"
-            style={{transform: `scale(${likeScale})`}}
-          >
-            <path
-              d="M2 21h4V9H2v12zM22 10c0-1.1-.9-2-2-2h-6.3l1-4.6.03-.32c0-.41-.17-.79-.44-1.06L13.2 1 6.6 7.6C6.2 7.9 6 8.4 6 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z"
-              fill={likeColor}
-            />
-          </svg>
-          <span style={{fontSize: 56, fontWeight: 800, color: likeColor, letterSpacing: 1}}>
-            ME GUSTA
-          </span>
-        </div>
+          <path
+            d="M2 21h4V9H2v12zM22 10c0-1.1-.9-2-2-2h-6.3l1-4.6.03-.32c0-.41-.17-.79-.44-1.06L13.2 1 6.6 7.6C6.2 7.9 6 8.4 6 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z"
+            fill={likeColor}
+          />
+        </svg>
+        <span
+          style={{
+            position: 'absolute',
+            left: LIKE_TEXT_LEFT,
+            top: LIKE_ICON_BOX.top,
+            height: LIKE_ICON_BOX.size,
+            display: 'flex',
+            alignItems: 'center',
+            fontSize: 56,
+            fontWeight: 800,
+            color: likeColor,
+            letterSpacing: 1,
+          }}
+        >
+          ME GUSTA
+        </span>
 
         {/* Subscribe button — fixed position, centered. */}
         <div
@@ -250,14 +231,14 @@ export const EndEngagementCue: React.FC<EndEngagementCueProps> = ({channelName})
         </div>
       </div>
 
-      {/* Pressing finger (deterministic cursor, lands exactly on the targets) */}
+      {/* Pressing pointer (deterministic cursor, lands exactly on the targets) */}
       <div
         style={{
           position: 'absolute',
-          left: panelLeft + fingerX - 32,
-          top: panelTop + fingerY - 32,
-          opacity: fingerOpacity,
-          transform: `scale(${fingerScale})`,
+          left: panelLeft + pointer.x - 32,
+          top: panelTop + pointer.y - 32,
+          opacity: pointerOpacity,
+          transform: `scale(${pointerScale})`,
           width: 64,
           height: 64,
           borderRadius: '50%',

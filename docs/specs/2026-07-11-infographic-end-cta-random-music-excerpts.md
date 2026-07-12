@@ -50,9 +50,11 @@ exactly the final 90 frames.
 Within those three seconds:
 
 - 0.0–0.6 s: dim the poster by no more than 18% and slide/fade the cue in;
-- 0.6–1.3 s: cursor/finger presses the Like control; the thumb bounces and
+- 0.6–1.3 s: cursor/finger presses the Like control (a short local "pop"
+  sound effect fires on the exact press frame); the thumb bounces and
   changes to its active colour with visible text `ME GUSTA`;
-- 1.3–2.1 s: press the red `SUSCRÍBETE` button;
+- 1.3–2.1 s: press the red `SUSCRÍBETE` button (a short local bell "ding"
+  sound effect fires on the exact press frame);
 - 2.1–3.0 s: hold `✓ SUSCRITO`, lightly wiggle the bell and show the configured
   `channelName`.
 
@@ -70,8 +72,17 @@ runtime randomness is allowed.
 - The overlay may temporarily cover poster detail only during the final three
   seconds; it must not cover the headline during the rest of the Short.
 - The cue must remain correct for voice-driven variable durations.
-- Do not add sound effects in this phase; the existing music/narration mix is
-  unchanged.
+- Press sound effects (operator override 2026-07-11, superseding this spec's
+  original no-SFX rule): the Like press fires `sfx/like_pop.wav` and the
+  Subscribe press fires `sfx/bell_ding.wav`, both under `remotion/public/sfx/`.
+  They are LOCAL, self-generated (ffmpeg sine synthesis — no third-party or
+  copyrighted audio; see `remotion/public/sfx/PROVENANCE.md` for the exact
+  generation commands and SHA-256 checksums), fire on the SAME shared frame
+  constants as the visual presses (`sfxFrames(fps) == pressFrames(fps)`,
+  asserted by executable tests), are bounded press blips (0.05–1.5 s, asserted
+  via ffprobe in tests), and the final mixed audio must remain non-clipping
+  (max_volume < 0 dBFS on the rendered Short). The underlying music/narration
+  mix pipeline itself is unchanged.
 
 ### Component boundary
 
@@ -164,7 +175,10 @@ The artifact is written atomically and allows QA to reproduce the chosen audio.
 - AC3: the visible state sequence includes `ME GUSTA`, `SUSCRÍBETE`,
   `✓ SUSCRITO`, a bell state and the configured channel name.
 - AC4: the CTA implementation uses Remotion frame-based deterministic animation,
-  respects safe-area constraints and has no external visual/SFX dependency.
+  respects safe-area constraints and has no EXTERNAL (remote/third-party/
+  copyrighted) visual or audio dependency; the two local, self-generated press
+  SFX under `remotion/public/sfx/` are explicitly allowed and must fire on the
+  shared press-frame constants with bounded durations and non-clipping output.
 - AC5: `food` resolves to Fresh Fallen Snow through the existing music library.
 - AC6: excerpt offset is stable for the same Short/track, differs for tested
   different Short IDs, includes the track key in its seed and stays within the
@@ -187,4 +201,6 @@ The artifact is written atomically and allows QA to reproduce the chosen audio.
 - No change to normal multi-scene `ShortVideo` CTA behavior.
 - No hardcoded render concurrency.
 - No nondeterministic choice that makes the same Short render differently.
+- (Amended 2026-07-11) Local, self-generated press SFX are IN scope per the
+  operator override — the excluded thing is external/copyrighted audio.
 

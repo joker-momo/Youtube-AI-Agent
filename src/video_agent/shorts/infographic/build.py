@@ -368,6 +368,7 @@ def run_infographic_short(
     voice_fn: Callable[[Path, dict, dict], Path] | None = None,
     mix_fn: Callable[[Path, Path, Path, dict, float], bool] | None = None,
     max_poster_attempts: int = 3,
+    source_idea: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Synchronous orchestrator. ``image_fn`` is async (the only awaited dep), so it is
     driven with a fresh ``asyncio.run`` per poster generation; ``llm_fn``/``music_fn``/
@@ -528,7 +529,14 @@ def run_infographic_short(
     _progress("seo")
     # SEO/title artifact (writes json/short_seo.json via the shipped Short SEO path:
     # 4 scroll-stopper formulas, <=40 chars, aligned with the poster hook_line).
-    build_infographic_seo(_long_job_dir(short_dir), short_dir.name, plan, channel_config, llm_fn)
+    # Pass the selected source idea (the full idea contract) so SEO preserves
+    # format/title/pain/payoff/idea_id + fixed-count, not just the poster plan
+    # (spec §Idea preservation). Defaults to ``source`` when the caller didn't
+    # pass an explicit idea, so direct callers stay source-compatible.
+    build_infographic_seo(
+        _long_job_dir(short_dir), short_dir.name, plan, channel_config, llm_fn,
+        source_idea=source_idea if source_idea is not None else source,
+    )
 
     _guard("render_props")
     _progress("render_props")
@@ -655,6 +663,9 @@ def render_selected_infographic_ideas(
                 short_dir, channel_config, source,
                 image_fn=image_fn, llm_fn=llm_fn, music_fn=music_fn, render_fn=render_fn,
                 read_text_fn=read_text_fn,
+                # The reduced ``source`` dict drives the poster; the FULL idea
+                # carries the SEO contract (format/pain/payoff/idea_id/count).
+                source_idea=idea,
             )
         except InfographicStopRequested:
             # Operator stop landed at a stage boundary of the CURRENT item:

@@ -173,8 +173,10 @@ def test_voice_duration_clamped_to_min_and_max(tmp_path):
     )
     assert status_a["duration_sec"] == 10.0
 
-    # Very long speech -> clamped down to max_duration_sec.
-    short_dir_b = tmp_path / "job-1" / "shorts" / "short-b"
+    # Very long speech -> clamped down to max_duration_sec. Distinct parent job
+    # so the constant-stub SEO title does not trip the (parent-scoped) sibling
+    # title-uniqueness gate — this case only exercises voice-duration clamping.
+    short_dir_b = tmp_path / "job-2" / "shorts" / "short-b"
 
     def voice_fn_long(sd, plan, c):
         p = Path(sd) / "audio" / "short_narration.wav"

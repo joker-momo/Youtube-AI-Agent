@@ -1,7 +1,12 @@
 """Build ``short_seo.json`` for a Short (LLM-generated, parsed + normalized)."""
 from __future__ import annotations
 
+import contextlib
+import errno
+import fcntl
+import json
 import re
+import time
 import unicodedata
 from collections.abc import Callable
 from pathlib import Path
@@ -235,6 +240,144 @@ _DEFAULT_FALLBACK_HASHTAGS = ["#bienestar", "#vida45plus", "#saludable", "#short
 # failure. Keep this small: the prompt itself already carries the rules.
 MAX_SEO_RETRIES = 2
 
+# ── Parent-job title uniqueness (spec 2026-07-13) ──────────────────────────
+# Two Shorts from the SAME long-form parent must not publish the same or
+# cosmetically-different SEO title (live repro: idea-01/07 both shipped
+# "Si tienes más de 45, revisa tu sal", idea-09 differed only tu/la).
+
+# Formula scaffolding that carries NO topical meaning — stripping it before
+# comparison keeps "si tienes más de 45, X" vs "…, Y" from reading as similar
+# just because the boilerplate matches, while still leaving the payload (X/Y)
+# to decide duplication.
+_TITLE_FORMULA_BOILERPLATE = (
+    re.compile(r"\bsi tienes mas de\s+\d+\b"),
+    re.compile(r"\ba los\s+\d+\s*\+?\b"),
+    re.compile(r"\bmayores de\s+\d+\b"),
+    re.compile(r"\bdespues de los\s+\d+\b"),
+    re.compile(r"\ben\s+\d+\s+segundos\b"),
+    re.compile(r"\bla verdad cientifica\b"),
+    re.compile(r"\bla verdad\b"),
+    re.compile(r"\bnecesitas saber\b"),
+)
+# Near-duplicate threshold on content-token Jaccard similarity. 0.8 keeps
+# "revisa sal" vs "revisa sal" (tu/la variants → 1.0) a duplicate, while
+# "revisa sal" vs "reduce sal" (0.33) stays distinct (AC2).
+_TITLE_NEAR_DUPLICATE_THRESHOLD = 0.8
+
+
+def _normalize_title_for_uniqueness(title: str) -> tuple[str, ...]:
+    """Canonical content-token signature for parent-scoped title comparison.
+
+    Accent/case/punctuation-insensitive, strips formula boilerplate and
+    low-information determiners/pronouns (via ``_TITLE_STOPWORDS``) and pure
+    numbers, then returns the SORTED remaining content tokens. Exact tuple
+    equality is a canonical duplicate."""
+    decomposed = unicodedata.normalize("NFKD", str(title or "").lower())
+    ascii_text = "".join(c for c in decomposed if not unicodedata.combining(c))
+    for pat in _TITLE_FORMULA_BOILERPLATE:
+        ascii_text = pat.sub(" ", ascii_text)
+    tokens = re.findall(r"[a-z0-9]+", ascii_text)
+    content = [
+        t for t in tokens
+        if len(t) >= 3 and t not in _TITLE_STOPWORDS and not t.isdigit()
+    ]
+    return tuple(sorted(content))
+
+
+def _title_uniqueness_issues(title: str, sibling_titles: list[str]) -> list[str]:
+    """Deterministic collision report vs the parent's sibling titles.
+
+    Exact canonical equality OR content-token Jaccard >= threshold counts as a
+    duplicate; each issue string names the matched sibling so the retry feedback
+    and audit can cite it. An empty sibling set never flags (AC11)."""
+    cand = _normalize_title_for_uniqueness(title)
+    if not cand:
+        return []
+    cand_set = set(cand)
+    issues: list[str] = []
+    for sibling in sibling_titles:
+        sib = _normalize_title_for_uniqueness(sibling)
+        if not sib:
+            continue
+        if cand == sib:
+            issues.append(
+                f"Title duplicates the sibling Short title {sibling!r} "
+                "(same after removing formula boilerplate and determiners)."
+            )
+            continue
+        sib_set = set(sib)
+        union = cand_set | sib_set
+        jaccard = len(cand_set & sib_set) / len(union) if union else 0.0
+        if jaccard >= _TITLE_NEAR_DUPLICATE_THRESHOLD:
+            issues.append(
+                f"Title is a near-duplicate (similarity {jaccard:.2f}) of the "
+                f"sibling Short title {sibling!r}."
+            )
+    return issues
+
+
+@contextlib.contextmanager
+def _parent_title_lock(lock_path: Path, timeout_sec: float = 10.0):
+    """Bounded exclusive lock serializing the final title check-and-write.
+
+    Non-blocking acquire with a short poll so a wedged holder can never hang the
+    pipeline; render concurrency is untouched. If the lock can't be taken in
+    ``timeout_sec`` the write proceeds anyway (the fresh re-read already ran) —
+    availability beats a hard stall for a metadata write."""
+    fd = open(lock_path, "a+")
+    acquired = False
+    deadline = time.monotonic() + timeout_sec
+    try:
+        while True:
+            try:
+                fcntl.flock(fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except OSError as exc:
+                if exc.errno not in (errno.EWOULDBLOCK, errno.EAGAIN):
+                    raise
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(0.05)
+        yield
+    finally:
+        if acquired:
+            try:
+                fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        fd.close()
+
+
+def _collect_sibling_short_titles(
+    long_job_dir: Path, current_short_id: str | None = None
+) -> list[str]:
+    """Parent-scoped, deterministic sibling SEO titles (spec §Sibling discovery).
+
+    Reads ``<parent>/shorts/<short_id>/json/short_seo.json`` (legacy fallback via
+    ``resolve_short_json``), sorted by short_id. Ignores the current Short, other
+    parents, missing/malformed artifacts, and empty titles."""
+    shorts_root = paths.shorts_dir(Path(long_job_dir))
+    if not shorts_root.exists():
+        return []
+    titles: list[str] = []
+    for child in sorted(shorts_root.iterdir(), key=lambda p: p.name):
+        if not child.is_dir() or child.name == current_short_id:
+            continue
+        seo_path = paths.resolve_short_json(child, paths.SHORT_SEO_FILE)
+        if not seo_path.exists():
+            continue
+        try:
+            doc = json.loads(seo_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(doc, dict):
+            continue
+        title = str(doc.get("title") or "").strip()
+        if title:
+            titles.append(title)
+    return titles
+
 
 def _build_seo_retry_feedback(issues: list) -> str:
     lines = [
@@ -335,9 +478,13 @@ def build_short_seo(
     retry_feedback = ""
     seo: dict[str, Any] = {}
     for attempt in range(MAX_SEO_RETRIES + 1):
+        # Refresh sibling titles before EVERY attempt (spec §Generation): the
+        # prompt lists them so the model steers clear up front.
+        used_titles = _collect_sibling_short_titles(long_job_dir, short_id)
         prompt = prompts.short_seo_prompt(
             channel_config, short_plan, short_script, long_video_url,
             retention_plan=retention_plan, retry_feedback=retry_feedback,
+            used_titles=used_titles,
         )
         # Tag the history entry with the attempt number so a self-correction
         # regen reads as ``seo:attempt-2`` instead of a second generic ``seo``
@@ -386,12 +533,24 @@ def build_short_seo(
         engagement_problem = _seo_engagement_issue(description)
         if engagement_problem:
             topic_problems = [*topic_problems, engagement_problem]
+        # Uniqueness gate uses a FRESH sibling read (not the attempt-start list),
+        # so a sibling that finished SEO WHILE this attempt was generating is
+        # still caught — this is the stale-snapshot close (spec §Generation 6).
+        gate_siblings = _collect_sibling_short_titles(long_job_dir, short_id)
+        uniqueness_problems = _title_uniqueness_issues(title, gate_siblings)
         if blocking:
             detail = "; ".join(i.detail for i in blocking)
             raise ValueError(f"SEO idea fidelity validation failed: {detail}")
-        if not repairable and not title_problems and not topic_problems:
+        if not repairable and not title_problems and not topic_problems and not uniqueness_problems:
             break
         if attempt >= MAX_SEO_RETRIES:
+            # A duplicate title must NEVER be published, appended with a number,
+            # or papered over by a fallback — fail loudly (spec §Generation).
+            if uniqueness_problems:
+                raise ValueError(
+                    "Could not produce a parent-unique Short title after "
+                    f"{MAX_SEO_RETRIES} retries: {uniqueness_problems[0]}"
+                )
             # Idea fidelity is a hard contract — still fails loudly.
             if repairable:
                 detail = "; ".join(i.detail for i in repairable)
@@ -463,9 +622,29 @@ def build_short_seo(
                 "TOPIC KEYWORD FIXES REQUIRED (SEO classification contract):\n"
                 + "\n".join(f"- {p}" for p in topic_problems)
             )
+        if uniqueness_problems:
+            feedback_parts.append(
+                "DUPLICATE TITLE — a sibling Short from THIS SAME video already "
+                "uses a title too similar to yours. Choose a clearly different "
+                "angle/object/action (not just a tu/la or single-word swap):\n"
+                + "\n".join(f"- {p}" for p in uniqueness_problems)
+            )
         retry_feedback = "\n\n".join(feedback_parts)
 
+    # Final atomic check-and-write under a bounded parent-level lock so two
+    # sibling Shorts finishing SEO concurrently cannot each pass their own
+    # snapshot and then both persist a collision (spec §Generation final check).
     jd = paths.short_json_dir(long_job_dir, short_id)
     jd.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(jd / paths.SHORT_SEO_FILE, seo)
+    lock_path = paths.shorts_dir(Path(long_job_dir)) / ".seo-title.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with _parent_title_lock(lock_path):
+        final_siblings = _collect_sibling_short_titles(long_job_dir, short_id)
+        final_dupe = _title_uniqueness_issues(seo["title"], final_siblings)
+        if final_dupe:
+            raise ValueError(
+                "Refusing to publish a duplicate Short title "
+                f"(final pre-write check): {final_dupe[0]}"
+            )
+        atomic_write_json(jd / paths.SHORT_SEO_FILE, seo)
     return seo

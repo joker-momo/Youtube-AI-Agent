@@ -15,6 +15,13 @@ from typing import Any
 from video_agent.shorts.infographic.voiceover import build_narration_text
 from video_agent.shorts.short_seo_builder import build_short_seo
 
+# Poster layouts that promise a fixed-count list; when the source idea uses one
+# and carries key_points, SEO must preserve that exact count (idea-09 is a
+# "6 errores" warning, not a generic salt infographic — spec §Idea preservation).
+_FIXED_COUNT_FORMATS = frozenset(
+    {"warning_list", "checklist_score", "numbered_tips", "category_grid", "comparison"}
+)
+
 
 def build_infographic_seo(
     long_job_dir: Path,
@@ -24,20 +31,38 @@ def build_infographic_seo(
     llm_fn: Callable[..., str],
     *,
     long_video_url: str = "",
+    source_idea: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build + persist ``<job>/shorts/<short_id>/json/short_seo.json`` for an infographic Short.
 
     ``build_short_seo`` writes the artifact itself (to ``short_json_dir``) and
     enforces the title contract, so this is a thin adapter that maps the poster
     plan onto the Short SEO inputs (hook = the poster's ``hook_line``).
+
+    When the selected ``source_idea`` is supplied it is the authoritative idea
+    contract (original title/topic, real format, viewer pain, practical payoff,
+    idea_id, and the fixed-count promise from ``key_points``); the poster plan is
+    only supplementary context and must not erase it (spec §Idea preservation).
+    An absent ``source_idea`` keeps the pre-existing poster-plan-only behavior
+    for backward compatibility (AC11).
     """
+    idea = source_idea or {}
+    idea_format = str(idea.get("format") or "").strip()
     short_plan = {
         "short_id": short_id,
-        "format": "infographic",
-        "title": plan.get("title") or "",
-        "viewer_pain": plan.get("hook_line") or plan.get("title") or "",
-        "practical_payoff": plan.get("cta") or "",
+        # Real idea format (warning_list, checklist_score, …) wins over the
+        # generic "infographic" so idea-fidelity checks see the true archetype.
+        "format": idea_format or "infographic",
+        "title": idea.get("title") or plan.get("title") or "",
+        "viewer_pain": idea.get("viewer_pain")
+        or plan.get("hook_line")
+        or plan.get("title")
+        or "",
+        "practical_payoff": idea.get("practical_payoff") or plan.get("cta") or "",
     }
+    if idea.get("idea_id"):
+        short_plan["idea_id"] = idea["idea_id"]
+
     short_script = {
         "hook": plan.get("hook_line") or plan.get("title") or "",
         "narration": build_narration_text(plan),
@@ -49,6 +74,15 @@ def build_infographic_seo(
         # checklist content got misdetected as that specific narrated format).
         "short_format": "infographic",
     }
+    # Fixed-count contract from the idea's key_points: SEO must not silently drop
+    # the promised count (idea-09 = six errors).
+    key_points = idea.get("key_points") if isinstance(idea.get("key_points"), list) else []
+    if key_points and (idea_format in _FIXED_COUNT_FORMATS or not idea_format):
+        short_script["idea_contract"] = {
+            "original_count": len(key_points),
+            "must_preserve_count": True,
+        }
+
     return build_short_seo(
         Path(long_job_dir),
         short_id,

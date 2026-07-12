@@ -384,6 +384,7 @@ def short_seo_prompt(
     *,
     retention_plan: dict | None = None,
     retry_feedback: str = "",
+    used_titles: list[str] | None = None,
 ) -> str:
     hook = str(short_script.get("hook") or "").strip()
     narration = str(short_script.get("narration") or "").strip()
@@ -445,8 +446,25 @@ def short_seo_prompt(
         f"{retry_feedback.strip()}\n\n" if str(retry_feedback or "").strip() else ""
     )
 
+    # Parent-job title uniqueness: sibling Shorts from the SAME long video must
+    # not repeat OR cosmetically paraphrase an already-used title (tu/la, minor
+    # word swaps). List them so the model steers clear (spec 2026-07-13).
+    used_block = ""
+    used_clean = [str(t).strip() for t in (used_titles or []) if str(t).strip()]
+    if used_clean:
+        used_lines = "\n".join(f'- "{t}"' for t in used_clean)
+        used_block = (
+            "TITLES ALREADY USED BY SIBLING SHORTS FROM THIS SAME VIDEO — do NOT "
+            "repeat any of them, and do NOT publish a cosmetic near-duplicate "
+            "(swapping only a determiner/pronoun like tu/la, or a single filler "
+            "word, is NOT enough variation). Pick a genuinely different angle, "
+            "object, or action:\n"
+            f"{used_lines}\n\n"
+        )
+
     return (
         f"{feedback_block}"
+        f"{used_block}"
         "You are the SEO copywriter for a Spain-first wellness channel for adults aged 45+.\n\n"
         "Write the YouTube Short metadata in Spain Spanish (es-ES). Every field MUST match the actual content of the script below. "
         "Off-topic hashtags will get the Short shown to the wrong audience, kill retention, and stop YouTube from recommending the channel — so accuracy beats keyword volume.\n\n"

@@ -532,11 +532,18 @@ def render_selected_infographic_ideas(
     music_fn: Callable[..., Path] | None = None,
     read_text_fn: Callable[[Path], str] | None = None,
     force: bool = False,
+    progress=None,
 ) -> dict[str, Any]:
     """Build one infographic Short per selected idea (parent topic -> poster short).
 
     Mirrors ``render_selected_short_ideas`` but runs the infographic pipeline. Writes
     each short's status + a manifest entry tagged ``short_type="infographic"``.
+
+    ``progress`` is an optional batch tracker (``BatchProgress`` contract):
+    item_started then item_completed/item_failed fire sequentially per idea,
+    batch_finished fires once at the end — or batch_cancelled on an explicit
+    operator stop, with no event for the later pending items. An ordinary item
+    failure is recorded and the loop CONTINUES with the next idea (spec §8.6).
     """
     long_job_dir = Path(long_job_dir)
     ideas_doc = read_short_ideas(long_job_dir)
@@ -547,8 +554,16 @@ def render_selected_infographic_ideas(
 
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     results: list[dict[str, Any]] = []
+    cancelled = False
     for n, idea in enumerate(selected, start=1):
         idea_id = str(idea.get("idea_id"))
+        if (long_job_dir / ".stop_requested").exists():
+            cancelled = True
+            if progress is not None:
+                progress.batch_cancelled("operator requested stop")
+            break
+        if progress is not None:
+            progress.item_started(idea_id)
         title = str(idea.get("title") or "")
         source = {
             "topic": idea.get("topic") or title,
@@ -574,11 +589,32 @@ def render_selected_infographic_ideas(
         }
         short_id = f"short-{n:02d}_{idea_id}_{ts}_{_slug(title or idea_id)}"
         short_dir = long_job_dir / "shorts" / short_id
-        status = run_infographic_short(
-            short_dir, channel_config, source,
-            image_fn=image_fn, llm_fn=llm_fn, music_fn=music_fn, render_fn=render_fn,
-            read_text_fn=read_text_fn,
-        )
+        try:
+            status = run_infographic_short(
+                short_dir, channel_config, source,
+                image_fn=image_fn, llm_fn=llm_fn, music_fn=music_fn, render_fn=render_fn,
+                read_text_fn=read_text_fn,
+            )
+        except Exception as exc:  # noqa: BLE001 — one bad idea must not sink the batch
+            # Ordinary item failure: record it and CONTINUE with the next
+            # selected idea (spec §8.6). The old behavior aborted the loop and
+            # silently discarded the remaining selection.
+            status = {
+                "short_type": "infographic",
+                "status": "failed",
+                "rendered": False,
+                "error": str(exc)[:500],
+            }
+            if progress is not None:
+                progress.item_failed(idea_id, exc)
+        else:
+            if progress is not None:
+                if status.get("rendered"):
+                    progress.item_completed(idea_id, short_id)
+                else:
+                    progress.item_failed(
+                        idea_id, status.get("error") or f"status={status.get('status')}"
+                    )
         status.update({"idea_id": idea_id, "short_id": short_id, "short_type": "infographic"})
         manifest_mod.write_short_status(long_job_dir, short_id, status)
         results.append({
@@ -586,6 +622,9 @@ def render_selected_infographic_ideas(
             "status": status.get("status"), "rendered": status.get("rendered", False),
             "video_path": status.get("video_path"),
         })
+
+    if progress is not None and not cancelled:
+        progress.batch_finished()
 
     try:
         doc = manifest_mod.read_manifest(long_job_dir) or {}

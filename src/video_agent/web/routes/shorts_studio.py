@@ -697,20 +697,41 @@ def post_shorts_studio_render_ideas(
     req: RenderIdeasRequest,
     jobs_root: Path = Depends(get_jobs_root),
 ) -> dict[str, Any]:
+    from video_agent.shorts.render_batch import (
+        MAX_BATCH_IDEAS,
+        SHORT_TYPES,
+        RenderBatchStore,
+        new_batch_id,
+    )
+
     job_dir = _safe_job_dir(jobs_root, job_id)
     if not (job_dir / "job.json").exists():
         raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    # One batch at a time per parent job — checked BEFORE the global busy guard
+    # so the operator sees the batch-specific reason, not a generic system_busy.
+    batch_store = RenderBatchStore(job_dir)
+    if batch_store.is_active():
+        raise HTTPException(status_code=409, detail={"error": "active_render_batch"})
     busy, _active = system_has_active_job(jobs_root)
     if busy:
         raise HTTPException(status_code=409, detail={"error": "system_busy"})
     ideas = read_short_ideas(job_dir)
     if not ideas:
         raise HTTPException(status_code=400, detail={"error": "ideas_not_found"})
-    valid_ids = {str(idea.get("idea_id")) for idea in ideas.get("ideas") or []}
+    ideas_by_id = {
+        str(idea.get("idea_id")): idea for idea in ideas.get("ideas") or [] if idea.get("idea_id")
+    }
     idea_ids = [idea_id for idea_id in req.idea_ids if idea_id]
     if not idea_ids:
         raise HTTPException(status_code=400, detail={"error": "missing_idea_ids"})
-    invalid = [idea_id for idea_id in idea_ids if idea_id not in valid_ids]
+    if len(idea_ids) > MAX_BATCH_IDEAS:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "too_many_idea_ids", "max": MAX_BATCH_IDEAS},
+        )
+    if len(set(idea_ids)) != len(idea_ids):
+        raise HTTPException(status_code=400, detail={"error": "duplicate_idea_ids"})
+    invalid = [idea_id for idea_id in idea_ids if idea_id not in ideas_by_id]
     if invalid:
         raise HTTPException(status_code=400, detail={"error": "invalid_idea_ids", "idea_ids": invalid})
 
@@ -718,6 +739,8 @@ def post_shorts_studio_render_ideas(
     # (e.g. "Infographic" / " infographic " must not route infographic while the dup
     # guard looks for a differently-cased key).
     short_type = str(req.short_type or "infographic").strip().lower()
+    if short_type not in SHORT_TYPES:
+        raise HTTPException(status_code=400, detail={"error": "invalid_short_type"})
 
     # Prevent rendering if already rendered (unless force=True). Duplicate detection
     # is keyed by (idea_id, short_type): the SAME idea may have one narrated Short AND
@@ -756,19 +779,62 @@ def post_shorts_studio_render_ideas(
 
     _clear_stop_requested(job_dir)
     command = command_for_short_type(short_type)
-    queue = JobQueue(jobs_root / "queue.db")
-    queue.enqueue(
-        job_id,
-        enforce_approvals=False,
-        command=command,
-        payload={"idea_ids": idea_ids, "force": bool(req.force), "short_type": short_type},
+
+    # Persist the durable batch BEFORE enqueueing (spec §6.1): if the enqueue
+    # fails, the batch is marked failed — never a phantom queued batch.
+    batch_id = new_batch_id()
+    batch = batch_store.create(
+        batch_id=batch_id,
+        ideas=[ideas_by_id[idea_id] for idea_id in idea_ids],
+        short_type=short_type,
+        force=bool(req.force),
+        generation_id=ideas.get("generation_id"),
     )
+    queue = JobQueue(jobs_root / "queue.db")
+    try:
+        enqueued = queue.enqueue(
+            job_id,
+            enforce_approvals=False,
+            command=command,
+            payload={
+                "idea_ids": idea_ids,
+                "force": bool(req.force),
+                "short_type": short_type,
+                "batch_id": batch_id,
+            },
+        )
+    except Exception as exc:
+        batch_store.mark_failed(error=f"enqueue_failed: {exc}")
+        raise HTTPException(status_code=500, detail={"error": "enqueue_failed"}) from exc
+    if enqueued is False:
+        batch_store.mark_failed(error="enqueue_failed")
+        raise HTTPException(status_code=409, detail={"error": "enqueue_failed"})
     return {
         "status": "enqueued",
         "command": command,
         "job_id": job_id,
+        "batch_id": batch_id,
         "idea_ids": idea_ids,
+        "total_count": batch["total_count"],
+        "remaining_count": batch["remaining_count"],
     }
+
+
+@router.get("/shorts-studio/jobs/{job_id}/ideas/render-batch")
+def get_shorts_studio_render_batch(
+    job_id: str,
+    jobs_root: Path = Depends(get_jobs_root),
+) -> dict[str, Any]:
+    """Durable batch progress snapshot; a stable idle document when none exists."""
+    from video_agent.shorts.render_batch import IDLE_SNAPSHOT, RenderBatchStore
+
+    job_dir = _safe_job_dir(jobs_root, job_id)
+    if not (job_dir / "job.json").exists():
+        raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+    doc = RenderBatchStore(job_dir).load()
+    if doc is None:
+        return dict(IDLE_SNAPSHOT)
+    return doc
 
 
 @router.post("/shorts-studio/jobs/{job_id}/prepare", status_code=202)

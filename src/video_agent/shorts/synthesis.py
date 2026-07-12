@@ -218,6 +218,7 @@ def render_selected_short_ideas(
     *,
     build_short_fn: Callable[..., dict] | None = None,
     force: bool = False,
+    progress=None,
 ) -> dict:
     from video_agent.shorts.short_builder import build_short as default_build_short
 
@@ -256,7 +257,15 @@ def render_selected_short_ideas(
         if prior_short_ids and not force:
             skipped_count += 1
             warnings.append(f"already_rendered_idea:{idea_id}")
+            # Batch bookkeeping: the work already existed before this batch, so
+            # the item is complete with its prior short (force controls
+            # replacement of PRE-batch work, spec §8 restart/resume).
+            if progress is not None:
+                progress.item_started(idea_id)
+                progress.item_completed(idea_id, prior_short_ids[0])
             continue
+        if progress is not None:
+            progress.item_started(idea_id)
 
         if prior_short_ids and force:
             archive_paths: dict[str, str] = {}
@@ -326,7 +335,13 @@ def render_selected_short_ideas(
                 if isinstance(detail, dict) and detail.get("stop_requested"):
                     is_stop = True
             if is_stop:
+                # Explicit stop cancels the current and all pending batch items;
+                # no event fires for the later pending items (spec §8.7).
+                if progress is not None:
+                    progress.batch_cancelled("operator requested stop")
                 raise exc
+            if progress is not None:
+                progress.item_failed(idea_id, exc)
         else:
             status = result.get("status")
             if status == "rendered":
@@ -335,6 +350,13 @@ def render_selected_short_ideas(
                 needs_review_count += 1
             else:
                 failed_count += 1
+            if progress is not None:
+                # A needs_review Short still produced a video: the batch item is
+                # complete; only a hard failure marks the item failed.
+                if status in ("rendered", "needs_review"):
+                    progress.item_completed(idea_id, result.get("short_id") or short_id)
+                else:
+                    progress.item_failed(idea_id, f"status={status}")
 
         active_entries = [entry for entry in active_entries if entry.get("idea_id") != idea_id]
         active_entries.append(
@@ -353,6 +375,11 @@ def render_selected_short_ideas(
                 "video_path": result.get("video_path"),
             }
         )
+
+    if progress is not None:
+        # The stop path raised out above (after batch_cancelled); reaching here
+        # means the batch ran to the end of the selection.
+        progress.batch_finished()
 
     blocked_count = failed_count + needs_review_count
     status = "failed"

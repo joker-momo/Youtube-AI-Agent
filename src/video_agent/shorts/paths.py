@@ -20,6 +20,7 @@ IDEA_GENERATION_RUN_FILE = "idea_generation_run.json"
 SHORT_IDEAS_FILE = "short_ideas.json"
 SELECTED_SHORT_IDEAS_FILE = "selected_short_ideas.json"
 IDEA_GENERATION_LOCK_FILE = ".ideas.lock"
+RENDER_BATCH_FILE = "render_batch.json"
 RENDER_SELECTED_LOCK_FILE = ".render-selected.lock"
 
 SHORT_STATUS_FILE = "short_status.json"  # root — job state marker
@@ -161,6 +162,11 @@ def short_ideas_path(long_job_dir: Path) -> Path:
 
 def selected_short_ideas_path(long_job_dir: Path) -> Path:
     return shorts_dir(long_job_dir) / SELECTED_SHORT_IDEAS_FILE
+
+
+def render_batch_path(long_job_dir: Path) -> Path:
+    """Durable multi-idea render-batch document (shorts_render_batch.v1)."""
+    return shorts_dir(long_job_dir) / RENDER_BATCH_FILE
 
 
 def idea_generation_run_path(long_job_dir: Path) -> Path:

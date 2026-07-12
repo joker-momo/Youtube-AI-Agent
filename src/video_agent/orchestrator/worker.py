@@ -136,6 +136,40 @@ def _dispatch_queue_job(
     raise ValueError(f"Unknown queue command: {command}")
 
 
+def _resume_render_batch(job_dir: Path, payload: dict) -> tuple[list[str] | None, object | None]:
+    """Validate + recover a durable render batch for this queue job.
+
+    Returns ``(idea_ids, progress)``: the remaining ordered idea IDs to render
+    (completed/failed items from the same batch are never repeated) and the
+    shared :class:`BatchProgress` tracker, or ``(None, None)`` for a legacy
+    payload without ``batch_id``. A persisted-batch mismatch fails closed — the
+    worker must not render untracked ideas (spec §8.2).
+    """
+    batch_id = str(payload.get("batch_id") or "").strip()
+    if not batch_id:
+        return None, None
+
+    from video_agent.shorts.render_batch import BatchProgress, RenderBatchStore
+
+    store = RenderBatchStore(job_dir)
+    doc = store.load()
+    if not doc or str(doc.get("batch_id")) != batch_id:
+        raise RuntimeError(
+            f"render batch mismatch for job {job_dir.name}: queue payload carries "
+            f"batch_id={batch_id!r} but the persisted document is "
+            f"{(doc or {}).get('batch_id')!r} — failing closed"
+        )
+    payload_ids = [str(i) for i in payload.get("idea_ids") or []]
+    batch_ids = [str(item.get("idea_id")) for item in doc.get("items") or []]
+    if payload_ids != batch_ids:
+        raise RuntimeError(
+            f"render batch {batch_id} ordered idea_ids disagree between the queue "
+            f"payload {payload_ids} and the persisted batch {batch_ids} — failing closed"
+        )
+    store.recover_for_resume()
+    return store.pending_idea_ids(), BatchProgress(store)
+
+
 def _run_short_infographic_job(job: dict, *, job_dir: Path, channel_path: Path, client: BrowserClient) -> None:
     """Build static infographic Shorts (one AI poster + licensed music bed)."""
     import json as _json
@@ -155,6 +189,10 @@ def _run_short_infographic_job(job: dict, *, job_dir: Path, channel_path: Path, 
     force = bool(payload.get("force"))
     channel_config = read_yaml(channel_path)
 
+    batch_idea_ids, progress = _resume_render_batch(job_dir, payload)
+    if batch_idea_ids is not None:
+        idea_ids = batch_idea_ids
+
     def chatgpt_fn(prompt: str) -> str:
         from video_agent.shorts.llm import chatgpt_send_with_recovery
         return asyncio.run(chatgpt_send_with_recovery(client, prompt))
@@ -168,6 +206,7 @@ def _run_short_infographic_job(job: dict, *, job_dir: Path, channel_path: Path, 
         render_fn=make_infographic_render_fn(channel_config),
         read_text_fn=None,  # v1: QA disabled
         force=force,
+        progress=progress,
     )
 
 
@@ -343,6 +382,10 @@ def _run_shorts_render_selected_ideas_job(job: dict, *, job_dir: Path, channel_p
     force = bool(payload.get("force"))
     channel_config = read_yaml(channel_path)
 
+    batch_idea_ids, progress = _resume_render_batch(job_dir, payload)
+    if batch_idea_ids is not None:
+        idea_ids = batch_idea_ids
+
     def chatgpt_fn(prompt: str) -> str:
         from video_agent.shorts.llm import chatgpt_send_with_recovery
         return asyncio.run(chatgpt_send_with_recovery(client, prompt))
@@ -367,6 +410,7 @@ def _run_shorts_render_selected_ideas_job(job: dict, *, job_dir: Path, channel_p
         idea_ids,
         build_short_fn=build_short_fn,
         force=force,
+        progress=progress,
     )
     # Surface per-idea build failures as a FAILED queue job (bug-506): the run
     # summary carries them, but swallowing them here logged "Successfully

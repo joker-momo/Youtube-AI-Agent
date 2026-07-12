@@ -176,6 +176,20 @@
   .idea-duplicate-badge { font-size:11px; font-weight:600; padding:2px 8px; border-radius:10px; background:#fef2f2; color:#b91c1c; border:1px solid #fca5a5; margin-bottom:4px; display:inline-block; }
   .idea-rendered-badge { font-size:11px; font-weight:600; padding:2px 8px; border-radius:10px; background:#f0fdf4; color:#15803d; border:1px solid #bbf7d0; margin-top:4px; display:inline-block; }
   .idea-card.idea-rendered { border-color: #bbf7d0; background: #fafdfb; }
+  .shorts-ideas-toolbar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px; }
+  .shorts-ideas-toolbar .sel-count { font-size:12px; color:var(--muted); }
+  .shorts-idea-checkbox { width:16px; height:16px; accent-color:#2563eb; flex-shrink:0; margin-top:2px; }
+  .shorts-batch-progress { border:1px solid var(--line); border-radius:8px; background:#fff; padding:12px 14px; margin-bottom:12px; }
+  .shorts-batch-progress .batch-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; font-size:13px; font-weight:600; }
+  .shorts-batch-progress .batch-counts { font-size:12px; color:var(--muted); }
+  .shorts-batch-items { margin:8px 0 0; padding:0; list-style:none; font-size:12px; }
+  .shorts-batch-items li { display:flex; gap:8px; align-items:baseline; padding:2px 0; }
+  .batch-chip { font-size:11px; border-radius:4px; padding:1px 8px; background:#f3f4f6; color:#374151; flex-shrink:0; }
+  .batch-chip.completed { background:#dcfce7; color:#166534; }
+  .batch-chip.running { background:#dbeafe; color:#1d4ed8; }
+  .batch-chip.failed { background:#fee2e2; color:#b91c1c; }
+  .batch-chip.cancelled { background:#f3f4f6; color:#6b7280; }
+  .batch-item-error { color:#b91c1c; font-size:11px; }
   .idea-score-row { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:4px; }
   .idea-score-badge { font-size:12px; font-weight:700; padding:2px 10px; border-radius:12px; max-width:100%; overflow-wrap:anywhere; }
   .idea-score-badge.high { background:#d1fae5; color:#065f46; }
@@ -3275,7 +3289,14 @@ async function loadShortsIdeasTab(jobId) {
       container.innerHTML = '<div class="ideas-empty">No ideas found. Click "Generate Ideas".</div>';
       return;
     }
-    container.innerHTML = `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">${ideas.length} ideas generated</div>
+    container.innerHTML = `<div id="shorts-batch-progress" class="shorts-batch-progress" style="display:none"></div>
+    <div class="shorts-ideas-toolbar">
+      <span style="font-size:12px;color:var(--muted)">${ideas.length} ideas generated</span>
+      <button class="action-btn" id="sp-select-all-ideas" onclick="spSelectAllIdeas()">Select all eligible</button>
+      <button class="action-btn" id="sp-clear-idea-selection" onclick="spClearIdeaSelection()">Clear selection</button>
+      <span class="sel-count"><span id="sp-selected-count">0</span> selected</span>
+      <button class="action-btn primary" id="sp-render-selected" onclick="spRenderSelected(this)" disabled>Render selected (0)</button>
+    </div>
     <div class="ideas-grid">${ideas.map(idea => {
       let badgeHtml = '';
       if (idea.associated_short) {
@@ -3294,7 +3315,8 @@ async function loadShortsIdeasTab(jobId) {
       return `
       <div class="idea-card${idea.associated_short ? ' idea-rendered' : ''}">
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
-          <div>
+          ${idea.associated_short ? '' : `<input type="checkbox" class="shorts-idea-checkbox" data-idea-id="${escapeHtml(idea.idea_id || '')}" onchange="spToggleIdeaSelection(this)">`}
+          <div style="flex:1">
             <div class="idea-card-title">${escapeHtml(idea.title || '')} <span style="font-weight:400;color:var(--muted);font-size:12px">(${escapeHtml(idea.idea_id || '')})</span></div>
             <div style="font-size:12px;color:var(--muted);margin-top:2px">
               <span class="idea-bucket-badge">${escapeHtml(idea.format || '')}</span>
@@ -3315,9 +3337,136 @@ async function loadShortsIdeasTab(jobId) {
       </div>
       `;
     }).join('')}</div>`;
+    spRestoreIdeaSelection();
+    refreshShortsBatchPanel(jobId);
   } catch (e) {
     container.innerHTML = '<div class="ideas-empty">Error loading ideas.</div>';
   }
+}
+
+// ---- Multi-idea render batch (sequential; spec 2026-07-13) ----
+// Ordered selection: SHORTS_BATCH_SELECTION preserves click order; Select all
+// uses the current visible idea order. Duplicates are impossible (Set-like).
+let SHORTS_BATCH_SELECTION = [];
+
+function spToggleIdeaSelection(cb) {
+  const id = cb.getAttribute('data-idea-id');
+  if (!id) return;
+  if (cb.checked) {
+    if (!SHORTS_BATCH_SELECTION.includes(id)) SHORTS_BATCH_SELECTION.push(id);
+  } else {
+    SHORTS_BATCH_SELECTION = SHORTS_BATCH_SELECTION.filter(x => x !== id);
+  }
+  spUpdateSelectionUi();
+}
+
+function spSelectAllIdeas() {
+  SHORTS_BATCH_SELECTION = [];
+  document.querySelectorAll('.shorts-idea-checkbox').forEach(cb => {
+    cb.checked = true;
+    const id = cb.getAttribute('data-idea-id');
+    if (id && !SHORTS_BATCH_SELECTION.includes(id)) SHORTS_BATCH_SELECTION.push(id);
+  });
+  spUpdateSelectionUi();
+}
+
+function spClearIdeaSelection() {
+  SHORTS_BATCH_SELECTION = [];
+  document.querySelectorAll('.shorts-idea-checkbox').forEach(cb => { cb.checked = false; });
+  spUpdateSelectionUi();
+}
+
+function spRestoreIdeaSelection() {
+  // The grid re-renders only when idea data changes; an unrelated poll response
+  // must never reset the operator's checkboxes.
+  const present = new Set();
+  document.querySelectorAll('.shorts-idea-checkbox').forEach(cb => {
+    const id = cb.getAttribute('data-idea-id');
+    present.add(id);
+    cb.checked = SHORTS_BATCH_SELECTION.includes(id);
+  });
+  SHORTS_BATCH_SELECTION = SHORTS_BATCH_SELECTION.filter(id => present.has(id));
+  spUpdateSelectionUi();
+}
+
+function spUpdateSelectionUi() {
+  const n = SHORTS_BATCH_SELECTION.length;
+  const count = document.getElementById('sp-selected-count');
+  if (count) count.textContent = String(n);
+  const btn = document.getElementById('sp-render-selected');
+  if (btn) {
+    btn.disabled = n === 0;
+    btn.textContent = `Render selected (${n})`;
+  }
+}
+
+async function spRenderSelected(btn) {
+  if (!SHORTS_SELECTED_JOB || !SHORTS_BATCH_SELECTION.length) return;
+  const selectedIdeaIds = SHORTS_BATCH_SELECTION.slice();
+  const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = '⏳ Enqueuing…';
+  try {
+    const r = await fetch('/shorts-studio/jobs/' + encodeURIComponent(SHORTS_SELECTED_JOB) + '/ideas/render', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({idea_ids: selectedIdeaIds, force: false, short_type: 'infographic'}),
+    });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      showToast('Render failed: ' + (d.detail?.error || d.detail || r.statusText));
+      btn.disabled = false; btn.textContent = orig;
+      return;
+    }
+    const body = await r.json();
+    showToast(`Batch enqueued: ${body.total_count} Short(s)`);
+    spClearIdeaSelection();
+    refreshShortsBatchPanel(SHORTS_SELECTED_JOB);
+    const jobId = SHORTS_SELECTED_JOB;
+    [2000, 5000, 10000].forEach(ms => setTimeout(() => refreshShortsBatchPanel(jobId), ms));
+    setTimeout(() => refreshShortsDetail(), 2000);
+  } catch (e) {
+    showToast('Network error');
+    btn.disabled = false; btn.textContent = orig;
+  }
+}
+
+const BATCH_TERMINAL_STATES = ['completed', 'completed_with_errors', 'failed', 'cancelled'];
+
+async function refreshShortsBatchPanel(jobId) {
+  const panel = document.getElementById('shorts-batch-progress');
+  if (!panel || !jobId) return;
+  let d = null;
+  try {
+    const r = await fetch('/shorts-studio/jobs/' + encodeURIComponent(jobId) + '/ideas/render-batch');
+    if (!r.ok) return;
+    d = await r.json();
+  } catch (e) { return; }
+  if (!d || d.status === 'idle') { panel.style.display = 'none'; panel.innerHTML = ''; return; }
+  panel.style.display = '';
+  const total = d.total_count || 0;
+  const remaining = d.remaining_count || 0;
+  const items = d.items || [];
+  const current = items.find(it => it.status === 'running');
+  const headline = d.status === 'running' && current
+    ? `Rendering ${current.position} of ${total} — ${current.idea_id}`
+    : `Batch ${d.status}`;
+  const rows = items.map(it => `
+    <li>
+      <span class="batch-chip ${escapeHtml(it.status || '')}">${escapeHtml(it.status || '')}</span>
+      <span>${it.position}. ${escapeHtml(it.idea_id || '')}${it.title ? ' · ' + escapeHtml(it.title) : ''}</span>
+      ${it.short_id ? `<span style="color:var(--muted);font-size:11px">${escapeHtml(it.short_id)}</span>` : ''}
+      ${it.error ? `<span class="batch-item-error">${escapeHtml(it.error)}</span>` : ''}
+    </li>`).join('');
+  panel.innerHTML = `
+    <div class="batch-head">
+      <span>${escapeHtml(d.short_type || '')} batch</span>
+      <span class="batch-chip ${escapeHtml(d.status || '')}">${escapeHtml(d.status || '')}</span>
+      <span id="shorts-batch-current">${escapeHtml(headline)}</span>
+    </div>
+    <div class="batch-counts">
+      ${d.completed_count || 0} completed · ${d.failed_count || 0} failed ·
+      <span id="shorts-batch-remaining">${remaining}</span> remaining
+    </div>
+    <ul class="shorts-batch-items">${rows}</ul>`;
 }
 
 function shortStageCompactLabel(label, name) {
@@ -4422,6 +4571,9 @@ function startShortsPolling() {
   if (SHORTS_POLL_TIMER) clearInterval(SHORTS_POLL_TIMER);
   SHORTS_POLL_TIMER = setInterval(async () => {
     if (ACTIVE_PAGE !== 'shorts' || !SHORTS_SELECTED_JOB) { clearInterval(SHORTS_POLL_TIMER); return; }
+    // Batch progress rides the existing poll loop (spec §5.2) — cheap GET, and
+    // refreshShortsBatchPanel never touches the selection checkboxes.
+    refreshShortsBatchPanel(SHORTS_SELECTED_JOB);
     const job = SHORTS_JOBS_CACHE.find(j => j.job_id === SHORTS_SELECTED_JOB);
     if (job && (job.shorts_status === 'ideas_generating' || job.shorts_status === 'rendering_selected')) {
       await loadShortsPage();

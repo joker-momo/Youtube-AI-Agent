@@ -47,7 +47,7 @@ DEFAULT_STATIC_DURATION_SEC = 15.0
 _ORIGINAL_PROCEDURAL_SOURCE = "procedural_original"
 # Final Like/Subscribe cue length; the cue must OWN its seconds — it may never
 # overlap narration (P1-D), so voice-driven durations reserve at least this tail.
-_ENGAGEMENT_CUE_SEC = 3.0
+_ENGAGEMENT_CUE_SEC = 4.0  # must equal CUE_TOTAL_SEC in endEngagementCueTiming.ts (pinned by test)
 
 
 

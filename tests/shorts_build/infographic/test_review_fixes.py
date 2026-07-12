@@ -198,8 +198,8 @@ def test_cue_starts_exactly_at_narration_end(tmp_path):
     props = json.loads((short_dir / "json" / paths.SHORT_RENDER_PROPS_FILE).read_text())
     # duration = voice + max(padding, cue) -> the 3s cue owns exactly the tail
     # AFTER the narration; cue_start == narration end, zero overlap.
-    assert status["duration_sec"] == pytest.approx(8.67 + 3.0)
-    assert props["engagementCueDurationSec"] == 3.0
+    assert status["duration_sec"] == pytest.approx(8.67 + 4.0)
+    assert props["engagementCueDurationSec"] == 4.0
     cue_start_sec = status["duration_sec"] - props["engagementCueDurationSec"]
     assert cue_start_sec == pytest.approx(status["voice_duration_sec"])
 
@@ -371,13 +371,13 @@ def test_serialized_offset_is_clamped_to_legal_bounds(tmp_path, tone_track, monk
 @pytest.mark.parametrize("voice_sec,expected_shown", [
     (19.0, False),   # tail 1.0s
     (18.5, False),   # tail 1.5s
-    (17.9, False),   # tail 2.1s
-    (17.1, False),   # tail 2.9s
-    (17.0, True),    # tail exactly 3.0s -> full cue fits
+    (17.0, False),   # tail 3.0s (old full length — now short of the 4s cue)
+    (16.1, False),   # tail 3.9s
+    (16.0, True),    # tail exactly 4.0s -> full cue fits
 ])
 def test_cue_is_all_or_nothing_never_shortened(tmp_path, voice_sec, expected_shown):
     """Review round 2: a shortened cue cannot complete its press sequence, so
-    either the FULL 3.0s fits after the narration or the cue is disabled."""
+    either the FULL 4.0s fits after the narration or the cue is disabled."""
     image_fn, llm_fn, music_fn, render_fn, voice_fn, mix_fn = _stub_pipeline_fns(voice_sec)
     cfg = {"audience": {"age_range": [45, 75]}, "channel": {"name": "VP"},
            "shorts": {"infographic": {"voice": {"enabled": True, "padding_sec": 1.0,
@@ -390,7 +390,7 @@ def test_cue_is_all_or_nothing_never_shortened(tmp_path, voice_sec, expected_sho
     )
     props = json.loads((short_dir / "json" / paths.SHORT_RENDER_PROPS_FILE).read_text())
     assert props["showEngagementCue"] is expected_shown
-    assert props["engagementCueDurationSec"] == (3.0 if expected_shown else 0.0)
+    assert props["engagementCueDurationSec"] == (4.0 if expected_shown else 0.0)
 
 
 @pytest.mark.parametrize("failure", ["timeout", "called_process_error"])

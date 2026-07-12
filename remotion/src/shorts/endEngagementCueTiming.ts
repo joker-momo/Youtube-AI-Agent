@@ -35,14 +35,22 @@ export const LIKE_TARGET = {
 } as const;
 export const SUB_TARGET = {x: PANEL_WIDTH / 2, y: SUBSCRIBE_TOP + SUBSCRIBE_HEIGHT / 2} as const;
 
-// Phase timeline (seconds within the cue).
+// Phase timeline (seconds within the cue). Paced for a 45-75 viewer
+// (2026-07-12 operator feedback: the old 3s cue pressed Like 0.15s after the
+// panel settled and reached the bell at 2.1s — it read as rushed): the panel
+// settles, THEN the pointer approaches; every press gets read time; the final
+// bell/channel state holds a full second.
 export const CUE_TIMELINE_SEC = {
   enterStart: 0.0,
-  enterEnd: 0.6,
-  likePress: 0.75,
-  subscribePress: 1.6,
-  subscribed: 2.1,
+  enterEnd: 0.7,
+  likePress: 1.2,
+  subscribePress: 2.4,
+  subscribed: 3.0,
 } as const;
+
+// Total cue length. MUST equal build.py's _ENGAGEMENT_CUE_SEC (the reserved
+// audio tail) or the choreography gets cut mid-press; a test pins the pair.
+export const CUE_TOTAL_SEC = 4.0;
 
 export const pressFrames = (fps: number) => ({
   like: Math.round(CUE_TIMELINE_SEC.likePress * fps),
@@ -74,21 +82,21 @@ export const panelTopFor = (): number => Math.min(SAFE_TOP, SAFE_BOTTOM - PANEL_
 // be fully OUTSIDE the panel (and invisible) by the subscribed frame so it can
 // never cover the bell/channel-name hold state.
 const POINTER_PATH: ReadonlyArray<{t: number; x: number; y: number}> = [
-  {t: 0.45, x: PANEL_WIDTH / 2, y: PANEL_HEIGHT + 120},
-  {t: 0.7, x: LIKE_TARGET.x, y: LIKE_TARGET.y},
-  {t: 1.3, x: LIKE_TARGET.x, y: LIKE_TARGET.y},
-  {t: 1.55, x: SUB_TARGET.x, y: SUB_TARGET.y},
-  {t: 1.9, x: SUB_TARGET.x, y: SUB_TARGET.y},
-  {t: 2.08, x: PANEL_WIDTH + 140, y: PANEL_HEIGHT + 160},
+  {t: 0.55, x: PANEL_WIDTH / 2, y: PANEL_HEIGHT + 120},
+  {t: 1.05, x: LIKE_TARGET.x, y: LIKE_TARGET.y},
+  {t: 2.0, x: LIKE_TARGET.x, y: LIKE_TARGET.y},
+  {t: 2.3, x: SUB_TARGET.x, y: SUB_TARGET.y},
+  {t: 2.75, x: SUB_TARGET.x, y: SUB_TARGET.y},
+  {t: 2.95, x: PANEL_WIDTH + 140, y: PANEL_HEIGHT + 160},
 ];
 
 // Pointer opacity keyframes (seconds -> alpha): fully invisible before the
-// subscribed frame (2.1s).
+// subscribed frame (3.0s).
 const POINTER_OPACITY: ReadonlyArray<{t: number; a: number}> = [
-  {t: 0.45, a: 0},
-  {t: 0.6, a: 1},
-  {t: 1.9, a: 1},
-  {t: 2.05, a: 0},
+  {t: 0.55, a: 0},
+  {t: 0.75, a: 1},
+  {t: 2.75, a: 1},
+  {t: 2.95, a: 0},
 ];
 
 const piecewise = (

@@ -78,7 +78,7 @@ def test_pass_gate_renders_a_static_poster_with_music_only(tmp_path):
     assert props["durationInFrames"] == 15 * 30
     assert props["kenBurns"] is False
     assert props["showEngagementCue"] is True
-    assert props["engagementCueDurationSec"] == 3.0
+    assert props["engagementCueDurationSec"] == 4.0
     assert status["audio_mode"] == "music_only"
 
 
@@ -135,15 +135,15 @@ def test_voice_enabled_extends_duration_to_voice_length_plus_padding(tmp_path):
     assert status["rendered"] is True
     assert status["audio_mode"] == "voice_plus_music"
     assert status["voice_duration_sec"] == 6.0
-    # P1-D: the tail after the voice must fit the 3s engagement cue, so the
-    # effective padding is max(padding_sec, 3.0) — the cue never overlaps speech.
-    assert status["duration_sec"] == 9.0  # 6.0 + max(2.5, 3.0)
-    assert captured_mix["duration_sec"] == 9.0
+    # P1-D: the tail after the voice must fit the 4s engagement cue, so the
+    # effective padding is max(padding_sec, 4.0) — the cue never overlaps speech.
+    assert status["duration_sec"] == 10.0  # 6.0 + max(2.5, 4.0)
+    assert captured_mix["duration_sec"] == 10.0
     props = json.loads((short_dir / "json" / "short_render_props.json").read_text())
     assert props["audio"] == "jobs/short-01/audio/infographic_mix.m4a"
-    assert props["durationInFrames"] == round(9.0 * 30)
+    assert props["durationInFrames"] == round(10.0 * 30)
     assert props["showEngagementCue"] is True
-    assert props["engagementCueDurationSec"] == 3.0
+    assert props["engagementCueDurationSec"] == 4.0
 
 
 def test_voice_duration_clamped_to_min_and_max(tmp_path):

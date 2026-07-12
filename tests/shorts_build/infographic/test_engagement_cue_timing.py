@@ -52,6 +52,8 @@ console.log(JSON.stringify({{
   pointerOpacityAtLike: m.pointerOpacityAt(f.like, fps),
   sfx: m.sfxFrames(fps),
   sfxFiles: m.SFX_FILES,
+  timelineSec: m.CUE_TIMELINE_SEC,
+  cueTotalSec: m.CUE_TOTAL_SEC,
 }}));
 """
     out = subprocess.run(
@@ -129,3 +131,26 @@ def test_sfx_assets_exist_and_are_short_press_sounds():
         ).stdout.strip()
         duration = float(out)
         assert 0.05 <= duration <= 1.5, (rel, duration)
+
+
+# --- unhurried pacing (2026-07-12: user feedback "an chuong dang ky nhin hoi voi") --
+
+
+def test_cue_pacing_gives_each_action_breathing_room(timing):
+    """The press choreography must not feel rushed for a 45-75 viewer:
+    the panel settles before the first press, each press gets read time,
+    and the final bell/channel state holds at least a full second."""
+    t = timing["timelineSec"]
+    total = timing["cueTotalSec"]
+    assert t["likePress"] - t["enterEnd"] >= 0.4        # register the panel first
+    assert t["subscribePress"] - t["likePress"] >= 1.0  # read SUSCRIBETE before press
+    assert t["subscribed"] - t["subscribePress"] >= 0.5 # bell answer not instant
+    assert total - t["subscribed"] >= 1.0               # calm hold on the end state
+
+
+def test_cue_total_matches_the_python_reserved_tail(timing):
+    """build.py reserves _ENGAGEMENT_CUE_SEC of audio tail for the cue; the TS
+    timeline total must be the same number or the cue gets cut mid-choreography."""
+    from video_agent.shorts.infographic import build
+
+    assert float(timing["cueTotalSec"]) == build._ENGAGEMENT_CUE_SEC

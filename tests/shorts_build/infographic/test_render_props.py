@@ -20,7 +20,7 @@ def test_props_reference_poster_and_audio_and_duration():
     assert props["kenBurnsScaleMax"] <= 1.02
     # A dedicated Like + Subscribe cue owns exactly the final 3 seconds.
     assert props["showEngagementCue"] is True
-    assert props["engagementCueDurationSec"] == 3.0
+    assert props["engagementCueDurationSec"] == 4.0
     # Legacy field remains serializable for older render-props consumers.
     assert "showSubscribeCue" in props
     # Renders the InfographicShort composition; concurrency stays "auto" (HARD RULE).

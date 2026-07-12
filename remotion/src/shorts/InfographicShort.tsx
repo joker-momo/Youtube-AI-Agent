@@ -23,7 +23,7 @@ export const engagementCueStartFrame = (durationInFrames: number, cueFrames: num
 export const InfographicShort: React.FC<InfographicShortProps> = ({
   poster, audio, music, channelName, durationInFrames,
   kenBurns = true, kenBurnsScaleMax = 1.02,
-  showSubscribeCue = false, showEngagementCue, engagementCueDurationSec = 3.0,
+  showSubscribeCue = false, showEngagementCue, engagementCueDurationSec = 4.0,
 }) => {
   const frame = useCurrentFrame();
   const {width, height, fps} = useVideoConfig();

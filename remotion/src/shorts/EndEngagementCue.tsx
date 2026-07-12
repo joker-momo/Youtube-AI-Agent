@@ -2,6 +2,7 @@ import React from 'react';
 import {AbsoluteFill, Audio, interpolate, Sequence, spring, staticFile, useCurrentFrame, useVideoConfig} from 'remotion';
 import {
   BELL_ROW_TOP,
+  CUE_TIMELINE_SEC,
   LIKE_ICON_BOX,
   LIKE_TEXT_LEFT,
   PANEL_HEIGHT,
@@ -22,16 +23,14 @@ export type EndEngagementCueProps = {
 };
 
 /**
- * Deterministic final-3s Like/Subscribe cue. Mounted by InfographicShort inside
+ * Deterministic final Like/Subscribe cue. Mounted by InfographicShort inside
  * a <Sequence> covering only the last cue frames, so local frame 0 is the cue
  * start. All timing/geometry comes from endEngagementCueTiming.ts (pure math,
  * executable in tests); this file only renders it with Remotion frame motion.
  *
- * Phase timeline (seconds within the cue):
- *   0.0-0.6  panel slides/fades in centered, poster dims by max 18%
- *   0.75     pointer presses Like (pop SFX) -> thumb bounces, ME GUSTA active
- *   1.6      pointer presses the red SUSCRÍBETE (bell SFX)
- *   2.1-3.0  hold ✓ SUSCRITO, bell wiggles, channel name visible
+ * Phase timeline: CUE_TIMELINE_SEC in endEngagementCueTiming.ts is the single
+ * source (panel enters, pointer presses Like then SUSCRÍBETE, ✓ SUSCRITO holds
+ * with the bell wiggle until the cue ends).
  */
 export const EndEngagementCue: React.FC<EndEngagementCueProps> = ({channelName}) => {
   const frame = useCurrentFrame();
@@ -45,8 +44,8 @@ export const EndEngagementCue: React.FC<EndEngagementCueProps> = ({channelName})
   const panelTop = panelTopFor();
   const sfx = sfxFrames(fps);
 
-  // --- entrance: dim + slide-in (0.0-0.6s) ---------------------------------
-  const dim = interpolate(t, [0, 0.6], [0, 0.18], {
+  // --- entrance: dim + slide-in (0 -> enterEnd) ------------------------------
+  const dim = interpolate(t, [0, CUE_TIMELINE_SEC.enterEnd], [0, 0.18], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
   });
@@ -67,7 +66,7 @@ export const EndEngagementCue: React.FC<EndEngagementCueProps> = ({channelName})
   const likeScale = liked ? 1 + 0.25 * (1 - Math.abs(likeBounce - 1)) : 1;
 
   // --- subscribe press: the RED button stays through the whole press phase;
-  // the state flips to SUSCRITO only at the subscribed frame (2.1s).
+  // the state flips to SUSCRITO only at the subscribed frame.
   const subscribed = frame >= presses.subscribed;
   const subscribePressed = frame >= presses.subscribe;
   const subscribeBounce = spring({

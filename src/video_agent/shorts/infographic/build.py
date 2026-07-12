@@ -24,6 +24,25 @@ from video_agent.shorts.infographic.seo import build_infographic_seo
 from video_agent.shorts.infographic.voiceover import synthesize_infographic_voiceover
 from video_agent.storage.atomic import atomic_write_json
 
+
+class InfographicStopRequested(RuntimeError):
+    """Operator stop observed at a stage boundary of an infographic build.
+
+    Cooperative-cancellation signal (AC8): raised between pipeline stages so a
+    stop can never be outrun by later expensive work (poster/LLM/ffmpeg/
+    Remotion). The sequential loop converts it into a batch cancellation; it is
+    intentionally NOT an ordinary item failure and must never trigger a retry.
+    """
+
+
+def _stop_requested_for(short_dir: Path) -> bool:
+    """Same stop contract as the narrated builder: parent-job or short flag."""
+    return (
+        (_long_job_dir(short_dir) / ".stop_requested").exists()
+        or (short_dir / ".stop_requested").exists()
+    )
+
+
 DEFAULT_STATIC_DURATION_SEC = 15.0
 _ORIGINAL_PROCEDURAL_SOURCE = "procedural_original"
 # Final Like/Subscribe cue length; the cue must OWN its seconds — it may never
@@ -388,10 +407,42 @@ def run_infographic_short(
             ],
         })
 
+    def _guard(next_stage: str) -> None:
+        """Cooperative stop check at a stage boundary (AC8).
+
+        An in-flight expensive call cannot be interrupted, but the moment it
+        returns this guard sees the operator's stop flag and refuses to launch
+        any later stage — no new ffmpeg/Remotion/browser work after Stop. The
+        short is persisted as terminal ``cancelled`` (never rendered/failed).
+        """
+        if not _stop_requested_for(short_dir):
+            return
+        idx = stage_names.index(next_stage)
+        atomic_write_json(short_dir / paths.SHORT_STATUS_FILE, {
+            "short_type": "infographic",
+            "status": "cancelled",
+            "rendered": False,
+            "stop_requested": True,
+            "stages": [
+                {
+                    "name": name,
+                    "status": (
+                        "skipped" if name in skip
+                        else "completed" if n < idx
+                        else "cancelled"
+                    ),
+                }
+                for n, name in enumerate(stage_names)
+            ],
+        })
+        raise InfographicStopRequested(f"stop requested before stage {next_stage!r}")
+
+    _guard("plan")
     _progress("plan")
     plan = build_poster_plan(channel_config, source, llm_fn)
     atomic_write_json(short_dir / "json" / paths.SHORT_POSTER_PLAN_FILE, plan)
 
+    _guard("poster")
     _progress("poster")
     verdict: dict[str, Any]
     if read_text_fn is None:
@@ -408,6 +459,7 @@ def run_infographic_short(
             )
             if verdict["verdict"] == "pass":
                 break
+    _guard("poster_qa")
     _progress("poster_qa")
     atomic_write_json(short_dir / "json" / paths.SHORT_POSTER_QA_FILE, verdict)
 
@@ -433,6 +485,7 @@ def run_infographic_short(
     engagement_cue_sec = _ENGAGEMENT_CUE_SEC
     show_engagement_cue = True
     if voice_enabled:
+        _guard("voice")
         _progress("voice")
         vfn = voice_fn or synthesize_infographic_voiceover
         narration_path = Path(vfn(short_dir, plan, channel_config))
@@ -455,12 +508,14 @@ def run_infographic_short(
             show_engagement_cue = False
             engagement_cue_sec = 0.0
 
+    _guard("music")
     _progress("music")
     music_fn = music_fn or prepare_infographic_music_bed
     audio_path = music_fn(short_dir, music_track, channel_config, duration)
 
     audio_mode = "music_only"
     if voice_enabled and narration_path is not None:
+        _guard("mix")
         _progress("mix")
         mfn = mix_fn or _mix_voice_with_music
         mixed_path = short_dir / "audio" / "infographic_mix.m4a"
@@ -469,11 +524,13 @@ def run_infographic_short(
             audio_mode = "voice_plus_music"
         # else: mixer failed — fall back to the music-only bed (already built).
 
+    _guard("seo")
     _progress("seo")
     # SEO/title artifact (writes json/short_seo.json via the shipped Short SEO path:
     # 4 scroll-stopper formulas, <=40 chars, aligned with the poster hook_line).
     build_infographic_seo(_long_job_dir(short_dir), short_dir.name, plan, channel_config, llm_fn)
 
+    _guard("render_props")
     _progress("render_props")
     props = build_infographic_render_props(
         poster_ref=_public_short_ref(short_dir, "assets", paths.SHORT_POSTER_IMAGE_NAME),
@@ -486,6 +543,7 @@ def run_infographic_short(
         engagement_cue_sec=engagement_cue_sec,
     )
     atomic_write_json(short_dir / "json" / paths.SHORT_RENDER_PROPS_FILE, props)
+    _guard("render")
     _progress("render")
     out = render_fn(short_dir, props)
 
@@ -598,6 +656,20 @@ def render_selected_infographic_ideas(
                 image_fn=image_fn, llm_fn=llm_fn, music_fn=music_fn, render_fn=render_fn,
                 read_text_fn=read_text_fn,
             )
+        except InfographicStopRequested:
+            # Operator stop landed at a stage boundary of the CURRENT item:
+            # the item is already persisted as cancelled by the guard; cancel
+            # the batch (idempotent — the stop route usually did it first) and
+            # stop immediately. No rendered/failed manifest entry, no events
+            # for later pending items (AC8).
+            cancelled = True
+            if progress is not None:
+                progress.batch_cancelled("operator requested stop")
+            results.append({
+                "short_id": short_id, "idea_id": idea_id, "short_type": "infographic",
+                "status": "cancelled", "rendered": False, "video_path": None,
+            })
+            break
         except Exception as exc:  # noqa: BLE001 — one bad idea must not sink the batch
             # Ordinary item failure: record it and CONTINUE with the next
             # selected idea (spec §8.6). The old behavior aborted the loop and

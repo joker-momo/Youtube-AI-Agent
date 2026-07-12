@@ -377,3 +377,126 @@ def test_stop_route_cancels_active_batch_immediately(client, tmp_path):
     assert snapshot["status"] == "cancelled"
     assert snapshot["remaining_count"] == 0
     assert [i["status"] for i in snapshot["items"]] == ["cancelled", "cancelled"]
+
+
+# ------------------------------------------- AC8 cooperative in-item stop --
+
+
+def _stage_fns(job: Path, stop_after: str):
+    """Real run_infographic_short deps with call spies; the ``stop_after``
+    stage writes the operator's stop flag before returning (a stop landing
+    while that call is in flight — it completes, later stages must not run)."""
+    calls: list[str] = []
+
+    def llm_fn(prompt):
+        calls.append("llm")
+        if stop_after == "plan":
+            (job / ".stop_requested").write_text("1\n", encoding="utf-8")
+        return json.dumps({
+            "poster_format": "numbered_tips", "title": "Sal en cinco pasos",
+            "hook_line": "Sal: compárala en 5 pasos",
+            "items": [{"label": f"Paso {n}"} for n in range(1, 6)], "cta": "Sigue",
+        })
+
+    async def image_fn(*, prompt, project_name, out_path, aspect_ratio="16:9"):
+        calls.append("image")
+        if stop_after == "poster":
+            (job / ".stop_requested").write_text("1\n", encoding="utf-8")
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(out_path).write_bytes(b"\x89PNG")
+        return {"bytes": 4}
+
+    def music_fn(short_dir, music_track, cfg, duration_sec):
+        calls.append("music")
+        p = Path(short_dir) / "audio" / "infographic_bgm.m4a"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"RIFF")
+        return p
+
+    def render_fn(short_dir, props):
+        calls.append("render")
+        out = Path(short_dir) / "outputs" / "short.mp4"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"\x00")
+        return out
+
+    return calls, llm_fn, image_fn, music_fn, render_fn
+
+
+def test_stop_during_plan_stage_runs_nothing_after_the_boundary(tmp_path):
+    """AC8 stage-level: stop lands while the PLAN call is in flight; the call
+    returns, and no poster/music/SEO/render work may start afterwards."""
+    from video_agent.shorts.infographic.build import (
+        InfographicStopRequested,
+        run_infographic_short,
+    )
+
+    job = _make_parent_job(tmp_path, ["idea-01"])
+    short_dir = job / "shorts" / "short-01_idea-01_stop"
+    calls, llm_fn, image_fn, music_fn, render_fn = _stage_fns(job, stop_after="plan")
+
+    with pytest.raises(InfographicStopRequested):
+        run_infographic_short(
+            short_dir, CFG, {"topic": "sal", "title": "Sal"},
+            image_fn=image_fn, llm_fn=llm_fn, music_fn=music_fn,
+            render_fn=render_fn, read_text_fn=None,
+        )
+
+    assert calls == ["llm"]  # plan returned; poster/music/render never started
+    status = json.loads((short_dir / paths.SHORT_STATUS_FILE).read_text())
+    assert status["status"] == "cancelled"
+    assert status["rendered"] is False
+    assert status["stop_requested"] is True
+
+
+def test_stop_during_poster_stage_stops_before_music_and_render(tmp_path):
+    from video_agent.shorts.infographic.build import (
+        InfographicStopRequested,
+        run_infographic_short,
+    )
+
+    job = _make_parent_job(tmp_path, ["idea-01"])
+    short_dir = job / "shorts" / "short-01_idea-01_stop2"
+    calls, llm_fn, image_fn, music_fn, render_fn = _stage_fns(job, stop_after="poster")
+
+    with pytest.raises(InfographicStopRequested):
+        run_infographic_short(
+            short_dir, CFG, {"topic": "sal", "title": "Sal"},
+            image_fn=image_fn, llm_fn=llm_fn, music_fn=music_fn,
+            render_fn=render_fn, read_text_fn=None,
+        )
+
+    assert calls == ["llm", "image"]  # poster call finished; nothing after
+    status = json.loads((short_dir / paths.SHORT_STATUS_FILE).read_text())
+    assert status["status"] == "cancelled"
+
+
+def test_loop_stop_mid_item_cancels_batch_and_never_starts_later_ideas(tmp_path):
+    """AC8 end-to-end through the sequential loop with the REAL pipeline:
+    stop during idea-01's plan stage — its later stages never run, the batch
+    ends cancelled, idea-02 never starts, and no rendered manifest entry
+    appears for either idea."""
+    from video_agent.shorts.infographic.build import render_selected_infographic_ideas
+
+    job = _make_parent_job(tmp_path, ["idea-01", "idea-02"])
+    store = RenderBatchStore(job)
+    store.create(batch_id="srb-x", ideas=_ideas("idea-01", "idea-02"),
+                 short_type="infographic", force=False, generation_id="ideas-1")
+    progress = _EventLog(store)
+    calls, llm_fn, image_fn, music_fn, render_fn = _stage_fns(job, stop_after="plan")
+
+    result = render_selected_infographic_ideas(
+        job, CFG, ["idea-01", "idea-02"],
+        image_fn=image_fn, llm_fn=llm_fn, music_fn=music_fn, render_fn=render_fn,
+        read_text_fn=None, progress=progress,
+    )
+
+    assert calls == ["llm"]  # idea-01 stopped at the plan boundary; idea-02 never ran
+    doc = store.load()
+    assert doc["status"] == "cancelled"
+    assert [i["status"] for i in doc["items"]] == ["cancelled", "cancelled"]
+    started = [e[1] for e in progress.events if e[0] == "started" and e[2]]
+    assert started == ["idea-01"]
+    statuses = [r["status"] for r in result["shorts"]]
+    assert statuses == ["cancelled"]
+    assert not any(r.get("rendered") for r in result["shorts"])

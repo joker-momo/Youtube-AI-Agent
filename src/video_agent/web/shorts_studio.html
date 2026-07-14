@@ -1011,9 +1011,39 @@
         <p>Vida Plena 45+ Shorts Production</p>
       </div>
       <div class="top-meta">
+        <button class="refresh-btn" type="button" onclick="openIdeaTitleJobModal()">Create video from idea</button>
         <button class="refresh-btn" id="refresh-btn" type="button" onclick="loadShortsPage()">Refresh</button>
       </div>
     </header>
+    <!-- Create idea from a title + description modal (long-form idea source) -->
+    <div class="modal-overlay hidden" id="idea-title-job-overlay" onclick="if(event.target===this)closeIdeaTitleJobModal()">
+      <div class="modal">
+        <div class="modal-title">Create video from idea</div>
+        <div class="modal-field">
+          <label for="itj-title">Title</label>
+          <textarea id="itj-title" placeholder="Sarcopenia después de los 60: 5 alimentos que ayudan a proteger tus músculos"></textarea>
+        </div>
+        <div class="modal-field">
+          <label for="itj-description">Description</label>
+          <textarea id="itj-description" placeholder="Para adultos de 45+ que quieren proteger sus músculos: enfoca alimentos concretos, la constancia y una cautela profesional. Añade el ángulo, el dolor del espectador o límites que aclaren el título."></textarea>
+        </div>
+        <div class="modal-field">
+          <label for="itj-channel">Channel</label>
+          <select id="itj-channel">
+            <option value="vida-plena-45">vida-plena-45</option>
+          </select>
+        </div>
+        <p style="font-size:12px;color:var(--muted);margin:2px 0 0">
+          ChatGPT expands the title and description into a full idea (topic, angle, key points, duration).
+        </p>
+        <div id="itj-status" style="font-size:12px;color:var(--muted);margin-top:8px;display:none"></div>
+        <div id="itj-error" style="font-size:12px;color:var(--red);margin-top:8px;display:none"></div>
+        <div class="modal-actions">
+          <button class="modal-cancel" onclick="closeIdeaTitleJobModal()">Cancel</button>
+          <button class="modal-submit" id="itj-submit" onclick="submitIdeaTitleJob()">Generate Idea</button>
+        </div>
+      </div>
+    </div>
     <main class="page">
       <!-- Shorts Studio Page -->
       <div id="shorts-page" class="shorts-page-wrap active">

@@ -140,6 +140,19 @@ def test_shorts_studio_from_title_caller_submits_description():
     assert "/ideas/from-title" in html
 
 
+def test_both_clients_render_the_description_input_element():
+    """The Description input must actually EXIST in the DOM of BOTH clients —
+    a JS getElementById without a matching element throws before fetch (Codex
+    verification round 1). Assert the real textarea + label, not only the JS."""
+    for name in ("dashboard.html", "shorts_studio.html"):
+        html = _read_html(name)
+        assert '<textarea id="itj-description"' in html, name
+        assert '<label for="itj-description">Description</label>' in html, name
+        # And the matching title/submit controls the caller reads must exist too.
+        assert '<textarea id="itj-title"' in html, name
+        assert 'id="itj-submit"' in html, name
+
+
 def test_both_from_title_clients_send_required_description_no_fabricated_default():
     """Both static clients reference the endpoint and submit the operator's own
     description — neither substitutes a fabricated fallback description."""

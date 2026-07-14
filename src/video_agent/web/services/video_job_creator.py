@@ -361,7 +361,7 @@ async def create_idea_from_title(
     *,
     channel_id: str,
     title_seed: str,
-    description: str,
+    description: str | None = None,
     jobs_root: Path,
     inputs_root: Path,
     browser_client: BrowserClient,
@@ -376,11 +376,14 @@ async def create_idea_from_title(
     the video is created later via ``/jobs/from-idea`` (Run Job button).
     """
     _validate_request_title(title_seed)
-    _validate_request_description(description)
-    # Normalize ONCE; the trimmed values are canonical for the prompt, the
-    # response, and the saved idea (the model output can never overwrite them).
     title_seed = title_seed.strip()
-    description = description.strip()
+    # Description is OPTIONAL (legacy title-only Shorts Studio caller sends none).
+    # Validate + normalize ONLY when supplied; the trimmed value is then
+    # canonical for the prompt, response, and saved idea (the model can never
+    # overwrite it). A missing description keeps the legacy title-only behavior.
+    if description is not None:
+        _validate_request_description(description)
+        description = description.strip()
     channel_path, channel_config = resolve_channel_config(channel_id)
     published = load_published_videos(channel_config, repo_root() / "configs")
     existing = collect_existing_video_ideas(

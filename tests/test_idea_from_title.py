@@ -152,10 +152,19 @@ def test_from_title_returns_422_when_chatgpt_never_valid(client: TestClient):
     assert r.json()["detail"]["error"] == "idea_expansion_failed"
 
 
-def test_from_title_only_needs_title_seed(client: TestClient):
-    # No duration / policy / notes fields — title is the only required input.
-    r = client.post(f"/channels/{CHANNEL}/ideas/from-title", json={"title_seed": TITLE, "description": DESCRIPTION})
+def test_from_title_legacy_title_only_still_works(client: TestClient):
+    # Legacy title-only caller (Shorts Studio) omits description entirely:
+    # description is optional, so the request succeeds with the unchanged
+    # title-only behavior — no description block, no idea.description.
+    r = client.post(f"/channels/{CHANNEL}/ideas/from-title", json={"title_seed": TITLE})
     assert r.status_code == 201, r.text
+    idea = r.json()["idea"]
+    assert idea["title_seed"] == TITLE
+    assert "description" not in idea
+    # The single captured prompt carries NO description input block.
+    _site, messages = client.fake_browser.sessions[0]  # type: ignore[attr-defined]
+    assert "Input description:" not in messages[0]
+    assert "Input title_seed:" in messages[0]
 
 
 def test_from_title_retries_invalid_chatgpt_json(client: TestClient):
@@ -218,10 +227,12 @@ def test_from_title_returns_and_persists_normalized_description(client: TestClie
     assert on_disk["description"] == DESCRIPTION
 
 
-def test_missing_description_is_422_and_calls_no_browser_session(client: TestClient):
+def test_missing_description_is_accepted_as_legacy_title_only(client: TestClient):
+    # Missing description must NOT be globally rejected (Long-only scope): the
+    # legacy title-only path returns 201, unlike a blank SUPPLIED description.
     r = client.post(f"/channels/{CHANNEL}/ideas/from-title", json={"title_seed": TITLE})
-    assert r.status_code == 422  # Pydantic schema failure (field absent)
-    assert client.fake_browser.sessions == []  # type: ignore[attr-defined]
+    assert r.status_code == 201, r.text
+    assert "description" not in r.json()["idea"]
 
 
 @pytest.mark.parametrize("bad", ["", "   ", "\n\t "])

@@ -963,13 +963,17 @@
             <textarea id="itj-title" placeholder="Sarcopenia después de los 60: 5 alimentos que ayudan a proteger tus músculos"></textarea>
           </div>
           <div class="modal-field">
+            <label for="itj-description">Description</label>
+            <textarea id="itj-description" placeholder="Para adultos de 45+ que quieren proteger sus músculos: enfoca alimentos concretos, la constancia y una cautela profesional. Añade el ángulo, el dolor del espectador o límites que aclaren el título."></textarea>
+          </div>
+          <div class="modal-field">
             <label>Channel</label>
             <select id="itj-channel">
               <option value="vida-plena-45">vida-plena-45</option>
             </select>
           </div>
           <p style="font-size:12px;color:var(--muted);margin:2px 0 0">
-            ChatGPT expands the title into a full idea (topic, angle, key points, duration).
+            ChatGPT expands the title and description into a full idea (topic, angle, key points, duration).
             It appears as an idea card below — click <strong>Run Job</strong> there to create the video.
           </p>
           <div id="itj-status" style="font-size:12px;color:var(--muted);margin-top:8px;display:none"></div>
@@ -2941,8 +2945,13 @@ function openIdeaTitleJobModal() {
   const ch = document.getElementById('itj-channel');
   if (ideaCh && ch) ch.innerHTML = ideaCh.innerHTML;
   document.getElementById('itj-title').value = '';
+  document.getElementById('itj-description').value = '';
   document.getElementById('itj-error').style.display = 'none';
   document.getElementById('itj-status').style.display = 'none';
+  // Never reopen with a stale disabled submit (R1.5).
+  const submit = document.getElementById('itj-submit');
+  submit.disabled = false;
+  submit.textContent = 'Generate Idea';
   document.getElementById('idea-title-job-overlay').classList.remove('hidden');
 }
 
@@ -2981,20 +2990,25 @@ async function submitIdeaTitleJob() {
     showIdeaTitleJobError('Enter a title first.');
     return;
   }
+  const description = document.getElementById('itj-description').value.trim();
+  if (!description) {
+    showIdeaTitleJobError('Enter a description first.');
+    return;
+  }
   const channelId = document.getElementById('itj-channel').value || 'vida-plena-45';
   const submit = document.getElementById('itj-submit');
   const originalSubmitText = submit.textContent;
   const status = document.getElementById('itj-status');
   submit.disabled = true;
   submit.textContent = 'Generating...';
-  status.textContent = 'Expanding title with ChatGPT into a full idea...';
+  status.textContent = 'Expanding title and description with ChatGPT into a full idea...';
   status.style.display = '';
   document.getElementById('itj-error').style.display = 'none';
   try {
     const r = await fetch('/channels/' + encodeURIComponent(channelId) + '/ideas/from-title', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({title_seed: titleSeed}),
+      body: JSON.stringify({title_seed: titleSeed, description}),
     });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) {

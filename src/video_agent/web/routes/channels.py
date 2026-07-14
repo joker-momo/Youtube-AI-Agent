@@ -422,6 +422,7 @@ async def post_idea_from_title(
     return await create_idea_from_title(
         channel_id=channel_id,
         title_seed=req.title_seed,
+        description=req.description,
         jobs_root=jobs_root,
         inputs_root=inputs_root,
         browser_client=client,

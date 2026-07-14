@@ -33,6 +33,10 @@ EXPANDED_IDEA = {
 }
 
 TITLE = "Dormir mejor después de los 45 con una rutina sencilla y realista"
+DESCRIPTION = (
+    "Para adultos de 45+ que se despiertan cansados: enfoca la cena ligera, la "
+    "luz de la tarde y una rutina realista, sin prometer curas."
+)
 
 
 class FakeBrowserClient:
@@ -70,7 +74,7 @@ def client(tmp_path: Path, monkeypatch):
 
 
 def test_from_title_returns_idea_and_does_not_create_job(client: TestClient, tmp_path: Path):
-    r = client.post(f"/channels/{CHANNEL}/ideas/from-title", json={"title_seed": TITLE})
+    r = client.post(f"/channels/{CHANNEL}/ideas/from-title", json={"title_seed": TITLE, "description": DESCRIPTION})
 
     assert r.status_code == 201, r.text
     body = r.json()
@@ -86,7 +90,7 @@ def test_from_title_returns_idea_and_does_not_create_job(client: TestClient, tmp
 
 
 def test_from_title_saves_idea_under_inputs_ideas(client: TestClient):
-    r = client.post(f"/channels/{CHANNEL}/ideas/from-title", json={"title_seed": TITLE})
+    r = client.post(f"/channels/{CHANNEL}/ideas/from-title", json={"title_seed": TITLE, "description": DESCRIPTION})
 
     assert r.status_code == 201, r.text
     saved = r.json()["saved"]
@@ -97,7 +101,7 @@ def test_from_title_saves_idea_under_inputs_ideas(client: TestClient):
 
 
 def test_from_title_score_fields_are_empty(client: TestClient):
-    r = client.post(f"/channels/{CHANNEL}/ideas/from-title", json={"title_seed": TITLE})
+    r = client.post(f"/channels/{CHANNEL}/ideas/from-title", json={"title_seed": TITLE, "description": DESCRIPTION})
 
     assert r.status_code == 201, r.text
     idea = r.json()["idea"]
@@ -107,7 +111,7 @@ def test_from_title_score_fields_are_empty(client: TestClient):
 
 
 def test_from_title_applies_hidden_auto_duration_defaults(client: TestClient):
-    r = client.post(f"/channels/{CHANNEL}/ideas/from-title", json={"title_seed": TITLE})
+    r = client.post(f"/channels/{CHANNEL}/ideas/from-title", json={"title_seed": TITLE, "description": DESCRIPTION})
 
     assert r.status_code == 201, r.text
     idea = r.json()["idea"]
@@ -122,7 +126,7 @@ def test_from_title_flags_duplicate_but_still_returns_and_saves(client: TestClie
         lambda *a, **k: [{"title": EXPANDED_IDEA["topic"]}],
     )
 
-    r = client.post(f"/channels/{CHANNEL}/ideas/from-title", json={"title_seed": TITLE})
+    r = client.post(f"/channels/{CHANNEL}/ideas/from-title", json={"title_seed": TITLE, "description": DESCRIPTION})
 
     assert r.status_code == 201, r.text
     body = r.json()
@@ -133,7 +137,7 @@ def test_from_title_flags_duplicate_but_still_returns_and_saves(client: TestClie
 
 
 def test_from_title_rejects_short_title(client: TestClient):
-    r = client.post(f"/channels/{CHANNEL}/ideas/from-title", json={"title_seed": "short"})
+    r = client.post(f"/channels/{CHANNEL}/ideas/from-title", json={"title_seed": "short", "description": DESCRIPTION})
 
     assert r.status_code == 400
     assert r.json()["detail"]["error"] == "invalid_title_seed"
@@ -142,7 +146,7 @@ def test_from_title_rejects_short_title(client: TestClient):
 def test_from_title_returns_422_when_chatgpt_never_valid(client: TestClient):
     client.fake_browser.response = "still not json"  # type: ignore[attr-defined]
 
-    r = client.post(f"/channels/{CHANNEL}/ideas/from-title", json={"title_seed": TITLE})
+    r = client.post(f"/channels/{CHANNEL}/ideas/from-title", json={"title_seed": TITLE, "description": DESCRIPTION})
 
     assert r.status_code == 422
     assert r.json()["detail"]["error"] == "idea_expansion_failed"
@@ -150,7 +154,7 @@ def test_from_title_returns_422_when_chatgpt_never_valid(client: TestClient):
 
 def test_from_title_only_needs_title_seed(client: TestClient):
     # No duration / policy / notes fields — title is the only required input.
-    r = client.post(f"/channels/{CHANNEL}/ideas/from-title", json={"title_seed": TITLE})
+    r = client.post(f"/channels/{CHANNEL}/ideas/from-title", json={"title_seed": TITLE, "description": DESCRIPTION})
     assert r.status_code == 201, r.text
 
 
@@ -170,7 +174,7 @@ def test_from_title_retries_invalid_chatgpt_json(client: TestClient):
     retry = RetryBrowser()
     app.dependency_overrides[get_browser_client] = lambda: retry
 
-    r = client.post(f"/channels/{CHANNEL}/ideas/from-title", json={"title_seed": TITLE})
+    r = client.post(f"/channels/{CHANNEL}/ideas/from-title", json={"title_seed": TITLE, "description": DESCRIPTION})
 
     assert r.status_code == 201, r.text
     assert retry.calls == 2
@@ -188,8 +192,169 @@ def test_from_title_prompt_includes_existing_videos_to_avoid(client: TestClient,
         encoding="utf-8",
     )
 
-    r = client.post(f"/channels/{CHANNEL}/ideas/from-title", json={"title_seed": TITLE})
+    r = client.post(f"/channels/{CHANNEL}/ideas/from-title", json={"title_seed": TITLE, "description": DESCRIPTION})
 
     assert r.status_code == 201, r.text
     prompt = client.fake_browser.sessions[0][1][0]  # type: ignore[attr-defined]
     assert "Rutina nocturna distinta para descansar" in prompt
+
+
+# ── Description contract: validation, provenance, prompt sentinels ──────────
+
+TITLE_SENTINEL = "TITLE-ONLY-7f3c"
+DESCRIPTION_SENTINEL = "DESCRIPTION-ONLY-a91e"
+
+
+def test_from_title_returns_and_persists_normalized_description(client: TestClient):
+    r = client.post(
+        f"/channels/{CHANNEL}/ideas/from-title",
+        json={"title_seed": f"  {TITLE}  ", "description": f"  {DESCRIPTION}  "},
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["idea"]["title_seed"] == TITLE
+    assert body["idea"]["description"] == DESCRIPTION
+    on_disk = json.loads((client.inputs_root / body["saved"]).read_text(encoding="utf-8"))  # type: ignore[attr-defined]
+    assert on_disk["description"] == DESCRIPTION
+
+
+def test_missing_description_is_422_and_calls_no_browser_session(client: TestClient):
+    r = client.post(f"/channels/{CHANNEL}/ideas/from-title", json={"title_seed": TITLE})
+    assert r.status_code == 422  # Pydantic schema failure (field absent)
+    assert client.fake_browser.sessions == []  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "\n\t "])
+def test_blank_description_is_400_invalid_description_and_no_session(client: TestClient, bad: str):
+    r = client.post(
+        f"/channels/{CHANNEL}/ideas/from-title",
+        json={"title_seed": TITLE, "description": bad},
+    )
+    assert r.status_code == 400
+    assert r.json()["detail"] == {
+        "error": "invalid_description",
+        "message": "description must be 10-2000 characters.",
+    }
+    assert client.fake_browser.sessions == []  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    ("length", "ok"),
+    [(9, False), (10, True), (2000, True), (2001, False)],
+)
+def test_description_length_boundaries(client: TestClient, length: int, ok: bool):
+    r = client.post(
+        f"/channels/{CHANNEL}/ideas/from-title",
+        json={"title_seed": TITLE, "description": "a" * length},
+    )
+    if ok:
+        assert r.status_code == 201, r.text
+    else:
+        assert r.status_code == 400
+        assert r.json()["detail"]["error"] == "invalid_description"
+        assert client.fake_browser.sessions == []  # type: ignore[attr-defined]
+
+
+def test_short_title_still_rejected_even_with_valid_description(client: TestClient):
+    r = client.post(
+        f"/channels/{CHANNEL}/ideas/from-title",
+        json={"title_seed": "short", "description": DESCRIPTION},
+    )
+    assert r.status_code == 400
+    assert r.json()["detail"]["error"] == "invalid_title_seed"
+
+
+def test_build_prompt_puts_title_and_description_in_own_labelled_blocks():
+    from video_agent.orchestrator.idea_expander import build_title_to_idea_prompt
+
+    prompt = build_title_to_idea_prompt(
+        channel_config={"channel": {"id": CHANNEL}},
+        title_seed=TITLE_SENTINEL,
+        description=DESCRIPTION_SENTINEL,
+        duration_mode="auto",
+        target_duration_sec=None,
+        min_duration_sec=660,
+        max_duration_sec=1800,
+        existing_videos=[],
+        duplicate_policy="warn_only",
+    )
+    # Each sentinel appears in its OWN labelled input block.
+    assert f"Input title_seed:\n{TITLE_SENTINEL}" in prompt
+    assert f"Input description:\n{DESCRIPTION_SENTINEL}" in prompt
+    # The description sentinel lives ONLY in its input block (title also recurs
+    # in the "title_seed: exactly ..." output requirement, which is intentional
+    # per R4.5, so title count is allowed to exceed one).
+    assert prompt.count(DESCRIPTION_SENTINEL) == 1
+    assert prompt.count(TITLE_SENTINEL) >= 1
+
+
+def test_prompt_instructs_combined_synthesis_and_content_only_treatment():
+    from video_agent.orchestrator.idea_expander import build_title_to_idea_prompt
+
+    prompt = build_title_to_idea_prompt(
+        channel_config={"channel": {"id": CHANNEL}},
+        title_seed=TITLE_SENTINEL,
+        description=DESCRIPTION_SENTINEL,
+        duration_mode="auto",
+        target_duration_sec=None,
+        min_duration_sec=660,
+        max_duration_sec=1800,
+        existing_videos=[],
+        duplicate_policy="warn_only",
+    )
+    low = prompt.lower()
+    assert "both" in low  # use BOTH inputs
+    assert "description" in low
+    assert "not instructions" in low or "not obey" in low or "source content" in low
+
+
+def test_integration_every_prompt_attempt_contains_both_sentinels(client: TestClient):
+    # First completion invalid JSON forces a retry; assert BOTH sentinels are in
+    # EVERY captured model prompt — proof Description survives request→prompt on
+    # each attempt, not just the HTTP body.
+    class RetryBrowser(FakeBrowserClient):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        async def run_session(self, site: str, messages: list[str], **kwargs) -> str:
+            self.calls += 1
+            self.sessions.append((site, list(messages)))
+            if self.calls == 1:
+                return "not json"
+            return json.dumps(EXPANDED_IDEA, ensure_ascii=False)
+
+    retry = RetryBrowser()
+    app.dependency_overrides[get_browser_client] = lambda: retry
+
+    r = client.post(
+        f"/channels/{CHANNEL}/ideas/from-title",
+        json={"title_seed": TITLE_SENTINEL + " rutina larga para dormir", "description": DESCRIPTION_SENTINEL + " contexto de descanso"},
+    )
+    assert r.status_code == 201, r.text
+    assert retry.calls == 2
+    assert retry.sessions, "no prompt captured"
+    for _site, messages in retry.sessions:
+        assert TITLE_SENTINEL in messages[0]
+        assert DESCRIPTION_SENTINEL in messages[0]
+
+
+def test_model_output_cannot_overwrite_canonical_title_or_description(client: TestClient):
+    # Model returns deliberately wrong title_seed/description; the operator's
+    # submitted, normalized inputs must win in the response and on disk.
+    client.fake_browser.response = {  # type: ignore[attr-defined]
+        **EXPANDED_IDEA,
+        "title_seed": "MODELO SOBRESCRIBE EL TITULO",
+        "description": "MODELO SOBRESCRIBE LA DESCRIPCION",
+    }
+    r = client.post(
+        f"/channels/{CHANNEL}/ideas/from-title",
+        json={"title_seed": TITLE, "description": DESCRIPTION},
+    )
+    assert r.status_code == 201, r.text
+    idea = r.json()["idea"]
+    assert idea["title_seed"] == TITLE
+    assert idea["description"] == DESCRIPTION
+    on_disk = json.loads((client.inputs_root / r.json()["saved"]).read_text(encoding="utf-8"))  # type: ignore[attr-defined]
+    assert on_disk["title_seed"] == TITLE
+    assert on_disk["description"] == DESCRIPTION

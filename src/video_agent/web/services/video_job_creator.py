@@ -227,6 +227,17 @@ def _validate_request_title(title_seed: str) -> None:
         )
 
 
+def _validate_request_description(description: str) -> None:
+    if not isinstance(description, str) or not 10 <= len(description.strip()) <= 2000:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_description",
+                "message": "description must be 10-2000 characters.",
+            },
+        )
+
+
 def _validate_idea(idea: dict, *, require_title_seed: bool = True) -> dict:
     try:
         validate_json(idea, repo_root() / "schemas" / "manual-idea.schema.json")
@@ -350,6 +361,7 @@ async def create_idea_from_title(
     *,
     channel_id: str,
     title_seed: str,
+    description: str,
     jobs_root: Path,
     inputs_root: Path,
     browser_client: BrowserClient,
@@ -364,6 +376,11 @@ async def create_idea_from_title(
     the video is created later via ``/jobs/from-idea`` (Run Job button).
     """
     _validate_request_title(title_seed)
+    _validate_request_description(description)
+    # Normalize ONCE; the trimmed values are canonical for the prompt, the
+    # response, and the saved idea (the model output can never overwrite them).
+    title_seed = title_seed.strip()
+    description = description.strip()
     channel_path, channel_config = resolve_channel_config(channel_id)
     published = load_published_videos(channel_config, repo_root() / "configs")
     existing = collect_existing_video_ideas(
@@ -381,6 +398,7 @@ async def create_idea_from_title(
         try:
             idea = await expand_title_to_idea(
                 title_seed=title_seed,
+                description=description,
                 channel_config=channel_config,
                 session_fn=lambda messages: browser_client.run_session("chatgpt", messages),
                 duration_mode="auto",

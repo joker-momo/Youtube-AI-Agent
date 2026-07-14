@@ -2833,6 +2833,8 @@ function openIdeaTitleJobModal() {
   const ch = document.getElementById('itj-channel');
   if (ideaCh && ch) ch.innerHTML = ideaCh.innerHTML;
   document.getElementById('itj-title').value = '';
+  const desc = document.getElementById('itj-description');
+  if (desc) desc.value = '';
   document.getElementById('itj-error').style.display = 'none';
   document.getElementById('itj-status').style.display = 'none';
   document.getElementById('idea-title-job-overlay').classList.remove('hidden');
@@ -2873,20 +2875,25 @@ async function submitIdeaTitleJob() {
     showIdeaTitleJobError('Enter a title first.');
     return;
   }
+  const description = document.getElementById('itj-description').value.trim();
+  if (!description) {
+    showIdeaTitleJobError('Enter a description first.');
+    return;
+  }
   const channelId = document.getElementById('itj-channel').value || 'vida-plena-45';
   const submit = document.getElementById('itj-submit');
   const originalSubmitText = submit.textContent;
   const status = document.getElementById('itj-status');
   submit.disabled = true;
   submit.textContent = 'Generating...';
-  status.textContent = 'Expanding title with ChatGPT into a full idea...';
+  status.textContent = 'Expanding title and description with ChatGPT into a full idea...';
   status.style.display = '';
   document.getElementById('itj-error').style.display = 'none';
   try {
     const r = await fetch('/channels/' + encodeURIComponent(channelId) + '/ideas/from-title', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({title_seed: titleSeed}),
+      body: JSON.stringify({title_seed: titleSeed, description}),
     });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) {

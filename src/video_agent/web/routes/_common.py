@@ -45,6 +45,10 @@ class GenerateIdeasRequest(BaseModel):
 
 class IdeaFromTitleRequest(BaseModel):
     title_seed: str
+    # Required source content (not executable instructions) grounding the idea
+    # expansion alongside the title. Absence is a 422 schema failure; blank /
+    # length-invalid supplied values are a 400 domain failure in the service.
+    description: str
 
 
 class ScoreIdeasRequest(BaseModel):

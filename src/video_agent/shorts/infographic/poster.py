@@ -8,7 +8,7 @@ from video_agent.orchestrator.image_prompt_log import safe_log_image_prompt
 from video_agent.shorts import paths
 from video_agent.shorts.infographic.poster_prompt import (
     build_poster_body,
-    build_poster_prompt,
+    wrap_poster_body,
 )
 
 
@@ -31,18 +31,22 @@ async def generate_poster(
     short_dir = Path(short_dir)
     out_path = short_dir / "assets" / paths.SHORT_POSTER_IMAGE_NAME
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    # ONE body per generation (KTD4/R7): the audit log wraps this exact string and
+    # image_fn receives it verbatim, so the logged effective palette is provably
+    # the palette that reached the model — never an independently recomputed one.
+    body = build_poster_body(plan, channel_config)
     # Log the full wrapped prompt (what conceptually reaches ChatGPT) for audit...
     safe_log_image_prompt(
         short_dir,
         stage="infographic",
         kind="infographic_poster",
-        prompt=build_poster_prompt(plan, channel_config),
+        prompt=wrap_poster_body(body),
         out_path=str(out_path),
         aspect_ratio="9:16",
     )
     # ...but pass the RAW body: the driver prepends the dimension instruction once.
     await image_fn(
-        prompt=build_poster_body(plan, channel_config),
+        prompt=body,
         project_name=f"{short_dir.name[:38]}-poster"[:45],
         out_path=str(out_path),
         aspect_ratio="9:16",

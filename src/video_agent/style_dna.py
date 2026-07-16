@@ -54,3 +54,37 @@ def load_style_dna(channel_path: Path | None) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         print(f"[style_dna] WARNING: failed to load style-dna.json ({exc}); neutral fallback palette.", flush=True)
     return DEFAULT_STYLE
+
+
+def load_style_dna_from_config(channel_config: dict[str, Any] | None) -> dict[str, Any]:
+    """Load style DNA from a channel config's ``style_dna.path`` declaration.
+
+    Builders that only receive the parsed ``channel_config`` (e.g. the Shorts
+    infographic poster prompt) resolve the brand palette here instead of
+    carrying their own hardcoded colours. The configured path is repo-root
+    relative (absolute paths are honoured as-is). Missing/malformed data uses
+    the SAME centralized ``DEFAULT_STYLE`` neutral fallback as
+    :func:`load_style_dna` and never raises.
+    """
+    cfg = channel_config if isinstance(channel_config, dict) else {}
+    declared = ((cfg.get("style_dna") or {}) if isinstance(cfg.get("style_dna"), dict) else {}).get("path")
+    if not declared:
+        return DEFAULT_STYLE
+    try:
+        from video_agent.contracts import repo_root
+
+        sp = Path(str(declared))
+        if not sp.is_absolute():
+            sp = repo_root() / sp
+        if sp.exists():
+            data = read_json(sp)
+            if isinstance(data, dict) and data.get("palette"):
+                return data
+        print(
+            f"[style_dna] WARNING: style_dna.path missing/invalid at {sp} — using the "
+            "neutral fallback palette; images will look UN-branded until it is fixed.",
+            flush=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[style_dna] WARNING: failed to load style_dna.path ({exc}); neutral fallback palette.", flush=True)
+    return DEFAULT_STYLE

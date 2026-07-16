@@ -1,3 +1,6 @@
+import json as _json
+import re
+
 from video_agent.shorts.infographic.poster_prompt import build_poster_prompt
 
 
@@ -80,7 +83,17 @@ def test_myth_vs_truth_layout_renders_two_column_numbered_cards():
     assert "hidrata casi igual" in body
     assert "two-column" in body.lower() or "two column" in body.lower()
     assert "MITO 1" in body and "VERDAD 1" in body
-    assert "red CROSS" in body and "green CHECK" in body
+    # The CROSS/CHECK semantics stay; their hues now come from the negative /
+    # positive style-DNA roles instead of a hardcoded red/green (bug-541).
+    from video_agent.shorts.infographic.poster_prompt import build_effective_palette
+
+    roles = build_effective_palette({
+        "poster_format": "myth_vs_truth", "title": "Mitos del café",
+        "items": [{"label": "el café deshidrata", "note": "hidrata casi igual"}],
+    })
+    assert "CROSS" in body and "CHECK" in body
+    assert f"negative/warning color ({roles['negative']})" in body
+    assert f"positive color ({roles['positive']})" in body
     # No mascot/speech-bubble treatment (operator explicitly scoped it out).
     assert "mascot" not in body.lower()
 
@@ -278,3 +291,193 @@ def test_poster_prompt_message_match_survives_unknown_topic():
     ]
     body = build_poster_body(plan)
     assert "MESSAGE MATCH" in body  # generic message-match rule still present
+
+
+# ── bug-541: style-DNA-driven, deterministic, contrast-aware palette ────────
+
+
+PALETTE_A = {"background": "#101010", "primary": "#AA1111", "secondary": "#22BB22", "accent": "#3333CC", "text": "#F0F0F0"}
+PALETTE_B = {"background": "#FFFFFF", "primary": "#EE7700", "secondary": "#00AACC", "accent": "#9900AA", "text": "#111111"}
+
+_FORBIDDEN_COLOR_PHRASES = (
+    "dark navy", "red or orange", "color (green)", "bold white digit",
+    "red CROSS", "solid red", "light red/pink", "light green card",
+    "red circular badge", "red ribbon", "green circular badge",
+    "green ribbon", "green CHECK", "a green check", "a red cross",
+    "bold white text",
+)
+
+
+def _cfg_with_palette(tmp_path, palette: dict) -> dict:
+    p = tmp_path / "style-dna.json"
+    p.write_text(_json.dumps({"version": "t", "palette": palette}), encoding="utf-8")
+    return {"channel": {"name": "Vida Plena 45+"}, "style_dna": {"path": str(p)}}
+
+
+def _all_format_plans():
+    return [
+        _plan("category_grid", [{"label": f"i{n}"} for n in range(5)]),
+        _plan("numbered_tips", [{"label": f"tip{n}"} for n in range(5)], title="Cinco pasos"),
+        _plan("warning_list", [{"label": f"err{n}", "note": "cuidado"} for n in range(5)], title="Errores con la sal"),
+        _plan("myth_vs_truth", [{"label": f"mito{n}", "note": f"verdad{n}"} for n in range(3)], title="Mitos del pan"),
+        _plan("timeline_routine", [{"time": "7:00", "label": "desayuno"}, {"time": "14:00", "label": "comida"}, {"time": "21:00", "label": "cena"}], title="Rutina diaria"),
+        _plan("checklist_score", [{"label": f"c{n}"} for n in range(5)], score_line="4+ = vas bien", title="Autochequeo"),
+        _plan("comparison", [{"label": "bueno1", "group": "bien"}, {"label": "malo1", "group": "mal"}], title="Bien vs mal"),
+        _plan("unknown_format_xyz", [{"label": "x"}], title="Formato raro"),
+    ]
+
+
+def test_palette_from_style_dna_drives_the_prompt(tmp_path):
+    """R2: the configured style-DNA palette must reach the prompt; two different
+    palettes must produce different bodies carrying their own hexes."""
+    from video_agent.shorts.infographic.poster_prompt import build_poster_body
+
+    plan = _plan("numbered_tips", [{"label": f"t{n}"} for n in range(5)])
+    a = build_poster_body(plan, _cfg_with_palette(tmp_path / "a", PALETTE_A) if (tmp_path / "a").mkdir() or True else {})
+    b = build_poster_body(plan, _cfg_with_palette(tmp_path / "b", PALETTE_B) if (tmp_path / "b").mkdir() or True else {})
+
+    assert a != b, "changing the style-DNA palette must change the prompt body"
+    assert PALETTE_A["primary"] in a and PALETTE_A["primary"] not in b
+    assert PALETTE_B["primary"] in b and PALETTE_B["primary"] not in a
+
+
+def test_missing_or_malformed_style_dna_uses_neutral_fallback_without_crashing(tmp_path):
+    """R2: missing path / missing file / malformed JSON / no config must not crash."""
+    from video_agent.shorts.infographic.poster_prompt import build_poster_body
+    from video_agent.style_dna import DEFAULT_STYLE
+
+    plan = _plan("numbered_tips", [{"label": "t"}])
+    bad = tmp_path / "broken.json"
+    bad.write_text("not json", encoding="utf-8")
+    for cfg in (
+        None,
+        {},
+        {"channel": {"name": "X"}},
+        {"style_dna": {"path": str(tmp_path / "missing.json")}},
+        {"style_dna": {"path": str(bad)}},
+        {"style_dna": {}},
+    ):
+        body = build_poster_body(plan, cfg)
+        assert DEFAULT_STYLE["palette"]["primary"] in body, cfg
+
+
+def test_role_mapping_is_deterministic_across_repeats(tmp_path):
+    """R3/R8: same plan+palette => byte-identical body every time (no hash()/rand)."""
+    from video_agent.shorts.infographic.poster_prompt import build_poster_body
+
+    cfg = _cfg_with_palette(tmp_path, PALETTE_A)
+    plan = _plan("warning_list", [{"label": f"e{n}", "note": "n"} for n in range(5)])
+    bodies = {build_poster_body(plan, cfg) for _ in range(10)}
+    assert len(bodies) == 1
+
+
+def test_dict_key_order_does_not_change_the_mapping(tmp_path):
+    """R3 scenario 4: reordering keys without semantic change keeps the mapping."""
+    from video_agent.shorts.infographic.poster_prompt import build_poster_body
+
+    cfg = _cfg_with_palette(tmp_path, PALETTE_A)
+    a = _plan("numbered_tips", [{"label": "uno"}, {"label": "dos"}])
+    b = {k: a[k] for k in reversed(list(a.keys()))}
+    assert build_poster_body(a, cfg) == build_poster_body(b, cfg)
+
+
+def test_unrelated_runtime_metadata_does_not_change_the_mapping(tmp_path):
+    """R8: retry counters / runtime metadata must not influence palette roles."""
+    from video_agent.shorts.infographic.poster_prompt import build_effective_palette
+
+    cfg = _cfg_with_palette(tmp_path, PALETTE_A)
+    plan = _plan("numbered_tips", [{"label": "uno"}])
+    base = build_effective_palette(plan, cfg)
+    noisy = build_effective_palette({**plan, "qa_attempt": 3, "generated_at": "2026-07-16T00:00:00Z"}, cfg)
+    assert base == noisy
+
+
+def test_different_content_diversifies_role_assignment(tmp_path):
+    """R3 scenario 3: representative ideas must exercise >=3 distinct mappings."""
+    from video_agent.shorts.infographic.poster_prompt import build_effective_palette
+
+    cfg = _cfg_with_palette(tmp_path, PALETTE_A)
+    plans = [
+        _plan("numbered_tips", [{"label": "sal"}], title="Auditoría de la sal"),
+        _plan("warning_list", [{"label": "pan"}], title="Errores con el pan"),
+        _plan("myth_vs_truth", [{"label": "cafe", "note": "v"}], title="Mitos del café"),
+        _plan("category_grid", [{"label": "avena"}], title="Alimentos con avena"),
+        _plan("timeline_routine", [{"time": "7:00", "label": "agua"}], title="Rutina de hidratación"),
+        _plan("comparison", [{"label": "aceite", "group": "bien"}], title="Aceite bueno o malo"),
+    ]
+    signatures = {
+        tuple(sorted((k, v) for k, v in build_effective_palette(p, cfg).items()))
+        for p in plans
+    }
+    assert len(signatures) >= 3, f"only {len(signatures)} distinct mappings"
+
+
+def test_every_role_value_comes_from_the_loaded_palette(tmp_path):
+    """R4: no role may silently fall back to a model-chosen color."""
+    from video_agent.shorts.infographic.poster_prompt import build_effective_palette
+
+    cfg = _cfg_with_palette(tmp_path, PALETTE_A)
+    allowed = set(PALETTE_A.values())
+    for plan in _all_format_plans():
+        roles = build_effective_palette(plan, cfg)
+        required = {
+            "canvas", "body_text", "headline_1", "headline_2", "badge_fill",
+            "badge_text", "positive", "negative", "divider_accent",
+        }
+        assert required <= set(roles), roles
+        for role, value in roles.items():
+            assert value in allowed, f"{role}={value} not in style-DNA palette"
+
+
+def test_badge_text_is_the_highest_contrast_palette_candidate(tmp_path):
+    """R5/KTD3: foreground over a fill is chosen by deterministic contrast."""
+    from video_agent.shorts.infographic.poster_prompt import (
+        _contrast_ratio,
+        build_effective_palette,
+    )
+
+    cfg = _cfg_with_palette(tmp_path, PALETTE_A)
+    for plan in _all_format_plans():
+        roles = build_effective_palette(plan, cfg)
+        chosen = roles["badge_text"]
+        fill = roles["badge_fill"]
+        best = max(
+            (PALETTE_A["background"], PALETTE_A["text"]),
+            key=lambda c: _contrast_ratio(c, fill),
+        )
+        assert chosen == best
+
+
+def test_prompt_carries_the_palette_contract_for_every_format(tmp_path):
+    """R4/R6/U3-5: every format renders the same explicit role->hex contract."""
+    from video_agent.shorts.infographic.poster_prompt import (
+        build_effective_palette,
+        build_poster_body,
+    )
+
+    cfg = _cfg_with_palette(tmp_path, PALETTE_A)
+    for plan in _all_format_plans():
+        body = build_poster_body(plan, cfg)
+        roles = build_effective_palette(plan, cfg)
+        assert "PALETTE" in body.upper()
+        for role, value in roles.items():
+            assert value in body, f"{plan['poster_format']}: {role} hex missing"
+        # The model must be told not to substitute its habitual scheme.
+        low = body.lower()
+        assert "do not" in low and ("substitute" in low or "replace" in low)
+
+
+def test_no_forbidden_fixed_color_phrase_in_any_format_prompt(tmp_path):
+    """R1 + U3-6: lexical regression — the legacy fixed recipe must not return."""
+    from video_agent.shorts.infographic.poster_prompt import build_poster_body
+
+    cfg = _cfg_with_palette(tmp_path, PALETTE_A)
+    for plan in _all_format_plans():
+        body = build_poster_body(plan, cfg)
+        low = body.lower()
+        for phrase in _FORBIDDEN_COLOR_PHRASES:
+            # Word-boundary match: "numbered circular badge" must not read as a
+            # forbidden "red circular badge".
+            assert not re.search(rf"\b{re.escape(phrase.lower())}", low), (
+                f"{plan['poster_format']}: '{phrase}'"
+            )

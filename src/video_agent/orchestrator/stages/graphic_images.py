@@ -106,18 +106,23 @@ def _content_first_style() -> str:
     """Scene-specific art direction for long-form graphic images.
 
     User feedback (2026-07-09): channel style-DNA made ChatGPT graphics collapse
-    into the same cream/green wellness card, flattening the creative content from
-    the script. Long-form graphics should vary with the scene; thumbnails keep
-    their own prompt path and are not affected here.
+    into one repeated wellness card, flattening the creative content from the
+    script. Long-form graphics should vary with the scene; thumbnails keep their
+    own prompt path and are not affected here.
+
+    bug-542: this prohibition must not NAME the colours it forbids — a negative
+    instruction still conditions the image model on those tokens (same leak class
+    as bug-541). Describe the anti-pattern structurally instead.
     """
     return (
         "CONTENT-FIRST ART DIRECTION: use the scene's specific idea, setting, object, "
         "tension, and action as the main creative driver. Do NOT force a recurring "
-        "cream/green brand palette, fixed soft panel, recurring channel card, or generic "
-        "living-room/kitchen template unless the scene itself calls for it. Choose colours, "
-        "materials, camera angle, background, and graphic treatment that fit the concrete "
-        "moment described by this scene. Keep the text large, sharp, and legible at video "
-        "size, but let the composition vary from scene to scene."
+        "brand palette, a repeated house colour scheme, a fixed soft panel, a recurring "
+        "channel card, or a generic living-room/kitchen template unless the scene itself "
+        "calls for it. Choose colours, materials, camera angle, background, and graphic "
+        "treatment that fit the concrete moment described by this scene. Keep the text "
+        "large, sharp, and legible at video size, but let the composition vary from scene "
+        "to scene."
     )
 
 
@@ -179,16 +184,19 @@ def _content_lines(layout: str, title: str, body: str, bullets: list[str], cta: 
             lines.append(
                 f'TWO side-by-side columns separated by a central divider — left: "{title}", right: "{body}".'
             )
-        # Colour semantics: the two sides may be two EXTREMES or two neutral
-        # options, not a good-vs-bad pair. Do NOT default to red=bad / green=good
-        # (real incident: a "green" column labelled "too little" read as the
-        # recommended choice and contradicted the heading). Only use a
-        # green/recommended tint if ONE side is explicitly the correct answer.
+        # Semantics: the two sides may be two EXTREMES or two neutral options,
+        # not a good-vs-bad pair (real incident: a column tinted as "good" but
+        # labelled "too little" read as the recommended choice and contradicted
+        # the heading). Recommendation styling is gated on ONE side being
+        # explicitly correct. Stated WITHOUT naming colours: a negative
+        # instruction that names them still conditions the model (bug-542).
         lines.append(
-            "Colour both columns with NEUTRAL, equal-weight brand tones and a plain "
-            "central divider. Do NOT default to a red (bad) versus green (good) scheme; "
-            "use a green/check or red/cross treatment ONLY if one column is explicitly the "
-            "recommended choice — otherwise neither side may look 'correct' by colour alone."
+            "Give BOTH columns neutral, EQUAL-WEIGHT treatment and a plain central "
+            "divider: neither side may read as the recommended or 'correct' one "
+            "through tint, contrast, iconography, or emphasis. Do NOT apply a "
+            "good-versus-bad styling by default. Use approval/rejection marks or an "
+            "emphasis treatment on one column ONLY if that column is explicitly the "
+            "recommended answer in the text above."
         )
         return lines
     if layout == "myth":

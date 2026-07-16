@@ -99,8 +99,8 @@ def test_image_failure_is_non_fatal(tmp_path):
 
 def test_graphic_prompt_omits_style_dna_and_prioritizes_scene_content(tmp_path):
     """User feedback 2026-07-09: long-form ChatGPT graphic cards had collapsed
-    into the same cream/green wellness-magazine template. Graphic image prompts
-    must be content-first and must not inject channel style-DNA palette/mood."""
+    into one repeated wellness-magazine template. Graphic image prompts must be
+    content-first and must not inject channel style-DNA palette/mood."""
     scenes = [{
         "id": "scene-01", "layout": "checklist", "caption": "Reduce el azucar",
         "graphic": {"needed": True, "prompt": "x"},
@@ -125,7 +125,11 @@ def test_graphic_prompt_omits_style_dna_and_prioritizes_scene_content(tmp_path):
     assert "#F6F1E8" not in prompt
     assert "#2F6B57" not in prompt
     assert "wellness-magazine" not in prompt
-    assert "Do NOT force a recurring cream/green" in prompt
+    # bug-542: the anti-template rule stays, but must NOT name the colours it
+    # forbids (a negative instruction still conditions the model on them).
+    assert "Do NOT force a recurring" in prompt
+    assert "brand palette" in prompt
+    assert "cream" not in prompt.lower() and "green" not in prompt.lower()
     assert "scene's specific idea" in prompt
 
 
@@ -271,3 +275,89 @@ def test_unrecovered_failure_stamps_marker_and_removes_stale_orphan(tmp_path):
     assert "failed" in str(graphic.get("error"))
     assert not graphic.get("image_ref")
     assert not out_path.exists()  # stale orphan removed
+
+
+# ── bug-542: no framework-owned named colours in ANY long graphic prompt ────
+
+_FORBIDDEN_COLOR_WORDS = (
+    "cream", "green", "red", "navy", "orange", "pink",
+    "white", "black", "beige", "yellow", "blue",
+)
+
+# Neutral scene content per layout: contains NO colour word itself, so any
+# colour token in the final prompt is framework-owned leakage.
+_NEUTRAL_LAYOUT_SCENES = {
+    "checklist": {"caption": "Revisa la etiqueta antes de comprar"},
+    "comparison": {"caption": "Cena muy pesada frente a cena demasiado escasa"},
+    "cta": {"caption": "Suscribete al canal"},
+    "do_dont": {"caption": "Camina despues de comer"},
+    "evidence_nugget": {"caption": "Ocho de cada diez adultos lo ignoran"},
+    "hook": {"caption": "La sal se esconde en la cena"},
+    "myth": {"caption": "El pan integral siempre adelgaza"},
+    "plate_map": {"caption": "Reparte el plato en tres partes"},
+    "quote": {"caption": "Comer despacio cambia la digestion"},
+    "quote_portrait": {"caption": "La constancia importa mas que la perfeccion"},
+    "recipe_snapshot": {"caption": "Avena con fruta en cinco minutos"},
+    "stat": {"caption": "Treinta por ciento menos sodio"},
+    "steps": {"caption": "Tres pasos para dormir mejor"},
+    "warning": {"caption": "Cuidado con las salsas preparadas"},
+}
+
+
+def _capture_layout_prompt(tmp_path, layout: str) -> str:
+    scene = {
+        "id": "scene-01", "layout": layout,
+        "caption": _NEUTRAL_LAYOUT_SCENES[layout]["caption"],
+        "graphic": {"needed": True, "prompt": "x"},
+    }
+    job_dir = _make_job(tmp_path / layout, [scene], topic_accent_color="#A47A3F")
+    captured: list[str] = []
+
+    async def _capture(*, prompt: str, project_name: str, out_path: str):
+        captured.append(prompt)
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(out_path).write_bytes(b"\x89PNG\r\n")
+        return {"src": "https://chatgpt/img", "bytes": 6}
+
+    asyncio.run(run_graphic_images_stage(job_dir, None, _capture))
+    assert captured, f"{layout}: no prompt captured"
+    return captured[0]
+
+
+def test_no_framework_owned_color_word_in_any_layout_prompt(tmp_path):
+    """R1/U1: with neutral scene content, the FINAL prompt sent to image_fn must
+    carry no source-owned colour name for ANY supported long graphic layout."""
+    import re
+
+    from video_agent.visual.spans import GRAPHIC_LAYOUTS
+
+    for layout in sorted(GRAPHIC_LAYOUTS):
+        prompt = _capture_layout_prompt(tmp_path, layout)
+        low = prompt.lower()
+        for word in _FORBIDDEN_COLOR_WORDS:
+            assert not re.search(rf"\b{word}\b", low), f"{layout}: leaked '{word}'"
+
+
+def test_no_style_dna_or_topic_accent_hex_in_any_layout_prompt(tmp_path):
+    """R3/U1-2: Style DNA stays disabled — no channel/SEO hex may appear."""
+    import re
+
+    from video_agent.visual.spans import GRAPHIC_LAYOUTS
+
+    for layout in sorted(GRAPHIC_LAYOUTS):
+        prompt = _capture_layout_prompt(tmp_path, layout)
+        assert not re.search(r"#[0-9A-Fa-f]{6}", prompt), f"{layout}: hex leaked"
+        assert "#A47A3F" not in prompt  # SEO topic accent
+        assert "CONTENT-FIRST ART DIRECTION" in prompt
+
+
+def test_content_first_direction_and_scene_text_survive_for_every_layout(tmp_path):
+    """R2/R5: removing colour words must not strip the content-first drivers."""
+    from video_agent.visual.spans import GRAPHIC_LAYOUTS
+
+    for layout in sorted(GRAPHIC_LAYOUTS):
+        prompt = _capture_layout_prompt(tmp_path, layout)
+        assert "scene's specific idea" in prompt, layout
+        # The scene's own words still reach the model.
+        first_word = _NEUTRAL_LAYOUT_SCENES[layout]["caption"].split()[0]
+        assert first_word.lower() in prompt.lower(), layout

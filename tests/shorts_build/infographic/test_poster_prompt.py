@@ -300,6 +300,8 @@ PALETTE_A = {"background": "#101010", "primary": "#AA1111", "secondary": "#22BB2
 PALETTE_B = {"background": "#FFFFFF", "primary": "#EE7700", "secondary": "#00AACC", "accent": "#9900AA", "text": "#111111"}
 
 _FORBIDDEN_COLOR_PHRASES = (
+    # bug-541 round 2: the prohibition sentence itself used to name these.
+    "navy headline", "red/orange accent", "green pill", "navy",
     "dark navy", "red or orange", "color (green)", "bold white digit",
     "red CROSS", "solid red", "light red/pink", "light green card",
     "red circular badge", "red ribbon", "green circular badge",
@@ -309,7 +311,10 @@ _FORBIDDEN_COLOR_PHRASES = (
 
 
 def _cfg_with_palette(tmp_path, palette: dict) -> dict:
-    p = tmp_path / "style-dna.json"
+    from pathlib import Path
+
+    Path(tmp_path).mkdir(parents=True, exist_ok=True)
+    p = Path(tmp_path) / "style-dna.json"
     p.write_text(_json.dumps({"version": "t", "palette": palette}), encoding="utf-8")
     return {"channel": {"name": "Vida Plena 45+"}, "style_dna": {"path": str(p)}}
 
@@ -333,12 +338,16 @@ def test_palette_from_style_dna_drives_the_prompt(tmp_path):
     from video_agent.shorts.infographic.poster_prompt import build_poster_body
 
     plan = _plan("numbered_tips", [{"label": f"t{n}"} for n in range(5)])
-    a = build_poster_body(plan, _cfg_with_palette(tmp_path / "a", PALETTE_A) if (tmp_path / "a").mkdir() or True else {})
-    b = build_poster_body(plan, _cfg_with_palette(tmp_path / "b", PALETTE_B) if (tmp_path / "b").mkdir() or True else {})
+    a = build_poster_body(plan, _cfg_with_palette(tmp_path / "a", PALETTE_A))
+    b = build_poster_body(plan, _cfg_with_palette(tmp_path / "b", PALETTE_B))
 
     assert a != b, "changing the style-DNA palette must change the prompt body"
-    assert PALETTE_A["primary"] in a and PALETTE_A["primary"] not in b
-    assert PALETTE_B["primary"] in b and PALETTE_B["primary"] not in a
+    # Each body carries ONLY its own palette's hexes (role selection may reject a
+    # low-contrast entry as a foreground, so assert set membership, not a fixed key).
+    assert any(h in a for h in PALETTE_A.values())
+    assert not any(h in a for h in set(PALETTE_B.values()) - set(PALETTE_A.values()))
+    assert any(h in b for h in PALETTE_B.values())
+    assert not any(h in b for h in set(PALETTE_A.values()) - set(PALETTE_B.values()))
 
 
 def test_missing_or_malformed_style_dna_uses_neutral_fallback_without_crashing(tmp_path):
@@ -462,9 +471,11 @@ def test_prompt_carries_the_palette_contract_for_every_format(tmp_path):
         assert "PALETTE" in body.upper()
         for role, value in roles.items():
             assert value in body, f"{plan['poster_format']}: {role} hex missing"
-        # The model must be told not to substitute its habitual scheme.
+        # The model must be forbidden from leaving the list / using its default
+        # scheme — stated WITHOUT naming any colour (bug-541 round 2).
         low = body.lower()
-        assert "do not" in low and ("substitute" in low or "replace" in low)
+        assert "do not introduce any color outside this list" in low
+        assert "default infographic color scheme" in low
 
 
 def test_no_forbidden_fixed_color_phrase_in_any_format_prompt(tmp_path):
@@ -481,3 +492,106 @@ def test_no_forbidden_fixed_color_phrase_in_any_format_prompt(tmp_path):
             assert not re.search(rf"\b{re.escape(phrase.lower())}", low), (
                 f"{plan['poster_format']}: '{phrase}'"
             )
+
+
+# ── bug-541 round 2 (Codex): contrast, neutrality, photo exemption, malformed ──
+
+# Real Vida Plena palette — the one that produced the 1.47:1 / 2.37:1 failures.
+_VIDA_PALETTE = {
+    "background": "#F6F1E8", "primary": "#2F6B57", "secondary": "#D98C5F",
+    "accent": "#F5C24B", "text": "#26332F",
+}
+
+
+def test_all_foreground_roles_clear_the_large_text_contrast_bar(tmp_path):
+    """R5: headline/state roles must be readable on the surface they sit on.
+
+    Regression for the live failures: #F5C24B on #F6F1E8 = 1.47:1 and
+    #D98C5F = 2.37:1 were being assigned to headlines/state marks.
+    """
+    from video_agent.shorts.infographic.poster_prompt import (
+        _MIN_LARGE_CONTRAST,
+        _contrast_ratio,
+        build_effective_palette,
+    )
+
+    for palette in (_VIDA_PALETTE, PALETTE_A, PALETTE_B):
+        cfg = _cfg_with_palette(tmp_path / f"p{abs(hash(str(palette))) % 9999}", palette)
+        for plan in _all_format_plans():
+            roles = build_effective_palette(plan, cfg)
+            canvas = roles["canvas"]
+            for role in ("headline_1", "headline_2", "positive", "negative", "body_text"):
+                ratio = _contrast_ratio(roles[role], canvas)
+                assert ratio >= _MIN_LARGE_CONTRAST, (
+                    f"{role}={roles[role]} on canvas {canvas} = {ratio:.2f}:1"
+                )
+            # Lettering on the badge must be readable against the badge fill.
+            assert _contrast_ratio(roles["badge_text"], roles["badge_fill"]) >= _MIN_LARGE_CONTRAST
+
+
+def test_vida_palette_still_varies_while_staying_readable(tmp_path):
+    """R3 + R5 together: enforcing contrast must not collapse variation."""
+    from video_agent.shorts.infographic.poster_prompt import build_effective_palette
+
+    cfg = _cfg_with_palette(tmp_path / "vida", _VIDA_PALETTE)
+    plans = [
+        _plan("numbered_tips", [{"label": "sal"}], title="Auditoría de la sal"),
+        _plan("warning_list", [{"label": "pan", "note": "x"}], title="Errores con el pan"),
+        _plan("myth_vs_truth", [{"label": "cafe", "note": "v"}], title="Mitos del café"),
+        _plan("category_grid", [{"label": "avena"}], title="Alimentos con avena"),
+        _plan("timeline_routine", [{"time": "7:00", "label": "agua"}], title="Rutina de hidratación"),
+        _plan("comparison", [{"label": "aceite", "group": "bien"}], title="Aceite bueno o malo"),
+    ]
+    sigs = {
+        (r["headline_1"], r["headline_2"], r["badge_fill"], r["positive"], r["negative"])
+        for r in (build_effective_palette(p, cfg) for p in plans)
+    }
+    assert len(sigs) >= 3, f"only {len(sigs)} distinct readable mappings"
+
+
+def test_prompt_prohibition_names_no_color_at_all(tmp_path):
+    """R1 round 2: the 'don't use your defaults' sentence must not itself name
+    navy / red / orange / green — that leaked the legacy recipe back in."""
+    from video_agent.shorts.infographic.poster_prompt import build_poster_body
+
+    cfg = _cfg_with_palette(tmp_path, _VIDA_PALETTE)
+    for plan in _all_format_plans():
+        low = build_poster_body(plan, cfg).lower()
+        for token in ("navy", "red/orange accent", "green pill", "habitual"):
+            assert token not in low, f"{plan['poster_format']}: '{token}'"
+
+
+def test_realistic_photos_keep_natural_colors_exemption(tmp_path):
+    """R5/Codex-3: the palette governs the DESIGN layer only — realistic food /
+    object / topic photos must keep true-to-life colors, not be tinted."""
+    from video_agent.shorts.infographic.poster_prompt import build_poster_body
+
+    cfg = _cfg_with_palette(tmp_path, _VIDA_PALETTE)
+    for plan in _all_format_plans():
+        low = build_poster_body(plan, cfg).lower()
+        assert "design layer" in low
+        assert "natural" in low and "true-to-life" in low
+        assert "never tint" in low or "not tint" in low
+
+
+def test_malformed_palette_container_and_keys_fall_back_without_crashing(tmp_path):
+    """R2 round 2: a truthy but non-mapping palette (or bad keys) must fall back."""
+    from video_agent.shorts.infographic.poster_prompt import build_poster_body
+    from video_agent.style_dna import DEFAULT_STYLE
+
+    plan = _plan("numbered_tips", [{"label": "t"}])
+    cases = [
+        {"palette": ["#112233"]},            # list container (live crash repro)
+        {"palette": "#112233"},              # string container
+        {"palette": 42},                     # scalar container
+        {"palette": {"primary": "not-a-hex", "background": None}},  # bad keys
+        {"palette": {"primary": "#123456"}},  # incomplete keys
+    ]
+    for n, dna in enumerate(cases):
+        d = tmp_path / f"c{n}"
+        d.mkdir(parents=True, exist_ok=True)
+        f = d / "style-dna.json"
+        f.write_text(_json.dumps(dna), encoding="utf-8")
+        body = build_poster_body(plan, {"style_dna": {"path": str(f)}})
+        # Never raises, and every missing/invalid key uses the centralized fallback.
+        assert DEFAULT_STYLE["palette"]["background"] in body or "#123456" in body, dna

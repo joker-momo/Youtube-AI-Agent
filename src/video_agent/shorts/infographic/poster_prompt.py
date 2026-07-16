@@ -26,8 +26,16 @@ _ROLE_PERMUTATIONS = tuple(itertools.permutations(range(len(_CHROMATIC_KEYS))))
 
 
 def _validated_palette(channel_config: dict[str, Any] | None) -> dict[str, str]:
-    """Canonical palette from style DNA; centralized neutral fallback per key."""
-    raw = (load_style_dna_from_config(channel_config) or {}).get("palette") or {}
+    """Canonical palette from style DNA; centralized neutral fallback per key.
+
+    Validates the CONTAINER as well as each key: a truthy but non-mapping
+    ``palette`` (e.g. ``{"palette": ["#112233"]}``) must fall back, never raise
+    into poster generation (R2 no-crash).
+    """
+    dna = load_style_dna_from_config(channel_config) or {}
+    raw = dna.get("palette") if isinstance(dna, dict) else None
+    if not isinstance(raw, dict):
+        raw = {}
     fallback = DEFAULT_STYLE["palette"]
     out: dict[str, str] = {}
     for key in (*_NEUTRAL_KEYS, *_CHROMATIC_KEYS):
@@ -81,10 +89,41 @@ def _contrast_ratio(a: str, b: str) -> float:
     return (lighter + 0.05) / (darker + 0.05)
 
 
+# WCAG AA for LARGE/bold text and graphical objects (headlines, state marks).
+# Poster headlines and check/cross marks are large by construction, so 3.0 is the
+# correct bar; anything below is unreadable at phone size (bug-541 round 2:
+# #F5C24B on #F6F1E8 measured 1.47:1).
+_MIN_LARGE_CONTRAST = 3.0
+
+
 def _best_foreground_on(fill: str, candidates: tuple[str, ...]) -> str:
     """Highest-contrast palette candidate for text over ``fill`` (deterministic:
     ties resolve to the first candidate in the given order) — KTD3."""
     return max(candidates, key=lambda c: _contrast_ratio(c, fill))
+
+
+def _readable_candidates_on(surface: str, candidates: list[str]) -> list[str]:
+    """Palette candidates that clear the large-text bar on ``surface``, in the
+    given deterministic order. Never empty: falls back to the single
+    highest-contrast candidate so a poster always has a legible foreground."""
+    ok = [c for c in candidates if _contrast_ratio(c, surface) >= _MIN_LARGE_CONTRAST]
+    return ok or [max(candidates, key=lambda c: _contrast_ratio(c, surface))]
+
+
+def _pick_distinct(pool: list[str], index: int, avoid: str | None = None) -> str:
+    """Deterministic pick from ``pool`` at ``index``, preferring a value that
+    differs from ``avoid`` when the pool allows it (keeps two-tone headlines and
+    positive/negative states visually distinct without randomness)."""
+    if not pool:
+        raise ValueError("empty candidate pool")
+    first = pool[index % len(pool)]
+    if avoid is None or first != avoid or len(pool) == 1:
+        return first
+    for offset in range(1, len(pool)):
+        alt = pool[(index + offset) % len(pool)]
+        if alt != avoid:
+            return alt
+    return first
 
 
 def build_effective_palette(
@@ -97,21 +136,35 @@ def build_effective_palette(
     same plan + palette on every retry (R3/R4/R8; KTD2).
     """
     palette = _validated_palette(channel_config)
+    canvas = palette["background"]
     chromatic = [palette[k] for k in _CHROMATIC_KEYS]
     digest = _content_fingerprint(plan)
-    perm = _ROLE_PERMUTATIONS[int(digest[:8], 16) % len(_ROLE_PERMUTATIONS)]
+    seed = int(digest[:8], 16)
+    perm = _ROLE_PERMUTATIONS[seed % len(_ROLE_PERMUTATIONS)]
     rotated = [chromatic[i] for i in perm]
+
+    # FILLS may use any chromatic entry (low-contrast brand colours shine here,
+    # because their lettering is contrast-picked against the fill itself).
     badge_fill = rotated[2]
-    neutrals = (palette["background"], palette["text"])
+    neutrals = (canvas, palette["text"])
+
+    # FOREGROUNDS (headline text, state marks) must clear the large-text bar on
+    # the surface they sit on — readability is a hard constraint (R5), so the
+    # rotation happens WITHIN the readable subset instead of overriding it.
+    readable = _readable_candidates_on(canvas, [*rotated, palette["text"]])
+    headline_1 = _pick_distinct(readable, seed)
+    headline_2 = _pick_distinct(readable, seed + 1, avoid=headline_1)
+    positive = _pick_distinct(readable, seed + 2)
+    negative = _pick_distinct(readable, seed + 3, avoid=positive)
     return {
-        "canvas": palette["background"],
-        "body_text": palette["text"],
-        "headline_1": rotated[0],
-        "headline_2": rotated[1],
+        "canvas": canvas,
+        "body_text": _best_foreground_on(canvas, neutrals[::-1]),
+        "headline_1": headline_1,
+        "headline_2": headline_2,
         "badge_fill": badge_fill,
         "badge_text": _best_foreground_on(badge_fill, neutrals),
-        "positive": rotated[0],
-        "negative": rotated[1],
+        "positive": positive,
+        "negative": negative,
         "divider_accent": rotated[2],
     }
 
@@ -120,14 +173,17 @@ def _palette_contract_line(roles: dict[str, str]) -> str:
     """The single mandatory role->hex contract every block references (KTD4)."""
     listing = "; ".join(f"{role} = {value}" for role, value in roles.items())
     return (
-        "PALETTE CONTRACT (MANDATORY — use these EXACT hex values and nothing "
-        f"else): {listing}. Every surface, text, badge, icon, divider and state "
-        "color on this poster must come from this list. Do NOT substitute or "
-        "replace it with your habitual infographic scheme (navy headline, red/"
-        "orange accent, green pill) or any color outside the list. Keep strong "
-        "readable contrast: body and headline text must stay clearly legible on "
-        "the canvas, and text on a filled badge must use the badge text color "
-        "given above."
+        "PALETTE CONTRACT (MANDATORY): use these EXACT hex values for the DESIGN "
+        f"layer — {listing}. The design layer means the canvas/background, all "
+        "typography, badges, pills, cards and their tints, dividers, gridlines, "
+        "flat decorative icons and the state marks (check / cross). Do NOT "
+        "introduce any color outside this list for those elements, and do NOT "
+        "fall back to your own default infographic color scheme — use only the "
+        "hex values given above. EXEMPTION: the realistic food/object/topic "
+        "photos keep their NATURAL, true-to-life colors; never tint, recolor or "
+        "posterize them to the palette. Keep strong readable contrast: headline "
+        "and body text must stay clearly legible on the canvas, and lettering on "
+        "a filled badge must use the badge text color given above."
     )
 
 _BASE = (

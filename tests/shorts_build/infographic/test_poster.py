@@ -41,7 +41,7 @@ def test_generate_poster_writes_png_logs_and_passes_raw_body(tmp_path):
 
 def _palette_contract(text: str) -> str:
     """Extract the role->hex contract section from a prompt/body."""
-    m = _re.search(r"PALETTE CONTRACT \(MANDATORY.*?\)\:(.*?)\. Every surface", text, _re.S)
+    m = _re.search(r"PALETTE CONTRACT \(MANDATORY\): use these EXACT hex values for the DESIGN layer — (.*?)\. The design layer", text, _re.S)
     assert m, "no palette contract found"
     return m.group(1).strip()
 
@@ -82,8 +82,10 @@ def test_logged_prompt_and_sent_body_share_one_palette_mapping(tmp_path):
     """R7/KTD4: the audit log must expose exactly the palette image_fn received."""
     raw, logged = _capture(tmp_path, _PLAN, _cfg(tmp_path, _PAL_X))
     assert _palette_contract(raw) == _palette_contract(logged)
-    # And it is the CONFIGURED palette, not a model default.
-    assert _PAL_X["primary"] in raw and _PAL_X["primary"] in logged
+    # And it is the CONFIGURED palette, not a model default (role selection may
+    # contrast-reject a specific entry, so assert the palette as a set).
+    assert any(h in raw for h in _PAL_X.values())
+    assert any(h in logged for h in _PAL_X.values())
 
 
 def test_wrapper_adds_dimensions_once_without_touching_the_contract(tmp_path):

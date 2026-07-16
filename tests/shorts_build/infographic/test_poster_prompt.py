@@ -431,7 +431,8 @@ def test_every_role_value_comes_from_the_loaded_palette(tmp_path):
         roles = build_effective_palette(plan, cfg)
         required = {
             "canvas", "body_text", "headline_1", "headline_2", "badge_fill",
-            "badge_text", "positive", "negative", "divider_accent",
+            "badge_text", "positive", "positive_text", "negative",
+            "negative_text", "divider_accent",
         }
         assert required <= set(roles), roles
         for role, value in roles.items():
@@ -595,3 +596,68 @@ def test_malformed_palette_container_and_keys_fall_back_without_crashing(tmp_pat
         body = build_poster_body(plan, {"style_dna": {"path": str(f)}})
         # Never raises, and every missing/invalid key uses the centralized fallback.
         assert DEFAULT_STYLE["palette"]["background"] in body or "#123456" in body, dna
+
+
+# ── bug-541 round 3: EVERY actual foreground/background pair, per format ────
+
+# The (foreground_role, surface_role) pairs each format's prompt really renders.
+# Audited against _format_block/_header_style_line; a fill's lettering must be
+# contrast-picked against THAT fill, never against a different badge.
+_FORMAT_CONTRAST_PAIRS = {
+    "category_grid": [("body_text", "canvas")],
+    "numbered_tips": [("badge_text", "badge_fill")],
+    "warning_list": [("negative", "canvas"), ("negative_text", "negative")],
+    "myth_vs_truth": [
+        ("negative", "canvas"), ("positive", "canvas"),
+        ("negative_text", "negative"), ("positive_text", "positive"),
+    ],
+    "timeline_routine": [("body_text", "canvas")],
+    "checklist_score": [("badge_text", "badge_fill"), ("body_text", "canvas")],
+    "comparison": [("positive", "canvas"), ("negative", "canvas")],
+    "unknown_format_xyz": [("body_text", "canvas")],
+}
+# Pairs every poster renders regardless of format (header + body copy).
+_UNIVERSAL_PAIRS = [("headline_1", "canvas"), ("headline_2", "canvas"), ("body_text", "canvas")]
+
+
+def test_every_actual_foreground_over_its_real_surface_clears_the_bar(tmp_path):
+    """R5 round 3: audit each format's REAL fg/bg pairs, not just fg-vs-canvas.
+
+    Regression for the live failure: myth_vs_truth lettered negative/positive
+    FILLS with badge_text (#26332F on #26332F = 1.00:1; on #2F6B57 = 2.10:1).
+    """
+    from video_agent.shorts.infographic.poster_prompt import (
+        _MIN_LARGE_CONTRAST,
+        _contrast_ratio,
+        build_effective_palette,
+    )
+
+    for palette in (_VIDA_PALETTE, PALETTE_A, PALETTE_B):
+        cfg = _cfg_with_palette(tmp_path / f"fg{abs(hash(str(palette))) % 9999}", palette)
+        for plan in _all_format_plans():
+            roles = build_effective_palette(plan, cfg)
+            fmt = plan["poster_format"]
+            pairs = _UNIVERSAL_PAIRS + _FORMAT_CONTRAST_PAIRS[fmt]
+            for fg, bg in pairs:
+                ratio = _contrast_ratio(roles[fg], roles[bg])
+                assert ratio >= _MIN_LARGE_CONTRAST, (
+                    f"{fmt}: {fg}={roles[fg]} on {bg}={roles[bg]} = {ratio:.2f}:1"
+                )
+
+
+def test_filled_state_badges_never_reuse_badge_text(tmp_path):
+    """A positive/negative FILL must be lettered with its OWN contrast-picked
+    text role — reusing badge_text is exactly what produced 1.00:1."""
+    from video_agent.shorts.infographic.poster_prompt import (
+        build_effective_palette,
+        build_poster_body,
+    )
+
+    cfg = _cfg_with_palette(tmp_path / "fills", _VIDA_PALETTE)
+    for fmt in ("warning_list", "myth_vs_truth"):
+        plan = next(p for p in _all_format_plans() if p["poster_format"] == fmt)
+        body = build_poster_body(plan, cfg)
+        roles = build_effective_palette(plan, cfg)
+        assert f"negative text color ({roles['negative_text']})" in body, fmt
+        if fmt == "myth_vs_truth":
+            assert f"positive text color ({roles['positive_text']})" in body

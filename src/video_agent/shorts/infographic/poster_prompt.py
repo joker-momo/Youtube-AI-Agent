@@ -156,6 +156,10 @@ def build_effective_palette(
     headline_2 = _pick_distinct(readable, seed + 1, avoid=headline_1)
     positive = _pick_distinct(readable, seed + 2)
     negative = _pick_distinct(readable, seed + 3, avoid=positive)
+    # positive/negative are used BOTH as marks on the canvas AND as solid badge/
+    # ribbon FILLS. Lettering on those fills must be contrast-picked against the
+    # fill it actually sits on — reusing badge_text put #26332F on #26332F
+    # (1.00:1, invisible) in myth_vs_truth (bug-541 round 3).
     return {
         "canvas": canvas,
         "body_text": _best_foreground_on(canvas, neutrals[::-1]),
@@ -164,7 +168,9 @@ def build_effective_palette(
         "badge_fill": badge_fill,
         "badge_text": _best_foreground_on(badge_fill, neutrals),
         "positive": positive,
+        "positive_text": _best_foreground_on(positive, neutrals),
         "negative": negative,
+        "negative_text": _best_foreground_on(negative, neutrals),
         "divider_accent": rotated[2],
     }
 
@@ -276,8 +282,8 @@ def _format_block(plan: dict[str, Any], roles: dict[str, str]) -> str:
         return (
             "Layout: a NUMBERED warning list, each row a food photo + a CROSS (X) mark "
             f"drawn in the negative/warning color ({roles['negative']}) + a short "
-            "caution. Render each number as a bold digit in the badge text color "
-            f"({roles['badge_text']}) inside a solid CIRCULAR badge filled with the "
+            "caution. Render each number as a bold digit in the negative text color "
+            f"({roles['negative_text']}) inside a solid CIRCULAR badge filled with the "
             f"negative/warning color ({roles['negative']}); all badges use that same "
             "fill. Rows: " + "; ".join(rows) + "."
         )
@@ -296,12 +302,12 @@ def _format_block(plan: dict[str, Any], roles: dict[str, str]) -> str:
             f"still readable under body text ({roles['body_text']}). Each Mito card "
             "starts with a small numbered circular badge and a ribbon tag reading "
             f"\"MITO n\" both filled with the negative/warning color ({roles['negative']}) "
-            f"and lettered in the badge text color ({roles['badge_text']}), then a CROSS "
+            f"and lettered in the negative text color ({roles['negative_text']}), then a CROSS "
             f"(X) icon in the negative/warning color ({roles['negative']}) and the myth "
             "text. Each Verdad card starts with a small numbered circular badge and a "
             f"ribbon tag reading \"VERDAD n\" both filled with the positive color "
-            f"({roles['positive']}) and lettered in the badge text color "
-            f"({roles['badge_text']}), then a CHECK icon in the positive color "
+            f"({roles['positive']}) and lettered in the positive text color "
+            f"({roles['positive_text']}), then a CHECK icon in the positive color "
             f"({roles['positive']}) and the truth text. One small relevant photo/icon per "
             "card. Rows: " + "; ".join(rows) + "."
         )

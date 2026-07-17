@@ -48,7 +48,11 @@ SHORT_RENDER_PROPS_FILE = "short_render_props.json"  # builder→render handoff 
 # Infographic-short artifacts.
 SHORT_POSTER_PLAN_FILE = "poster_plan.json"
 SHORT_POSTER_QA_FILE = "poster_qa.json"
+SHORT_POSTER_PALETTE_FILE = "poster_palette.json"  # the short's frozen palette decision
 SHORT_POSTER_IMAGE_NAME = "poster.png"  # under <short_dir>/assets/
+# Parent-scoped: sibling Shorts read each other's palette history under it, so the
+# read-decide-write must be serialized across render batches and worker processes.
+POSTER_PALETTE_LOCK_FILE = ".poster-palette.lock"
 SHORT_MUSIC_SELECTION_FILE = "music_selection.json"  # library-bed reproducibility audit
 # Visual-span + compiled-timeline artifacts (spec v3.2.3 §7). All live under json/.
 SHORT_VISUAL_SPANS_FILE = "visual_spans.json"

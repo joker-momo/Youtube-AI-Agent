@@ -197,3 +197,26 @@ def test_cdp_attach_health_reports_structured_ok_and_degraded(monkeypatch):
     healthy = asyncio.run(app.cdp_attach_health())
     assert healthy["ok"] is True
     assert healthy["contexts"] == 2
+
+
+def test_session_open_preserves_structured_cdp_error(monkeypatch):
+    """bridge 20260709 reopen: the session path must NOT flatten the structured
+    CDP 503 (stage/attempt/attempts) into a generic {'error': str} — the operator
+    loses the real cause otherwise."""
+    from fastapi.testclient import TestClient
+
+    async def _structured_503(pw, cdp_url):
+        raise app.HTTPException(
+            status_code=503,
+            detail={"cdp_url": cdp_url, "stage": "connect_over_cdp", "attempt": 3, "attempts": 3,
+                    "error": "ConnectionError: CDP listener gone"},
+        )
+
+    monkeypatch.setattr(app, "_attach_cdp_or_503", _structured_503)
+    client = TestClient(app.app)
+    r = client.post("/chatgpt/sessions")
+    assert r.status_code == 503
+    detail = r.json()["detail"]
+    # The structured fields survive — not flattened to a bare error string.
+    assert detail.get("stage") == "connect_over_cdp"
+    assert detail.get("attempts") == 3

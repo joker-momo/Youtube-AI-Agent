@@ -374,10 +374,15 @@ async def _open_session(site: str) -> str:
 async def _open_session_locked(site: str) -> str:
     try:
         pw_ctx, browser = await _connect_runtime()
+    except HTTPException:
+        # Structured 503 from _attach_cdp_or_503 (stage / attempt / attempts).
+        # Re-raise verbatim — flattening it to {"error": str(exc)} was exactly the
+        # bridge-20260709 reopen: the session path lost the CDP failure detail.
+        raise
     except Exception as exc:
         raise HTTPException(
             status_code=503,
-            detail={"cdp_url": _cdp_url(), "error": str(exc)},
+            detail={"cdp_url": _cdp_url(), "stage": "connect_runtime", "error": f"{type(exc).__name__}: {exc}"},
         ) from exc
 
     try:
@@ -432,6 +437,8 @@ async def _open_session_locked(site: str) -> str:
                 await page.close()
                 await browser.close()
                 await pw_ctx.__aexit__(None, None, None)
+                if isinstance(retry_exc, HTTPException):
+                    raise  # preserve a structured error (e.g. CDP 503), never flatten
                 if isinstance(retry_exc, LoginRequiredError):
                     raise HTTPException(
                         status_code=409,

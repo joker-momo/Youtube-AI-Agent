@@ -85,15 +85,39 @@ _TOPIC_OBJECTS = {
     "cenas", "desayuno", "pan", "agua", "siesta", "pantalla", "pantallas",
     "movil", "azucar", "fruta", "verdura", "verduras", "plato", "etiqueta",
     "envase", "vitamina", "vitaminas", "proteina", "caminata", "paseo",
+    # Body-posture & relaxation objects (bug-547): this is a sleep/mobility
+    # wellness channel, not only a nutrition one. These are concrete, depictable
+    # thumbnail subjects — legs, a chair, a posture, breathing, bedding — every
+    # bit as anchoring as "café" or "pan".
+    "pierna", "piernas", "rodilla", "rodillas", "espalda", "cuello", "hombro",
+    "hombros", "cadera", "caderas", "pies", "silla", "postura", "posturas",
+    "respiracion", "almohada", "almohadas", "colchon", "cama", "manta",
+    "estiramiento", "estiramientos",
 }
 _PAIN_TERMS = {
-    "sueno", "insomnio", "dolor", "cansancio", "fatiga", "estres", "ansiedad",
-    "duermes", "empeora", "pesadez", "rigidez", "molestia", "molestias",
+    "sueno", "insomnio", "dolor", "dolores", "cansancio", "fatiga", "estres",
+    "ansiedad", "duermes", "empeora", "pesadez", "rigidez", "molestia",
+    "molestias", "tension", "tensiones", "hinchazon", "calambre", "calambres",
 }
+# Sleep-disruption symptom stems (bug-547): DESPERTAR / DESPERTARES / DESPIERTAS
+# / DESPERTARSE — waking through the night IS the pain this audience feels, the
+# same class as insomnio, just a form the fixed set could not spell out.
+_PAIN_STEMS = ("despert",)
 _OUTCOME_PHRASES = (
     "duerme mejor", "dormir mejor", "descansar mejor", "mas energia",
     "fuerza", "energia", "descanso",
 )
+# Reduction-framed benefit (bug-547): relief from a discomfort is the core
+# wellness promise, and "menos tensión" is the exact mirror of the already
+# accepted "alivia la tensión". A reduction word paired with a discomfort noun
+# is an outcome; a reduction word paired with a plain ingredient ("menos sal")
+# is not — sal is a topic object, not a symptom, so it stays out of this set.
+_REDUCTION_TERMS = {"menos", "sin", "reduce", "reducir", "reduces", "baja", "calma", "quita"}
+_DISCOMFORT_TERMS = {
+    "tension", "tensiones", "dolor", "dolores", "rigidez", "fatiga",
+    "cansancio", "estres", "ansiedad", "hinchazon", "pesadez", "molestia",
+    "molestias", "insomnio", "calambre", "calambres",
+}
 # Care/improvement verb stems (prefix-matched on whole words): CUIDA/CUIDAR,
 # ALIVIA, PROTEGE, FORTALECE, RECUPERA, MEJORA, REFUERZA...
 _OUTCOME_STEMS = (
@@ -173,11 +197,17 @@ def _semantic_signals(text_norm: str, words: set[str], title_words: set[str]) ->
         and w not in _NON_TOPIC_OVERLAP
         and not any(w.startswith(stem) for stem in _OUTCOME_STEMS)
         and not any(w.startswith(stem) for stem in _AGENCY_STEMS)
+        and not any(w.startswith(stem) for stem in _PAIN_STEMS)
     }
     has_topic = bool(words & _TOPIC_OBJECTS) or bool(title_overlap)
-    has_pain = bool(words & _PAIN_TERMS)
-    has_outcome = any(p in text_norm for p in _OUTCOME_PHRASES) or any(
-        w.startswith(stem) for w in words for stem in _OUTCOME_STEMS
+    has_pain = bool(words & _PAIN_TERMS) or any(
+        w.startswith(stem) for w in words for stem in _PAIN_STEMS
+    )
+    has_outcome = (
+        any(p in text_norm for p in _OUTCOME_PHRASES)
+        or any(w.startswith(stem) for w in words for stem in _OUTCOME_STEMS)
+        # reduction of a discomfort ("menos tensión", "sin rigidez") is a benefit
+        or (bool(words & _REDUCTION_TERMS) and bool(words & _DISCOMFORT_TERMS))
     )
     has_action = any(p in text_norm for p in _ACTION_PHRASES)
     # Timing words only count as honest specificity when anchored to a concrete

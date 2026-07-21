@@ -62,7 +62,14 @@ def valid_script_payload() -> dict:
         "sections": [
             {"title": "Calma", "text": "Baja el ritmo una hora antes de acostarte."}
         ],
-        "narration": "Dormir mejor empieza con una decisión simple. Baja el ritmo una hora antes de acostarte.",
+        # A genuinely valid script MEETS the channel's word floor (bug-495: the
+        # deterministic script_qa length gate rejects below-floor narration). The
+        # opening stays readable; the rest is padded to clear 660s/120wpm = 1320
+        # words so these advancement tests exercise a length-valid script.
+        "narration": (
+            "Dormir mejor empieza con una decisión simple. Baja el ritmo una hora "
+            "antes de acostarte. " + "Respira despacio y relaja los hombros. " * 230
+        ),
         "cta": "Prueba este hábito esta noche.",
         "qa": {"verdict": "PENDING_GEMINI_QA"},
     }

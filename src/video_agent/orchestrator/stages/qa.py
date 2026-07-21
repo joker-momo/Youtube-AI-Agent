@@ -130,7 +130,17 @@ def promote_qa_stage(
         ) from exc
 
     qa_payload = json.loads(result.output_path.read_text(encoding="utf-8"))
-    if artifact == "seo":
+    if artifact == "script":
+        # Late facade import: _enforce_script_length_qa is in script.py
+        from video_agent.orchestrator import stages as stages_pkg
+        stages_pkg._enforce_script_length_qa(
+            job_dir,
+            result.output_path,
+            qa_payload,
+            channel_path=channel_path,
+        )
+        qa_payload = json.loads(result.output_path.read_text(encoding="utf-8"))
+    elif artifact == "seo":
         # Late facade import: _enforce_seo_language_qa is in seo.py, accessed via facade
         from video_agent.orchestrator import stages as stages_pkg
         stages_pkg._enforce_seo_language_qa(

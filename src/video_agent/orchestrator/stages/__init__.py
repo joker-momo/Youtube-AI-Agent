@@ -137,6 +137,7 @@ from video_agent.orchestrator.stages.scenes import (
 # script
 # ---------------------------------------------------------------------------
 from video_agent.orchestrator.stages.script import (
+    _enforce_script_length_qa,
     auto_script_stage,
     promote_script_stage,
     run_script_stage,

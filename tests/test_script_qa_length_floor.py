@@ -82,3 +82,25 @@ def test_floor_scales_with_a_different_channel_duration(tmp_path):
 def test_word_count_helper():
     assert _narration_word_count({"narration": "hola mundo feliz"}) == 3
     assert _narration_word_count({}) == 0
+
+
+def test_script_qa_task_prompt_carries_the_configured_floor():
+    """bridge 20260707 r3: the Gemini script_qa prompt itself must CARRY the
+    configured minimum (1320 for 660s/120wpm) and forbid an upper cap — not only
+    the deterministic post-QA gate."""
+    from video_agent.orchestrator.briefing import build_task_prompt
+
+    cfg = {"content_format": {"duration_sec_min": 660}, "tts": {"pace_wpm": 120}}
+    prompt = build_task_prompt("script_qa", existing_prompt="", channel_config=cfg)
+    assert "1320" in prompt, "script_qa prompt does not carry the configured floor"
+    assert "NEEDS_REWORK" in prompt
+    # No obsolete upper range leaks back in.
+    assert "2900" not in prompt and "4350" not in prompt
+
+
+def test_script_qa_floor_scales_in_the_prompt_with_channel_duration():
+    from video_agent.orchestrator.briefing import build_task_prompt
+
+    cfg = {"content_format": {"duration_sec_min": 1200}, "tts": {"pace_wpm": 120}}
+    prompt = build_task_prompt("script_qa", existing_prompt="", channel_config=cfg)
+    assert "2400" in prompt  # 1200/60 * 120

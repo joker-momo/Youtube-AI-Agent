@@ -1572,3 +1572,65 @@ def test_build_short_scenes_unclassified_error_object_is_labelled_distinctly(tmp
         assert exc.failure_kind == "chatgpt_error_object"
         # must NOT be mislabelled as a size refusal
         assert not isinstance(exc, ssb.ChatGPTSizeRefusalError)
+
+
+def _drive_build_short_with_scene_reply(tmp_path, short_id, scene_reply):
+    """Run the full scene stage via build_short with a fixed scenes reply, return
+    (res, scene_calls, calls, short_dir)."""
+    from video_agent.shorts import paths, short_builder
+
+    job = _long_job(tmp_path)
+    calls: list[str] = []
+    scene_calls = {"n": 0}
+
+    def llm_fn(kind, prompt):
+        if kind == "script":
+            return json.dumps(_GOOD_SCRIPT)
+        if kind == "scenes":
+            scene_calls["n"] += 1
+            return scene_reply
+        return "{}"
+
+    def gemini_fn(prompt):
+        return json.dumps({"verdict": "PASS", "issues": [], "required_changes": []})
+
+    plan = {"short_id": short_id, "format": "pain_to_tip", "scene_ids": ["scene-09"],
+            "music_track": "shorts_sleep_stress", "narration_seed": "x"}
+    res = short_builder.build_short(
+        job, plan, _cfg(), llm_fn=llm_fn, gemini_fn=gemini_fn, **_stub_io(calls),
+    )
+    return res, scene_calls, calls, paths.short_dir(job, short_id)
+
+
+def test_end_to_end_quota_refusal_surfaces_specific_kind_and_spares_creative_budget(tmp_path: Path):
+    """bug 20260705 r3: a quota refusal must reach short status as chatgpt_quota
+    (operator sees the real cause), never touch the creative scene-QA budget, and
+    never render."""
+    from video_agent.shorts import paths
+
+    res, scene_calls, calls, sd = _drive_build_short_with_scene_reply(
+        tmp_path, "short-e2e-q",
+        '{"error": "You have reached your usage limit for GPT-4.", "scenes": []}',
+    )
+    assert res["status"] == "needs_review"
+    assert res["qa_verdict"] == "PROVIDER_ERROR"
+    assert res.get("failure_kind") == "chatgpt_quota", res.get("failure_kind")
+    assert "render" not in calls
+    # Creative budget untouched: no scene-QA artifact, so no scene_count=0 feedback.
+    assert not (sd / "json" / paths.SHORT_SCENES_QA_FILE).exists()
+    import json as _json
+    fr = _json.loads((sd / "json" / paths.SHORT_FAILURE_REPORT_FILE).read_text(encoding="utf-8"))
+    assert fr["type"] == "chatgpt_quota"
+
+
+def test_end_to_end_policy_refusal_surfaces_specific_kind(tmp_path: Path):
+    from video_agent.shorts import paths
+
+    res, scene_calls, calls, sd = _drive_build_short_with_scene_reply(
+        tmp_path, "short-e2e-p",
+        '{"error": "I can\'t help with that content policy.", "scenes": []}',
+    )
+    assert res.get("failure_kind") == "chatgpt_policy", res.get("failure_kind")
+    assert res["qa_verdict"] == "PROVIDER_ERROR"
+    assert "render" not in calls
+    assert not (sd / "json" / paths.SHORT_SCENES_QA_FILE).exists()

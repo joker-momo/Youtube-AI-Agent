@@ -59,6 +59,36 @@ class ChatGPTSizeRefusalError(ChatGPTProviderError):
     failure_kind = "chatgpt_size_refusal"
 
 
+class ChatGPTQuotaError(ChatGPTProviderError):
+    """ChatGPT declined because of a usage/quota/rate limit, not response size.
+    A compact-output retry cannot help — the account must wait or upgrade."""
+
+    failure_kind = "chatgpt_quota"
+
+
+class ChatGPTAuthError(ChatGPTProviderError):
+    """ChatGPT returned an authentication/session error (logged out, session
+    expired). Needs a re-login, not a scene retry."""
+
+    failure_kind = "chatgpt_auth"
+
+
+class ChatGPTPolicyRefusalError(ChatGPTProviderError):
+    """ChatGPT refused on content-policy grounds. Retrying the same prompt will
+    refuse again; the idea/prompt must change."""
+
+    failure_kind = "chatgpt_policy"
+
+
+class ChatGPTErrorObjectError(ChatGPTProviderError):
+    """ChatGPT returned a JSON error object with no usable scenes that does not
+    match a known category (size / quota / auth / policy). Still a provider
+    failure — never empty scenes, never creative QA — but distinctly labelled so
+    the operator sees the real reason instead of a blanket 'size refusal'."""
+
+    failure_kind = "chatgpt_error_object"
+
+
 # Provider/browser error phrases that ChatGPT renders as plain page text. If any
 # appears, the response is a provider failure, not a scenes answer.
 PROVIDER_ERROR_PATTERNS = (
@@ -90,9 +120,10 @@ def is_valid_scene_payload(payload: object) -> bool:
     return len(scenes) > 0
 
 
-# Phrases ChatGPT uses when it (wrongly) claims the scenes JSON is too big to
-# emit in one message. Only consulted when the payload has no usable scenes,
-# so Spanish scene content can never false-positive on these English phrases.
+# Phrases that pin a no-scenes reply to a SPECIFIC failure cause. Consulted only
+# when the payload has no usable scenes, so Spanish scene content can never
+# false-positive on these English phrases. bug 20260705 reopen: a JSON error
+# object must NOT be blanket-labelled a size refusal — only size wording is size.
 SIZE_REFUSAL_PATTERNS = (
     "maximum response size",
     "exceeds the maximum response",
@@ -100,25 +131,84 @@ SIZE_REFUSAL_PATTERNS = (
     "exceeds the response limit",
     "response limits",
     "too large to fit",
+    "too long to",
     "split the task",
+    "split it into",
+    "break it into",
+)
+_QUOTA_PATTERNS = (
+    "usage limit", "usage cap", "rate limit", "too many requests",
+    "you've reached", "you have reached", "reached your", "reached the limit",
+    "upgrade to continue", "limit for gpt", "come back later",
+)
+_AUTH_PATTERNS = (
+    "log in", "logged out", "sign in to continue", "session expired",
+    "session has expired", "please authenticate", "not authenticated",
+    "unauthorized", "you're not logged in", "you are not logged in",
+)
+_POLICY_PATTERNS = (
+    "content policy", "usage policy", "against our", "can't help with that",
+    "cannot help with that", "can't assist with", "cannot assist with",
+    "unable to help with", "i can't create", "i cannot create",
+    "violates", "not able to provide",
 )
 
 
-def is_size_refusal_response(raw: str | None, payload: object | None = None) -> bool:
-    """True when the reply is a refusal instead of scenes: a JSON error-object
-    with empty/missing scenes (any wording), or refusal prose citing response
-    size. Valid scene payloads are never refusals."""
+def _refusal_text(raw: str | None, payload: object | None) -> str:
+    """The text to classify: the JSON ``error`` field when present, else the raw
+    reply. An error object's message is the authoritative signal."""
+    if isinstance(payload, dict):
+        err = str(payload.get("error") or "").strip()
+        if err:
+            return err
+    return (raw or "").strip()
+
+
+def classify_refusal(raw: str | None, payload: object | None = None) -> str | None:
+    """Classify a ChatGPT scenes reply that carries NO usable scenes.
+
+    Returns a specific kind — ``"size_refusal"``, ``"quota"``, ``"auth"``,
+    ``"policy"``, or ``"error_object"`` (a JSON error object that matches none of
+    the above) — or ``None`` when the reply is a valid scenes payload (or empty).
+    Valid scene payloads are never a refusal.
+    """
     text = (raw or "").strip()
     if not text:
-        return False
+        return None
     if payload is None:
         payload = _parse(raw)
     if is_valid_scene_payload(payload):
-        return False
+        return None
+    signal = _refusal_text(raw, payload).lower()
+    if any(p in signal for p in SIZE_REFUSAL_PATTERNS):
+        return "size_refusal"
+    if any(p in signal for p in _QUOTA_PATTERNS):
+        return "quota"
+    if any(p in signal for p in _AUTH_PATTERNS):
+        return "auth"
+    if any(p in signal for p in _POLICY_PATTERNS):
+        return "policy"
+    # A JSON error object with no usable scenes and no recognised wording is still
+    # a provider refusal — just an unclassified one, not a size refusal.
     if isinstance(payload, dict) and str(payload.get("error") or "").strip():
-        return True
-    lowered = text.lower()
-    return any(pattern in lowered for pattern in SIZE_REFUSAL_PATTERNS)
+        return "error_object"
+    return None
+
+
+# kind -> the typed provider error to raise for it.
+_REFUSAL_ERRORS: dict[str, type[ChatGPTProviderError]] = {
+    "size_refusal": ChatGPTSizeRefusalError,
+    "quota": ChatGPTQuotaError,
+    "auth": ChatGPTAuthError,
+    "policy": ChatGPTPolicyRefusalError,
+    "error_object": ChatGPTErrorObjectError,
+}
+
+
+def is_size_refusal_response(raw: str | None, payload: object | None = None) -> bool:
+    """True only for a genuine SIZE refusal (bug 20260705 reopen: quota/auth/
+    policy/other error objects are classified separately, not as size)."""
+    return classify_refusal(raw, payload) == "size_refusal"
 
 
 # Appended to the scene prompt for the one in-place retry after a size refusal.
@@ -529,12 +619,15 @@ def build_short_scenes(
             snippet=snippet,
         )
     payload = _parse(raw)
-    # Size-refusal guard (bridge 20260705-141239): ChatGPT sometimes refuses the
-    # scenes JSON claiming it exceeds the per-message response size (as refusal
-    # prose or as {"error": ..., "scenes": []}). Retry once in place with a
-    # compact-output correction; the repair-feedback loop must never see this,
-    # because its bigger repair prompt only reinforces the refusal.
-    if is_size_refusal_response(raw, payload):
+    # Refusal guard (bridge 20260705-141239 + reopen): a reply with no usable
+    # scenes is classified by CAUSE, not blanket-labelled a size refusal. Only a
+    # genuine size refusal earns the in-place compact-output retry — its bigger
+    # repair prompt only reinforces the refusal, so the creative repair loop must
+    # never see it. Quota / auth / policy / other error objects cannot be fixed by
+    # re-asking compactly, so they raise their specific typed error immediately so
+    # the operator sees the real reason.
+    kind = classify_refusal(raw, payload)
+    if kind == "size_refusal":
         raw = _invoke(llm_fn, "scenes", prompt + _COMPACT_RETRY_ADDENDUM)
         if is_provider_error_text(raw):
             snippet = (raw or "").strip().splitlines()[0][:200] if (raw or "").strip() else ""
@@ -543,13 +636,24 @@ def build_short_scenes(
                 snippet=snippet,
             )
         payload = _parse(raw)
-        if is_size_refusal_response(raw, payload):
+        retry_kind = classify_refusal(raw, payload)
+        if retry_kind:
             snippet = (raw or "").strip().splitlines()[0][:200] if (raw or "").strip() else ""
-            raise ChatGPTSizeRefusalError(
+            error_cls = _REFUSAL_ERRORS.get(retry_kind, ChatGPTErrorObjectError)
+            reason = (
                 "ChatGPT refused the scenes JSON for response size twice "
-                "(original prompt + compact retry).",
-                snippet=snippet,
+                "(original prompt + compact retry)."
+                if retry_kind == "size_refusal"
+                else f"ChatGPT still returned no usable scenes after the compact retry ({retry_kind})."
             )
+            raise error_cls(reason, snippet=snippet)
+    elif kind:
+        snippet = (raw or "").strip().splitlines()[0][:200] if (raw or "").strip() else ""
+        raise _REFUSAL_ERRORS[kind](
+            f"ChatGPT returned a {kind} refusal instead of scene JSON; a compact "
+            "retry cannot resolve this.",
+            snippet=snippet,
+        )
     scenes = normalize_short_scenes(payload, short_script)
     scenes = apply_first_frame_plan(scenes, short_plan, channel_config)
     jd = paths.short_json_dir(long_job_dir, short_plan["short_id"])

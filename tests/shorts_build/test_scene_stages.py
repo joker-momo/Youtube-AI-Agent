@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .conftest import *  # noqa: F401,F403
 
+
 def test_phase15_graphic_layouts_preserved_by_scene_normalizer():
     from video_agent.shorts.short_scene_builder import normalize_short_scenes
 
@@ -690,7 +691,7 @@ def test_qa_passes_clean_short(tmp_path: Path):
 
 
 def test_qa_rejects_greeting(tmp_path: Path):
-    from video_agent.shorts import qa, paths
+    from video_agent.shorts import paths, qa
     job = _good_short_dir(tmp_path)
     sp = paths.short_dir(job, "short-01") / "short_script.json"
     d = json.loads(sp.read_text())
@@ -703,7 +704,7 @@ def test_qa_rejects_greeting(tmp_path: Path):
 
 
 def test_qa_rejects_long_disclaimer(tmp_path: Path):
-    from video_agent.shorts import qa, paths
+    from video_agent.shorts import paths, qa
     job = _good_short_dir(tmp_path)
     sp = paths.short_dir(job, "short-01") / "short_script.json"
     d = json.loads(sp.read_text())
@@ -716,7 +717,7 @@ def test_qa_rejects_long_disclaimer(tmp_path: Path):
 
 
 def test_qa_rejects_medical_overclaim(tmp_path: Path):
-    from video_agent.shorts import qa, paths
+    from video_agent.shorts import paths, qa
     job = _good_short_dir(tmp_path)
     sp = paths.short_dir(job, "short-01") / "short_script.json"
     d = json.loads(sp.read_text())
@@ -728,7 +729,7 @@ def test_qa_rejects_medical_overclaim(tmp_path: Path):
 
 
 def test_script_rule_qa_rejects_over_word_budget_before_scenes(tmp_path: Path):
-    from video_agent.shorts import qa, paths
+    from video_agent.shorts import paths, qa
 
     job = _good_short_dir(tmp_path)
     sd = paths.short_dir(job, "short-01")
@@ -748,7 +749,7 @@ def test_script_rule_qa_rejects_over_word_budget_before_scenes(tmp_path: Path):
 
 
 def test_script_rule_qa_rejects_too_many_spoken_checklist_points(tmp_path: Path):
-    from video_agent.shorts import qa, paths
+    from video_agent.shorts import paths, qa
 
     job = _good_short_dir(tmp_path)
     sd = paths.short_dir(job, "short-01")
@@ -985,15 +986,15 @@ def test_checklist_missing_graphic_is_repairable_error():
         {"id": "s02", "layout": "short_tip", "duration_sec": 4.0, "on_screen_text": "POR 100 G", "visual_prompt": "vertical hands comparing labels", "narration": "Compara fibra y azúcares por 100 g antes de elegir."},
         {"id": "s03", "layout": "short_cta", "duration_sec": 2.4, "on_screen_text": "GUARDA ESTA LISTA", "visual_prompt": "vertical shopping basket", "narration": "Guarda esta lista."},
     ]
-    
+
     issues = validate_scene_structure(
-        scenes, 
+        scenes,
         scenes_doc={"total_duration_sec": 8.9, "scenes": scenes},
         script={"short_format": "checklist", "narration": " ".join(s["narration"] for s in scenes)}
     )
-    
+
     blocking = [i for i in issues if i.severity in ("blocking_error", "repairable_error")]
-    
+
     assert any(i.type == "missing_graphic_required" for i in blocking)
     assert any("graphic_label_callout" in (i.repair_hint or "") for i in blocking)
 
@@ -1176,7 +1177,8 @@ _PROVIDER_ERROR_TEXT = (
 
 def test_is_provider_error_text_and_payload_guards():
     from video_agent.shorts.short_scene_builder import (
-        is_provider_error_text, is_valid_scene_payload,
+        is_provider_error_text,
+        is_valid_scene_payload,
     )
     assert is_provider_error_text(_PROVIDER_ERROR_TEXT)
     assert is_provider_error_text("An error occurred, try again later")
@@ -1215,8 +1217,9 @@ def test_build_short_scenes_raises_provider_error_not_empty_scenes(tmp_path: Pat
 
 
 def test_build_short_provider_error_does_not_emit_scene_count_zero(tmp_path: Path):
-    from video_agent.shorts import short_builder, paths
     import json as _json
+
+    from video_agent.shorts import paths, short_builder
 
     job = _long_job(tmp_path)
     calls: list[str] = []
@@ -1258,6 +1261,7 @@ def test_build_short_provider_error_does_not_emit_scene_count_zero(tmp_path: Pat
 
 def test_chatgpt_send_with_recovery_clears_cookies_then_succeeds():
     import asyncio
+
     from video_agent.shorts import llm as shorts_llm
 
     class FakeClient:
@@ -1284,6 +1288,7 @@ def test_chatgpt_send_with_recovery_clears_cookies_then_succeeds():
 
 def test_chatgpt_send_with_recovery_exhausts_and_returns_provider_text():
     import asyncio
+
     from video_agent.shorts import llm as shorts_llm
 
     class FakeClient:
@@ -1384,8 +1389,8 @@ def test_is_size_refusal_response_detects_both_shapes():
     # Production shapes.
     assert is_size_refusal_response(_SIZE_REFUSAL_JSON)
     assert is_size_refusal_response(_SIZE_REFUSAL_TEXT)
-    # Any error-object with empty/missing scenes is a refusal, whatever the wording.
-    assert is_size_refusal_response('{"error": "cannot comply", "scenes": []}')
+    # bug 20260705 REOPEN: a non-size error object is NOT a size refusal anymore.
+    assert not is_size_refusal_response('{"error": "cannot comply", "scenes": []}')
     # Valid scenes payloads are never a refusal, even if a string contains "error".
     assert not is_size_refusal_response(
         '{"scenes": [{"id": "s01", "narration": "Sin error, todo bien."}]}'
@@ -1397,9 +1402,27 @@ def test_is_size_refusal_response_detects_both_shapes():
     assert not is_size_refusal_response(None)
 
 
+def test_classify_refusal_distinguishes_causes():
+    """bug 20260705 reopen: quota / auth / policy / generic error objects must
+    each be classified distinctly, not blanket-labelled as a size refusal."""
+    from video_agent.shorts.short_scene_builder import classify_refusal
+
+    assert classify_refusal(_SIZE_REFUSAL_JSON) == "size_refusal"
+    assert classify_refusal('{"error": "You have reached your usage limit for GPT-4.", "scenes": []}') == "quota"
+    assert classify_refusal('{"error": "Your session has expired, please log in.", "scenes": []}') == "auth"
+    assert classify_refusal('{"error": "I can\'t help with that content policy.", "scenes": []}') == "policy"
+    # An error object with no recognised wording is a distinct provider failure,
+    # NOT a size refusal.
+    assert classify_refusal('{"error": "cannot comply", "scenes": []}') == "error_object"
+    # Valid scenes / empty input are never a refusal.
+    assert classify_refusal('{"scenes": [{"id": "s01", "narration": "ok"}]}') is None
+    assert classify_refusal("") is None
+    assert classify_refusal(None) is None
+
+
 def test_build_short_scenes_size_refusal_recovers_on_compact_retry(tmp_path: Path):
-    from video_agent.shorts import short_scene_builder as ssb
     from video_agent.shorts import paths
+    from video_agent.shorts import short_scene_builder as ssb
 
     job = _long_job(tmp_path)
     prompts_seen: list[str] = []
@@ -1428,8 +1451,8 @@ def test_build_short_scenes_size_refusal_recovers_on_compact_retry(tmp_path: Pat
 
 
 def test_build_short_scenes_size_refusal_twice_raises_size_error(tmp_path: Path):
-    from video_agent.shorts import short_scene_builder as ssb
     from video_agent.shorts import paths
+    from video_agent.shorts import short_scene_builder as ssb
 
     job = _long_job(tmp_path)
     calls = {"n": 0}
@@ -1493,3 +1516,59 @@ def test_short_scene_prompt_v6_enforces_verbatim_preserve_split_not_compress():
     assert "you may shorten scene.narration" not in low
     assert "3–5 word cta" not in low
     assert "do not copy long script narration beats verbatim" not in low
+
+
+def test_build_short_scenes_quota_error_raises_immediately_without_compact_retry(tmp_path: Path):
+    """bug 20260705 reopen: a quota error is NOT a size refusal — it must raise a
+    typed quota error on the FIRST reply, never burning a compact retry."""
+    from video_agent.shorts import short_scene_builder as ssb
+
+    job = _long_job(tmp_path)
+    prompts_seen: list[str] = []
+
+    def llm_fn(kind, prompt):
+        prompts_seen.append(prompt)
+        return '{"error": "You have reached your usage limit for GPT-4.", "scenes": []}'
+
+    try:
+        ssb.build_short_scenes(job, {"short_id": "short-q1"}, _GOOD_SCRIPT, _cfg(), llm_fn)
+        raise AssertionError("expected ChatGPTQuotaError")
+    except ssb.ChatGPTQuotaError as exc:
+        assert exc.failure_kind == "chatgpt_quota"
+    assert len(prompts_seen) == 1, "quota must not trigger the compact-size retry"
+    assert not any("SIZE CORRECTION" in p for p in prompts_seen)
+
+
+def test_build_short_scenes_policy_refusal_raises_typed_policy_error(tmp_path: Path):
+    from video_agent.shorts import short_scene_builder as ssb
+
+    job = _long_job(tmp_path)
+    calls = {"n": 0}
+
+    def llm_fn(kind, prompt):
+        calls["n"] += 1
+        return '{"error": "I can\'t help with that content policy.", "scenes": []}'
+
+    try:
+        ssb.build_short_scenes(job, {"short_id": "short-p1"}, _GOOD_SCRIPT, _cfg(), llm_fn)
+        raise AssertionError("expected ChatGPTPolicyRefusalError")
+    except ssb.ChatGPTPolicyRefusalError as exc:
+        assert exc.failure_kind == "chatgpt_policy"
+    assert calls["n"] == 1
+
+
+def test_build_short_scenes_unclassified_error_object_is_labelled_distinctly(tmp_path: Path):
+    from video_agent.shorts import short_scene_builder as ssb
+
+    job = _long_job(tmp_path)
+
+    def llm_fn(kind, prompt):
+        return '{"error": "cannot comply", "scenes": []}'
+
+    try:
+        ssb.build_short_scenes(job, {"short_id": "short-e1"}, _GOOD_SCRIPT, _cfg(), llm_fn)
+        raise AssertionError("expected ChatGPTErrorObjectError")
+    except ssb.ChatGPTErrorObjectError as exc:
+        assert exc.failure_kind == "chatgpt_error_object"
+        # must NOT be mislabelled as a size refusal
+        assert not isinstance(exc, ssb.ChatGPTSizeRefusalError)

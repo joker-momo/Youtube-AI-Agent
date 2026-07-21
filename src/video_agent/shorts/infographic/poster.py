@@ -15,8 +15,10 @@ from typing import Any
 from video_agent.orchestrator.image_prompt_log import safe_log_image_prompt
 from video_agent.shorts import paths
 from video_agent.shorts.infographic.poster_prompt import (
+    _content_fingerprint,
     build_poster_body,
     effective_palette_fingerprint,
+    effective_palette_values,
     select_palette_contract,
     validate_palette_contract,
     wrap_poster_body,
@@ -37,30 +39,47 @@ def palette_path(short_dir: Path) -> Path:
     return Path(short_dir) / "json" / paths.SHORT_POSTER_PALETTE_FILE
 
 
-def _load_valid_contract(path: Path, expected_fingerprint: str) -> dict[str, Any] | None:
+def _load_valid_contract(
+    path: Path,
+    expected_fingerprint: str,
+    *,
+    allowed_values: frozenset[str],
+    expected_content_fingerprint: str | None = None,
+) -> dict[str, Any] | None:
     """A trustworthy contract from ``path``, or None if there is nothing usable.
 
-    Anything unreadable, malformed, stale against the active Style DNA, or whose
-    own contrast evidence no longer holds is treated as absent — never repaired in
-    place, because a half-trusted palette is how unreadable posters ship.
+    Anything unreadable, malformed, stale against the active Style DNA, off-palette
+    (bug-546 reopen), or whose own contrast evidence no longer holds is treated as
+    absent — never repaired in place, because a half-trusted palette is how
+    unreadable OR off-brand posters ship.
     """
     try:
         data = read_json(path)
     except (OSError, ValueError):
         return None
-    if not validate_palette_contract(data, expected_fingerprint):
+    if not validate_palette_contract(
+        data,
+        expected_fingerprint,
+        allowed_values=allowed_values,
+        expected_content_fingerprint=expected_content_fingerprint,
+    ):
         return None
     if not isinstance(data.get("selected_at_utc"), str) or not isinstance(data.get("short_id"), str):
         return None
     return data
 
 
-def _recent_sibling_contracts(short_dir: Path, expected_fingerprint: str) -> tuple[dict[str, Any], ...]:
+def _recent_sibling_contracts(
+    short_dir: Path, expected_fingerprint: str, allowed_values: frozenset[str]
+) -> tuple[dict[str, Any], ...]:
     """The most recent valid sibling decisions, newest first.
 
     Ordered by the immutable ``(selected_at_utc, short_id)`` pair rather than file
     mtime, so a resumed batch, a shuffled directory listing or two Shorts committed
     in the same clock tick still produce one deterministic history (R13).
+
+    Sibling sidecars are validated for palette membership but NOT content
+    fingerprint — a sibling's content legitimately differs from this Short's.
     """
     parent = Path(short_dir).parent
     current = Path(short_dir).resolve()
@@ -72,7 +91,9 @@ def _recent_sibling_contracts(short_dir: Path, expected_fingerprint: str) -> tup
     for sibling in siblings:
         if not sibling.is_dir() or sibling.resolve() == current:
             continue
-        contract = _load_valid_contract(palette_path(sibling), expected_fingerprint)
+        contract = _load_valid_contract(
+            palette_path(sibling), expected_fingerprint, allowed_values=allowed_values
+        )
         if contract is not None:
             contracts.append(contract)
     contracts.sort(key=lambda c: (c["selected_at_utc"], c["short_id"]), reverse=True)
@@ -87,8 +108,13 @@ def resolve_poster_palette(
     short_dir = Path(short_dir)
     path = palette_path(short_dir)
     expected_fingerprint = effective_palette_fingerprint(channel_config)
+    allowed_values = effective_palette_values(channel_config)
+    own_content = _content_fingerprint(plan)
 
-    existing = _load_valid_contract(path, expected_fingerprint)
+    existing = _load_valid_contract(
+        path, expected_fingerprint,
+        allowed_values=allowed_values, expected_content_fingerprint=own_content,
+    )
     if existing is not None:
         return existing
 
@@ -98,10 +124,13 @@ def resolve_poster_palette(
     # released before any prompt logging or image call: those are slow and external,
     # and holding a lock across them would serialize the whole batch (R20).
     with file_lock(lock_path, timeout_sec=_PALETTE_LOCK_TIMEOUT_SEC):
-        existing = _load_valid_contract(path, expected_fingerprint)
+        existing = _load_valid_contract(
+            path, expected_fingerprint,
+            allowed_values=allowed_values, expected_content_fingerprint=own_content,
+        )
         if existing is not None:
             return existing
-        recent = _recent_sibling_contracts(short_dir, expected_fingerprint)
+        recent = _recent_sibling_contracts(short_dir, expected_fingerprint, allowed_values)
         contract = select_palette_contract(plan, channel_config, recent=recent)
         contract["selected_at_utc"] = datetime.now(UTC).isoformat(timespec="microseconds").replace(
             "+00:00", "Z"

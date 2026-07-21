@@ -5,6 +5,7 @@ import os
 import re
 import time
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse, urlunparse
 
 import httpx
@@ -218,33 +219,69 @@ def _target_url(site: str) -> str:
 # surfaces as a generic 500. Bound it and raise a structured 503 so the caller
 # (and Codex verification) sees the real cause instead of an opaque 500.
 _CDP_CONNECT_TIMEOUT_MS = 45_000
+# The observed failure (bridge 20260709) was a FLAP: after a browser/CDP restart
+# the listener briefly appears then disappears, so the first attach hits a stale
+# ws endpoint and errors. A small bounded retry that RE-RESOLVES the ws endpoint
+# each attempt rides over that transient window; the endpoint id changes when the
+# runtime relaunches, so reusing a cached one would just retry a dead socket.
+_CDP_ATTACH_ATTEMPTS = 3
+_CDP_RETRY_BACKOFF_SEC = 0.5
 
 
 async def _attach_cdp_or_503(pw, cdp_url: str):
-    """Resolve the runtime ws endpoint and attach over CDP.
+    """Resolve the runtime ws endpoint and attach over CDP, with bounded retries.
 
-    Raises HTTPException(503) with structured detail on any resolve or attach
-    failure (including the bounded connect timeout), never a bare 500.
+    Re-resolves the ws endpoint on every attempt and bounds the connect timeout.
+    Raises HTTPException(503) with structured detail (including which stage failed
+    and how many attempts were made) on exhaustion, never a bare 500 and never the
+    180s hang.
     """
-    try:
-        ws_endpoint = await _resolve_browser_ws(cdp_url)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=503,
-            detail={"cdp_url": cdp_url, "stage": "resolve_ws", "error": f"{type(exc).__name__}: {exc}"},
-        ) from exc
-    try:
-        return await pw.chromium.connect_over_cdp(ws_endpoint, timeout=_CDP_CONNECT_TIMEOUT_MS)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "cdp_url": cdp_url,
-                "ws_endpoint": ws_endpoint,
-                "stage": "connect_over_cdp",
+    last_detail: dict[str, Any] = {"cdp_url": cdp_url, "stage": "resolve_ws", "error": "not attempted"}
+    for attempt in range(1, _CDP_ATTACH_ATTEMPTS + 1):
+        try:
+            ws_endpoint = await _resolve_browser_ws(cdp_url)
+        except Exception as exc:
+            last_detail = {
+                "cdp_url": cdp_url, "stage": "resolve_ws", "attempt": attempt,
                 "error": f"{type(exc).__name__}: {exc}",
-            },
-        ) from exc
+            }
+        else:
+            try:
+                return await pw.chromium.connect_over_cdp(ws_endpoint, timeout=_CDP_CONNECT_TIMEOUT_MS)
+            except Exception as exc:
+                last_detail = {
+                    "cdp_url": cdp_url, "ws_endpoint": ws_endpoint,
+                    "stage": "connect_over_cdp", "attempt": attempt,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+        if attempt < _CDP_ATTACH_ATTEMPTS:
+            await asyncio.sleep(_CDP_RETRY_BACKOFF_SEC)
+    raise HTTPException(status_code=503, detail={**last_detail, "attempts": _CDP_ATTACH_ATTEMPTS})
+
+
+async def cdp_attach_health() -> dict[str, Any]:
+    """Structured CDP-attach smoke check (bridge 20260709).
+
+    Attaches through the shared bounded helper and reports a machine-readable
+    verdict instead of an opaque 500, so an operator (or Codex, before running the
+    real image gate) can tell at a glance whether the browser runtime is reachable.
+    """
+    cdp_url = _cdp_url()
+    from playwright.async_api import async_playwright
+
+    try:
+        async with async_playwright() as pw:
+            browser = await _attach_cdp_or_503(pw, cdp_url)
+            try:
+                contexts = len(browser.contexts)
+            finally:
+                await browser.close()
+        return {"ok": True, "cdp_url": cdp_url, "contexts": contexts}
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {"error": str(exc.detail)}
+        return {"ok": False, "cdp_url": cdp_url, **detail}
+    except Exception as exc:  # noqa: BLE001 - smoke check never raises
+        return {"ok": False, "cdp_url": cdp_url, "stage": "unknown", "error": f"{type(exc).__name__}: {exc}"}
 
 
 @app.get("/health")
@@ -1064,9 +1101,8 @@ async def auth_clear_cookies(site: str, preserve_session: bool = True) -> dict:
 
     cdp_url = _cdp_url()
     try:
-        ws_endpoint = await _resolve_browser_ws(cdp_url)
         async with async_playwright() as pw:
-            browser = await pw.chromium.connect_over_cdp(ws_endpoint)
+            browser = await _attach_cdp_or_503(pw, cdp_url)
             try:
                 context = browser.contexts[0] if browser.contexts else await browser.new_context()
                 before = await context.cookies()
@@ -1116,9 +1152,8 @@ async def auth_status(site: str) -> dict:
 
     cdp_url = _cdp_url()
     try:
-        ws_endpoint = await _resolve_browser_ws(cdp_url)
         async with async_playwright() as pw:
-            browser = await pw.chromium.connect_over_cdp(ws_endpoint)
+            browser = await _attach_cdp_or_503(pw, cdp_url)
             try:
                 context = (
                     browser.contexts[0]

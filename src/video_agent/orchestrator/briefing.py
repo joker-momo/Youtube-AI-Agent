@@ -176,6 +176,15 @@ _LENGTH_ES = {
         "- cta: 20-250 caracteres, llamado claro y no agresivo, incluye "
         "sugerencia de suscribirse + comentar + ver otro video."
     ),
+    "script_qa": (
+        "- LONGITUD (obligatorio, mismo contrato que generó el guion): narration "
+        "debe tener AL MENOS {script_word_floor} palabras (~{floor_min}+ min a "
+        "{pace_wpm} palabras/min). Si tiene MENOS, verdict=NEEDS_REWORK y pide "
+        "ampliarlo con ejemplos/pasos/micro-historias.\n"
+        "- NO existe máximo: un guion más largo que {script_word_floor} palabras es "
+        "CORRECTO. Nunca marques un guion como demasiado largo ni apliques ningún "
+        "rango superior fijo de palabras; cualquier tope superior es obsoleto.\n"
+    ),
     "scenes": (
         "- total_duration_sec: igual a la duración hablada real del narration aprobado "
         "(~palabras / {pace_wpm} × 60). Mínimo {floor_sec} s, SIN tope fijo. NO inventes "

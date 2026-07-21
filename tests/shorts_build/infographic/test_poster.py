@@ -246,7 +246,10 @@ def test_current_short_and_invalid_siblings_do_not_steer_selection(tmp_path):
     """U3.4 + U3.5: a cancelled/failed sibling with no valid sidecar, and the
     Short's own directory, are invisible to history."""
     from video_agent.shorts.infographic.poster import _recent_sibling_contracts, generate_poster
-    from video_agent.shorts.infographic.poster_prompt import effective_palette_fingerprint
+    from video_agent.shorts.infographic.poster_prompt import (
+        effective_palette_fingerprint,
+        effective_palette_values,
+    )
 
     cfg = _vida_cfg(tmp_path)
     shorts = tmp_path / "shorts"
@@ -257,10 +260,11 @@ def test_current_short_and_invalid_siblings_do_not_steer_selection(tmp_path):
     (shorts / "short-01_idea-98_broken" / "json" / "poster_palette.json").write_text("{not json", encoding="utf-8")
 
     fp = effective_palette_fingerprint(cfg)
-    assert _recent_sibling_contracts(good, fp) == (), "own directory leaked into history"
+    vals = effective_palette_values(cfg)
+    assert _recent_sibling_contracts(good, fp, vals) == (), "own directory leaked into history"
     other = shorts / "short-01_idea-02_next"
     other.mkdir(parents=True)
-    recent = _recent_sibling_contracts(other, fp)
+    recent = _recent_sibling_contracts(other, fp, vals)
     assert [c["short_id"] for c in recent] == [good.name], f"invalid siblings leaked: {recent}"
 
 
@@ -396,7 +400,10 @@ def test_equal_timestamps_break_ties_on_short_id_regardless_of_listing_order(tmp
         generate_poster,
         palette_path,
     )
-    from video_agent.shorts.infographic.poster_prompt import effective_palette_fingerprint
+    from video_agent.shorts.infographic.poster_prompt import (
+        effective_palette_fingerprint,
+        effective_palette_values,
+    )
 
     cfg = _vida_cfg(tmp_path)
     shorts = tmp_path / "shorts"
@@ -410,17 +417,18 @@ def test_equal_timestamps_break_ties_on_short_id_regardless_of_listing_order(tmp
         p.write_text(_json.dumps(data), encoding="utf-8")
 
     fp = effective_palette_fingerprint(cfg)
+    vals = effective_palette_values(cfg)
     target = shorts / "short-01_idea-04_d"
     target.mkdir(parents=True)
     expected = ["short-01_idea-03_c", "short-01_idea-02_b"]  # highest short_id wins the tie
-    assert [c["short_id"] for c in _recent_sibling_contracts(target, fp)] == expected
+    assert [c["short_id"] for c in _recent_sibling_contracts(target, fp, vals)] == expected
 
     real_iterdir = Path.iterdir
     def shuffled(self):
         return reversed(sorted(real_iterdir(self)))
     poster_mod.Path.iterdir = shuffled
     try:
-        assert [c["short_id"] for c in _recent_sibling_contracts(target, fp)] == expected
+        assert [c["short_id"] for c in _recent_sibling_contracts(target, fp, vals)] == expected
     finally:
         poster_mod.Path.iterdir = real_iterdir
 
@@ -520,3 +528,106 @@ def test_no_named_colour_recipe_survives_in_any_format_prompt(tmp_path):
         body = build_poster_body(_poster_plan(fmt, "Tema de prueba"), cfg).lower()
         for word in forbidden:
             assert not _re.search(rf"\b{word}\b", body), f"{fmt}: prompt names the colour {word!r}"
+
+
+# ── bug-546 REOPEN (R14): a COHERENT off-palette tamper must be rejected ───────
+# Codex found: validate_palette_contract rechecked signature/evidence/fingerprint
+# but never that a role's hex actually BELONGS to the active palette, nor that
+# scheme_id was canonical. A tamperer who recomputes signature+evidence for an
+# off-palette contract slipped through and leaked a non-brand colour into a poster.
+
+def _off_palette_but_readable(value: str, allowed: frozenset) -> str:
+    """A 1-nibble perturbation of ``value``: essentially the same colour (so it
+    keeps its contrast and would pass every readability gate) yet NOT a palette
+    member — the exact 'coherent tamper' Codex described."""
+    flipped = value[:-1] + ("0" if value[-1] != "0" else "1")
+    assert flipped not in allowed, flipped
+    return flipped
+
+
+def _coherent_contract(tmp_path, roles_override=None):
+    """A fully self-consistent contract: signature, evidence and scheme_id all
+    recomputed for its own roles, exactly as a clever tamper would forge."""
+    from video_agent.shorts.infographic import poster_prompt as pp
+    cfg = _vida_cfg(tmp_path)
+    contract = pp.select_palette_contract(_poster_plan(), cfg)
+    if roles_override:
+        roles = {**contract["roles"], **roles_override}
+        contract = {
+            **contract,
+            "roles": roles,
+            "scheme_id": pp._scheme_id(roles),
+            "dominant_signature": pp.dominant_signature(roles, contract["poster_format"]),
+            "contrast_evidence": pp._contrast_evidence(roles, contract["poster_format"]),
+        }
+    return cfg, contract
+
+
+def test_coherent_off_palette_contract_is_rejected(tmp_path):
+    from video_agent.shorts.infographic import poster_prompt as pp
+    cfg = _vida_cfg(tmp_path)
+    values = pp.effective_palette_values(cfg)
+    genuine = pp.select_palette_contract(_poster_plan(), cfg)
+    # Perturb divider to an off-palette hex that keeps ~identical contrast, so the
+    # ONLY thing wrong is palette membership — every other check stays coherent.
+    off = _off_palette_but_readable(genuine["roles"]["divider_accent"], values)
+    cfg, tampered = _coherent_contract(tmp_path, {"divider_accent": off})
+    # Prove the tamper is coherent + readable (would pass WITHOUT the membership check).
+    assert tampered["contrast_evidence"] == pp._contrast_evidence(tampered["roles"], tampered["poster_format"])
+    assert all(r >= pp._minimum_for_pair(p) for p, r in tampered["contrast_evidence"].items())
+    # ...yet the hardened validator rejects it precisely on membership.
+    assert pp.validate_palette_contract(
+        tampered, palette_fingerprint=pp.effective_palette_fingerprint(cfg),
+        allowed_values=values,
+    ) is False, "coherent, readable off-palette contract slipped through R14"
+
+
+def test_tampered_scheme_id_is_rejected(tmp_path):
+    from video_agent.shorts.infographic import poster_prompt as pp
+    cfg, contract = _coherent_contract(tmp_path)
+    contract = {**contract, "scheme_id": "deadbeefcafe"}
+    assert pp.validate_palette_contract(
+        contract, palette_fingerprint=pp.effective_palette_fingerprint(cfg),
+        allowed_values=pp.effective_palette_values(cfg),
+    ) is False, "non-canonical scheme_id accepted"
+
+
+def test_wrong_content_fingerprint_is_rejected_for_own_short(tmp_path):
+    from video_agent.shorts.infographic import poster_prompt as pp
+    cfg, contract = _coherent_contract(tmp_path)
+    assert pp.validate_palette_contract(
+        contract, palette_fingerprint=pp.effective_palette_fingerprint(cfg),
+        allowed_values=pp.effective_palette_values(cfg),
+        expected_content_fingerprint="0" * 64,
+    ) is False, "sidecar for different content accepted as this Short's own"
+
+
+def test_genuine_contract_still_validates_with_hardened_checks(tmp_path):
+    from video_agent.shorts.infographic import poster_prompt as pp
+    cfg, contract = _coherent_contract(tmp_path)
+    assert pp.validate_palette_contract(
+        contract, palette_fingerprint=pp.effective_palette_fingerprint(cfg),
+        allowed_values=pp.effective_palette_values(cfg),
+        expected_content_fingerprint=contract["content_fingerprint"],
+    ) is True
+
+
+def test_generation_seam_replaces_a_coherent_off_palette_sidecar(tmp_path):
+    """End-to-end: a coherent off-palette sidecar on disk must be discarded and
+    rewritten before any image call — the leak must never reach a poster."""
+    from video_agent.shorts.infographic import poster_prompt as pp
+    from video_agent.shorts.infographic.poster import generate_poster, palette_path
+    cfg = _vida_cfg(tmp_path)
+    values = pp.effective_palette_values(cfg)
+    genuine = pp.select_palette_contract(_poster_plan(), cfg)
+    off = _off_palette_but_readable(genuine["roles"]["headline_1"], values)
+    cfg, tampered = _coherent_contract(tmp_path, {"headline_1": off})
+    short = tmp_path / "shorts" / "short-01_idea-01_x"
+    palette_path(short).parent.mkdir(parents=True, exist_ok=True)
+    tampered = {**tampered, "selected_at_utc": "2026-07-17T00:00:00.000000Z", "short_id": short.name}
+    palette_path(short).write_text(_json.dumps(tampered), encoding="utf-8")
+    calls = []
+    asyncio.run(generate_poster(short, _poster_plan(), _recording_image_fn(calls), cfg))
+    assert off not in calls[0]["prompt"], "off-palette colour reached the poster prompt"
+    written = _json.loads(palette_path(short).read_text(encoding="utf-8"))
+    assert off not in written["roles"].values()

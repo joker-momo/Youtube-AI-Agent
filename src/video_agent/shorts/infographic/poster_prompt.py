@@ -552,6 +552,16 @@ def effective_palette_fingerprint(channel_config: dict[str, Any] | None = None) 
     return palette_fingerprint(palette)
 
 
+def effective_palette_values(channel_config: dict[str, Any] | None = None) -> frozenset[str]:
+    """The exact hex values a trustworthy sidecar is allowed to use (R14).
+
+    Membership in THIS set is the check a coherent tamper cannot fake: it can
+    recompute a self-consistent signature and contrast evidence for an off-brand
+    colour, but it cannot make that colour a member of the active Style DNA."""
+    palette, _schemes, _rejected, _reasons = _effective_palette(channel_config)
+    return frozenset(palette.values())
+
+
 _REQUIRED_ROLES = frozenset(
     {
         "canvas",
@@ -570,13 +580,27 @@ _REQUIRED_ROLES = frozenset(
 
 
 def validate_palette_contract(
-    contract: Any, expected_palette_fingerprint: str | None = None
+    contract: Any,
+    palette_fingerprint: str | None = None,
+    *,
+    allowed_values: frozenset[str] | set[str] | None = None,
+    expected_content_fingerprint: str | None = None,
 ) -> bool:
     """True when a persisted contract can still be trusted (R14).
 
     Everything is rechecked from the hexes themselves rather than believed: a
     sidecar written before a Style DNA edit, hand-tampered, or truncated must be
     replaced, never used to letter a poster nobody can read.
+
+    Signature/evidence recomputation alone is NOT enough (bug-546 reopen): a
+    tamperer who edits a role to an off-palette colour AND recomputes a coherent
+    signature + evidence + scheme_id produces an internally consistent contract.
+    Two independent anchors close that: every role value must be a member of the
+    ACTIVE palette (``allowed_values``), which a forger cannot conjure, and the
+    ``scheme_id`` must be the canonical digest of the roles, not an arbitrary
+    string. ``expected_content_fingerprint`` additionally binds a Short's OWN
+    sidecar to its OWN plan (omitted when validating sibling sidecars, whose
+    content legitimately differs).
     """
     if not isinstance(contract, dict):
         return False
@@ -587,9 +611,18 @@ def validate_palette_contract(
         return False
     if not all(is_valid_hex(value) for value in roles.values()):
         return False
+    if allowed_values is not None and not all(v in allowed_values for v in roles.values()):
+        return False
+    if contract.get("scheme_id") != _scheme_id(roles):
+        return False
     if (
-        expected_palette_fingerprint is not None
-        and contract.get("palette_fingerprint") != expected_palette_fingerprint
+        palette_fingerprint is not None
+        and contract.get("palette_fingerprint") != palette_fingerprint
+    ):
+        return False
+    if (
+        expected_content_fingerprint is not None
+        and contract.get("content_fingerprint") != expected_content_fingerprint
     ):
         return False
     poster_format = contract.get("poster_format")

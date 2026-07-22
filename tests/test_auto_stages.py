@@ -37,7 +37,6 @@ from video_agent.web.app import (
     get_jobs_root,
 )
 
-
 # ---------- fixtures shared with existing script tests ----------------------
 
 
@@ -193,6 +192,7 @@ class FakeBrowserClient:
     ) -> dict:
         self.events.append("image")
         import os
+
         from PIL import Image
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
         Image.new("RGB", (640, 360), (12, 34, 56)).save(out_path, format="PNG")
@@ -327,7 +327,7 @@ def test_auto_run_then_promote_retries_on_promotion_failure(
 ):
     job_dir = tmp_path / "job-auto"
     _seed_script(job_dir, channel_path, idea_payload)
-    
+
     # First response fails to parse, second succeeds
     fake = FakeBrowserClient(
         queue=[
@@ -1603,9 +1603,9 @@ def test_run_whisper_timestamps_delegates_to_audio_subprocess(
     tmp_path: Path,
     monkeypatch,
 ):
+    import video_agent.orchestrator.stages as stages_mod
     from video_agent.orchestrator import create_job
     from video_agent.orchestrator.job_state import load_job
-    import video_agent.orchestrator.stages as stages_mod
 
     job_dir = tmp_path / "job-whisper"
     create_job(
@@ -2157,8 +2157,8 @@ async def _failing_image_fn(prompt: str, *, project_name: str, out_path: str) ->
 
 def test_auto_assets_chatgpt_continues_on_scene_failure(tmp_path, channel_path):
     """A scene failure emits SCENE_ASSET_FAILED and stage still completes."""
-    from video_agent.orchestrator.stages import auto_assets_chatgpt_stage
     from video_agent.contracts import EVENT_LOG
+    from video_agent.orchestrator.stages import auto_assets_chatgpt_stage
 
     job_dir = tmp_path / "job-assets"
     _seed_at_assets_chatgpt(job_dir, _two_scene_doc())
@@ -2736,3 +2736,34 @@ def test_scenes_qa_prewarm_overlaps_generation_and_qa_stage_reuses(
     merged = json.loads(output_qa.read_text(encoding="utf-8"))
     assert merged["verdict"] == "PASS"
     assert fake_qa.calls == []
+
+
+def test_auto_script_qa_accepts_a_script_at_exactly_the_floor(
+    tmp_path: Path,
+    channel_path: Path,
+    idea_payload: dict,
+    valid_script_payload: dict,
+):
+    """bridge 20260707 r4: full-stage exact-floor ACCEPTANCE. A script whose
+    narration is exactly the configured floor (1320 words for vida-plena-45's
+    660s/120wpm) must pass script_qa and advance to scenes — the deterministic
+    length gate must not reject the boundary."""
+    from video_agent.orchestrator.briefing import _script_length_floor
+    from video_agent.orchestrator.stages import auto_script_qa_stage
+    from video_agent.utils.json_io import read_yaml
+
+    floor = _script_length_floor(read_yaml(channel_path))["script_word_floor"]
+    # Use the same job dir name the fixture's job_id expects, so promote's
+    # job_id-match guard passes; only the narration length is under test here.
+    job_dir = tmp_path / valid_script_payload["job_id"]
+    payload = {**valid_script_payload, "narration": " ".join(["palabra"] * floor)}
+    assert len(payload["narration"].split()) == floor
+
+    _advance_through_script_promote(job_dir, channel_path, idea_payload, payload)
+    fake = FakeBrowserClient(queue=[json.dumps(_qa_pass_payload())])
+    asyncio.run(
+        auto_script_qa_stage(job_dir, channel_path, lambda msgs: fake.run_session("gemini", msgs))
+    )
+    state = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    assert state["current_stage"] == "scenes"
+    assert any(s["name"] == "script_qa" and s["status"] == "completed" for s in state["stages"])

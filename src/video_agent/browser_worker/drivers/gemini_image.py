@@ -241,7 +241,11 @@ class GeminiImageDriver:
         candidates = await self.page.evaluate(self._FIND_IMAGE_JS)
         for item in reversed(candidates or []):
             src = str(item.get("src") or "")
-            if not src.startswith("http"):
+            # bug-511 recurrence (bridge 20260722): the live Gemini response image
+            # carries a `blob:` src, and sometimes a `data:` URI — NOT http. The old
+            # `startswith("http")` filter skipped exactly the real generated image
+            # and the wait timed out at 0s while the picture sat on screen.
+            if not (src.startswith("http") or src.startswith("blob:") or src.startswith("data:")):
                 continue
             low = src.lower()
             if "avatar" in low or "favicon" in low or "/icon" in low:
@@ -268,15 +272,39 @@ class GeminiImageDriver:
         except Exception:
             return False
 
+    # Fetch a blob:/data: URL from INSIDE the page (those URLs live only in the
+    # page's origin/context — Playwright's request API cannot reach them) and
+    # return the ORIGINAL-resolution bytes as base64. Screenshotting the displayed
+    # <img> would save the shrunk 708x395 box, not the generated image (bug-511
+    # recurrence 20260722 explicitly forbids that).
+    _READ_BLOB_JS = """async (src) => {
+        const resp = await fetch(src);
+        const buf = await resp.arrayBuffer();
+        let binary = '';
+        const bytes = new Uint8Array(buf);
+        const chunk = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunk) {
+            binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+        }
+        return btoa(binary);
+    }"""
+
     async def _download_image(self, src: str, dest: Path) -> Path:
-        ctx = self.page.context
         max_attempts = 3
+        in_page = src.startswith("blob:") or src.startswith("data:")
         for attempt in range(1, max_attempts + 1):
             try:
-                response = await ctx.request.get(src)
-                if response.status != 200:
-                    raise BrowserDriverError(f"Image download failed: HTTP {response.status}")
-                body = await response.body()
+                if in_page:
+                    import base64
+                    b64 = await self.page.evaluate(self._READ_BLOB_JS, src)
+                    body = base64.b64decode(b64)
+                    if not body:
+                        raise BrowserDriverError("Gemini blob fetch returned no bytes.")
+                else:
+                    response = await self.page.context.request.get(src)
+                    if response.status != 200:
+                        raise BrowserDriverError(f"Image download failed: HTTP {response.status}")
+                    body = await response.body()
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 atomic_write_bytes(dest, body)
                 return dest

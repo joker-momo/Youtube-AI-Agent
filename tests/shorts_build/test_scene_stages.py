@@ -1634,3 +1634,54 @@ def test_end_to_end_policy_refusal_surfaces_specific_kind(tmp_path: Path):
     assert res["qa_verdict"] == "PROVIDER_ERROR"
     assert "render" not in calls
     assert not (sd / "json" / paths.SHORT_SCENES_QA_FILE).exists()
+
+
+def test_end_to_end_auth_refusal_surfaces_specific_kind(tmp_path: Path):
+    """bug 20260705 r4: every representative refusal class through the full
+    persisted flow — auth."""
+    from video_agent.shorts import paths
+
+    res, _sc, calls, sd = _drive_build_short_with_scene_reply(
+        tmp_path, "short-e2e-a",
+        '{"error": "Your session has expired, please log in to continue.", "scenes": []}',
+    )
+    assert res.get("failure_kind") == "chatgpt_auth", res.get("failure_kind")
+    assert res["qa_verdict"] == "PROVIDER_ERROR"
+    assert "render" not in calls
+    assert not (sd / "json" / paths.SHORT_SCENES_QA_FILE).exists()
+    import json as _json
+    fr = _json.loads((sd / "json" / paths.SHORT_FAILURE_REPORT_FILE).read_text(encoding="utf-8"))
+    assert fr["type"] == "chatgpt_auth"
+
+
+def test_end_to_end_unclassified_error_object_surfaces_specific_kind(tmp_path: Path):
+    """bug 20260705 r4: unclassified error object -> chatgpt_error_object, NOT
+    a size refusal, through the full flow."""
+    from video_agent.shorts import paths
+
+    res, _sc, calls, sd = _drive_build_short_with_scene_reply(
+        tmp_path, "short-e2e-e", '{"error": "cannot comply", "scenes": []}',
+    )
+    assert res.get("failure_kind") == "chatgpt_error_object", res.get("failure_kind")
+    assert res["qa_verdict"] == "PROVIDER_ERROR"
+    assert not (sd / "json" / paths.SHORT_SCENES_QA_FILE).exists()
+    import json as _json
+    fr = _json.loads((sd / "json" / paths.SHORT_FAILURE_REPORT_FILE).read_text(encoding="utf-8"))
+    assert fr["type"] == "chatgpt_error_object"
+
+
+def test_end_to_end_size_refusal_twice_surfaces_size_kind_through_full_flow(tmp_path: Path):
+    """bug 20260705 r4: a size refusal that persists past the compact retry
+    reaches short status as chatgpt_size_refusal, still sparing the creative
+    budget and never rendering."""
+    from video_agent.shorts import paths
+
+    res, scene_calls, calls, sd = _drive_build_short_with_scene_reply(
+        tmp_path, "short-e2e-s", _SIZE_REFUSAL_JSON,
+    )
+    assert res.get("failure_kind") == "chatgpt_size_refusal", res.get("failure_kind")
+    assert res["qa_verdict"] == "PROVIDER_ERROR"
+    assert "render" not in calls
+    assert not (sd / "json" / paths.SHORT_SCENES_QA_FILE).exists()
+    # A size refusal DID get its in-place compact retry (2 scene calls per attempt).
+    assert scene_calls["n"] >= 2

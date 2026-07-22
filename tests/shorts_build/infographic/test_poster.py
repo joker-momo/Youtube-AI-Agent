@@ -249,6 +249,7 @@ def test_current_short_and_invalid_siblings_do_not_steer_selection(tmp_path):
     from video_agent.shorts.infographic.poster_prompt import (
         effective_palette_fingerprint,
         effective_palette_values,
+        effective_scheme_ids,
     )
 
     cfg = _vida_cfg(tmp_path)
@@ -261,10 +262,11 @@ def test_current_short_and_invalid_siblings_do_not_steer_selection(tmp_path):
 
     fp = effective_palette_fingerprint(cfg)
     vals = effective_palette_values(cfg)
-    assert _recent_sibling_contracts(good, fp, vals) == (), "own directory leaked into history"
+    cids = effective_scheme_ids(cfg)
+    assert _recent_sibling_contracts(good, fp, vals, cids) == (), "own directory leaked into history"
     other = shorts / "short-01_idea-02_next"
     other.mkdir(parents=True)
-    recent = _recent_sibling_contracts(other, fp, vals)
+    recent = _recent_sibling_contracts(other, fp, vals, cids)
     assert [c["short_id"] for c in recent] == [good.name], f"invalid siblings leaked: {recent}"
 
 
@@ -403,6 +405,7 @@ def test_equal_timestamps_break_ties_on_short_id_regardless_of_listing_order(tmp
     from video_agent.shorts.infographic.poster_prompt import (
         effective_palette_fingerprint,
         effective_palette_values,
+        effective_scheme_ids,
     )
 
     cfg = _vida_cfg(tmp_path)
@@ -418,17 +421,18 @@ def test_equal_timestamps_break_ties_on_short_id_regardless_of_listing_order(tmp
 
     fp = effective_palette_fingerprint(cfg)
     vals = effective_palette_values(cfg)
+    cids = effective_scheme_ids(cfg)
     target = shorts / "short-01_idea-04_d"
     target.mkdir(parents=True)
     expected = ["short-01_idea-03_c", "short-01_idea-02_b"]  # highest short_id wins the tie
-    assert [c["short_id"] for c in _recent_sibling_contracts(target, fp, vals)] == expected
+    assert [c["short_id"] for c in _recent_sibling_contracts(target, fp, vals, cids)] == expected
 
     real_iterdir = Path.iterdir
     def shuffled(self):
         return reversed(sorted(real_iterdir(self)))
     poster_mod.Path.iterdir = shuffled
     try:
-        assert [c["short_id"] for c in _recent_sibling_contracts(target, fp, vals)] == expected
+        assert [c["short_id"] for c in _recent_sibling_contracts(target, fp, vals, cids)] == expected
     finally:
         poster_mod.Path.iterdir = real_iterdir
 
@@ -631,3 +635,40 @@ def test_generation_seam_replaces_a_coherent_off_palette_sidecar(tmp_path):
     assert off not in calls[0]["prompt"], "off-palette colour reached the poster prompt"
     written = _json.loads(palette_path(short).read_text(encoding="utf-8"))
     assert off not in written["roles"].values()
+
+
+def test_non_canonical_on_palette_arrangement_is_rejected(tmp_path):
+    """bug-546 reopen: a self-consistent role mapping built from VALID palette
+    hexes but in a pairing the enumerator never emits must be rejected — on-palette
+    membership + a self-computed scheme_id is not enough."""
+    from video_agent.shorts.infographic import poster_prompt as pp
+    cfg = _vida_cfg(tmp_path)
+    values = pp.effective_palette_values(cfg)
+    canonical = pp.effective_scheme_ids(cfg)
+    genuine = pp.select_palette_contract(_poster_plan(), cfg)
+
+    # Swap two roles to make a mapping the selector never produces, but keep every
+    # value on-palette, then recompute a fully self-consistent contract.
+    roles = dict(genuine["roles"])
+    roles["headline_1"], roles["body_text"] = roles["body_text"], roles["headline_1"]
+    forged = {
+        **genuine, "roles": roles,
+        "scheme_id": pp._scheme_id(roles),
+        "dominant_signature": pp.dominant_signature(roles, genuine["poster_format"]),
+        "contrast_evidence": pp._contrast_evidence(roles, genuine["poster_format"]),
+    }
+    # Every value is still a palette member, and scheme_id is canonical FOR the roles...
+    assert set(roles.values()) <= values
+    assert forged["scheme_id"] == pp._scheme_id(roles)
+    # ...but the mapping is not one the enumerator emits, so its id is not canonical.
+    assert forged["scheme_id"] not in canonical
+    assert pp.validate_palette_contract(
+        forged, palette_fingerprint=pp.effective_palette_fingerprint(cfg),
+        allowed_values=values, canonical_scheme_ids=canonical,
+    ) is False, "non-canonical on-palette arrangement slipped through"
+    # And a GENUINE contract still validates with the canonical gate on.
+    assert pp.validate_palette_contract(
+        genuine, palette_fingerprint=pp.effective_palette_fingerprint(cfg),
+        allowed_values=values, canonical_scheme_ids=canonical,
+        expected_content_fingerprint=genuine["content_fingerprint"],
+    ) is True

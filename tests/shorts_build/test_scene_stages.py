@@ -1685,3 +1685,63 @@ def test_end_to_end_size_refusal_twice_surfaces_size_kind_through_full_flow(tmp_
     assert not (sd / "json" / paths.SHORT_SCENES_QA_FILE).exists()
     # A size refusal DID get its in-place compact retry (2 scene calls per attempt).
     assert scene_calls["n"] >= 2
+
+
+def test_every_refusal_class_persists_kind_and_spends_zero_creative_budget(tmp_path: Path):
+    """bug 20260705 r5: for EVERY refusal class, read the PERSISTED short_status.json
+    off disk (full-flow contract) and assert the creative scene-QA budget counters
+    are DIRECTLY zero — not merely that a QA file is absent."""
+    from video_agent.shorts import paths
+    from video_agent.shorts.manifest import read_short_status
+
+    cases = {
+        "short-r5-size": (_SIZE_REFUSAL_JSON, "chatgpt_size_refusal"),
+        "short-r5-quota": ('{"error": "You have reached your usage limit.", "scenes": []}', "chatgpt_quota"),
+        "short-r5-auth": ('{"error": "Your session has expired, log in.", "scenes": []}', "chatgpt_auth"),
+        "short-r5-policy": ('{"error": "I can\'t help with that content policy.", "scenes": []}', "chatgpt_policy"),
+        "short-r5-err": ('{"error": "cannot comply", "scenes": []}', "chatgpt_error_object"),
+    }
+    for short_id, (reply, kind) in cases.items():
+        case_root = tmp_path / short_id
+        case_root.mkdir(parents=True, exist_ok=True)
+        job = _long_job(case_root)  # isolated job per case
+        calls: list[str] = []
+
+        def llm_fn(k, prompt, _reply=reply):
+            if k == "script":
+                return json.dumps(_GOOD_SCRIPT)
+            if k == "scenes":
+                return _reply
+            return "{}"
+
+        from video_agent.shorts import short_builder
+        plan = {"short_id": short_id, "format": "pain_to_tip", "scene_ids": ["scene-09"],
+                "music_track": "shorts_sleep_stress", "narration_seed": "x"}
+        short_builder.build_short(
+            job, plan, _cfg(),
+            llm_fn=llm_fn,
+            gemini_fn=lambda p: json.dumps({"verdict": "PASS", "issues": [], "required_changes": []}),
+            **_stub_io(calls),
+        )
+
+        # PERSISTED full-flow contract: read short_status.json from disk.
+        persisted = read_short_status(job, short_id)
+        assert persisted["status"] == "needs_review", (short_id, persisted.get("status"))
+        assert persisted["qa_verdict"] == "PROVIDER_ERROR", (short_id, persisted.get("qa_verdict"))
+        assert persisted["failure_kind"] == kind, (short_id, persisted.get("failure_kind"))
+
+        # DIRECT creative-budget assertion: a provider refusal must consume ZERO
+        # creative REGENERATION budget. qa_scenes_attempts is the raw
+        # scene-generation attempt counter (legitimately >=1 — one attempt was
+        # made), so the budget-consumed metrics are the RETRY counters:
+        # regeneration_attempts and the structural/product creative-retry sub-counts.
+        for counter in ("regeneration_attempts", "qa_scenes_structural_attempts",
+                        "qa_scenes_product_attempts"):
+            assert persisted.get(counter, 0) == 0, (short_id, counter, persisted.get(counter))
+
+        # And the persisted scenes artifact never became a valid empty-scenes doc
+        # that could have entered scene QA.
+        assert not paths.short_scenes_qa_path(job, short_id).exists() if hasattr(
+            paths, "short_scenes_qa_path"
+        ) else not (paths.short_dir(job, short_id) / "json" / paths.SHORT_SCENES_QA_FILE).exists()
+        assert "render" not in calls

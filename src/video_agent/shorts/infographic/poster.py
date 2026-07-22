@@ -19,6 +19,7 @@ from video_agent.shorts.infographic.poster_prompt import (
     build_poster_body,
     effective_palette_fingerprint,
     effective_palette_values,
+    effective_scheme_ids,
     select_palette_contract,
     validate_palette_contract,
     wrap_poster_body,
@@ -44,14 +45,15 @@ def _load_valid_contract(
     expected_fingerprint: str,
     *,
     allowed_values: frozenset[str],
+    canonical_scheme_ids: frozenset[str],
     expected_content_fingerprint: str | None = None,
 ) -> dict[str, Any] | None:
     """A trustworthy contract from ``path``, or None if there is nothing usable.
 
-    Anything unreadable, malformed, stale against the active Style DNA, off-palette
-    (bug-546 reopen), or whose own contrast evidence no longer holds is treated as
-    absent — never repaired in place, because a half-trusted palette is how
-    unreadable OR off-brand posters ship.
+    Anything unreadable, malformed, stale against the active Style DNA, off-palette,
+    non-canonical (bug-546 reopen), or whose own contrast evidence no longer holds
+    is treated as absent — never repaired in place, because a half-trusted palette
+    is how unreadable OR off-brand posters ship.
     """
     try:
         data = read_json(path)
@@ -61,6 +63,7 @@ def _load_valid_contract(
         data,
         expected_fingerprint,
         allowed_values=allowed_values,
+        canonical_scheme_ids=canonical_scheme_ids,
         expected_content_fingerprint=expected_content_fingerprint,
     ):
         return None
@@ -70,7 +73,10 @@ def _load_valid_contract(
 
 
 def _recent_sibling_contracts(
-    short_dir: Path, expected_fingerprint: str, allowed_values: frozenset[str]
+    short_dir: Path,
+    expected_fingerprint: str,
+    allowed_values: frozenset[str],
+    canonical_scheme_ids: frozenset[str],
 ) -> tuple[dict[str, Any], ...]:
     """The most recent valid sibling decisions, newest first.
 
@@ -92,7 +98,8 @@ def _recent_sibling_contracts(
         if not sibling.is_dir() or sibling.resolve() == current:
             continue
         contract = _load_valid_contract(
-            palette_path(sibling), expected_fingerprint, allowed_values=allowed_values
+            palette_path(sibling), expected_fingerprint,
+            allowed_values=allowed_values, canonical_scheme_ids=canonical_scheme_ids,
         )
         if contract is not None:
             contracts.append(contract)
@@ -109,11 +116,12 @@ def resolve_poster_palette(
     path = palette_path(short_dir)
     expected_fingerprint = effective_palette_fingerprint(channel_config)
     allowed_values = effective_palette_values(channel_config)
+    canonical_ids = effective_scheme_ids(channel_config)
     own_content = _content_fingerprint(plan)
 
     existing = _load_valid_contract(
-        path, expected_fingerprint,
-        allowed_values=allowed_values, expected_content_fingerprint=own_content,
+        path, expected_fingerprint, allowed_values=allowed_values,
+        canonical_scheme_ids=canonical_ids, expected_content_fingerprint=own_content,
     )
     if existing is not None:
         return existing
@@ -125,12 +133,12 @@ def resolve_poster_palette(
     # and holding a lock across them would serialize the whole batch (R20).
     with file_lock(lock_path, timeout_sec=_PALETTE_LOCK_TIMEOUT_SEC):
         existing = _load_valid_contract(
-            path, expected_fingerprint,
-            allowed_values=allowed_values, expected_content_fingerprint=own_content,
+            path, expected_fingerprint, allowed_values=allowed_values,
+            canonical_scheme_ids=canonical_ids, expected_content_fingerprint=own_content,
         )
         if existing is not None:
             return existing
-        recent = _recent_sibling_contracts(short_dir, expected_fingerprint, allowed_values)
+        recent = _recent_sibling_contracts(short_dir, expected_fingerprint, allowed_values, canonical_ids)
         contract = select_palette_contract(plan, channel_config, recent=recent)
         contract["selected_at_utc"] = datetime.now(UTC).isoformat(timespec="microseconds").replace(
             "+00:00", "Z"

@@ -562,6 +562,18 @@ def effective_palette_values(channel_config: dict[str, Any] | None = None) -> fr
     return frozenset(palette.values())
 
 
+def effective_scheme_ids(channel_config: dict[str, Any] | None = None) -> frozenset[str]:
+    """Scheme ids the selector CAN actually produce for the active palette (R14
+    reopen). On-palette membership is not enough: a tamperer can assemble a
+    self-consistent role mapping from valid palette hexes that the enumerator
+    would never emit (wrong canvas/role pairing, a colour multiset the schemes
+    never use). Only a role mapping whose id is in this canonical set is trusted;
+    scheme_id itself is just sha256(roles), so it cannot vouch for canonicality on
+    its own."""
+    _palette, schemes, _rejected, _reasons = _effective_palette(channel_config)
+    return frozenset(_scheme_id(s) for s in schemes)
+
+
 _REQUIRED_ROLES = frozenset(
     {
         "canvas",
@@ -584,6 +596,7 @@ def validate_palette_contract(
     palette_fingerprint: str | None = None,
     *,
     allowed_values: frozenset[str] | set[str] | None = None,
+    canonical_scheme_ids: frozenset[str] | set[str] | None = None,
     expected_content_fingerprint: str | None = None,
 ) -> bool:
     """True when a persisted contract can still be trusted (R14).
@@ -613,7 +626,14 @@ def validate_palette_contract(
         return False
     if allowed_values is not None and not all(v in allowed_values for v in roles.values()):
         return False
-    if contract.get("scheme_id") != _scheme_id(roles):
+    scheme_id = _scheme_id(roles)
+    if contract.get("scheme_id") != scheme_id:
+        return False
+    # Canonicality (bug-546 reopen): the role mapping must be one the selector can
+    # actually PRODUCE, not merely an on-palette self-consistent arrangement. A
+    # crafted mapping using valid hexes but a pairing the enumerator never emits
+    # has an id outside this set and is rejected.
+    if canonical_scheme_ids is not None and scheme_id not in canonical_scheme_ids:
         return False
     if (
         palette_fingerprint is not None

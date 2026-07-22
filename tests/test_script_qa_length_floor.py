@@ -104,3 +104,17 @@ def test_script_qa_floor_scales_in_the_prompt_with_channel_duration():
     cfg = {"content_format": {"duration_sec_min": 1200}, "tts": {"pace_wpm": 120}}
     prompt = build_task_prompt("script_qa", existing_prompt="", channel_config=cfg)
     assert "2400" in prompt  # 1200/60 * 120
+
+
+def test_exactly_floor_words_is_accepted_and_one_below_is_reworked(tmp_path):
+    """bridge 20260707 r4: explicit exact-floor acceptance. A script with EXACTLY
+    the floor word count must PASS; exactly one word fewer must rework."""
+    import json
+    job = tmp_path / "job"
+    ch = _channel_yaml(tmp_path)  # 660s * 120wpm / 60 = 1320
+    for words, expected in ((1320, "PASS"), (1319, "NEEDS_REWORK"), (1321, "PASS")):
+        _write_script(job, words)
+        qa_path, payload = _qa_output(job, verdict="PASS")
+        _enforce_script_length_qa(job, qa_path, payload, channel_path=ch)
+        got = json.loads(qa_path.read_text(encoding="utf-8"))["verdict"]
+        assert got == expected, f"{words} words -> {got}, expected {expected}"

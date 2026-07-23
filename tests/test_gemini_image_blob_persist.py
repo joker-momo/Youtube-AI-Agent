@@ -9,6 +9,7 @@ import asyncio
 import base64
 import io
 
+import httpx
 import pytest
 
 from video_agent.browser_worker import app
@@ -239,3 +240,137 @@ def test_image_routes_accept_request_for_disconnect_awareness():
     for fn in (app.chatgpt_image, app.chatgpt_image_batch):
         params = inspect.signature(fn).parameters
         assert "request" in params, f"{fn.__name__} must accept request for disconnect handling"
+
+
+# ── gate 3 (r4): pre-acquisition size cap ─────────────────────────────────────
+def test_blob_oversize_flag_from_content_length_precheck_is_rejected(tmp_path):
+    """The in-page cap sets oversize:true (from Content-Length) and returns NO b64
+    — Python must reject without decoding."""
+    class _OversizePage(_BlobPage):
+        async def evaluate(self, js, *args):
+            if "arrayBuffer" in js:
+                return {"ok": True, "status": 200, "contentType": "image/png",
+                        "size": GeminiImageDriver._MAX_IMAGE_BYTES + 999, "oversize": True}
+            return [{"src": self._src, "w": 708, "h": 395}]
+
+    with pytest.raises(BrowserDriverError, match="size cap"):
+        _run(GeminiImageDriver(_OversizePage()), _BLOB_SRC, tmp_path / "s.png")
+
+
+def test_data_uri_oversize_rejected_before_decode(tmp_path):
+    # payload whose estimated decoded size exceeds the cap
+    big_b64 = "A" * ((GeminiImageDriver._MAX_IMAGE_BYTES + 10) * 4 // 3 + 4)
+    src = "data:image/png;base64," + big_b64
+    with pytest.raises(BrowserDriverError, match="size cap"):
+        _run(GeminiImageDriver(_BlobPage()), src, tmp_path / "d.png")
+
+
+def test_blob_read_js_receives_the_cap_argument(tmp_path):
+    """The driver must pass [src, maxBytes] so the in-page cap can act."""
+    seen = {}
+
+    class _ArgPage(_BlobPage):
+        async def evaluate(self, js, *args):
+            if "arrayBuffer" in js:
+                seen["arg"] = args[0] if args else None
+                return {"ok": True, "status": 200, "contentType": "image/png",
+                        "size": len(_ORIGINAL_PNG), "b64": base64.b64encode(_ORIGINAL_PNG).decode()}
+            return [{"src": self._src, "w": 708, "h": 395}]
+
+    _run(GeminiImageDriver(_ArgPage()), _BLOB_SRC, tmp_path / "s.png")
+    assert seen["arg"] == [_BLOB_SRC, GeminiImageDriver._MAX_IMAGE_BYTES]
+
+
+# ── gate 2 (r4): bounded cleanup ──────────────────────────────────────────────
+def test_bounded_close_does_not_hang_on_a_wedged_target():
+    class _WedgedPage:
+        async def close(self):
+            await asyncio.sleep(3600)
+
+    async def scenario():
+        app._PAGE_CLEANUP_TIMEOUT_SEC = 0.2
+        await app._bounded_close(_WedgedPage())   # must return, not hang
+        await app._bounded_close(None)            # None is a no-op
+
+    asyncio.run(asyncio.wait_for(scenario(), timeout=5))
+
+
+# ── gate 1 (r4): real ASGI route integration ──────────────────────────────────
+def _asgi_client():
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app.app), base_url="http://t")
+
+
+def test_route_one_shot_returns_impl_result_via_asgi(monkeypatch):
+    async def fake_impl(payload):
+        return {"ok": True, "src": "blob:x", "bytes": 123}
+
+    monkeypatch.setattr(app, "_chatgpt_image_impl", fake_impl)
+
+    async def scenario():
+        async with _asgi_client() as c:
+            r = await c.post("/chatgpt/image", json={
+                "prompt": "a plate", "project_name": "p", "out_path": "jobs/x/a.png"})
+        assert r.status_code == 200 and r.json()["ok"] is True
+
+    asyncio.run(scenario())
+
+
+def test_route_one_shot_propagates_structured_error_via_asgi(monkeypatch):
+    async def fake_impl(payload):
+        raise app.HTTPException(status_code=502, detail={"stage": "gemini", "error": "boom"})
+
+    monkeypatch.setattr(app, "_chatgpt_image_impl", fake_impl)
+
+    async def scenario():
+        async with _asgi_client() as c:
+            r = await c.post("/chatgpt/image", json={
+                "prompt": "x", "project_name": "p", "out_path": "jobs/x/a.png"})
+        assert r.status_code == 502 and r.json()["detail"]["stage"] == "gemini"
+
+    asyncio.run(scenario())
+
+
+def test_route_batch_returns_impl_result_via_asgi(monkeypatch):
+    async def fake_impl(payload):
+        return {"results": [{"ok": True}], "count": len(payload.prompts)}
+
+    monkeypatch.setattr(app, "_chatgpt_image_batch_impl", fake_impl)
+
+    async def scenario():
+        async with _asgi_client() as c:
+            r = await c.post("/chatgpt/image/batch", json={
+                "prompts": ["a", "b"], "project_name": "p",
+                "out_paths": ["jobs/x/a.png", "jobs/x/b.png"]})
+        assert r.status_code == 200 and r.json()["count"] == 2
+
+    asyncio.run(scenario())
+
+
+def test_route_one_shot_cancels_on_disconnect(monkeypatch):
+    """Route-level disconnect: a slow impl is cancelled and returns 499, running
+    its cleanup finally. ASGI TestClient cannot drop mid-request, so drive the
+    real route function with a Request that reports disconnection."""
+    cleaned = {"done": False}
+
+    async def slow_impl(payload):
+        try:
+            await asyncio.sleep(30)
+            return {"ok": True}
+        finally:
+            cleaned["done"] = True
+
+    monkeypatch.setattr(app, "_chatgpt_image_impl", slow_impl)
+    monkeypatch.setattr(app, "_DISCONNECT_POLL_SEC", 0.01)
+
+    class _DisconnectedRequest:
+        async def is_disconnected(self):
+            return True
+
+    async def scenario():
+        payload = app.ImagePromptRequest(prompt="x", project_name="p", out_path="jobs/x/a.png")
+        with pytest.raises(app.HTTPException) as ei:
+            await app.chatgpt_image(payload, _DisconnectedRequest())
+        assert ei.value.status_code == 499
+        assert cleaned["done"]
+
+    asyncio.run(scenario())

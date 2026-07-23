@@ -225,6 +225,22 @@ _PAGE_CLEANUP_TIMEOUT_SEC = 10.0
 _DISCONNECT_POLL_SEC = 0.5
 
 
+async def _bounded_close(closable) -> None:
+    """Best-effort, BOUNDED close of a Playwright page/browser (bridge 20260722 r4).
+
+    A bare ``await page.close()`` in a cleanup ``finally`` can hang when the CDP
+    target is wedged — and a disconnect cancellation that enters such a finally
+    would hang the request it was trying to free. Cap every image-route close so
+    cleanup always returns; a leaked tab is recoverable, a hung request is not.
+    """
+    if closable is None:
+        return
+    try:
+        await asyncio.wait_for(closable.close(), timeout=_PAGE_CLEANUP_TIMEOUT_SEC)
+    except Exception:
+        pass
+
+
 async def _run_with_disconnect_guard(request: Request | None, coro):
     """Run ``coro`` but CANCEL it if the HTTP client disconnects (bridge 20260722
     r3). Image generation drives a real browser for minutes; if the caller has
@@ -894,10 +910,7 @@ async def _chatgpt_image_impl(payload: ImagePromptRequest) -> dict:
                 print(f"[browser] Error in chatgpt_image: {exc}. Clearing browser data & retrying once...", flush=True)
                 try:
                     await clear_browser_data_keep_login(context)
-                    try:
-                        await page.close()
-                    except Exception:
-                        pass
+                    await _bounded_close(page)
                     page = await context.new_page()
                     await human_pause(page, min_ms=400, max_ms=900)
                     driver = ChatGPTImageDriver(page)
@@ -948,12 +961,9 @@ async def _chatgpt_image_impl(payload: ImagePromptRequest) -> dict:
                     await human_pause(page, min_ms=400, max_ms=900)
                 except Exception:
                     pass
-                try:
-                    await page.close()
-                except Exception:
-                    pass
+                await _bounded_close(page)
         finally:
-            await browser.close()
+            await _bounded_close(browser)
 
 
 class BatchImagePromptRequest(BaseModel):
@@ -994,10 +1004,7 @@ async def _generate_images_via_gemini(
             )
         return results
     finally:
-        try:
-            await page.close()
-        except Exception:
-            pass
+        await _bounded_close(page)
 
 
 @app.post("/chatgpt/image/batch")
@@ -1050,10 +1057,7 @@ async def _chatgpt_image_batch_impl(payload: BatchImagePromptRequest) -> dict:
                 print(f"[browser] Error in chatgpt_image_batch: {exc}. Clearing browser data & retrying once...", flush=True)
                 try:
                     await clear_browser_data_keep_login(context)
-                    try:
-                        await page.close()
-                    except Exception:
-                        pass
+                    await _bounded_close(page)
                     page = await context.new_page()
                     await human_pause(page, min_ms=400, max_ms=900)
                     driver = ChatGPTImageDriver(page)
@@ -1103,12 +1107,9 @@ async def _chatgpt_image_batch_impl(payload: BatchImagePromptRequest) -> dict:
                     await human_pause(page, min_ms=400, max_ms=900)
                 except Exception:
                     pass
-                try:
-                    await page.close()
-                except Exception:
-                    pass
+                await _bounded_close(page)
         finally:
-            await browser.close()
+            await _bounded_close(browser)
 
 
 @app.post("/chatgpt/send")

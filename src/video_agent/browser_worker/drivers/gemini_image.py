@@ -279,10 +279,25 @@ class GeminiImageDriver:
     # recurrence 20260722 forbids that). We surface ok/status/contentType/size so
     # the Python side can reject a non-2xx / non-image / oversize response before
     # decoding (r3).
-    _READ_BLOB_JS = """async (src) => {
+    _READ_BLOB_JS = """async ([src, maxBytes]) => {
         const resp = await fetch(src);
+        // Pre-acquisition cap: reject on the declared Content-Length BEFORE
+        // buffering the body, so an oversize response is never fully read.
+        const declared = parseInt(resp.headers.get('content-length') || '', 10);
+        if (Number.isFinite(declared) && declared > maxBytes) {
+            return {ok: resp.ok, status: resp.status,
+                    contentType: resp.headers.get('content-type') || '',
+                    size: declared, oversize: true};
+        }
         const buf = await resp.arrayBuffer();
         const bytes = new Uint8Array(buf);
+        // Second cap: if the actual body exceeds the limit, DO NOT build the
+        // (large) base64 string — return the size and let Python reject it.
+        if (bytes.length > maxBytes) {
+            return {ok: resp.ok, status: resp.status,
+                    contentType: resp.headers.get('content-type') || '',
+                    size: bytes.length, oversize: true};
+        }
         let binary = '';
         const chunk = 0x8000;
         for (let i = 0; i < bytes.length; i += chunk) {
@@ -382,6 +397,11 @@ class GeminiImageDriver:
         header, _, payload = src[len("data:"):].partition(",")
         is_b64 = header.endswith(";base64") or ";base64;" in f";{header};"
         mime = header.split(";")[0].strip().lower()
+        # Estimate the decoded size from the payload length and reject an oversize
+        # data URI BEFORE decoding the full body (base64 decodes to ~3/4 its length).
+        estimated = (len(payload) * 3) // 4 if is_b64 else len(payload)
+        if estimated > GeminiImageDriver._MAX_IMAGE_BYTES:
+            raise BrowserDriverError(f"data URI exceeds the size cap (~{estimated} bytes).")
         if is_b64:
             try:
                 data = base64.b64decode(payload, validate=True)
@@ -404,14 +424,16 @@ class GeminiImageDriver:
                     declared_mime, body = self._parse_data_uri(src)
                 elif src.startswith("blob:"):
                     meta = await asyncio.wait_for(
-                        self.page.evaluate(self._READ_BLOB_JS, src),
+                        self.page.evaluate(self._READ_BLOB_JS, [src, self._MAX_IMAGE_BYTES]),
                         timeout=self._BLOB_FETCH_TIMEOUT_SEC,
                     )
                     if not isinstance(meta, dict) or not meta.get("ok"):
                         raise BrowserDriverError(
                             f"Gemini blob fetch not ok (status {meta.get('status') if isinstance(meta, dict) else '?'})."
                         )
-                    if int(meta.get("size") or 0) > self._MAX_IMAGE_BYTES:
+                    # oversize is set by the in-page cap BEFORE the body was fully
+                    # buffered/base64-encoded — reject without decoding.
+                    if meta.get("oversize") or int(meta.get("size") or 0) > self._MAX_IMAGE_BYTES:
                         raise BrowserDriverError(f"Gemini blob exceeds the size cap ({meta.get('size')} bytes).")
                     declared_mime = str(meta.get("contentType") or "") or None
                     try:

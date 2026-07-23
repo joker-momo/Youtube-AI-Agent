@@ -374,3 +374,63 @@ def test_route_one_shot_cancels_on_disconnect(monkeypatch):
         assert cleaned["done"]
 
     asyncio.run(scenario())
+
+
+# ── gate 1 (r5): streaming acquisition cap ────────────────────────────────────
+def test_read_blob_js_streams_and_early_exits_not_arraybuffer_only():
+    """The blob reader must acquire via a streaming ReadableStream with a
+    cumulative cap and bail early on !resp.ok — not unconditionally arrayBuffer()
+    the whole body (which buffers an oversize chunked/no-Content-Length response)."""
+    js = GeminiImageDriver._READ_BLOB_JS
+    assert "getReader" in js, "blob fetch must stream via resp.body.getReader()"
+    assert "reader.cancel" in js, "the stream must be aborted when over the cap"
+    assert "if (!resp.ok)" in js, "must early-return before reading a non-2xx body"
+    assert "maxBytes" in js
+    # arrayBuffer may exist only as a non-streamable fallback, never as the first
+    # unconditional read.
+    assert js.index("getReader") < js.index("arrayBuffer"), "streaming must be the primary path"
+
+
+def test_streaming_oversize_without_content_length_is_rejected(tmp_path):
+    """Adversarial: a chunked/blob response with NO Content-Length whose body
+    crosses the cap mid-stream returns oversize:true (no b64) — driver rejects."""
+    class _StreamOversizePage(_BlobPage):
+        async def evaluate(self, js, *args):
+            if "arrayBuffer" in js:  # the READ_BLOB script
+                # no contentType-derived size; the cumulative stream cap fired
+                return {"ok": True, "status": 200, "contentType": "image/png",
+                        "size": GeminiImageDriver._MAX_IMAGE_BYTES + 1, "oversize": True}
+            return [{"src": self._src, "w": 708, "h": 395}]
+
+    with pytest.raises(BrowserDriverError, match="size cap"):
+        _run(GeminiImageDriver(_StreamOversizePage()), _BLOB_SRC, tmp_path / "s.png")
+
+
+# ── gate 2 (r5): BATCH route-level disconnect cancellation ────────────────────
+def test_route_batch_cancels_on_disconnect(monkeypatch):
+    cleaned = {"done": False}
+
+    async def slow_batch_impl(payload):
+        try:
+            await asyncio.sleep(30)
+            return {"results": []}
+        finally:
+            cleaned["done"] = True
+
+    monkeypatch.setattr(app, "_chatgpt_image_batch_impl", slow_batch_impl)
+    monkeypatch.setattr(app, "_DISCONNECT_POLL_SEC", 0.01)
+
+    class _DisconnectedRequest:
+        async def is_disconnected(self):
+            return True
+
+    async def scenario():
+        payload = app.BatchImagePromptRequest(
+            prompts=["a", "b"], project_name="p",
+            out_paths=["jobs/x/a.png", "jobs/x/b.png"])
+        with pytest.raises(app.HTTPException) as ei:
+            await app.chatgpt_image_batch(payload, _DisconnectedRequest())
+        assert ei.value.status_code == 499
+        assert cleaned["done"], "batch in-flight task must be cancelled and cleaned up"
+
+    asyncio.run(asyncio.wait_for(scenario(), timeout=5))

@@ -281,35 +281,55 @@ class GeminiImageDriver:
     # decoding (r3).
     _READ_BLOB_JS = """async ([src, maxBytes]) => {
         const resp = await fetch(src);
-        // Pre-acquisition cap: reject on the declared Content-Length BEFORE
-        // buffering the body, so an oversize response is never fully read.
+        const contentType = resp.headers.get('content-type') || '';
+        // Early exit on a non-2xx response BEFORE reading any body (r5).
+        if (!resp.ok) {
+            return {ok: false, status: resp.status, contentType: contentType, size: 0};
+        }
+        // Declared Content-Length precheck: reject BEFORE reading the body.
         const declared = parseInt(resp.headers.get('content-length') || '', 10);
         if (Number.isFinite(declared) && declared > maxBytes) {
-            return {ok: resp.ok, status: resp.status,
-                    contentType: resp.headers.get('content-type') || '',
+            return {ok: true, status: resp.status, contentType: contentType,
                     size: declared, oversize: true};
         }
-        const buf = await resp.arrayBuffer();
-        const bytes = new Uint8Array(buf);
-        // Second cap: if the actual body exceeds the limit, DO NOT build the
-        // (large) base64 string — return the size and let Python reject it.
-        if (bytes.length > maxBytes) {
-            return {ok: resp.ok, status: resp.status,
-                    contentType: resp.headers.get('content-type') || '',
-                    size: bytes.length, oversize: true};
+        // STREAMING read with a cumulative cap (r5): a chunked/blob response with
+        // NO Content-Length is read incrementally and ABORTED the moment the
+        // running total crosses maxBytes — the whole oversize body is never
+        // buffered. A non-streamable body uses the bounded whole-read fallback.
+        let bytes;
+        if (resp.body && typeof resp.body.getReader === 'function') {
+            const reader = resp.body.getReader();
+            const chunks = [];
+            let total = 0;
+            while (true) {
+                const {done, value} = await reader.read();
+                if (done) break;
+                total += value.length;
+                if (total > maxBytes) {
+                    try { await reader.cancel(); } catch (e) {}
+                    return {ok: true, status: resp.status, contentType: contentType,
+                            size: total, oversize: true};
+                }
+                chunks.push(value);
+            }
+            bytes = new Uint8Array(total);
+            let off = 0;
+            for (const c of chunks) { bytes.set(c, off); off += c.length; }
+        } else {
+            const buf = await resp.arrayBuffer();
+            bytes = new Uint8Array(buf);
+            if (bytes.length > maxBytes) {
+                return {ok: true, status: resp.status, contentType: contentType,
+                        size: bytes.length, oversize: true};
+            }
         }
         let binary = '';
         const chunk = 0x8000;
         for (let i = 0; i < bytes.length; i += chunk) {
             binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
         }
-        return {
-            ok: resp.ok,
-            status: resp.status,
-            contentType: resp.headers.get('content-type') || '',
-            size: bytes.length,
-            b64: btoa(binary),
-        };
+        return {ok: true, status: resp.status, contentType: contentType,
+                size: bytes.length, b64: btoa(binary)};
     }"""
 
     # Magic signature -> canonical MIME. A real generated image starts with one of

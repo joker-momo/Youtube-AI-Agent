@@ -289,22 +289,54 @@ class GeminiImageDriver:
         return btoa(binary);
     }"""
 
+    # A real generated image starts with one of these signatures. Validating them
+    # (bug-511 recurrence 20260722 r2) stops a truncated blob, an HTML error page,
+    # or an empty/garbage fetch from being written as a "successful" PNG — the
+    # downstream render would then fail on an undecodable file.
+    _IMAGE_MAGIC = (
+        b"\x89PNG\r\n\x1a\n",   # PNG
+        b"\xff\xd8\xff",         # JPEG
+        b"GIF87a", b"GIF89a",    # GIF
+    )
+    _MIN_IMAGE_BYTES = 100
+    # Bound the in-page blob fetch so a dead/navigated page cannot hang the
+    # download indefinitely after the client has gone away.
+    _BLOB_FETCH_TIMEOUT_SEC = 30.0
+
+    def _validate_image_bytes(self, body: bytes) -> None:
+        if len(body) < self._MIN_IMAGE_BYTES:
+            raise BrowserDriverError(
+                f"Gemini image is too small to be valid ({len(body)} bytes)."
+            )
+        is_webp = body[:4] == b"RIFF" and body[8:12] == b"WEBP"
+        if not (is_webp or any(body.startswith(sig) for sig in self._IMAGE_MAGIC)):
+            raise BrowserDriverError(
+                "Gemini fetch did not return a recognised image (bad magic bytes); "
+                "refusing to save a non-image as the generated poster."
+            )
+
     async def _download_image(self, src: str, dest: Path) -> Path:
+        import asyncio
+        import base64
+
         max_attempts = 3
         in_page = src.startswith("blob:") or src.startswith("data:")
         for attempt in range(1, max_attempts + 1):
             try:
                 if in_page:
-                    import base64
-                    b64 = await self.page.evaluate(self._READ_BLOB_JS, src)
+                    b64 = await asyncio.wait_for(
+                        self.page.evaluate(self._READ_BLOB_JS, src),
+                        timeout=self._BLOB_FETCH_TIMEOUT_SEC,
+                    )
                     body = base64.b64decode(b64)
-                    if not body:
-                        raise BrowserDriverError("Gemini blob fetch returned no bytes.")
                 else:
                     response = await self.page.context.request.get(src)
                     if response.status != 200:
                         raise BrowserDriverError(f"Image download failed: HTTP {response.status}")
                     body = await response.body()
+                # Validate BEFORE writing — never persist a non-image (R: safe
+                # original-image validation, bridge 20260722 r2).
+                self._validate_image_bytes(body)
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 atomic_write_bytes(dest, body)
                 return dest

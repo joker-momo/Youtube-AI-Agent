@@ -219,6 +219,8 @@ def _target_url(site: str) -> str:
 # surfaces as a generic 500. Bound it and raise a structured 503 so the caller
 # (and Codex verification) sees the real cause instead of an opaque 500.
 _CDP_CONNECT_TIMEOUT_MS = 45_000
+# Bound for best-effort page/tab cleanup so a wedged target cannot hang a request.
+_PAGE_CLEANUP_TIMEOUT_SEC = 10.0
 # The observed failure (bridge 20260709) was a FLAP: after a browser/CDP restart
 # the listener briefly appears then disappears, so the first attach hits a stale
 # ws endpoint and errors. A small bounded retry that RE-RESOLVES the ws endpoint
@@ -780,8 +782,12 @@ async def _generate_image_via_gemini(
             aspect_ratio=aspect_ratio,
         )
     finally:
+        # BOUNDED cleanup (bridge 20260722 r2): if the client disconnected and the
+        # page/CDP target is wedged, page.close() can hang indefinitely and leak the
+        # request. Cap it so cleanup always returns; a leaked tab is recoverable, a
+        # hung worker request is not.
         try:
-            await page.close()
+            await asyncio.wait_for(page.close(), timeout=_PAGE_CLEANUP_TIMEOUT_SEC)
         except Exception:
             pass
 

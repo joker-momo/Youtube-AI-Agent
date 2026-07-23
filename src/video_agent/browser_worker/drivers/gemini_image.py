@@ -274,37 +274,201 @@ class GeminiImageDriver:
 
     # Fetch a blob:/data: URL from INSIDE the page (those URLs live only in the
     # page's origin/context — Playwright's request API cannot reach them) and
-    # return the ORIGINAL-resolution bytes as base64. Screenshotting the displayed
+    # return STRUCTURED metadata + the bytes as base64. Screenshotting the shown
     # <img> would save the shrunk 708x395 box, not the generated image (bug-511
-    # recurrence 20260722 explicitly forbids that).
-    _READ_BLOB_JS = """async (src) => {
+    # recurrence 20260722 forbids that). We surface ok/status/contentType/size so
+    # the Python side can reject a non-2xx / non-image / oversize response before
+    # decoding (r3).
+    _READ_BLOB_JS = """async ([src, maxBytes]) => {
         const resp = await fetch(src);
-        const buf = await resp.arrayBuffer();
+        const contentType = resp.headers.get('content-type') || '';
+        // Early exit on a non-2xx response BEFORE reading any body (r5).
+        if (!resp.ok) {
+            return {ok: false, status: resp.status, contentType: contentType, size: 0};
+        }
+        // Declared Content-Length precheck: reject BEFORE reading the body.
+        const declared = parseInt(resp.headers.get('content-length') || '', 10);
+        if (Number.isFinite(declared) && declared > maxBytes) {
+            return {ok: true, status: resp.status, contentType: contentType,
+                    size: declared, oversize: true};
+        }
+        // STREAMING read with a cumulative cap (r5): a chunked/blob response with
+        // NO Content-Length is read incrementally and ABORTED the moment the
+        // running total crosses maxBytes — the whole oversize body is never
+        // buffered. A non-streamable body uses the bounded whole-read fallback.
+        let bytes;
+        if (resp.body && typeof resp.body.getReader === 'function') {
+            const reader = resp.body.getReader();
+            const chunks = [];
+            let total = 0;
+            while (true) {
+                const {done, value} = await reader.read();
+                if (done) break;
+                total += value.length;
+                if (total > maxBytes) {
+                    try { await reader.cancel(); } catch (e) {}
+                    return {ok: true, status: resp.status, contentType: contentType,
+                            size: total, oversize: true};
+                }
+                chunks.push(value);
+            }
+            bytes = new Uint8Array(total);
+            let off = 0;
+            for (const c of chunks) { bytes.set(c, off); off += c.length; }
+        } else {
+            const buf = await resp.arrayBuffer();
+            bytes = new Uint8Array(buf);
+            if (bytes.length > maxBytes) {
+                return {ok: true, status: resp.status, contentType: contentType,
+                        size: bytes.length, oversize: true};
+            }
+        }
         let binary = '';
-        const bytes = new Uint8Array(buf);
         const chunk = 0x8000;
         for (let i = 0; i < bytes.length; i += chunk) {
             binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
         }
-        return btoa(binary);
+        return {ok: true, status: resp.status, contentType: contentType,
+                size: bytes.length, b64: btoa(binary)};
     }"""
 
+    # Magic signature -> canonical MIME. A real generated image starts with one of
+    # these; anything else (HTML error page, truncated blob, garbage) is rejected.
+    _MAGIC_TO_MIME = (
+        (b"\x89PNG\r\n\x1a\n", "image/png"),
+        (b"\xff\xd8\xff", "image/jpeg"),
+        (b"GIF87a", "image/gif"),
+        (b"GIF89a", "image/gif"),
+    )
+    _MIN_IMAGE_BYTES = 100
+    _MAX_IMAGE_BYTES = 40 * 1024 * 1024  # 40 MB — a generated poster is far under this
+    # Bound the in-page blob fetch so a dead/navigated page cannot hang the
+    # download indefinitely after the client has gone away.
+    _BLOB_FETCH_TIMEOUT_SEC = 30.0
+
+    @staticmethod
+    def _normalize_mime(value: str) -> str:
+        return (value or "").split(";")[0].strip().lower()
+
+    def _detected_mime(self, body: bytes) -> str | None:
+        if body[:4] == b"RIFF" and body[8:12] == b"WEBP":
+            return "image/webp"
+        for sig, mime in self._MAGIC_TO_MIME:
+            if body.startswith(sig):
+                return mime
+        return None
+
+    def _validate_image_bytes(self, body: bytes, *, declared_mime: str | None = None) -> None:
+        """Reject anything that is not a genuine, decodable image (r3).
+
+        Checks, in order: size floor and ceiling; magic-byte signature (detected
+        MIME); declared-vs-detected MIME agreement when a Content-Type / data-URI
+        MIME is present; and a real decode pass so a magic-valid-but-corrupt body
+        is caught before it is written and later crashes the render.
+        """
+        if len(body) < self._MIN_IMAGE_BYTES:
+            raise BrowserDriverError(f"Gemini image too small to be valid ({len(body)} bytes).")
+        if len(body) > self._MAX_IMAGE_BYTES:
+            raise BrowserDriverError(f"Gemini image exceeds the size cap ({len(body)} bytes).")
+
+        # Reject a declared non-image type up front (before even inspecting bytes):
+        # a data:text/html or Content-Type: text/html is a refusal/error page.
+        declared = self._normalize_mime(declared_mime) if declared_mime else ""
+        if declared and not declared.startswith("image/"):
+            raise BrowserDriverError(f"Gemini response declared a non-image type: {declared!r}.")
+
+        detected = self._detected_mime(body)
+        if detected is None:
+            raise BrowserDriverError(
+                "Gemini fetch did not return a recognised image (bad magic bytes); "
+                "refusing to save a non-image as the generated poster."
+            )
+
+        if declared:
+            # image/jpg is a common alias for image/jpeg.
+            declared_norm = "image/jpeg" if declared == "image/jpg" else declared
+            if declared_norm != detected:
+                raise BrowserDriverError(
+                    f"Gemini response MIME mismatch: declared {declared_norm!r}, bytes are {detected!r}."
+                )
+
+        # Actual decode — catches a corrupt image whose header magic is valid.
+        try:
+            import io
+
+            from PIL import Image
+
+            Image.open(io.BytesIO(body)).verify()
+        except BrowserDriverError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - any decode failure is a bad image
+            raise BrowserDriverError(f"Gemini image failed to decode: {exc}") from exc
+
+    @staticmethod
+    def _parse_data_uri(src: str) -> tuple[str, bytes]:
+        """Parse a ``data:[<mime>][;base64],<payload>`` URI in Python. Returns
+        (declared_mime, raw_bytes). Non-base64 data URIs and malformed base64 raise."""
+        import base64
+        import binascii
+        from urllib.parse import unquote_to_bytes
+
+        if not src.startswith("data:") or "," not in src:
+            raise BrowserDriverError("Malformed data URI.")
+        header, _, payload = src[len("data:"):].partition(",")
+        is_b64 = header.endswith(";base64") or ";base64;" in f";{header};"
+        mime = header.split(";")[0].strip().lower()
+        # Estimate the decoded size from the payload length and reject an oversize
+        # data URI BEFORE decoding the full body (base64 decodes to ~3/4 its length).
+        estimated = (len(payload) * 3) // 4 if is_b64 else len(payload)
+        if estimated > GeminiImageDriver._MAX_IMAGE_BYTES:
+            raise BrowserDriverError(f"data URI exceeds the size cap (~{estimated} bytes).")
+        if is_b64:
+            try:
+                data = base64.b64decode(payload, validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise BrowserDriverError(f"Malformed base64 in data URI: {exc}") from exc
+        else:
+            data = unquote_to_bytes(payload)
+        return mime, data
+
     async def _download_image(self, src: str, dest: Path) -> Path:
+        import asyncio
+        import base64
+        import binascii
+
         max_attempts = 3
-        in_page = src.startswith("blob:") or src.startswith("data:")
         for attempt in range(1, max_attempts + 1):
             try:
-                if in_page:
-                    import base64
-                    b64 = await self.page.evaluate(self._READ_BLOB_JS, src)
-                    body = base64.b64decode(b64)
-                    if not body:
-                        raise BrowserDriverError("Gemini blob fetch returned no bytes.")
+                declared_mime: str | None = None
+                if src.startswith("data:"):
+                    declared_mime, body = self._parse_data_uri(src)
+                elif src.startswith("blob:"):
+                    meta = await asyncio.wait_for(
+                        self.page.evaluate(self._READ_BLOB_JS, [src, self._MAX_IMAGE_BYTES]),
+                        timeout=self._BLOB_FETCH_TIMEOUT_SEC,
+                    )
+                    if not isinstance(meta, dict) or not meta.get("ok"):
+                        raise BrowserDriverError(
+                            f"Gemini blob fetch not ok (status {meta.get('status') if isinstance(meta, dict) else '?'})."
+                        )
+                    # oversize is set by the in-page cap BEFORE the body was fully
+                    # buffered/base64-encoded — reject without decoding.
+                    if meta.get("oversize") or int(meta.get("size") or 0) > self._MAX_IMAGE_BYTES:
+                        raise BrowserDriverError(f"Gemini blob exceeds the size cap ({meta.get('size')} bytes).")
+                    declared_mime = str(meta.get("contentType") or "") or None
+                    try:
+                        body = base64.b64decode(str(meta.get("b64") or ""), validate=True)
+                    except (binascii.Error, ValueError) as exc:
+                        raise BrowserDriverError(f"Malformed base64 from blob fetch: {exc}") from exc
                 else:
                     response = await self.page.context.request.get(src)
                     if response.status != 200:
                         raise BrowserDriverError(f"Image download failed: HTTP {response.status}")
+                    declared_mime = response.headers.get("content-type")
                     body = await response.body()
+
+                # Validate BEFORE writing — never persist a non-image (r2/r3).
+                self._validate_image_bytes(body, declared_mime=declared_mime)
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 atomic_write_bytes(dest, body)
                 return dest

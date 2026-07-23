@@ -9,7 +9,7 @@ from typing import Any
 from urllib.parse import urlparse, urlunparse
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 
@@ -219,6 +219,61 @@ def _target_url(site: str) -> str:
 # surfaces as a generic 500. Bound it and raise a structured 503 so the caller
 # (and Codex verification) sees the real cause instead of an opaque 500.
 _CDP_CONNECT_TIMEOUT_MS = 45_000
+# Bound for best-effort page/tab cleanup so a wedged target cannot hang a request.
+_PAGE_CLEANUP_TIMEOUT_SEC = 10.0
+# How often to poll for a disconnected client while an image generation runs.
+_DISCONNECT_POLL_SEC = 0.5
+
+
+async def _bounded_close(closable) -> None:
+    """Best-effort, BOUNDED close of a Playwright page/browser (bridge 20260722 r4).
+
+    A bare ``await page.close()`` in a cleanup ``finally`` can hang when the CDP
+    target is wedged — and a disconnect cancellation that enters such a finally
+    would hang the request it was trying to free. Cap every image-route close so
+    cleanup always returns; a leaked tab is recoverable, a hung request is not.
+    """
+    if closable is None:
+        return
+    try:
+        await asyncio.wait_for(closable.close(), timeout=_PAGE_CLEANUP_TIMEOUT_SEC)
+    except Exception:
+        pass
+
+
+async def _run_with_disconnect_guard(request: Request | None, coro):
+    """Run ``coro`` but CANCEL it if the HTTP client disconnects (bridge 20260722
+    r3). Image generation drives a real browser for minutes; if the caller has
+    gone away, we stop the work and let its own ``finally`` blocks clean up the
+    page/browser instead of driving a doomed generation to completion.
+
+    ``coro`` must be a freshly-created coroutine; it is scheduled as a task and
+    raced against a disconnect poller.
+    """
+    task = asyncio.ensure_future(coro)
+
+    async def _watch() -> None:
+        try:
+            while not task.done():
+                if request is not None and await request.is_disconnected():
+                    task.cancel()
+                    return
+                await asyncio.sleep(_DISCONNECT_POLL_SEC)
+        except asyncio.CancelledError:
+            pass
+
+    watcher = asyncio.ensure_future(_watch())
+    try:
+        return await task
+    except asyncio.CancelledError as exc:
+        # 499 = client closed request (nginx convention). The generation was
+        # cancelled cleanly; its finally blocks have run the browser cleanup.
+        raise HTTPException(
+            status_code=499,
+            detail={"error": "client disconnected; image generation cancelled"},
+        ) from exc
+    finally:
+        watcher.cancel()
 # The observed failure (bridge 20260709) was a FLAP: after a browser/CDP restart
 # the listener briefly appears then disappears, so the first attach hits a stale
 # ws endpoint and errors. A small bounded retry that RE-RESOLVES the ws endpoint
@@ -780,8 +835,12 @@ async def _generate_image_via_gemini(
             aspect_ratio=aspect_ratio,
         )
     finally:
+        # BOUNDED cleanup (bridge 20260722 r2): if the client disconnected and the
+        # page/CDP target is wedged, page.close() can hang indefinitely and leak the
+        # request. Cap it so cleanup always returns; a leaked tab is recoverable, a
+        # hung worker request is not.
         try:
-            await page.close()
+            await asyncio.wait_for(page.close(), timeout=_PAGE_CLEANUP_TIMEOUT_SEC)
         except Exception:
             pass
 
@@ -798,7 +857,12 @@ def _gemini_fallback_error_detail(gemini_exc: Exception, chatgpt_exc: Exception)
 
 
 @app.post("/chatgpt/image")
-async def chatgpt_image(payload: ImagePromptRequest) -> dict:
+async def chatgpt_image(payload: ImagePromptRequest, request: Request) -> dict:
+    """One-shot ChatGPT image generation, cancelled if the client disconnects."""
+    return await _run_with_disconnect_guard(request, _chatgpt_image_impl(payload))
+
+
+async def _chatgpt_image_impl(payload: ImagePromptRequest) -> dict:
     """One-shot ChatGPT image generation via a normal chat conversation.
 
     Opens a new Chromium page, starts a non-temporary ChatGPT conversation,
@@ -846,10 +910,7 @@ async def chatgpt_image(payload: ImagePromptRequest) -> dict:
                 print(f"[browser] Error in chatgpt_image: {exc}. Clearing browser data & retrying once...", flush=True)
                 try:
                     await clear_browser_data_keep_login(context)
-                    try:
-                        await page.close()
-                    except Exception:
-                        pass
+                    await _bounded_close(page)
                     page = await context.new_page()
                     await human_pause(page, min_ms=400, max_ms=900)
                     driver = ChatGPTImageDriver(page)
@@ -900,12 +961,9 @@ async def chatgpt_image(payload: ImagePromptRequest) -> dict:
                     await human_pause(page, min_ms=400, max_ms=900)
                 except Exception:
                     pass
-                try:
-                    await page.close()
-                except Exception:
-                    pass
+                await _bounded_close(page)
         finally:
-            await browser.close()
+            await _bounded_close(browser)
 
 
 class BatchImagePromptRequest(BaseModel):
@@ -946,14 +1004,16 @@ async def _generate_images_via_gemini(
             )
         return results
     finally:
-        try:
-            await page.close()
-        except Exception:
-            pass
+        await _bounded_close(page)
 
 
 @app.post("/chatgpt/image/batch")
-async def chatgpt_image_batch(payload: BatchImagePromptRequest) -> dict:
+async def chatgpt_image_batch(payload: BatchImagePromptRequest, request: Request) -> dict:
+    """Sequential ChatGPT image generation, cancelled if the client disconnects."""
+    return await _run_with_disconnect_guard(request, _chatgpt_image_batch_impl(payload))
+
+
+async def _chatgpt_image_batch_impl(payload: BatchImagePromptRequest) -> dict:
     """Sequential ChatGPT image generation in one normal chat, then delete it."""
     from playwright.async_api import async_playwright
 
@@ -997,10 +1057,7 @@ async def chatgpt_image_batch(payload: BatchImagePromptRequest) -> dict:
                 print(f"[browser] Error in chatgpt_image_batch: {exc}. Clearing browser data & retrying once...", flush=True)
                 try:
                     await clear_browser_data_keep_login(context)
-                    try:
-                        await page.close()
-                    except Exception:
-                        pass
+                    await _bounded_close(page)
                     page = await context.new_page()
                     await human_pause(page, min_ms=400, max_ms=900)
                     driver = ChatGPTImageDriver(page)
@@ -1050,12 +1107,9 @@ async def chatgpt_image_batch(payload: BatchImagePromptRequest) -> dict:
                     await human_pause(page, min_ms=400, max_ms=900)
                 except Exception:
                     pass
-                try:
-                    await page.close()
-                except Exception:
-                    pass
+                await _bounded_close(page)
         finally:
-            await browser.close()
+            await _bounded_close(browser)
 
 
 @app.post("/chatgpt/send")

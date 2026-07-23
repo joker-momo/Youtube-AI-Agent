@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from .conftest import *  # noqa: F401,F403
 
 
@@ -1745,3 +1747,50 @@ def test_every_refusal_class_persists_kind_and_spends_zero_creative_budget(tmp_p
             paths, "short_scenes_qa_path"
         ) else not (paths.short_dir(job, short_id) / "json" / paths.SHORT_SCENES_QA_FILE).exists()
         assert "render" not in calls
+
+
+# bug 20260705 r6: ONE parameterized contract asserting BOTH the returned dict
+# AND the persisted short_status.json for EVERY refusal class.
+_REFUSAL_CONTRACT_CASES = [
+    ("size", _SIZE_REFUSAL_JSON, "chatgpt_size_refusal"),
+    ("quota", '{"error": "You have reached your usage limit.", "scenes": []}', "chatgpt_quota"),
+    ("auth", '{"error": "Your session has expired, log in.", "scenes": []}', "chatgpt_auth"),
+    ("policy", '{"error": "I can\'t help with that content policy.", "scenes": []}', "chatgpt_policy"),
+    ("error_object", '{"error": "cannot comply", "scenes": []}', "chatgpt_error_object"),
+]
+
+
+@pytest.mark.parametrize("label,reply,kind", _REFUSAL_CONTRACT_CASES, ids=[c[0] for c in _REFUSAL_CONTRACT_CASES])
+def test_refusal_operator_contract_returned_and_persisted(tmp_path: Path, label, reply, kind):
+    """Full operator contract per class: the RETURNED dict and the PERSISTED
+    short_status.json must agree on status/qa_verdict/failure_kind, no creative
+    regeneration budget is spent, no scene-QA artifact exists, and nothing renders."""
+    import json as _json
+
+    from video_agent.shorts import paths
+
+    res, _sc, calls, sd = _drive_build_short_with_scene_reply(tmp_path, f"short-c-{label}", reply)
+
+    # RETURNED contract.
+    assert res["status"] == "needs_review"
+    assert res["qa_verdict"] == "PROVIDER_ERROR"
+    assert res.get("failure_kind") == kind
+
+    # PERSISTED contract (read short_status.json off disk) agrees with the returned dict.
+    persisted = _json.loads((sd / paths.SHORT_STATUS_FILE).read_text(encoding="utf-8"))
+    assert persisted["status"] == res["status"]
+    assert persisted["qa_verdict"] == res["qa_verdict"]
+    assert persisted["failure_kind"] == res.get("failure_kind") == kind
+
+    # Persisted failure report type agrees too.
+    import json as _json
+    fr = _json.loads((sd / "json" / paths.SHORT_FAILURE_REPORT_FILE).read_text(encoding="utf-8"))
+    assert fr["type"] == kind
+
+    # DIRECT creative-budget: zero regeneration/structural/product retries.
+    for counter in ("regeneration_attempts", "qa_scenes_structural_attempts", "qa_scenes_product_attempts"):
+        assert persisted.get(counter, 0) == 0
+
+    # No scene-QA artifact, no render.
+    assert not (sd / "json" / paths.SHORT_SCENES_QA_FILE).exists()
+    assert "render" not in calls

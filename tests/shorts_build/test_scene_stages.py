@@ -1685,8 +1685,8 @@ def test_end_to_end_size_refusal_twice_surfaces_size_kind_through_full_flow(tmp_
     assert res["qa_verdict"] == "PROVIDER_ERROR"
     assert "render" not in calls
     assert not (sd / "json" / paths.SHORT_SCENES_QA_FILE).exists()
-    # A size refusal DID get its in-place compact retry (2 scene calls per attempt).
-    assert scene_calls["n"] >= 2
+    # A size refusal gets EXACTLY its one in-place compact retry (2 scene calls).
+    assert scene_calls["n"] == 2
 
 
 def test_every_refusal_class_persists_kind_and_spends_zero_creative_budget(tmp_path: Path):
@@ -1751,25 +1751,36 @@ def test_every_refusal_class_persists_kind_and_spends_zero_creative_budget(tmp_p
 
 # bug 20260705 r6: ONE parameterized contract asserting BOTH the returned dict
 # AND the persisted short_status.json for EVERY refusal class.
+# (label, reply, kind, exact_scene_calls). Only a genuine SIZE refusal earns the
+# in-place compact retry (2 scene LLM calls); quota/auth/policy/error_object raise
+# their typed error on the first reply (exactly 1). Verified by probe, not assumed.
 _REFUSAL_CONTRACT_CASES = [
-    ("size", _SIZE_REFUSAL_JSON, "chatgpt_size_refusal"),
-    ("quota", '{"error": "You have reached your usage limit.", "scenes": []}', "chatgpt_quota"),
-    ("auth", '{"error": "Your session has expired, log in.", "scenes": []}', "chatgpt_auth"),
-    ("policy", '{"error": "I can\'t help with that content policy.", "scenes": []}', "chatgpt_policy"),
-    ("error_object", '{"error": "cannot comply", "scenes": []}', "chatgpt_error_object"),
+    ("size", _SIZE_REFUSAL_JSON, "chatgpt_size_refusal", 2),
+    ("quota", '{"error": "You have reached your usage limit.", "scenes": []}', "chatgpt_quota", 1),
+    ("auth", '{"error": "Your session has expired, log in.", "scenes": []}', "chatgpt_auth", 1),
+    ("policy", '{"error": "I can\'t help with that content policy.", "scenes": []}', "chatgpt_policy", 1),
+    ("error_object", '{"error": "cannot comply", "scenes": []}', "chatgpt_error_object", 1),
 ]
 
 
-@pytest.mark.parametrize("label,reply,kind", _REFUSAL_CONTRACT_CASES, ids=[c[0] for c in _REFUSAL_CONTRACT_CASES])
-def test_refusal_operator_contract_returned_and_persisted(tmp_path: Path, label, reply, kind):
+@pytest.mark.parametrize(
+    "label,reply,kind,expected_calls", _REFUSAL_CONTRACT_CASES,
+    ids=[c[0] for c in _REFUSAL_CONTRACT_CASES],
+)
+def test_refusal_operator_contract_returned_and_persisted(tmp_path: Path, label, reply, kind, expected_calls):
     """Full operator contract per class: the RETURNED dict and the PERSISTED
-    short_status.json must agree on status/qa_verdict/failure_kind, no creative
-    regeneration budget is spent, no scene-QA artifact exists, and nothing renders."""
+    short_status.json + failure report must agree on status/qa_verdict/failure_kind,
+    the raw provider detail is preserved, the exact scene-call count is honoured
+    (size retries once, others do not), no creative regeneration budget is spent,
+    no scene-QA artifact exists, and nothing renders."""
     import json as _json
 
     from video_agent.shorts import paths
 
-    res, _sc, calls, sd = _drive_build_short_with_scene_reply(tmp_path, f"short-c-{label}", reply)
+    res, scene_calls, calls, sd = _drive_build_short_with_scene_reply(tmp_path, f"short-c-{label}", reply)
+
+    # GATE 1 — exact scene LLM call count: only size gets the compact retry.
+    assert scene_calls["n"] == expected_calls, (label, scene_calls["n"], expected_calls)
 
     # RETURNED contract.
     assert res["status"] == "needs_review"
@@ -1782,10 +1793,13 @@ def test_refusal_operator_contract_returned_and_persisted(tmp_path: Path, label,
     assert persisted["qa_verdict"] == res["qa_verdict"]
     assert persisted["failure_kind"] == res.get("failure_kind") == kind
 
-    # Persisted failure report type agrees too.
-    import json as _json
+    # Persisted failure report: type AND GATE 2 — the raw provider detail/snippet
+    # is preserved (not flattened to just the kind), so an operator sees what the
+    # model actually returned.
     fr = _json.loads((sd / "json" / paths.SHORT_FAILURE_REPORT_FILE).read_text(encoding="utf-8"))
     assert fr["type"] == kind
+    assert fr.get("detail"), (label, "missing provider detail")
+    assert reply.strip()[:30] in fr.get("error_snippet", ""), (label, fr.get("error_snippet"))
 
     # DIRECT creative-budget: zero regeneration/structural/product retries.
     for counter in ("regeneration_attempts", "qa_scenes_structural_attempts", "qa_scenes_product_attempts"):

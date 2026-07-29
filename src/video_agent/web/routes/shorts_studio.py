@@ -265,10 +265,15 @@ def _video_abs_path(job_dir: Path, video_path: str | None) -> str | None:
 def get_shorts_studio_state(jobs_root: Path = Depends(get_jobs_root)) -> dict[str, Any]:
     busy, active_jobs = system_has_active_job(jobs_root)
     jobs: list[dict[str, Any]] = []
-    for job_dir in sorted(jobs_root.iterdir(), reverse=True) if jobs_root.exists() else []:
+    for job_dir in sorted(jobs_root.iterdir()) if jobs_root.exists() else []:
         if not job_dir.is_dir() or not (job_dir / "job.json").exists():
             continue
         jobs.append(_studio_job_state(job_dir, active_jobs))
+    # Newest first BY DATE. Directory names are "<title-slug>-<channel>-<stamp>",
+    # so the old reverse-name sort was really sorting by title: an older video
+    # with a late-alphabet title outranked a newer one in the Source Videos panel.
+    # A job without created_at sorts last, with a deterministic job_id tiebreak.
+    jobs.sort(key=lambda j: (str(j.get("created_at") or ""), str(j.get("job_id") or "")), reverse=True)
     return {
         "can_start": not busy,
         "active_jobs": active_jobs,

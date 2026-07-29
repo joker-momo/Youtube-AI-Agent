@@ -553,3 +553,50 @@ def test_shorts_studio_render_selected_rejects_already_rendered(client: TestClie
     # Render with force=True should still be accepted
     response = client.post("/shorts-studio/jobs/job-1/ideas/render", json={"idea_ids": ["idea-01"], "force": True})
     assert response.status_code == 202
+
+
+def _write_job_at(root: Path, job_id: str, created_at: str) -> Path:
+    """A job whose created_at is explicit, so ordering can be asserted
+    independently of the directory name."""
+    job_dir = _write_job(root, job_id)
+    payload = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    payload["created_at"] = created_at
+    payload["updated_at"] = created_at
+    (job_dir / "job.json").write_text(json.dumps(payload), encoding="utf-8")
+    return job_dir
+
+
+def test_shorts_studio_state_lists_source_videos_newest_first(client: TestClient, tmp_path: Path):
+    """The Source Videos panel must be newest-first BY DATE. Job directory names
+    are '<title-slug>-<channel>-<timestamp>', so sorting by name is really sorting
+    by title — an older video with a late-alphabet title outranked a newer one.
+    """
+    # Names are chosen so NEITHER ascending nor descending name order matches the
+    # expected date order — otherwise the test would pass even with no sort at all.
+    #   date desc  -> bbb, aaa, ccc
+    #   name asc   -> aaa, bbb, ccc   (different)
+    #   name desc  -> ccc, bbb, aaa   (different)
+    _write_job_at(tmp_path, "bbb-newest", "2026-03-01T00:00:00Z")
+    _write_job_at(tmp_path, "aaa-middle", "2026-02-01T00:00:00Z")
+    _write_job_at(tmp_path, "ccc-oldest", "2026-01-01T00:00:00Z")
+
+    body = client.get("/shorts-studio/state").json()
+    assert [j["job_id"] for j in body["jobs"]] == [
+        "bbb-newest", "aaa-middle", "ccc-oldest",
+    ]
+    assert [j["job_id"] for j in body["eligible_jobs"]] == [
+        "bbb-newest", "aaa-middle", "ccc-oldest",
+    ]
+
+
+def test_shorts_studio_state_ordering_is_stable_without_created_at(client: TestClient, tmp_path: Path):
+    """A job.json missing created_at must not crash or scramble the list; it sorts
+    last (unknown date) with a deterministic job_id tiebreak."""
+    _write_job_at(tmp_path, "has-date", "2026-05-01T00:00:00Z")
+    nodate = _write_job(tmp_path, "no-date")
+    payload = json.loads((nodate / "job.json").read_text(encoding="utf-8"))
+    payload.pop("created_at", None)
+    (nodate / "job.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    ids = [j["job_id"] for j in client.get("/shorts-studio/state").json()["jobs"]]
+    assert ids == ["has-date", "no-date"]

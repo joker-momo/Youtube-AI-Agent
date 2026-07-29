@@ -3187,6 +3187,15 @@ function renderShortsJobList(jobs) {
   const list = document.getElementById('shorts-jobs-list');
   document.getElementById('shorts-panel-count').textContent = jobs.length + ' videos';
   if (!jobs.length) { list.innerHTML = '<div style="font-size:12px;color:var(--muted);text-align:center;padding:20px">No eligible jobs found.</div>'; return; }
+  // Newest source video first. The backend already sorts by created_at, but a
+  // defensive client-side sort keeps the panel correct even if an older payload
+  // (or a job without created_at) arrives.
+  jobs = (jobs || []).slice().sort((a, b) => {
+    const ka = String(a && a.created_at || '');
+    const kb = String(b && b.created_at || '');
+    if (ka !== kb) return kb.localeCompare(ka);
+    return String(b && b.job_id || '').localeCompare(String(a && a.job_id || ''));
+  });
   list.innerHTML = jobs.map(j => {
     const active = SHORTS_SELECTED_JOB === j.job_id ? ' active' : '';
     const statusColor = j.shorts_status === 'ideas_ready' ? 'var(--green)' : j.shorts_status === 'ideas_generating' || j.shorts_status === 'rendering_selected' ? 'var(--blue)' : j.shorts_status === 'failed' ? 'var(--red)' : '#b8bcc2';

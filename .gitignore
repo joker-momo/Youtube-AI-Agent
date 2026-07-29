@@ -49,6 +49,7 @@ browser_trace/
 /inputs/ideas
 /scratch
 jobs.db
+job_queue.db
 worker_logs.txt
 remotion/src/*.js
 

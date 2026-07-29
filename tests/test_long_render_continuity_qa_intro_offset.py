@@ -25,10 +25,10 @@ def _write_render_props(job_dir, *, intro_sec, fps, disclaimer_sec=0.0):
             "branding": {
                 "intro_sec": intro_sec,
                 "outro_sec": 1.0,
-                "medical_disclaimer": {
-                    "enabled": disclaimer_sec > 0,
-                    "duration_sec": disclaimer_sec,
-                },
+                "disclaimer_sec": disclaimer_sec,
+                "disclaimer_video_path": (
+                    "branding/ch/disclaimer.mp4" if disclaimer_sec > 0 else None
+                ),
             },
         },
     )

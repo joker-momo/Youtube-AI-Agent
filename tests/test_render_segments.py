@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 import subprocess
+import wave
+from array import array
 from pathlib import Path
 
 import pytest
@@ -804,11 +806,9 @@ def test_fast_audio_track_includes_intro_and_outro_own_audio(tmp_path, monkeypat
 
     actual = probe_audio_duration_sec(audio_path)
     assert actual is not None
-    # intro's real audio (1.0s) + content trimmed to exactly 2.0s + outro's
-    # real audio (0.79s, slightly short of its own 0.8s video — like the
-    # real branding assets) = 3.79s. NOT 3.8s (which is what a naive
-    # frame-count-only assembly would wrongly assume).
-    assert abs(actual - 3.79) < 0.05
+    # Each branding audio stream is padded/trimmed to its auto-probed video
+    # duration so the muxed audio timeline exactly matches the video timeline.
+    assert abs(actual - 3.8) < 0.05
 
 
 def test_fast_audio_track_without_intro_or_outro_video(tmp_path, monkeypatch):
@@ -839,7 +839,7 @@ def test_fast_audio_track_without_intro_or_outro_video(tmp_path, monkeypatch):
     assert abs(actual - 3.0) < 0.05
 
 
-def test_fast_audio_track_inserts_silence_for_medical_disclaimer(tmp_path, monkeypatch):
+def test_fast_audio_track_inserts_silence_for_silent_disclaimer_video(tmp_path, monkeypatch):
     import video_agent.stages.render as render_mod
     from video_agent.stages.render import _build_fast_audio_track
 
@@ -855,7 +855,8 @@ def test_fast_audio_track_inserts_silence_for_medical_disclaimer(tmp_path, monke
                 "branding": {
                     "intro_sec": 0,
                     "outro_sec": 0,
-                    "medical_disclaimer": {"enabled": True, "duration_sec": 1.0},
+                    "disclaimer_sec": 1.0,
+                    "disclaimer_video_path": "branding/ch/disclaimer.mp4",
                 },
                 "audio": {"narration": "jobs/job-1/assets/narration.wav", "music": None},
             }
@@ -873,9 +874,9 @@ def test_fast_audio_track_inserts_silence_for_medical_disclaimer(tmp_path, monke
     _build_fast_audio_track(render_props, tmp_path / "audio.wav")
 
     filter_graph = captured["cmd"][captured["cmd"].index("-filter_complex") + 1]
-    assert "anullsrc=r=48000:cl=stereo,atrim=0:1.000000[adisclaimer]" in filter_graph
-    assert "apad,atrim=0:8.000000" in filter_graph
-    assert "[adisclaimer][a0]concat=n=2:v=0:a=1[out]" in filter_graph
+    assert "anullsrc=r=48000:cl=stereo,atrim=0:1.000000[a0]" in filter_graph
+    assert "[0:a]apad,atrim=0:8.000000[a1]" in filter_graph
+    assert "[a0][a1]concat=n=2:v=0:a=1[out]" in filter_graph
 
 
 def test_fast_audio_track_with_medical_disclaimer_is_valid_real_audio(
@@ -896,7 +897,8 @@ def test_fast_audio_track_with_medical_disclaimer_is_valid_real_audio(
                 "branding": {
                     "intro_sec": 0,
                     "outro_sec": 0,
-                    "medical_disclaimer": {"enabled": True, "duration_sec": 1.0},
+                    "disclaimer_sec": 1.0,
+                    "disclaimer_video_path": "branding/ch/disclaimer.mp4",
                 },
                 "audio": {"narration": "jobs/job-1/assets/narration.wav", "music": None},
             }
@@ -910,3 +912,58 @@ def test_fast_audio_track_with_medical_disclaimer_is_valid_real_audio(
     actual = probe_audio_duration_sec(audio_path)
     assert actual is not None
     assert abs(actual - 4.0) < 0.05
+
+
+def test_fast_audio_track_preserves_disclaimer_video_audio(tmp_path, monkeypatch):
+    import video_agent.stages.render as render_mod
+    from video_agent.stages.render import _build_fast_audio_track, probe_audio_duration_sec
+
+    monkeypatch.setattr(render_mod, "repo_root", lambda: tmp_path)
+    public_dir = tmp_path / "remotion" / "public" / "branding" / "ch"
+    public_dir.mkdir(parents=True)
+    disclaimer = public_dir / "disclaimer.mp4"
+    _make_video_with_audio(disclaimer, video_seconds=1.0, audio_seconds=1.0)
+
+    narration_path = tmp_path / "jobs" / "job-1" / "assets" / "narration.wav"
+    narration_path.parent.mkdir(parents=True)
+    _make_wav(narration_path, seconds=2.0)
+
+    render_props = tmp_path / "render_props.json"
+    render_props.write_text(
+        json.dumps(
+            {
+                "render": {"fps": 30, "duration_in_frames": 90},
+                "branding": {
+                    "intro_sec": 0,
+                    "outro_sec": 0,
+                    "disclaimer_sec": 1.0,
+                    "disclaimer_video_path": "branding/ch/disclaimer.mp4",
+                },
+                "audio": {"narration": "jobs/job-1/assets/narration.wav", "music": None},
+            }
+        ),
+        encoding="utf-8",
+    )
+    audio_path = tmp_path / "audio.wav"
+
+    _build_fast_audio_track(render_props, audio_path)
+
+    actual = probe_audio_duration_sec(audio_path)
+    assert actual is not None
+    assert abs(actual - 3.0) < 0.05
+    with wave.open(str(audio_path), "rb") as wav:
+        sample_rate = wav.getframerate()
+        channels = wav.getnchannels()
+        interleaved = array("h", wav.readframes(sample_rate))
+    disclaimer_samples = interleaved[::channels]
+    rms = (
+        sum(sample * sample for sample in disclaimer_samples)
+        / len(disclaimer_samples)
+    ) ** 0.5
+    zero_crossings = sum(
+        left <= 0 < right or right <= 0 < left
+        for left, right in zip(disclaimer_samples, disclaimer_samples[1:], strict=False)
+    )
+    measured_frequency = zero_crossings / 2
+    assert rms > 100
+    assert 420 <= measured_frequency <= 460

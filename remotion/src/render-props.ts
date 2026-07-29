@@ -161,14 +161,10 @@ export type RenderProps = {
     logo_path?: string | null;
     intro_video_path?: string | null;
     outro_video_path?: string | null;
+    disclaimer_video_path?: string | null;
     intro_sec?: number;
     outro_sec?: number;
-    medical_disclaimer?: {
-      enabled?: boolean;
-      duration_sec?: number;
-      title?: string;
-      lines?: string[];
-    };
+    disclaimer_sec?: number;
     watermark_enabled?: boolean;
     // Show the channel name in the top-left corner of every scene.
     // Defaults to false to keep the opening frame clean.

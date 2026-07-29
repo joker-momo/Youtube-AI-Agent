@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from video_agent.assets.materialize import materialize_media
-from video_agent.branding import medical_disclaimer_duration_sec
+from video_agent.branding import disclaimer_duration_sec
 from video_agent.contracts import repo_root
 from video_agent.storage.atomic import atomic_write_json, atomic_write_text
 from video_agent.utils.json_io import read_json
@@ -218,7 +218,7 @@ def validate_render_duration_matches_scene_sum(
     branding = props.get("branding") or {}
     branding_duration = (
         float(branding.get("intro_sec") or 0.0)
-        + medical_disclaimer_duration_sec(branding)
+        + disclaimer_duration_sec(branding)
         + float(branding.get("outro_sec") or 0.0)
     )
     expected_duration = round(scene_sum + branding_duration, 3)
@@ -902,8 +902,9 @@ def _can_use_fast_audio_track(render_props: dict) -> bool:
     ffmpeg (no Chromium at all).
 
     ChannelVideo.tsx's ONLY audio sources are: intro.mp4's own embedded
-    track, the narration <Audio>, and outro.mp4's own embedded track — no
-    background-music mixing today. If music is ever configured
+    track, disclaimer.mp4's optional embedded track, the narration <Audio>,
+    and outro.mp4's own embedded track — no background-music mixing today.
+    If music is ever configured
     (``audio.music`` non-null), that assumption no longer holds and this
     MUST fall back to a real Remotion render — hardcoding a second, richer
     audio graph here would silently drift from whatever the composition
@@ -924,21 +925,20 @@ def _build_fast_audio_track(render_props_path: Path, audio_path: Path) -> None:
       1. intro.mp4's OWN embedded audio (real content — a branding
          jingle/music bed, confirmed via ffprobe; ChannelVideo's intro
          <MediaVideo> has no ``muted`` prop, unlike scene backgrounds).
-      2. silence for the medical disclaimer, when enabled.
+      2. disclaimer.mp4's own audio, or silence when that clip is silent.
       3. narration.wav, trimmed/padded to exactly the content span's
          duration (content starts at frame 0 of narration in every
          case, so no intro-offset shift is needed here at all).
       4. outro.mp4's OWN embedded audio, same as intro.
 
-    Every duration used is read fresh from render_props — intro_sec/
-    outro_sec are themselves probed from the real intro/outro video files
-    upstream (_probe_duration_sec), never hardcoded here. Swapping either
-    branding video for a different length changes this automatically."""
+    Every branding duration is probed from its real video file upstream,
+    never hardcoded here. Swapping intro, disclaimer, or outro for a
+    different-length clip changes this automatically."""
     props = read_json(render_props_path)
     branding = props.get("branding") or {}
     fps = float((props.get("render", {}) or {}).get("fps") or 30)
     intro_sec = float(branding.get("intro_sec") or 0.0)
-    disclaimer_sec = medical_disclaimer_duration_sec(branding)
+    disclaimer_sec = disclaimer_duration_sec(branding)
     outro_sec = float(branding.get("outro_sec") or 0.0)
     intro_frames = math.floor(intro_sec * fps + 0.5)
     disclaimer_frames = math.floor(disclaimer_sec * fps + 0.5)
@@ -959,36 +959,44 @@ def _build_fast_audio_track(render_props_path: Path, audio_path: Path) -> None:
 
     public_dir = repo_root() / "remotion" / "public"
     inputs: list[Path] = []
-    if intro_frames > 0 and branding.get("intro_video_path"):
-        intro_path = public_dir / branding["intro_video_path"]
-        if intro_path.exists() and _has_audio_stream(intro_path):
-            inputs.append(intro_path)
-    inputs.append(narration_path)
-    if outro_frames > 0 and branding.get("outro_video_path"):
-        outro_path = public_dir / branding["outro_video_path"]
-        if outro_path.exists() and _has_audio_stream(outro_path):
-            inputs.append(outro_path)
+    pieces: list[tuple[int | None, float]] = []
 
-    narration_index = inputs.index(narration_path)
+    def append_branding_piece(path_key: str, frames: int) -> None:
+        if frames <= 0:
+            return
+        input_index = None
+        relative_path = branding.get(path_key)
+        if relative_path:
+            media_path = public_dir / relative_path
+            if media_path.exists() and _has_audio_stream(media_path):
+                input_index = len(inputs)
+                inputs.append(media_path)
+        pieces.append((input_index, frames / fps))
+
+    append_branding_piece("intro_video_path", intro_frames)
+    append_branding_piece("disclaimer_video_path", disclaimer_frames)
+    narration_index = len(inputs)
+    inputs.append(narration_path)
+    pieces.append((narration_index, content_sec))
+    append_branding_piece("outro_video_path", outro_frames)
+
     cmd = ["ffmpeg", "-y"]
     for p in inputs:
         cmd += ["-i", str(p)]
-    # Only the narration piece needs shaping (pad/trim to the content span's
-    # exact duration); intro/outro play their own audio as-is.
-    filters = []
-    labels = []
-    for i in range(len(inputs)):
-        if i == narration_index:
-            if disclaimer_frames > 0:
-                filters.append(
-                    "anullsrc=r=48000:cl=stereo,"
-                    f"atrim=0:{disclaimer_frames / fps:.6f}[adisclaimer]"
-                )
-                labels.append("[adisclaimer]")
-            filters.append(f"[{i}:a]apad,atrim=0:{content_sec:.6f}[a{i}]")
+    filters: list[str] = []
+    labels: list[str] = []
+    for piece_index, (input_index, duration_sec) in enumerate(pieces):
+        label = f"[a{piece_index}]"
+        if input_index is None:
+            filters.append(
+                "anullsrc=r=48000:cl=stereo,"
+                f"atrim=0:{duration_sec:.6f}{label}"
+            )
         else:
-            filters.append(f"[{i}:a]anull[a{i}]")
-        labels.append(f"[a{i}]")
+            filters.append(
+                f"[{input_index}:a]apad,atrim=0:{duration_sec:.6f}{label}"
+            )
+        labels.append(label)
     filters.append(f"{''.join(labels)}concat=n={len(labels)}:v=0:a=1[out]")
     cmd += [
         "-filter_complex", ";".join(filters),

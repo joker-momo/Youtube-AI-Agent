@@ -155,15 +155,22 @@ def test_legacy_render_without_schedule_succeeds(tmp_path: Path) -> None:
 def test_disclaimer_delays_content_schedule_without_consuming_it(tmp_path: Path) -> None:
     """Intro + disclaimer occupy their own frames before scene-backed content."""
     props = _build_props()
+    disclaimer_path = REMOTION / "public" / "test_fixtures" / "disclaimer-black.mp4"
+    disclaimer_path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=black:s=1920x1080:r=30",
+            "-t", "1", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            str(disclaimer_path),
+        ],
+        check=True,
+        capture_output=True,
+    )
     props["branding"] = {
         **props["branding"],
         "intro_sec": 1.0,
-        "medical_disclaimer": {
-            "enabled": True,
-            "duration_sec": 1.0,
-            "title": "AVISO MÉDICO",
-            "lines": ["Contenido informativo.", "Consulta a tu médico."],
-        },
+        "disclaimer_sec": 1.0,
+        "disclaimer_video_path": "test_fixtures/disclaimer-black.mp4",
     }
     props["render"]["duration_sec"] = 8.0
     props["render"]["duration_in_frames"] = 240

@@ -10,8 +10,7 @@ from pathlib import Path
 
 from video_agent.assets.materialize import materialize_media
 from video_agent.branding import (
-    medical_disclaimer_duration_sec,
-    prepare_medical_disclaimer,
+    disclaimer_duration_sec,
     without_long_form_branding,
 )
 from video_agent.contracts import (
@@ -159,7 +158,6 @@ def _prepare_branding(channel_config: dict) -> dict:
     root = repo_root()
     channel_id = (channel_config.get("channel") or {}).get("id", "default")
     branding_cfg = channel_config.get("branding") or {}
-    medical_disclaimer = prepare_medical_disclaimer(branding_cfg)
     # Intro/outro default OFF for maximum opening retention. YouTube viewers
     # decide whether to keep watching within the first 5-15 seconds, so the
     # video must start on the narration hook rather than a logo card. The
@@ -179,14 +177,24 @@ def _prepare_branding(channel_config: dict) -> dict:
     outro_video_source = (
         _resolve_brand_video_source(channel_config, "outro") if enable_intro_outro else None
     )
+    configured_disclaimer = branding_cfg.get("disclaimer_video_path")
+    disclaimer_video_source = (
+        _resolve_brand_video_source(channel_config, "disclaimer")
+        if isinstance(configured_disclaimer, str) and configured_disclaimer.strip()
+        else None
+    )
     logo_public = None
     intro_video_public = None
     outro_video_public = None
+    disclaimer_video_public = None
+    disclaimer_sec = 0.0
     if intro_video_source:
         intro_sec = _probe_duration_sec(intro_video_source)
     if outro_video_source:
         outro_sec = _probe_duration_sec(outro_video_source)
-    if logo_source or intro_video_source or outro_video_source:
+    if disclaimer_video_source:
+        disclaimer_sec = _probe_duration_sec(disclaimer_video_source)
+    if logo_source or intro_video_source or outro_video_source or disclaimer_video_source:
         dest_dir = root / "remotion" / "public" / "branding" / str(channel_id)
         dest_dir.mkdir(parents=True, exist_ok=True)
         if logo_source:
@@ -201,6 +209,10 @@ def _prepare_branding(channel_config: dict) -> dict:
             dest = dest_dir / outro_video_source.name
             materialize_media(outro_video_source, dest)
             outro_video_public = f"branding/{channel_id}/{outro_video_source.name}"
+        if disclaimer_video_source:
+            dest = dest_dir / disclaimer_video_source.name
+            materialize_media(disclaimer_video_source, dest)
+            disclaimer_video_public = f"branding/{channel_id}/{disclaimer_video_source.name}"
     # Hybrid graphic cards: graphic scenes render the generated card shrunk &
     # centered over a fixed brand-gradient background video (kills the static
     # "slideshow" feel of consecutive graphic scenes). Enabled via
@@ -224,8 +236,10 @@ def _prepare_branding(channel_config: dict) -> dict:
         # ``branding.show_channel_name_overlay: true`` when a one-off cut
         # needs the brand label visible.
         "show_channel_name_overlay": bool(branding_cfg.get("show_channel_name_overlay", False)),
-        # Static, silent medical notice between the intro and main content.
-        "medical_disclaimer": medical_disclaimer,
+        # Replaceable video clip between intro and main content. Its duration
+        # is always probed from the file, just like intro/outro.
+        "disclaimer_video_path": disclaimer_video_public,
+        "disclaimer_sec": disclaimer_sec,
         # Hybrid graphic cards over a fixed brand-gradient bg (visual.hybrid_card).
         # None → graphic cards render full-bleed (legacy).
         "hybrid_card_bg": hybrid_card_bg,
@@ -802,7 +816,7 @@ def _build_render_props(
     scene_duration_sec = round(sum(float(s.get("duration_sec") or 0.0) for s in (scenes or [])), 1)
     # Shorts normalize this shared branding field to disabled before reaching
     # this builder, so content selection stays independent from frame pinning.
-    disclaimer_sec = medical_disclaimer_duration_sec(branding)
+    disclaimer_sec = disclaimer_duration_sec(branding)
     render = dict(render_base) | {
         "duration_sec": (
             scene_duration_sec
@@ -914,7 +928,7 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
 
     content_offset_sec = (
         float(branding.get("intro_sec") or 0.0)
-        + medical_disclaimer_duration_sec(branding)
+        + disclaimer_duration_sec(branding)
     )
     if resync_seo_chapters(
         job_dir,
@@ -1342,7 +1356,7 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
 
             content_offset_sec = (
                 float(branding.get("intro_sec") or 0.0)
-                + medical_disclaimer_duration_sec(branding)
+                + disclaimer_duration_sec(branding)
             )
             chapters = resync_seo_chapters(
                 job_dir,

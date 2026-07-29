@@ -1,9 +1,15 @@
+import json
 from pathlib import Path
 
-from video_agent.pipeline import OperatorRenderOptions, PipelineOptions, render_operator_job, run_pipeline
-from video_agent.utils.json_io import read_json, read_yaml
 import yaml
-import json
+
+from video_agent.pipeline import (
+    OperatorRenderOptions,
+    PipelineOptions,
+    render_operator_job,
+    run_pipeline,
+)
+from video_agent.utils.json_io import read_json, read_yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -54,7 +60,7 @@ def test_pipeline_writes_structured_artifacts_without_render(tmp_path, monkeypat
     render_props = read_json(result.job_dir / "json" / "render_props.json")
     expected_offset = (
         float(render_props["branding"]["intro_sec"])
-        + float(render_props["branding"]["medical_disclaimer"]["duration_sec"])
+        + float(render_props["branding"]["disclaimer_sec"])
     )
     assert chapter_resync_calls == [expected_offset]
     assert render_props["channel"]["id"] == "vida-plena-45"

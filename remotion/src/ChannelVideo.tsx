@@ -327,90 +327,6 @@ const BrandCard: React.FC<{
   );
 };
 
-const MedicalDisclaimerCard: React.FC<{
-  title: string;
-  lines: string[];
-  channelName: string;
-  palette: RenderProps['style']['palette'];
-}> = ({title, lines, channelName, palette}) => (
-  <AbsoluteFill
-    style={{
-      ...fullFrame,
-      background: `radial-gradient(circle at 50% 28%, ${palette.primary} 0%, #101914 48%, #080D0A 100%)`,
-      color: '#F7F4EC',
-    }}
-  >
-    <div
-      style={{
-        position: 'absolute',
-        inset: 0,
-        background: 'linear-gradient(135deg, rgba(255,255,255,0.045), transparent 42%)',
-      }}
-    />
-    <div
-      style={{
-        width: 1360,
-        margin: 'auto',
-        padding: '60px 80px 64px',
-        border: '1px solid rgba(255,255,255,0.18)',
-        borderRadius: 24,
-        background: 'rgba(7, 13, 10, 0.78)',
-        boxShadow: '0 28px 80px rgba(0,0,0,0.38)',
-        textAlign: 'center',
-      }}
-    >
-      <div
-        style={{
-          color: palette.accent,
-          fontSize: 22,
-          fontWeight: 800,
-          letterSpacing: 4,
-          textTransform: 'uppercase',
-        }}
-      >
-        {channelName}
-      </div>
-      <h1
-        style={{
-          margin: '20px 0 28px',
-          color: '#FFFFFF',
-          fontSize: 58,
-          fontWeight: 900,
-          letterSpacing: 1.4,
-          lineHeight: 1.08,
-        }}
-      >
-        {title}
-      </h1>
-      <div
-        style={{
-          width: 140,
-          height: 5,
-          margin: '0 auto 30px',
-          borderRadius: 3,
-          background: palette.accent,
-        }}
-      />
-      <div style={{display: 'flex', flexDirection: 'column', gap: 18}}>
-        {lines.map((line, index) => (
-          <p
-            key={`${index}-${line}`}
-            style={{
-              margin: 0,
-              color: index === 1 ? '#F4D9C9' : '#F7F4EC',
-              fontSize: 36,
-              fontWeight: index === 1 ? 750 : 600,
-              lineHeight: 1.34,
-            }}
-          >
-            {line}
-          </p>
-        ))}
-      </div>
-    </div>
-  </AbsoluteFill>
-);
-
 const BridgeFade: React.FC<{mode: 'out' | 'in'}> = ({mode}) => {
   const frame = useCurrentFrame();
   const alpha = mode === 'out'
@@ -779,10 +695,10 @@ export const ChannelVideo: React.FC<RenderProps> = (props) => {
   const logoPath = props.branding?.logo_path ?? null;
   const introVideoPath = props.branding?.intro_video_path ?? null;
   const outroVideoPath = props.branding?.outro_video_path ?? null;
+  const disclaimerVideoPath = props.branding?.disclaimer_video_path ?? null;
   const introFrames = Math.max(0, Math.round((props.branding?.intro_sec ?? 0) * fps));
-  const disclaimer = props.branding?.medical_disclaimer;
-  const disclaimerFrames = disclaimer?.enabled
-    ? Math.max(0, Math.round((disclaimer.duration_sec ?? 0) * fps))
+  const disclaimerFrames = disclaimerVideoPath
+    ? Math.max(0, Math.round((props.branding?.disclaimer_sec ?? 0) * fps))
     : 0;
   const outroFrames = Math.max(0, Math.round((props.branding?.outro_sec ?? 0) * fps));
   const disclaimerFrom = introFrames;
@@ -819,13 +735,11 @@ export const ChannelVideo: React.FC<RenderProps> = (props) => {
           />
         </Sequence>
       ) : null}
-      {disclaimer && disclaimerFrames > 0 ? (
+      {disclaimerVideoPath && disclaimerFrames > 0 ? (
         <Sequence from={disclaimerFrom} durationInFrames={disclaimerFrames}>
-          <MedicalDisclaimerCard
-            title={disclaimer.title || 'AVISO MÉDICO'}
-            lines={disclaimer.lines || []}
-            channelName={props.channel.name}
-            palette={props.style.palette}
+          <MediaVideo
+            src={mediaSrc(disclaimerVideoPath)}
+            style={{position: 'absolute', width: '100%', height: '100%', objectFit: 'cover'}}
           />
         </Sequence>
       ) : null}

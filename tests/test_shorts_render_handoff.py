@@ -258,7 +258,8 @@ def test_prepared_short_props_zero_long_form_intro_outro(tmp_path: Path):
             "outro_sec": 8.0,
             "intro_video_path": "branding/vida-plena-45/intro.mp4",
             "outro_video_path": "branding/vida-plena-45/outro.mp4",
-            "medical_disclaimer": {"enabled": True, "duration_sec": 8.0},
+            "disclaimer_sec": 8.0,
+            "disclaimer_video_path": "branding/vida-plena-45/disclaimer.mp4",
         },
         handoff=handoff,
         visual_timeline_mode="report_only",
@@ -269,5 +270,5 @@ def test_prepared_short_props_zero_long_form_intro_outro(tmp_path: Path):
     assert props["branding"]["outro_sec"] == 0.0
     assert props["branding"]["intro_video_path"] is None
     assert props["branding"]["outro_video_path"] is None
-    assert props["branding"]["medical_disclaimer"]["enabled"] is False
-    assert props["branding"]["medical_disclaimer"]["duration_sec"] == 0.0
+    assert props["branding"]["disclaimer_sec"] == 0.0
+    assert props["branding"]["disclaimer_video_path"] is None

@@ -20,7 +20,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from video_agent.branding import medical_disclaimer_duration_sec
+from video_agent.branding import disclaimer_duration_sec
 from video_agent.contracts import ARTIFACT_SCENES, ARTIFACT_VIDEO
 from video_agent.orchestrator.job_state import load_job
 from video_agent.orchestrator.stages._shared import (
@@ -99,7 +99,7 @@ def _intro_offset_frames(job_dir: Path) -> int:
         fps = float(((rp.get("render") or {}).get("fps")) or 0.0)
         branding = rp.get("branding") or {}
         content_offset_sec = float(branding.get("intro_sec") or 0.0)
-        content_offset_sec += medical_disclaimer_duration_sec(branding)
+        content_offset_sec += disclaimer_duration_sec(branding)
         if fps <= 0 or content_offset_sec <= 0:
             return 0
         return math.floor(content_offset_sec * fps + 0.5)

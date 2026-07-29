@@ -28,8 +28,8 @@ def test_prepare_branding_defaults_intro_outro_to_zero():
     assert branding["outro_sec"] == 0.0
     assert branding["intro_video_path"] is None
     assert branding["outro_video_path"] is None
-    assert branding["medical_disclaimer"]["enabled"] is False
-    assert branding["medical_disclaimer"]["duration_sec"] == 0.0
+    assert branding["disclaimer_video_path"] is None
+    assert branding["disclaimer_sec"] == 0.0
 
 
 def test_prepare_branding_skips_intro_outro_when_flag_false():
@@ -72,46 +72,49 @@ def test_vida_plena_channel_config_has_intro_outro_enabled():
     assert cfg.get("branding", {}).get("enable_intro_outro") is True
 
 
-def test_prepare_branding_honors_medical_disclaimer(monkeypatch):
+def test_prepare_branding_auto_probes_medical_disclaimer_video(monkeypatch):
     import video_agent.pipeline as pipeline_module
 
-    monkeypatch.setattr(pipeline_module, "_resolve_brand_video_source", lambda *a, **kw: None)
+    source = repo_root() / "asset_library/source/disclaimer.mp4"
+    monkeypatch.setattr(
+        pipeline_module,
+        "_resolve_brand_video_source",
+        lambda _config, kind: source if kind == "disclaimer" else None,
+    )
     monkeypatch.setattr(pipeline_module, "_resolve_brand_logo_source", lambda *a, **kw: None)
+    monkeypatch.setattr(pipeline_module, "_probe_duration_sec", lambda path: 6.75)
+    materialized = []
+    monkeypatch.setattr(
+        pipeline_module,
+        "materialize_media",
+        lambda source, dest: materialized.append((source, dest)),
+    )
 
     config = {
         "channel": {"id": "disclaimer-test"},
         "branding": {
-            "medical_disclaimer": {
-                "enabled": True,
-                "duration_sec": 8.0,
-                "title": "AVISO MÉDICO",
-                "lines": ["Línea uno.", "Línea dos.", "Línea tres."],
-            }
+            "disclaimer_video_path": "asset_library/source/disclaimer.mp4",
         },
     }
 
     branding = _prepare_branding(config)
 
-    assert branding["medical_disclaimer"] == {
-        "enabled": True,
-        "duration_sec": 8.0,
-        "title": "AVISO MÉDICO",
-        "lines": ["Línea uno.", "Línea dos.", "Línea tres."],
-    }
-
-
-def test_vida_plena_channel_config_enables_readable_medical_disclaimer():
-    cfg = _load_vida_plena_config()
-    disclaimer = cfg["branding"]["medical_disclaimer"]
-
-    assert disclaimer["enabled"] is True
-    assert disclaimer["duration_sec"] == 8.0
-    assert disclaimer["title"] == "AVISO MÉDICO"
-    assert disclaimer["lines"] == [
-        "Este video tiene fines informativos y educativos.",
-        "No sustituye el diagnóstico ni el tratamiento médico profesional.",
-        "Consulta siempre a tu médico antes de cambiar tu dieta, ejercicio o tratamiento.",
+    assert branding["disclaimer_video_path"] == "branding/disclaimer-test/disclaimer.mp4"
+    assert branding["disclaimer_sec"] == 6.75
+    assert materialized == [
+        (
+            source,
+            repo_root() / "remotion/public/branding/disclaimer-test/disclaimer.mp4",
+        )
     ]
+
+
+def test_vida_plena_channel_config_uses_replaceable_disclaimer_video():
+    cfg = _load_vida_plena_config()
+    assert cfg["branding"]["disclaimer_video_path"] == (
+        "asset_library/source/disclaimer.mp4"
+    )
+    assert "medical_disclaimer" not in cfg["branding"]
 
 
 def test_prepare_branding_hides_channel_name_overlay_by_default():
@@ -212,10 +215,12 @@ def test_channel_video_tsx_gates_channel_name_label():
 def test_channel_video_places_medical_disclaimer_between_intro_and_content():
     src = (repo_root() / "remotion/src/ChannelVideo.tsx").read_text(encoding="utf-8")
 
-    assert "MedicalDisclaimerCard" in src
+    assert "MedicalDisclaimerCard" not in src
+    assert "const disclaimerVideoPath = props.branding?.disclaimer_video_path ?? null;" in src
     assert "const disclaimerFrom = introFrames;" in src
     assert "const contentFrom = introFrames + disclaimerFrames;" in src
     assert "<Sequence from={disclaimerFrom} durationInFrames={disclaimerFrames}>" in src
+    assert "src={mediaSrc(disclaimerVideoPath)}" in src
     assert "<Sequence from={contentFrom}>" in src
 
 

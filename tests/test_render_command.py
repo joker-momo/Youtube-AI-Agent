@@ -158,7 +158,8 @@ def test_pre_render_duration_validation_includes_medical_disclaimer(tmp_path):
                 "branding": {
                     "intro_sec": 1.0,
                     "outro_sec": 1.0,
-                    "medical_disclaimer": {"enabled": True, "duration_sec": 8.0},
+                    "disclaimer_sec": 8.0,
+                    "disclaimer_video_path": "branding/ch/disclaimer.mp4",
                 },
             }
         ),

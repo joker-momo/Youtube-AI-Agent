@@ -47,7 +47,8 @@ def test_duration_includes_medical_disclaimer():
     branding = {
         "intro_sec": 2.0,
         "outro_sec": 2.0,
-        "medical_disclaimer": {"enabled": True, "duration_sec": 8.0},
+        "disclaimer_sec": 8.0,
+        "disclaimer_video_path": "branding/ch/disclaimer.mp4",
     }
     rp = _build_render_props(**_args(branding=branding))
 
@@ -60,7 +61,8 @@ def test_legacy_short_omits_long_form_branding_and_duration_frames():
     branding = {
         "intro_sec": 0.0,
         "outro_sec": 0.0,
-        "medical_disclaimer": {"enabled": True, "duration_sec": 8.0},
+        "disclaimer_sec": 8.0,
+        "disclaimer_video_path": "branding/ch/disclaimer.mp4",
     }
     rp = _build_render_props(
         **_args(
@@ -70,7 +72,8 @@ def test_legacy_short_omits_long_form_branding_and_duration_frames():
     )
     assert "duration_in_frames" not in rp["render"]
     assert rp["render"]["duration_sec"] == 5.0
-    assert rp["branding"]["medical_disclaimer"]["enabled"] is False
+    assert rp["branding"]["disclaimer_sec"] == 0.0
+    assert rp["branding"]["disclaimer_video_path"] is None
 
 
 def test_passes_through_core_fields():

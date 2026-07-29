@@ -86,6 +86,29 @@ def test_classify_presion_alta_pantorrilla_maps_to_blood_pressure():
     assert profile["primary_category"] == "blood_pressure_circulation_heart"
 
 
+def test_classify_surgery_after_60_maps_to_medical_decision():
+    profile = tp.classify_thumbnail_topic(
+        "Cirugía después de los 60: preguntas para decidir mejor",
+        "CIRUGÍA: 3 PREGUNTAS CLAVE",
+    )
+
+    assert profile["primary_category"] == "surgery_medical_decision"
+    assert profile["risk_level"] == "medical_sensitive"
+    assert profile["age_signal"] == "60+"
+    assert any("cirugia" in keyword for keyword in profile["keywords"])
+
+
+def test_age_phrase_alone_does_not_imply_protein_or_muscle():
+    profile = tp.classify_thumbnail_topic(
+        "Salud después de los 60",
+        "VIVE MEJOR",
+    )
+
+    assert profile["primary_category"] == "general_45plus_lifestyle"
+    assert profile["secondary_category"] is None
+    assert profile["age_signal"] == "60+"
+
+
 # --- §13 plan_thumbnail_prompts ---------------------------------------------
 
 def _seo_three() -> dict:
@@ -160,6 +183,66 @@ def test_prompt_avoids_medical_fear_for_medical_sensitive_category():
     text = plans[0]["prompt"]
     assert "hospital" in text.lower() or "Do not show" in text or "Avoid" in text
     assert plans[0]["risk_level"] == "medical_sensitive"
+
+
+def test_surgery_variants_use_non_gory_medical_decision_visuals():
+    seo = {
+        "title": "Cirugía después de los 60: preguntas para decidir mejor",
+        "title_variants": [
+            {
+                "title": "Cirugía después de los 60: preguntas para decidir mejor",
+                "thumbnail_text": "CIRUGÍA: 3 PREGUNTAS CLAVE",
+            },
+            {
+                "title": "No es solo la edad: cirugía después de los 60",
+                "thumbnail_text": "CIRUGÍA TRAS LOS 60: DECIDE MEJOR",
+            },
+            {
+                "title": "El riesgo que falta: decidir una cirugía después de los 60",
+                "thumbnail_text": "CIRUGÍA TRAS LOS 60: VALORA RIESGOS",
+            },
+        ],
+    }
+
+    plans = tp.plan_thumbnail_prompts(seo, {})
+
+    assert len(plans) == 3
+    for plan in plans:
+        assert plan["primary_category"] == "surgery_medical_decision"
+        assert plan["risk_level"] == "medical_sensitive"
+        assert plan["topic_props"]
+        visual = " ".join(
+            [
+                plan["scene"],
+                plan["main_prop"],
+                " ".join(plan["topic_props"]),
+                plan["category_safety_rules"],
+            ]
+        ).lower()
+        assert any(
+            cue in visual
+            for cue in (
+                "surgical consent",
+                "surgery appointment",
+                "surgical admissions",
+                "operating-room",
+                "operating room",
+            )
+        )
+        assert "non-gory" in visual
+        assert not any(
+            wrong_cue in plan["main_prop"].lower()
+            for wrong_cue in ("protein meal", "dumbbell", "resistance band")
+        )
+        assert not any(
+            blocked_context in {item.lower() for item in plan["avoid"]}
+            for blocked_context in ("hospital", "doctor diagnosis scene")
+        )
+
+    comparison = plans[2]["visual_strategy_description"].lower()
+    assert "operar" in comparison
+    assert "esperar" in comparison
+    assert "everyday habits or food" not in comparison
 
 
 # --- §6.3 tie-break determinism --------------------------------------------

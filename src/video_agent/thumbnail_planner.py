@@ -34,6 +34,10 @@ def normalize_for_thumbnail_classification(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 CATEGORY_TRIGGERS: dict[str, list[str]] = {
+    "surgery_medical_decision": [
+        "cirugia", "operacion", "operar", "quirofano", "quirurgic",
+        "preoperator", "posoperator",
+    ],
     "food_choice": [
         "pan", "tostada", "desayuno", "cena", "comida", "plato",
         "aceite", "yogur", "fruta", "verduras", "arroz", "pasta", "integral",
@@ -48,7 +52,6 @@ CATEGORY_TRIGGERS: dict[str, list[str]] = {
     ],
     "protein_muscle": [
         "proteina", "musculo", "fuerza", "sarcopenia", "masa muscular",
-        "despues de los 60",
     ],
     "fiber_digestion": [
         "fibra", "digestion", "estrenimiento", "hinchazon", "intestino", "barriga",
@@ -118,6 +121,7 @@ CATEGORY_TRIGGERS: dict[str, list[str]] = {
 # ---------------------------------------------------------------------------
 
 CATEGORY_PRIORITY: list[str] = [
+    "surgery_medical_decision",
     "brain_memory_cognition",
     # blood_pressure_circulation_heart ranks above blood_sugar_diabetes so
     # tied scores resolve toward the circulation/heart axis when both fire
@@ -213,6 +217,11 @@ def pick_secondary_category(scores: dict[str, int], primary: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 MEDICAL_SENSITIVE_KEYWORDS: list[str] = [
+    "cirugia",
+    "operacion",
+    "operar",
+    "quirofano",
+    "quirurgic",
     "demencia",
     "alzheimer",
     "diabetes",
@@ -225,6 +234,7 @@ MEDICAL_SENSITIVE_KEYWORDS: list[str] = [
 ]
 
 MEDICAL_SENSITIVE_CATEGORIES: set[str] = {
+    "surgery_medical_decision",
     "brain_memory_cognition",
     "blood_sugar_diabetes",
     "blood_pressure_circulation_heart",
@@ -336,6 +346,25 @@ def classify_thumbnail_topic(title: str, thumbnail_text: str = "") -> dict[str, 
 # ---------------------------------------------------------------------------
 
 THUMBNAIL_VISUAL_PRESETS: dict[str, dict[str, Any]] = {
+    "surgery_medical_decision": {
+        "scene": (
+            "bright specialist consultation room beside a hospital surgical "
+            "admissions area"
+        ),
+        "main_prop": (
+            "a clearly visible surgical consent form and surgery appointment "
+            "folder while a doctor and mature patient discuss the decision"
+        ),
+        "avoid": [
+            "open surgery",
+            "blood",
+            "exposed organs",
+            "incisions",
+            "needles as the focal point",
+            "fear-based emergency imagery",
+            "generic gym or food props",
+        ],
+    },
     "food_choice": {
         "scene": "Spanish home kitchen or dining table",
         "main_prop": "bread, toast, Mediterranean plate, olive oil, fruit, or yogurt — the specific food from the title",
@@ -464,6 +493,10 @@ def select_visual_preset(category: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 _TOPIC_SCENES: dict[str, str] = {
+    "clinic": (
+        "bright specialist consultation room beside a hospital surgical "
+        "admissions area, dignified and non-gory"
+    ),
     "kitchen": (
         "Spanish home kitchen or dining table, bright and uncluttered, "
         "with the topic food in clear focus"
@@ -480,6 +513,12 @@ _TOPIC_SCENES: dict[str, str] = {
 # whole tokens; stems match token prefixes; never free substrings, so "pan"
 # cannot fire inside "pantalla".
 _TOPIC_VISUAL_VOCABULARY: tuple[tuple[frozenset[str], tuple[str, ...], str, str], ...] = (
+    (
+        frozenset({"cirugia", "cirugias", "operacion", "operaciones", "operar", "quirofano"}),
+        ("quirurg", "preoperator", "posoperator"),
+        "a surgical consent form and a clearly visible surgery appointment folder",
+        "clinic",
+    ),
     (frozenset({"sal", "salero", "sodio"}), (), "a salt shaker and visibly salty foods", "kitchen"),
     (frozenset({"pan", "panes", "tostada", "tostadas"}), (), "loaves of bread or toast", "kitchen"),
     (frozenset({"cafe", "cafeina"}), (), "a cup of coffee", "kitchen"),
@@ -584,18 +623,29 @@ _MEDICAL_SENSITIVE_AVOID_BOILERPLATE: list[str] = [
     "fear-based medical imagery",
 ]
 
+_SURGERY_MEDICAL_DECISION_AVOID_BOILERPLATE: list[str] = [
+    "medical emergency",
+    "pills as main visual",
+    "syringe",
+    "fear-based medical imagery",
+    "graphic operating-room procedure",
+]
+
 
 def merge_avoid_lists(
     primary_preset: dict,
     secondary_preset: dict | None,
     risk_level: str,
+    primary_category: str | None = None,
 ) -> list[str]:
     """Union of primary + secondary + risk-level avoid terms, deduped."""
     avoid: list[str] = []
     avoid.extend(primary_preset.get("avoid") or [])
     if secondary_preset:
         avoid.extend(secondary_preset.get("avoid") or [])
-    if risk_level == "medical_sensitive":
+    if primary_category == "surgery_medical_decision":
+        avoid.extend(_SURGERY_MEDICAL_DECISION_AVOID_BOILERPLATE)
+    elif risk_level == "medical_sensitive":
         avoid.extend(_MEDICAL_SENSITIVE_AVOID_BOILERPLATE)
     return stable_dedupe(avoid)
 
@@ -622,6 +672,7 @@ def merge_main_prop(primary_preset: dict, secondary_preset: dict | None) -> str:
 # ---------------------------------------------------------------------------
 
 CATEGORY_LABELS: dict[str, str] = {
+    "surgery_medical_decision": "surgery and shared medical decision-making",
     "food_choice": "food choice",
     "functional_foods_superfoods": "functional foods and daily nutrition",
     "shopping_label_choice": "shopping and label choice",
@@ -656,7 +707,7 @@ def category_label(category: str | None) -> str:
 # §7.4 Strategy description
 # ---------------------------------------------------------------------------
 
-def describe_strategy(strategy: str) -> str:
+def describe_strategy(strategy: str, primary_category: str | None = None) -> str:
     if strategy == "face_driven":
         return (
             "FACE-DRIVEN. A real, expressive mature face is the main hook — "
@@ -675,6 +726,14 @@ def describe_strategy(strategy: str) -> str:
             "out-click a face."
         )
     if strategy == "comparison_driven":
+        if primary_category == "surgery_medical_decision":
+            return (
+                "COMPARISON-DRIVEN. Show the OPERAR versus ESPERAR decision as "
+                "two dignified, non-gory clinical choice zones: proceeding with "
+                "the planned surgery versus watchful waiting and follow-up. "
+                "Communicate the contrast visually without extra printed labels; "
+                "the exact thumbnail wording remains the only text."
+            )
         return (
             "COMPARISON-DRIVEN. Split the frame into two clear zones — a worse/old "
             "habit versus a better/new one — marked with a large red cross and a "
@@ -712,6 +771,13 @@ def safety_rules_for_category(primary_category: str, risk_level: str, avoid: lis
         category_hint = (
             "Show gentle circulation-friendly lifestyle cues; "
             "avoid emergency heart imagery. "
+        )
+    elif primary_category == "surgery_medical_decision":
+        category_hint = (
+            "Make surgery visually unmistakable through shared medical "
+            "decision-making, a surgical consent form, and a surgery appointment "
+            "folder. Keep the consultation dignified and non-gory; avoid blood, "
+            "open procedures, exposed organs, and emergency panic. "
         )
     elif primary_category == "weight_loss_metabolism":
         category_hint = (
@@ -921,7 +987,7 @@ def build_thumbnail_prompt(plan: dict) -> str:
         "\n"
         "Safety and tone:\n"
         f"{plan.get('category_safety_rules', '')}\n"
-        "The image should feel like practical lifestyle advice, "
+        "The image should feel like practical, trustworthy guidance, "
         "not fear-based medical content.\n"
     )
 
@@ -980,13 +1046,18 @@ def plan_thumbnail_prompts(seo: dict, channel_config: dict) -> list[dict]:
             "risk_level": profile["risk_level"],
             "age_signal": profile["age_signal"],
             "visual_strategy": strategy,
-            "visual_strategy_description": describe_strategy(strategy),
+            "visual_strategy_description": describe_strategy(
+                strategy, profile["primary_category"]
+            ),
             "persona": persona,
             "scene": primary_preset["scene"],
             "main_prop": merge_main_prop(primary_preset, secondary_preset),
             "topic_props": [],
             "avoid": merge_avoid_lists(
-                primary_preset, secondary_preset, profile["risk_level"]
+                primary_preset,
+                secondary_preset,
+                profile["risk_level"],
+                profile["primary_category"],
             ),
             "accent_color": accent_color,
             "punch_color": punch_color,

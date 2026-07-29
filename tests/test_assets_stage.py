@@ -100,6 +100,74 @@ def test_prepare_assets_auto_prefers_local_directory_before_stock_api(tmp_path):
     assert manifest["scenes"][0]["background"].endswith("scene-01.mp4")
 
 
+def test_prepare_assets_full_pass_does_not_partially_replace_assets_when_interrupted(
+    tmp_path, monkeypatch
+):
+    workspace = tmp_path / "workspace"
+    (workspace / "remotion").mkdir(parents=True)
+    job_dir = workspace / "jobs" / "job-interrupted-assets"
+    assets_dir = job_dir / "assets"
+    public_assets_dir = (
+        workspace / "remotion" / "public" / "jobs" / job_dir.name / "assets"
+    )
+    assets_dir.mkdir(parents=True)
+    public_assets_dir.mkdir(parents=True)
+
+    old_assets = {}
+    for scene_id in ("scene-01", "scene-02"):
+        payload = f"old-{scene_id}".encode()
+        old_assets[scene_id] = payload
+        (assets_dir / f"{scene_id}.mp4").write_bytes(payload)
+        (public_assets_dir / f"{scene_id}.mp4").write_bytes(payload)
+
+    new_video = tmp_path / "new-scene-01.mp4"
+    new_video.write_bytes(b"new-scene-01")
+
+    def interrupt_on_second_scene(_self, scene, _channel_id, _job_id):
+        if scene["id"] == "scene-01":
+            return {
+                "local_path": str(new_video),
+                "provider": "pexels",
+                "asset_tier": "pexels_video",
+            }
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(
+        "video_agent.stages.assets.StockAssetService.get_scene_asset",
+        interrupt_on_second_scene,
+    )
+
+    scenes = {
+        "total_duration_sec": 20,
+        "scenes": [
+            {
+                "id": scene_id,
+                "duration_sec": 10,
+                "on_screen_text": scene_id,
+                "asset_refs": {},
+            }
+            for scene_id in ("scene-01", "scene-02")
+        ],
+    }
+
+    with pytest.raises(KeyboardInterrupt):
+        prepare_assets(
+            job_dir,
+            STYLE_DNA,
+            scenes,
+            visual_config={
+                "strategy": "auto",
+                "query_cache_path": str(tmp_path / "query-cache.db"),
+                "asset_library_path": str(tmp_path / "asset-library"),
+            },
+            render_tts=False,
+        )
+
+    for scene_id, payload in old_assets.items():
+        assert (assets_dir / f"{scene_id}.mp4").read_bytes() == payload
+        assert (public_assets_dir / f"{scene_id}.mp4").read_bytes() == payload
+
+
 def test_prepare_assets_records_stock_errors_when_falling_back_to_placeholder(tmp_path):
     class MissingKeyStockClient:
         def search(self, provider, query, filters):

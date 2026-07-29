@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from video_agent.assets.audio_ops import (  # extracted shared primitives (P1)
@@ -32,6 +33,49 @@ from video_agent.storage.public_jobs import prepare_public_job_dir
 from video_agent.utils.json_io import write_json
 
 
+class _AssetWriteStage:
+    """Keep a full background pass from exposing partially replaced media."""
+
+    def __init__(self, *, enabled: bool, job_dir: Path) -> None:
+        self.enabled = enabled
+        self._targets: dict[Path, Path] = {}
+        self._tmp = (
+            TemporaryDirectory(prefix=".asset-stage-", dir=job_dir)
+            if enabled
+            else None
+        )
+        self.root = Path(self._tmp.name) if self._tmp is not None else None
+
+    def target(self, final_path: Path, namespace: str) -> Path:
+        if not self.enabled or self.root is None:
+            return final_path
+        staged_path = self.root / namespace / final_path.name
+        staged_path.parent.mkdir(parents=True, exist_ok=True)
+        self._targets[final_path] = staged_path
+        return staged_path
+
+    def commit(self) -> None:
+        if not self.enabled:
+            return
+        pending: list[tuple[Path, Path]] = []
+        try:
+            for final_path, staged_path in self._targets.items():
+                if not staged_path.exists():
+                    continue
+                next_path = final_path.with_name(f".{final_path.name}.asset-stage-next")
+                materialize_media(staged_path, next_path)
+                pending.append((next_path, final_path))
+            for next_path, final_path in pending:
+                next_path.replace(final_path)
+        finally:
+            self.cleanup()
+
+    def cleanup(self) -> None:
+        if self._tmp is not None:
+            self._tmp.cleanup()
+            self._tmp = None
+
+
 def prepare_assets(
     job_dir: Path,
     style_dna: dict[str, Any],
@@ -59,6 +103,10 @@ def prepare_assets(
             break
     public_assets_dir = prepare_public_job_dir(workspace_root, job_dir.name) / "assets"
     public_assets_dir.mkdir(parents=True, exist_ok=True)
+    asset_stage = _AssetWriteStage(
+        enabled=render_backgrounds and only_scene_ids is None,
+        job_dir=job_dir,
+    )
     palette = style_dna["palette"]
     visual_config = visual_config or {}
 
@@ -117,18 +165,29 @@ def prepare_assets(
         # Encode all scene backgrounds to video so Remotion renders one media path.
         asset_suffix = ".mp4"
         image_path = assets_dir / f"{scene['id']}{asset_suffix}"
+        staged_image_path = asset_stage.target(image_path, "job-assets")
+        public_image_path = public_assets_dir / image_path.name
+        staged_public_image_path = asset_stage.target(
+            public_image_path, "public-assets"
+        )
         # media_kind records whether the SOURCE was real video footage or a still
         # image (photo / AI image / placeholder), so the UI can preview it as a
         # <video> or <img> even though every asset is encoded to .mp4 for render.
         media_kind = "video"
         preview_still = assets_dir / f"{scene['id']}_preview.jpg"
+        staged_preview_still = asset_stage.target(preview_still, "job-previews")
         if local_image:
             if local_image.suffix.lower() == ".mp4":
-                if local_image.resolve() != image_path.resolve():
-                    materialize_media(local_image, image_path)
+                if local_image.resolve() != staged_image_path.resolve():
+                    materialize_media(local_image, staged_image_path)
             else:
-                _write_video_from_image(local_image, image_path, scene_dur, is_portrait=is_portrait)
-                if _write_preview_still(local_image, preview_still):
+                _write_video_from_image(
+                    local_image,
+                    staged_image_path,
+                    scene_dur,
+                    is_portrait=is_portrait,
+                )
+                if _write_preview_still(local_image, staged_preview_still):
                     media_kind = "image"
             source = (
                 "asset_refs_primary" if primary_asset is not None else "local_directory"
@@ -145,10 +204,15 @@ def prepare_assets(
                 library_path = Path(stock_asset.get("url", "")) # Should not happen
 
             if library_path.suffix.lower() == ".mp4":
-                materialize_media(library_path, image_path)
+                materialize_media(library_path, staged_image_path)
             else:
-                _write_video_from_image(library_path, image_path, scene_dur, is_portrait=is_portrait)
-                if _write_preview_still(library_path, preview_still):
+                _write_video_from_image(
+                    library_path,
+                    staged_image_path,
+                    scene_dur,
+                    is_portrait=is_portrait,
+                )
+                if _write_preview_still(library_path, staged_preview_still):
                     media_kind = "image"
             source = "asset_library"
             source_path = str(library_path.resolve())
@@ -164,7 +228,7 @@ def prepare_assets(
             record_scene_selection(diversity_run, scene=scene, selected_asset=stock_asset)
         else:
             _write_placeholder_video(
-                image_path,
+                staged_image_path,
                 scene,
                 index,
                 palette,
@@ -187,8 +251,7 @@ def prepare_assets(
             elif stock_service:
                 extra_manifest = {"stock_errors": stock_service.core.last_errors}
             record_scene_selection(diversity_run, scene=scene, selected_asset=None, is_placeholder=True)
-        public_image_path = public_assets_dir / image_path.name
-        materialize_media(image_path, public_image_path)
+        materialize_media(staged_image_path, staged_public_image_path)
         public_ref = f"jobs/{job_dir.name}/assets/{image_path.name}"
         scene["asset_refs"]["background"] = public_ref
         # Whether the SOURCE was real footage or a photo-backed encode. The
@@ -218,6 +281,8 @@ def prepare_assets(
                 })
             except Exception:  # pragma: no cover - reporting must never break asset prep
                 pass
+
+    asset_stage.commit()
 
     if render_backgrounds:
         finalize_visual_diversity_report(

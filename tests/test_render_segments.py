@@ -504,7 +504,52 @@ def test_long_form_finish_still_requires_chatgpt_thumbnail(tmp_path, monkeypatch
 # segment at a random frame. One retry recovers it.
 # ---------------------------------------------------------------------------
 
-def test_segment_retries_once_on_asset_404(tmp_path, monkeypatch):
+def test_restore_public_job_assets_rebuilds_only_current_job_refs(tmp_path, monkeypatch):
+    import video_agent.stages.render as render_mod
+
+    repo = tmp_path / "repo"
+    job_dir = repo / "jobs" / "job-123"
+    (job_dir / "assets").mkdir(parents=True)
+    (job_dir / "outputs").mkdir()
+    (job_dir / "json").mkdir()
+    (job_dir / "assets" / "scene-46.mp4").write_bytes(b"scene-video")
+    (job_dir / "outputs" / "thumbnail_1.jpg").write_bytes(b"thumbnail")
+    render_props = job_dir / "json" / "render_props.json"
+    render_props.write_text(
+        json.dumps({
+            "scenes": [
+                {"asset": "jobs/job-123/assets/scene-46.mp4"},
+                {"asset": "jobs/other-job/assets/scene-01.mp4"},
+            ],
+            "thumbnail": "/jobs/job-123/outputs/thumbnail_1.jpg",
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(render_mod, "repo_root", lambda: repo)
+
+    restored = render_mod._restore_public_job_assets(job_dir, render_props)
+
+    assert restored == 2
+    public_job = repo / "remotion" / "public" / "jobs" / "job-123"
+    assert (public_job / "assets" / "scene-46.mp4").read_bytes() == b"scene-video"
+    assert (public_job / "outputs" / "thumbnail_1.jpg").read_bytes() == b"thumbnail"
+    assert not (repo / "remotion" / "public" / "jobs" / "other-job").exists()
+
+
+@pytest.mark.parametrize(
+    "error_detail",
+    [
+        (
+            "Error: Received a status code of 404 while downloading file "
+            "http://localhost:3000/public/jobs/x/assets/narration.wav."
+        ),
+        (
+            "Error fetching /public/jobs/x/assets/scene-46.mp4: "
+            "404 Not Found"
+        ),
+    ],
+)
+def test_segment_retries_once_on_asset_404(tmp_path, monkeypatch, error_detail):
     import video_agent.stages.render as render_mod
 
     job_dir = tmp_path / "job"
@@ -538,8 +583,7 @@ def test_segment_retries_once_on_asset_404(tmp_path, monkeypatch):
         if calls["segment_calls"] == 1:
             raise RemotionSubprocessError(
                 "Remotion subprocess exited with code 1. Last output:\n"
-                "Error: Received a status code of 404 while downloading file "
-                "http://localhost:3000/public/jobs/x/assets/narration.wav."
+                f"{error_detail}"
             )
         _make_clip(Path(cmd[7]), seconds=1.0, fps=30)
 

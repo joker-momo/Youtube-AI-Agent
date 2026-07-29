@@ -11,6 +11,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from video_agent.assets.materialize import materialize_media
 from video_agent.contracts import repo_root
 from video_agent.storage.atomic import atomic_write_json, atomic_write_text
 from video_agent.utils.json_io import read_json
@@ -1046,6 +1047,53 @@ def _mux_video_audio(video_only_path: Path, audio_path: Path, output_path: Path)
         )
 
 
+def _is_public_asset_404(exc: RemotionSubprocessError) -> bool:
+    """Return whether Remotion failed while fetching a job-scoped public asset."""
+    detail = str(exc).lower()
+    return "404" in detail and ("/public/jobs/" in detail or "public/jobs/" in detail)
+
+
+def _iter_public_job_refs(value) -> set[str]:
+    refs: set[str] = set()
+    if isinstance(value, dict):
+        for child in value.values():
+            refs.update(_iter_public_job_refs(child))
+    elif isinstance(value, list):
+        for child in value:
+            refs.update(_iter_public_job_refs(child))
+    elif isinstance(value, str):
+        normalized = value.lstrip("/")
+        if normalized.startswith("jobs/"):
+            refs.add(normalized)
+    return refs
+
+
+def _touch_public_job_dir(job_dir: Path) -> None:
+    public_job_dir = repo_root() / "remotion" / "public" / "jobs" / job_dir.name
+    if public_job_dir.exists():
+        public_job_dir.touch()
+
+
+def _restore_public_job_assets(job_dir: Path, render_props_path: Path) -> int:
+    """Re-materialize job files referenced by render props after public pruning."""
+    prefix = Path("jobs") / job_dir.name
+    public_root = repo_root() / "remotion" / "public"
+    restored = 0
+    for raw_ref in sorted(_iter_public_job_refs(read_json(render_props_path))):
+        ref = Path(raw_ref)
+        try:
+            relative = ref.relative_to(prefix)
+        except ValueError:
+            continue
+        source = job_dir / relative
+        if not source.is_file():
+            continue
+        materialize_media(source, public_root / ref)
+        restored += 1
+    _touch_public_job_dir(job_dir)
+    return restored
+
+
 def _render_segments(
     render_props_path: Path,
     video_path: Path,
@@ -1117,6 +1165,9 @@ def _render_segments(
     # teardown, never racing with what a still-settling process just made.
     prev_tmp_before: set[str] | None = None
     for index, (start, end) in enumerate(plan, start=1):
+        # Public-job pruning uses directory mtime. Keep this active long render
+        # newer than completed jobs created concurrently by Shorts batches.
+        _touch_public_job_dir(job_dir)
         if stop_request_path is not None and stop_request_path.exists():
             raise RuntimeError("Stop requested by operator.")
         seg_path = _segment_path(job_dir, index)
@@ -1164,10 +1215,12 @@ def _render_segments(
                 # frame 1408). The asset is usually back by the time we
                 # retry; one retry converts a lost render into a lost couple
                 # of minutes.
-                if seg_attempt == 0 and "status code of 404" in str(exc):
+                if seg_attempt == 0 and _is_public_asset_404(exc):
+                    restored = _restore_public_job_assets(job_dir, render_props_path)
                     print(
                         f"[render] segment {index}: asset 404 mid-render "
-                        "(public symlink target mutated?) — retrying once",
+                        f"(public job pruned or mutated); restored {restored} "
+                        "referenced files — retrying once",
                         flush=True,
                     )
                     continue

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import math
 import os
 import re
 import shutil
@@ -12,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from video_agent.assets.materialize import materialize_media
+from video_agent.branding import medical_disclaimer_duration_sec
 from video_agent.contracts import repo_root
 from video_agent.storage.atomic import atomic_write_json, atomic_write_text
 from video_agent.utils.json_io import read_json
@@ -214,8 +216,10 @@ def validate_render_duration_matches_scene_sum(
     render_duration = float((props.get("render") or {}).get("duration_sec") or 0.0)
     scene_sum = _render_scene_sum(props)
     branding = props.get("branding") or {}
-    branding_duration = float(branding.get("intro_sec") or 0.0) + float(
-        branding.get("outro_sec") or 0.0
+    branding_duration = (
+        float(branding.get("intro_sec") or 0.0)
+        + medical_disclaimer_duration_sec(branding)
+        + float(branding.get("outro_sec") or 0.0)
     )
     expected_duration = round(scene_sum + branding_duration, 3)
     if abs(render_duration - expected_duration) > float(tolerance_sec):
@@ -776,8 +780,7 @@ def _segmented_render_enabled(render_props_path: Path) -> bool:
     return bool((props.get("render", {}) or {}).get("segmented", True))
 
 
-def _total_render_frames(render_props_path: Path) -> int:
-    props = read_json(render_props_path)
+def _total_render_frames_from_props(props: dict) -> int:
     render_cfg = props.get("render", {}) or {}
     frames = render_cfg.get("duration_in_frames")
     if isinstance(frames, int) and frames > 0:
@@ -785,6 +788,10 @@ def _total_render_frames(render_props_path: Path) -> int:
     fps = float(render_cfg.get("fps") or 30)
     duration = float(render_cfg.get("duration_sec") or 0)
     return max(1, round(fps * duration))
+
+
+def _total_render_frames(render_props_path: Path) -> int:
+    return _total_render_frames_from_props(read_json(render_props_path))
 
 
 def _segment_plan(total_frames: int, segment_frames: int) -> list[tuple[int, int]]:
@@ -911,16 +918,17 @@ def _build_fast_audio_track(render_props_path: Path, audio_path: Path) -> None:
     observed, the same order as real pixel rendering, for a job that
     should take seconds).
 
-    Three pieces, concatenated in order, exactly matching what
+    Four pieces, concatenated in order, exactly matching what
     ChannelVideo.tsx actually composes (verified by reading the source,
     not assumed):
       1. intro.mp4's OWN embedded audio (real content — a branding
          jingle/music bed, confirmed via ffprobe; ChannelVideo's intro
          <MediaVideo> has no ``muted`` prop, unlike scene backgrounds).
-      2. narration.wav, trimmed/padded to exactly the content span's
+      2. silence for the medical disclaimer, when enabled.
+      3. narration.wav, trimmed/padded to exactly the content span's
          duration (content starts at frame 0 of narration in every
          case, so no intro-offset shift is needed here at all).
-      3. outro.mp4's OWN embedded audio, same as intro.
+      4. outro.mp4's OWN embedded audio, same as intro.
 
     Every duration used is read fresh from render_props — intro_sec/
     outro_sec are themselves probed from the real intro/outro video files
@@ -930,11 +938,16 @@ def _build_fast_audio_track(render_props_path: Path, audio_path: Path) -> None:
     branding = props.get("branding") or {}
     fps = float((props.get("render", {}) or {}).get("fps") or 30)
     intro_sec = float(branding.get("intro_sec") or 0.0)
+    disclaimer_sec = medical_disclaimer_duration_sec(branding)
     outro_sec = float(branding.get("outro_sec") or 0.0)
-    intro_frames = round(intro_sec * fps)
-    outro_frames = round(outro_sec * fps)
-    total_frames = _total_render_frames(render_props_path)
-    content_frames = max(0, total_frames - intro_frames - outro_frames)
+    intro_frames = math.floor(intro_sec * fps + 0.5)
+    disclaimer_frames = math.floor(disclaimer_sec * fps + 0.5)
+    outro_frames = math.floor(outro_sec * fps + 0.5)
+    total_frames = _total_render_frames_from_props(props)
+    content_frames = max(
+        0,
+        total_frames - intro_frames - disclaimer_frames - outro_frames,
+    )
     content_sec = content_frames / fps
 
     narration_rel = (props.get("audio") or {}).get("narration")
@@ -966,11 +979,17 @@ def _build_fast_audio_track(render_props_path: Path, audio_path: Path) -> None:
     labels = []
     for i in range(len(inputs)):
         if i == narration_index:
+            if disclaimer_frames > 0:
+                filters.append(
+                    "anullsrc=r=48000:cl=stereo,"
+                    f"atrim=0:{disclaimer_frames / fps:.6f}[adisclaimer]"
+                )
+                labels.append("[adisclaimer]")
             filters.append(f"[{i}:a]apad,atrim=0:{content_sec:.6f}[a{i}]")
         else:
             filters.append(f"[{i}:a]anull[a{i}]")
         labels.append(f"[a{i}]")
-    filters.append(f"{''.join(labels)}concat=n={len(inputs)}:v=0:a=1[out]")
+    filters.append(f"{''.join(labels)}concat=n={len(labels)}:v=0:a=1[out]")
     cmd += [
         "-filter_complex", ";".join(filters),
         "-map", "[out]",

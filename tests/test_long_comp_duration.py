@@ -22,6 +22,17 @@ def test_includes_intro_and_outro():
     assert _comp_duration_in_frames(scenes, intro_sec=2.0, outro_sec=2.0, fps=30) == 270
 
 
+def test_includes_medical_disclaimer_between_intro_and_scenes():
+    scenes = [{"duration_sec": 2.0}, {"duration_sec": 3.0}]
+    assert _comp_duration_in_frames(
+        scenes,
+        intro_sec=2.0,
+        disclaimer_sec=8.0,
+        outro_sec=2.0,
+        fps=30,
+    ) == 510
+
+
 def test_no_branding_is_scene_frames_only():
     scenes = [{"duration_sec": 2.0}, {"duration_sec": 3.0}]
     assert _comp_duration_in_frames(scenes, intro_sec=0.0, outro_sec=0.0, fps=30) == 150

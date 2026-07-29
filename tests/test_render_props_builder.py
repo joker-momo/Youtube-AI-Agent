@@ -9,6 +9,7 @@ pinned only when requested (long-form), never for shorts.
 
 from __future__ import annotations
 
+from video_agent.branding import without_long_form_branding
 from video_agent.pipeline import _build_render_props
 
 _BRANDING = {"intro_sec": 2.0, "outro_sec": 2.0}
@@ -42,9 +43,34 @@ def test_includes_duration_in_frames_when_requested():
     assert rp["render"]["duration_in_frames"] == 270
 
 
-def test_omits_duration_in_frames_for_shorts():
-    rp = _build_render_props(**_args(include_duration_in_frames=False))
+def test_duration_includes_medical_disclaimer():
+    branding = {
+        "intro_sec": 2.0,
+        "outro_sec": 2.0,
+        "medical_disclaimer": {"enabled": True, "duration_sec": 8.0},
+    }
+    rp = _build_render_props(**_args(branding=branding))
+
+    # scenes 5s + intro 2s + disclaimer 8s + outro 2s
+    assert rp["render"]["duration_sec"] == 17.0
+    assert rp["render"]["duration_in_frames"] == 510
+
+
+def test_legacy_short_omits_long_form_branding_and_duration_frames():
+    branding = {
+        "intro_sec": 0.0,
+        "outro_sec": 0.0,
+        "medical_disclaimer": {"enabled": True, "duration_sec": 8.0},
+    }
+    rp = _build_render_props(
+        **_args(
+            include_duration_in_frames=False,
+            branding=without_long_form_branding(branding),
+        )
+    )
     assert "duration_in_frames" not in rp["render"]
+    assert rp["render"]["duration_sec"] == 5.0
+    assert rp["branding"]["medical_disclaimer"]["enabled"] is False
 
 
 def test_passes_through_core_fields():

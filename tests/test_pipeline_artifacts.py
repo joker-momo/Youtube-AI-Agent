@@ -9,6 +9,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_pipeline_writes_structured_artifacts_without_render(tmp_path, monkeypatch):
+    import video_agent.operator as operator_mod
+
+    chapter_resync_calls: list[float] = []
+    real_resync = operator_mod.resync_seo_chapters
+
+    def tracked_resync(*args, **kwargs):
+        chapter_resync_calls.append(float(kwargs.get("content_offset_sec") or 0.0))
+        return real_resync(*args, **kwargs)
+
+    monkeypatch.setattr(operator_mod, "resync_seo_chapters", tracked_resync)
     monkeypatch.delenv("PEXELS_API_KEY", raising=False)
     monkeypatch.delenv("PIXABAY_API_KEY", raising=False)
     channel_config = read_yaml(ROOT / "configs/vida-plena-45/channel.yaml")
@@ -42,6 +52,11 @@ def test_pipeline_writes_structured_artifacts_without_render(tmp_path, monkeypat
     assert (result.job_dir / "outputs" / "thumbnail.jpg").exists()
     assert (result.job_dir / "outputs" / "report.md").exists()
     render_props = read_json(result.job_dir / "json" / "render_props.json")
+    expected_offset = (
+        float(render_props["branding"]["intro_sec"])
+        + float(render_props["branding"]["medical_disclaimer"]["duration_sec"])
+    )
+    assert chapter_resync_calls == [expected_offset]
     assert render_props["channel"]["id"] == "vida-plena-45"
     assert len(render_props["scenes"]) == 5
     visual_review = read_json(result.job_dir / "json" / "visual_review.json")

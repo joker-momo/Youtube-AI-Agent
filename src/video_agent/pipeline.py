@@ -1,40 +1,44 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
+import json
 import logging
 import math
 import os
 import subprocess
-import json
+from dataclasses import dataclass
+from pathlib import Path
 
+from video_agent.assets.materialize import materialize_media
+from video_agent.branding import (
+    medical_disclaimer_duration_sec,
+    prepare_medical_disclaimer,
+    without_long_form_branding,
+)
 from video_agent.contracts import (
-    ARTIFACT_REPORT,
     ARTIFACT_RENDER_PROPS,
-    ARTIFACT_VISUAL_CONTACT_SHEET,
-    ARTIFACT_VISUAL_REVIEW,
-    ARTIFACT_VIDEO,
-    ARTIFACT_SCRIPT,
+    ARTIFACT_REPORT,
     ARTIFACT_SCENES,
     ARTIFACT_SEO,
     ARTIFACT_THUMBNAIL,
+    ARTIFACT_VIDEO,
+    ARTIFACT_VISUAL_CONTACT_SHEET,
+    ARTIFACT_VISUAL_REVIEW,
     EVENT_LOG,
     repo_root,
 )
 from video_agent.operator import assert_operator_qa_passed, write_operator_review
 from video_agent.providers.mock import MockProvider
+from video_agent.runtime.providers import AUDIO_SUBPROCESS_ENV, SubprocessAudioTaskProvider
 from video_agent.stages.assets import prepare_assets
 from video_agent.stages.render import render_with_remotion
 from video_agent.stages.scene import run_scene_stage
 from video_agent.stages.script import run_script_stage
 from video_agent.stages.thumbnail import create_thumbnail_and_seo
+from video_agent.storage.atomic import atomic_write_text
 from video_agent.utils.json_io import read_json, read_yaml, write_json
 from video_agent.utils.logging import EventLogger
 from video_agent.utils.paths import create_job_dir
 from video_agent.utils.validation import validate_json
-from video_agent.runtime.providers import AUDIO_SUBPROCESS_ENV, SubprocessAudioTaskProvider
-from video_agent.assets.materialize import materialize_media
-from video_agent.storage.atomic import atomic_write_text
 from video_agent.visual.spans import GRAPHIC_LAYOUTS
 
 _AUDIO_SUBPROCESS_ENV = AUDIO_SUBPROCESS_ENV
@@ -155,6 +159,7 @@ def _prepare_branding(channel_config: dict) -> dict:
     root = repo_root()
     channel_id = (channel_config.get("channel") or {}).get("id", "default")
     branding_cfg = channel_config.get("branding") or {}
+    medical_disclaimer = prepare_medical_disclaimer(branding_cfg)
     # Intro/outro default OFF for maximum opening retention. YouTube viewers
     # decide whether to keep watching within the first 5-15 seconds, so the
     # video must start on the narration hook rather than a logo card. The
@@ -219,6 +224,8 @@ def _prepare_branding(channel_config: dict) -> dict:
         # ``branding.show_channel_name_overlay: true`` when a one-off cut
         # needs the brand label visible.
         "show_channel_name_overlay": bool(branding_cfg.get("show_channel_name_overlay", False)),
+        # Static, silent medical notice between the intro and main content.
+        "medical_disclaimer": medical_disclaimer,
         # Hybrid graphic cards over a fixed brand-gradient bg (visual.hybrid_card).
         # None → graphic cards render full-bleed (legacy).
         "hybrid_card_bg": hybrid_card_bg,
@@ -538,7 +545,7 @@ def _write_visual_review(job_dir: Path, job_id: str, assets: dict, scene_doc: di
             f"visual_review scene count mismatch: assets={len(asset_scenes)}, scenes={len(doc_scenes)}"
         )
     scenes = []
-    for scene_asset, scene in zip(asset_scenes, doc_scenes):
+    for scene_asset, scene in zip(asset_scenes, doc_scenes, strict=False):
         selection = scene_asset.get("asset_selection") or {}
         scenes.append(
             {
@@ -743,13 +750,18 @@ def _recompile_asset_schedule(job_dir: Path, scenes: list[dict], fps: int) -> di
 
 
 def _comp_duration_in_frames(
-    scenes: list[dict], *, intro_sec: float, outro_sec: float, fps: int
+    scenes: list[dict],
+    *,
+    intro_sec: float,
+    outro_sec: float,
+    fps: int,
+    disclaimer_sec: float = 0.0,
 ) -> int:
     """Total composition frames for the long-form ``ChannelVideo`` layout.
 
-    Mirrors ``ChannelVideo.tsx``: the scene layer is shifted by ``introFrames`` and
-    an outro is appended, so the composition length is
-    ``introFrames + totalSceneFrames + outroFrames`` — NOT the scenes-only
+    Mirrors ``ChannelVideo.tsx``: the scene layer is shifted by the intro plus
+    medical disclaimer and an outro is appended, so the composition length is
+    ``introFrames + disclaimerFrames + totalSceneFrames + outroFrames`` — NOT the scenes-only
     ``visual_schedule.total_duration_in_frames``. Per-quantity rounding uses
     ``floor(x*fps + 0.5)`` to match JS ``Math.round`` (the schedule + renderer use
     the same), so the result is frame-exact. Root.tsx consumes this via
@@ -761,7 +773,7 @@ def _comp_duration_in_frames(
         return math.floor(float(sec or 0.0) * fps + 0.5)
 
     scene_frames = sum(_f(s.get("duration_sec")) for s in (scenes or []))
-    return _f(intro_sec) + scene_frames + _f(outro_sec)
+    return _f(intro_sec) + _f(disclaimer_sec) + scene_frames + _f(outro_sec)
 
 
 def _build_render_props(
@@ -779,7 +791,8 @@ def _build_render_props(
     """Assemble the render_props dict shared by ``run_pipeline`` and
     ``render_operator_job``.
 
-    ``duration_sec`` always covers scenes + branding intro/outro. ``duration_in_frames``
+    ``duration_sec`` always covers scenes + branding intro/disclaimer/outro.
+    ``duration_in_frames``
     (the exact composition frame count) is pinned only for long-form
     (``include_duration_in_frames``) — shorts mount the scene layer at frame 0 and let
     Root size to the schedule total, so it must stay absent there. Centralized so the
@@ -787,8 +800,16 @@ def _build_render_props(
     """
     scenes = scene_doc["scenes"]
     scene_duration_sec = round(sum(float(s.get("duration_sec") or 0.0) for s in (scenes or [])), 1)
+    # Shorts normalize this shared branding field to disabled before reaching
+    # this builder, so content selection stays independent from frame pinning.
+    disclaimer_sec = medical_disclaimer_duration_sec(branding)
     render = dict(render_base) | {
-        "duration_sec": scene_duration_sec + branding["intro_sec"] + branding["outro_sec"]
+        "duration_sec": (
+            scene_duration_sec
+            + branding["intro_sec"]
+            + disclaimer_sec
+            + branding["outro_sec"]
+        )
     }
     if include_duration_in_frames:
         render["duration_in_frames"] = _comp_duration_in_frames(
@@ -796,6 +817,7 @@ def _build_render_props(
             intro_sec=branding["intro_sec"],
             outro_sec=branding["outro_sec"],
             fps=fps,
+            disclaimer_sec=disclaimer_sec,
         )
     return {
         "channel": channel_config["channel"],
@@ -888,6 +910,19 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
     logger.log("ASSETS_READY", {"job_id": job_id, "cost_usd": 0})
 
     branding = _prepare_branding(channel_config)
+    from video_agent.operator import resync_seo_chapters
+
+    content_offset_sec = (
+        float(branding.get("intro_sec") or 0.0)
+        + medical_disclaimer_duration_sec(branding)
+    )
+    if resync_seo_chapters(
+        job_dir,
+        scene_doc=scene_doc,
+        script=script,
+        content_offset_sec=content_offset_sec,
+    ):
+        seo = read_json(_resolve_json_file(job_dir, "seo.json"))
     render_props = _build_render_props(
         channel_config=channel_config,
         style=style,
@@ -1291,10 +1326,12 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
         tts_config=(channel_config.get("tts") or {}) | {"music": channel_config.get("music") or {}},
         channel_id=channel_config["channel"]["id"],
     )
+    branding = _prepare_branding(channel_config)
     if is_short_job:
         _restore_scene_durations(scene_doc, short_duration_snapshot)
         write_json(job_dir / ARTIFACT_SCENES, scene_doc)
         validate_json(scene_doc, root / "schemas/scenes.schema.json")
+        branding = without_long_form_branding(branding)
     else:
         # AUTHORITATIVE chapter resync (bug-531): prepare_assets audio-fits the
         # scene timeline, so only NOW does scene_doc reflect what the viewer
@@ -1303,7 +1340,15 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
         try:
             from video_agent.operator import resync_seo_chapters
 
-            chapters = resync_seo_chapters(job_dir, scene_doc=scene_doc)
+            content_offset_sec = (
+                float(branding.get("intro_sec") or 0.0)
+                + medical_disclaimer_duration_sec(branding)
+            )
+            chapters = resync_seo_chapters(
+                job_dir,
+                scene_doc=scene_doc,
+                content_offset_sec=content_offset_sec,
+            )
             if chapters:
                 logger.log(
                     "OPERATOR_RENDER_PROGRESS",
@@ -1322,8 +1367,6 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
                     "error": str(exc)[:200],
                 },
             )
-    branding = _prepare_branding(channel_config)
-
     render_config = channel_config["render"].copy()
     if job_dir.parent.name == "shorts":
         shorts_render = (channel_config.get("shorts") or {}).get("render") or {}

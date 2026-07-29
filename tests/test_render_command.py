@@ -146,6 +146,28 @@ def test_pre_render_duration_validation_blocks_props_scene_sum_mismatch(tmp_path
         raise AssertionError("expected duration mismatch to fail before render")
 
 
+def test_pre_render_duration_validation_includes_medical_disclaimer(tmp_path):
+    from video_agent.stages.render import validate_render_duration_matches_scene_sum
+
+    render_props = tmp_path / "render_props.json"
+    render_props.write_text(
+        json.dumps(
+            {
+                "render": {"duration_sec": 15.0},
+                "scenes": [{"id": "s01", "duration_sec": 5.0}],
+                "branding": {
+                    "intro_sec": 1.0,
+                    "outro_sec": 1.0,
+                    "medical_disclaimer": {"enabled": True, "duration_sec": 8.0},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert validate_render_duration_matches_scene_sum(render_props) == 15.0
+
+
 def test_post_render_duration_validation_blocks_short_mp4_mismatch(tmp_path, monkeypatch):
     from video_agent.stages.render import validate_rendered_video_duration
 

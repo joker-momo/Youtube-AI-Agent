@@ -327,6 +327,90 @@ const BrandCard: React.FC<{
   );
 };
 
+const MedicalDisclaimerCard: React.FC<{
+  title: string;
+  lines: string[];
+  channelName: string;
+  palette: RenderProps['style']['palette'];
+}> = ({title, lines, channelName, palette}) => (
+  <AbsoluteFill
+    style={{
+      ...fullFrame,
+      background: `radial-gradient(circle at 50% 28%, ${palette.primary} 0%, #101914 48%, #080D0A 100%)`,
+      color: '#F7F4EC',
+    }}
+  >
+    <div
+      style={{
+        position: 'absolute',
+        inset: 0,
+        background: 'linear-gradient(135deg, rgba(255,255,255,0.045), transparent 42%)',
+      }}
+    />
+    <div
+      style={{
+        width: 1360,
+        margin: 'auto',
+        padding: '60px 80px 64px',
+        border: '1px solid rgba(255,255,255,0.18)',
+        borderRadius: 24,
+        background: 'rgba(7, 13, 10, 0.78)',
+        boxShadow: '0 28px 80px rgba(0,0,0,0.38)',
+        textAlign: 'center',
+      }}
+    >
+      <div
+        style={{
+          color: palette.accent,
+          fontSize: 22,
+          fontWeight: 800,
+          letterSpacing: 4,
+          textTransform: 'uppercase',
+        }}
+      >
+        {channelName}
+      </div>
+      <h1
+        style={{
+          margin: '20px 0 28px',
+          color: '#FFFFFF',
+          fontSize: 58,
+          fontWeight: 900,
+          letterSpacing: 1.4,
+          lineHeight: 1.08,
+        }}
+      >
+        {title}
+      </h1>
+      <div
+        style={{
+          width: 140,
+          height: 5,
+          margin: '0 auto 30px',
+          borderRadius: 3,
+          background: palette.accent,
+        }}
+      />
+      <div style={{display: 'flex', flexDirection: 'column', gap: 18}}>
+        {lines.map((line, index) => (
+          <p
+            key={`${index}-${line}`}
+            style={{
+              margin: 0,
+              color: index === 1 ? '#F4D9C9' : '#F7F4EC',
+              fontSize: 36,
+              fontWeight: index === 1 ? 750 : 600,
+              lineHeight: 1.34,
+            }}
+          >
+            {line}
+          </p>
+        ))}
+      </div>
+    </div>
+  </AbsoluteFill>
+);
+
 const BridgeFade: React.FC<{mode: 'out' | 'in'}> = ({mode}) => {
   const frame = useCurrentFrame();
   const alpha = mode === 'out'
@@ -342,6 +426,17 @@ const BridgeFade: React.FC<{mode: 'out' | 'in'}> = ({mode}) => {
     />
   );
 };
+
+const BridgeTransition: React.FC<{atFrame: number}> = ({atFrame}) => (
+  <>
+    <Sequence from={Math.max(0, atFrame - BRIDGE_FRAMES)} durationInFrames={BRIDGE_FRAMES}>
+      <BridgeFade mode="out" />
+    </Sequence>
+    <Sequence from={atFrame} durationInFrames={BRIDGE_FRAMES}>
+      <BridgeFade mode="in" />
+    </Sequence>
+  </>
+);
 
 
 const FontLoader: React.FC = () => (
@@ -685,11 +780,17 @@ export const ChannelVideo: React.FC<RenderProps> = (props) => {
   const introVideoPath = props.branding?.intro_video_path ?? null;
   const outroVideoPath = props.branding?.outro_video_path ?? null;
   const introFrames = Math.max(0, Math.round((props.branding?.intro_sec ?? 0) * fps));
+  const disclaimer = props.branding?.medical_disclaimer;
+  const disclaimerFrames = disclaimer?.enabled
+    ? Math.max(0, Math.round((disclaimer.duration_sec ?? 0) * fps))
+    : 0;
   const outroFrames = Math.max(0, Math.round((props.branding?.outro_sec ?? 0) * fps));
+  const disclaimerFrom = introFrames;
+  const contentFrom = introFrames + disclaimerFrames;
   const subtitles = resolveSubtitles(props.render.subtitles);
-  let start = introFrames;
+  let start = contentFrom;
   const totalSceneFrames = props.scenes.reduce((acc, s) => acc + Math.round(s.duration_sec * fps), 0);
-  const outroFrom = start + totalSceneFrames;
+  const outroFrom = contentFrom + totalSceneFrames;
   // When a compiled asset schedule is present, the visual timeline owns the
   // background layer (one continuous clip per span). Absent → legacy per-scene
   // background, frame-identical to before.
@@ -697,7 +798,7 @@ export const ChannelVideo: React.FC<RenderProps> = (props) => {
   return (
     <AbsoluteFill style={{backgroundColor: '#0C100D'}}>
       {props.audio.narration ? (
-        <Sequence from={introFrames}>
+        <Sequence from={contentFrom}>
           <Audio src={mediaSrc(props.audio.narration)} />
         </Sequence>
       ) : null}
@@ -718,11 +819,21 @@ export const ChannelVideo: React.FC<RenderProps> = (props) => {
           />
         </Sequence>
       ) : null}
+      {disclaimer && disclaimerFrames > 0 ? (
+        <Sequence from={disclaimerFrom} durationInFrames={disclaimerFrames}>
+          <MedicalDisclaimerCard
+            title={disclaimer.title || 'AVISO MÉDICO'}
+            lines={disclaimer.lines || []}
+            channelName={props.channel.name}
+            palette={props.style.palette}
+          />
+        </Sequence>
+      ) : null}
       {/* Background layer: continuous span clips. Rendered before the scene
           sequences so it sits behind their gradients/text. Scene-layer is shifted
-          by introFrames, matching where the per-scene sequences start. */}
+          by the intro + disclaimer, matching where scenes and narration start. */}
       {visualSchedule ? (
-        <Sequence from={introFrames}>
+        <Sequence from={contentFrom}>
           <ChannelVisualTimeline schedule={visualSchedule} />
         </Sequence>
       ) : null}
@@ -756,10 +867,10 @@ export const ChannelVideo: React.FC<RenderProps> = (props) => {
         );
       })}
       {/* Persistent logo — ONE continuous top-right overlay spanning every scene,
-          mounted once (introFrames → end of scenes) so it never blinks on a scene
+          mounted once (contentFrom → end of scenes) so it never blinks on a scene
           cut. Sits above the scene layer (top-right). */}
       {logoPath ? (
-        <Sequence from={introFrames} durationInFrames={totalSceneFrames}>
+        <Sequence from={contentFrom} durationInFrames={totalSceneFrames}>
           <LogoWatermark logoPath={logoPath} />
         </Sequence>
       ) : null}
@@ -783,27 +894,9 @@ export const ChannelVideo: React.FC<RenderProps> = (props) => {
         )
       ) : null}
 
-      {introFrames > 0 ? (
-        <>
-          <Sequence from={Math.max(0, introFrames - BRIDGE_FRAMES)} durationInFrames={BRIDGE_FRAMES}>
-            <BridgeFade mode="out" />
-          </Sequence>
-          <Sequence from={introFrames} durationInFrames={BRIDGE_FRAMES}>
-            <BridgeFade mode="in" />
-          </Sequence>
-        </>
-      ) : null}
-
-      {outroFrames > 0 ? (
-        <>
-          <Sequence from={Math.max(0, outroFrom - BRIDGE_FRAMES)} durationInFrames={BRIDGE_FRAMES}>
-            <BridgeFade mode="out" />
-          </Sequence>
-          <Sequence from={outroFrom} durationInFrames={BRIDGE_FRAMES}>
-            <BridgeFade mode="in" />
-          </Sequence>
-        </>
-      ) : null}
+      {introFrames > 0 ? <BridgeTransition atFrame={introFrames} /> : null}
+      {disclaimerFrames > 0 ? <BridgeTransition atFrame={contentFrom} /> : null}
+      {outroFrames > 0 ? <BridgeTransition atFrame={outroFrom} /> : null}
     </AbsoluteFill>
   );
 };

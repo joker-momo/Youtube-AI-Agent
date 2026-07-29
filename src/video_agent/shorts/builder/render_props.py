@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from video_agent.branding import without_long_form_branding
 from video_agent.shorts import paths
 from video_agent.shorts.asset_schedule import compute_schedule_hash
 from video_agent.shorts.builder.snapshots import _scene_duration_sum
@@ -154,13 +155,7 @@ def build_prepared_short_render_props(
     # after branding.enable_intro_outro was turned on channel-wide 2026-07-01 for
     # long-form). Force them to zero here so render.duration_sec == scene_sum and the
     # embedded branding does not point the renderer at intro/outro clips.
-    branding = {
-        **branding,
-        "intro_sec": 0.0,
-        "outro_sec": 0.0,
-        "intro_video_path": None,
-        "outro_video_path": None,
-    }
+    branding = without_long_form_branding(branding)
     intro = 0.0
     outro = 0.0
     scene_sum = round(sum(float(s.get("duration_sec") or 0.0) for s in scene_list), 1)

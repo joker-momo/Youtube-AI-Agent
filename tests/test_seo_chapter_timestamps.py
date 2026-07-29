@@ -472,11 +472,15 @@ def test_resync_seo_chapters_replaces_planned_timeline_overshoot(tmp_path):
         ],
     }
 
-    chapters = resync_seo_chapters(job_dir, scene_doc=final_scene_doc)
+    chapters = resync_seo_chapters(
+        job_dir,
+        scene_doc=final_scene_doc,
+        content_offset_sec=10.0,
+    )
 
-    assert chapters == [("00:00", "Primera parte"), ("01:00", "Segunda parte")]
+    assert chapters == [("00:00", "Primera parte"), ("01:10", "Segunda parte")]
     seo = json.loads((job_dir / "json" / "seo.json").read_text(encoding="utf-8"))
     assert "24:39" not in seo["description"]
-    assert "01:00 - Segunda parte" in seo["description"]
+    assert "01:10 - Segunda parte" in seo["description"]
     # single-field update: unrelated fields untouched
     assert seo["thumbnail_path"] == "jobs/x/outputs/thumbnail_1.jpg"

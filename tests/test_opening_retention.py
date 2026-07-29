@@ -4,7 +4,7 @@ strengthen the first-30-seconds prompt rules."""
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from datetime import UTC
 
 import yaml
 
@@ -28,6 +28,8 @@ def test_prepare_branding_defaults_intro_outro_to_zero():
     assert branding["outro_sec"] == 0.0
     assert branding["intro_video_path"] is None
     assert branding["outro_video_path"] is None
+    assert branding["medical_disclaimer"]["enabled"] is False
+    assert branding["medical_disclaimer"]["duration_sec"] == 0.0
 
 
 def test_prepare_branding_skips_intro_outro_when_flag_false():
@@ -65,12 +67,51 @@ def test_prepare_branding_honors_explicit_enable_flag(monkeypatch):
     assert branding["outro_sec"] == 2.5
 
 
-def test_vida_plena_channel_config_has_intro_outro_disabled():
+def test_vida_plena_channel_config_has_intro_outro_enabled():
     cfg = _load_vida_plena_config()
-    assert cfg.get("branding", {}).get("enable_intro_outro") is False, (
-        "channel.yaml must keep enable_intro_outro=false to guarantee the "
-        "opening-retention policy stays in place."
-    )
+    assert cfg.get("branding", {}).get("enable_intro_outro") is True
+
+
+def test_prepare_branding_honors_medical_disclaimer(monkeypatch):
+    import video_agent.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "_resolve_brand_video_source", lambda *a, **kw: None)
+    monkeypatch.setattr(pipeline_module, "_resolve_brand_logo_source", lambda *a, **kw: None)
+
+    config = {
+        "channel": {"id": "disclaimer-test"},
+        "branding": {
+            "medical_disclaimer": {
+                "enabled": True,
+                "duration_sec": 8.0,
+                "title": "AVISO MÉDICO",
+                "lines": ["Línea uno.", "Línea dos.", "Línea tres."],
+            }
+        },
+    }
+
+    branding = _prepare_branding(config)
+
+    assert branding["medical_disclaimer"] == {
+        "enabled": True,
+        "duration_sec": 8.0,
+        "title": "AVISO MÉDICO",
+        "lines": ["Línea uno.", "Línea dos.", "Línea tres."],
+    }
+
+
+def test_vida_plena_channel_config_enables_readable_medical_disclaimer():
+    cfg = _load_vida_plena_config()
+    disclaimer = cfg["branding"]["medical_disclaimer"]
+
+    assert disclaimer["enabled"] is True
+    assert disclaimer["duration_sec"] == 8.0
+    assert disclaimer["title"] == "AVISO MÉDICO"
+    assert disclaimer["lines"] == [
+        "Este video tiene fines informativos y educativos.",
+        "No sustituye el diagnóstico ni el tratamiento médico profesional.",
+        "Consulta siempre a tu médico antes de cambiar tu dieta, ejercicio o tratamiento.",
+    ]
 
 
 def test_prepare_branding_hides_channel_name_overlay_by_default():
@@ -106,8 +147,6 @@ def test_mark_render_completed_auto_advances_review(tmp_path):
     Review is a cosmetic HTML write, not an external approval — leaving
     it pending stalls the dashboard on "Review page" forever.
     """
-    import json
-    from datetime import datetime, timezone
 
     from video_agent.stages.render import _mark_render_stage_completed
 
@@ -138,7 +177,6 @@ def test_mark_render_completed_auto_advances_review(tmp_path):
 
 
 def test_mark_render_completed_skips_review_when_already_done(tmp_path):
-    import json
 
     from video_agent.stages.render import _mark_render_stage_completed
 
@@ -169,6 +207,16 @@ def test_channel_video_tsx_gates_channel_name_label():
     src = (repo_root() / "remotion/src/ChannelVideo.tsx").read_text(encoding="utf-8")
     assert "showChannelNameOverlay ?" in src or "showChannelNameOverlay\n" in src
     assert "show_channel_name_overlay" in src
+
+
+def test_channel_video_places_medical_disclaimer_between_intro_and_content():
+    src = (repo_root() / "remotion/src/ChannelVideo.tsx").read_text(encoding="utf-8")
+
+    assert "MedicalDisclaimerCard" in src
+    assert "const disclaimerFrom = introFrames;" in src
+    assert "const contentFrom = introFrames + disclaimerFrames;" in src
+    assert "<Sequence from={disclaimerFrom} durationInFrames={disclaimerFrames}>" in src
+    assert "<Sequence from={contentFrom}>" in src
 
 
 # ---------------- prompt retention guidance ----------------
@@ -228,8 +276,7 @@ def test_complete_stage_falls_back_to_previous_completed_at(tmp_path):
     use the previous stage's ``completed_at`` as the new stage's
     ``started_at`` instead of ``now`` — otherwise every stage reports a
     0-second duration."""
-    import json
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     from video_agent.orchestrator.stages import _complete_stage
 
@@ -237,7 +284,7 @@ def test_complete_stage_falls_back_to_previous_completed_at(tmp_path):
     job_dir.mkdir()
     # Stage A finished a minute ago; stage B is the new in-flight one with
     # no explicit started_at (the historical bug).
-    a_end = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    a_end = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
     state = {
         "job_id": "job-fallback",
         "channel_id": "vida-plena-45",
@@ -270,8 +317,6 @@ def test_complete_stage_falls_back_to_previous_completed_at(tmp_path):
 
 
 def test_start_stage_marks_started_at_only_once(tmp_path):
-    import json
-    from datetime import datetime, timezone
 
     from video_agent.orchestrator.stages import _start_stage
 

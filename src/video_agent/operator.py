@@ -541,6 +541,7 @@ def _compute_chapter_timestamps(
     script: dict[str, Any] | None,
     scenes_plan: dict[str, Any] | None = None,
     chapter_overrides: dict[str, Any] | None = None,
+    content_offset_sec: float = 0.0,
 ) -> list[tuple[str, str]]:
     """Compute YouTube chapter (timestamp, title) pairs from real scenes.
 
@@ -565,7 +566,8 @@ def _compute_chapter_timestamps(
     offsets = _scene_offsets(scenes)
     total_sec = float(scene_doc.get("total_duration_sec") or 0)
     tail = offsets[-1] + float(scenes[-1].get("duration_sec") or 0)
-    total_sec = max(total_sec, tail)
+    content_offset_sec = max(0.0, float(content_offset_sec or 0.0))
+    total_sec = max(total_sec, tail) + content_offset_sec
     if total_sec <= 0:
         return []
 
@@ -617,7 +619,7 @@ def _compute_chapter_timestamps(
         anchored: list[tuple[str, str]] = [("00:00", section_titles[0])]
         last_offset = 0.0
         for title, scene_idx in zip(section_titles[1:], anchors, strict=True):
-            offset = offsets[scene_idx]
+            offset = offsets[scene_idx] + content_offset_sec
             # Keep EVERY section whose anchor is valid; drop only chapters that
             # violate YouTube's hard rules (>=10s apart, inside the video).
             if offset - last_offset < _MIN_CHAPTER_GAP_SEC or offset >= total_sec:
@@ -649,7 +651,9 @@ def _compute_chapter_timestamps(
     used_titles: set[str] = set()
     last_offset = -_MIN_CHAPTER_GAP_SEC
     for chapter_pos, scene_idx in enumerate(boundary_indices):
-        offset = offsets[scene_idx]
+        offset = offsets[scene_idx] + (
+            content_offset_sec if chapter_pos > 0 else 0.0
+        )
         if chapter_pos > 0 and (offset - last_offset < _MIN_CHAPTER_GAP_SEC or offset >= total_sec):
             continue
         ts = "00:00" if chapter_pos == 0 else _format_mmss(offset)
@@ -678,6 +682,7 @@ def resync_seo_chapters(
     job_dir: Path,
     scene_doc: dict[str, Any] | None = None,
     script: dict[str, Any] | None = None,
+    content_offset_sec: float = 0.0,
 ) -> list[tuple[str, str]] | None:
     """Recompute the YouTube chapter block in seo.json from the CURRENT scene
     timeline and persist it via a race-safe single-field update.
@@ -711,7 +716,11 @@ def resync_seo_chapters(
     )
     overrides = _read_optional_json(job_dir / "json" / "chapter_overrides.json")
     chapters = _compute_chapter_timestamps(
-        scene_doc, script, scenes_plan=scenes_plan, chapter_overrides=overrides
+        scene_doc,
+        script,
+        scenes_plan=scenes_plan,
+        chapter_overrides=overrides,
+        content_offset_sec=content_offset_sec,
     )
     if not chapters:
         return None

@@ -150,3 +150,32 @@ def test_legacy_render_without_schedule_succeeds(tmp_path: Path) -> None:
     # fallback renders the full frame count and is readable mid-scene (frame 30).
     assert len(vals) == 180
     assert vals[30] is not None, "legacy first scene unreadable mid-scene"
+
+
+def test_disclaimer_delays_content_schedule_without_consuming_it(tmp_path: Path) -> None:
+    """Intro + disclaimer occupy their own frames before scene-backed content."""
+    props = _build_props()
+    props["branding"] = {
+        **props["branding"],
+        "intro_sec": 1.0,
+        "medical_disclaimer": {
+            "enabled": True,
+            "duration_sec": 1.0,
+            "title": "AVISO MÉDICO",
+            "lines": ["Contenido informativo.", "Consulta a tu médico."],
+        },
+    }
+    props["render"]["duration_sec"] = 8.0
+    props["render"]["duration_in_frames"] = 240
+    cf.generate_fixture(FIXTURE, width=1920, height=1080)
+
+    vals = cf.decode_video_markers(_render(props, tmp_path))
+
+    assert len(vals) == 240
+    assert all(value is None for value in vals[:60])
+    readable = [(frame, value) for frame, value in enumerate(vals[60:], 60) if value is not None]
+    assert readable[0][0] <= 60 + 12  # content is only briefly covered by BridgeFade
+    assert all(
+        value == TRIM_BEFORE + frame - 60
+        for frame, value in readable
+    )

@@ -16,9 +16,11 @@ from __future__ import annotations
 import math
 import shutil
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
+from video_agent.branding import medical_disclaimer_duration_sec
 from video_agent.contracts import ARTIFACT_SCENES, ARTIFACT_VIDEO
 from video_agent.orchestrator.job_state import load_job
 from video_agent.orchestrator.stages._shared import (
@@ -82,13 +84,10 @@ def analyze_span_continuity(
 
 
 def _intro_offset_frames(job_dir: Path) -> int:
-    """Frames the rendered scene layer is shifted by (long-form intro).
+    """Frames the rendered scene layer is shifted by (intro + disclaimer).
 
-    ``ChannelVideo.tsx`` mounts the scene layer at ``introFrames`` while the
-    schedule ``scene_boundaries`` are scene-layer 0-based, so the QA must sample
-    the rendered video at ``boundary + introFrames``. Read from the already-written
-    ``render_props.json`` (branding.intro_sec * render.fps, JS ``Math.round``).
-    Returns 0 when render_props / branding is absent (e.g. shorts, intro disabled).
+    ``ChannelVideo.tsx`` mounts scenes after both pre-content cards while schedule
+    boundaries remain scene-layer 0-based.
     """
     for candidate in (job_dir / "json" / "render_props.json", job_dir / "render_props.json"):
         if not candidate.exists():
@@ -98,10 +97,12 @@ def _intro_offset_frames(job_dir: Path) -> int:
         except Exception:
             return 0
         fps = float(((rp.get("render") or {}).get("fps")) or 0.0)
-        intro_sec = float(((rp.get("branding") or {}).get("intro_sec")) or 0.0)
-        if fps <= 0 or intro_sec <= 0:
+        branding = rp.get("branding") or {}
+        content_offset_sec = float(branding.get("intro_sec") or 0.0)
+        content_offset_sec += medical_disclaimer_duration_sec(branding)
+        if fps <= 0 or content_offset_sec <= 0:
             return 0
-        return math.floor(intro_sec * fps + 0.5)
+        return math.floor(content_offset_sec * fps + 0.5)
     return 0
 
 

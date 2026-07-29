@@ -837,3 +837,76 @@ def test_fast_audio_track_without_intro_or_outro_video(tmp_path, monkeypatch):
     actual = probe_audio_duration_sec(audio_path)
     assert actual is not None
     assert abs(actual - 3.0) < 0.05
+
+
+def test_fast_audio_track_inserts_silence_for_medical_disclaimer(tmp_path, monkeypatch):
+    import video_agent.stages.render as render_mod
+    from video_agent.stages.render import _build_fast_audio_track
+
+    monkeypatch.setattr(render_mod, "repo_root", lambda: tmp_path)
+    narration_path = tmp_path / "jobs" / "job-1" / "assets" / "narration.wav"
+    narration_path.parent.mkdir(parents=True)
+    narration_path.write_bytes(b"wav")
+    render_props = tmp_path / "render_props.json"
+    render_props.write_text(
+        json.dumps(
+            {
+                "render": {"fps": 30, "duration_in_frames": 270},
+                "branding": {
+                    "intro_sec": 0,
+                    "outro_sec": 0,
+                    "medical_disclaimer": {"enabled": True, "duration_sec": 1.0},
+                },
+                "audio": {"narration": "jobs/job-1/assets/narration.wav", "music": None},
+            }
+        ),
+        encoding="utf-8",
+    )
+    captured = {}
+
+    def fake_run(cmd, capture_output, text):
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(render_mod.subprocess, "run", fake_run)
+
+    _build_fast_audio_track(render_props, tmp_path / "audio.wav")
+
+    filter_graph = captured["cmd"][captured["cmd"].index("-filter_complex") + 1]
+    assert "anullsrc=r=48000:cl=stereo,atrim=0:1.000000[adisclaimer]" in filter_graph
+    assert "apad,atrim=0:8.000000" in filter_graph
+    assert "[adisclaimer][a0]concat=n=2:v=0:a=1[out]" in filter_graph
+
+
+def test_fast_audio_track_with_medical_disclaimer_is_valid_real_audio(
+    tmp_path, monkeypatch
+):
+    import video_agent.stages.render as render_mod
+    from video_agent.stages.render import _build_fast_audio_track, probe_audio_duration_sec
+
+    monkeypatch.setattr(render_mod, "repo_root", lambda: tmp_path)
+    narration_path = tmp_path / "jobs" / "job-1" / "assets" / "narration.wav"
+    narration_path.parent.mkdir(parents=True)
+    _make_wav(narration_path, seconds=3.5)
+    render_props = tmp_path / "render_props.json"
+    render_props.write_text(
+        json.dumps(
+            {
+                "render": {"fps": 30, "duration_in_frames": 120},
+                "branding": {
+                    "intro_sec": 0,
+                    "outro_sec": 0,
+                    "medical_disclaimer": {"enabled": True, "duration_sec": 1.0},
+                },
+                "audio": {"narration": "jobs/job-1/assets/narration.wav", "music": None},
+            }
+        ),
+        encoding="utf-8",
+    )
+    audio_path = tmp_path / "audio.wav"
+
+    _build_fast_audio_track(render_props, audio_path)
+
+    actual = probe_audio_duration_sec(audio_path)
+    assert actual is not None
+    assert abs(actual - 4.0) < 0.05

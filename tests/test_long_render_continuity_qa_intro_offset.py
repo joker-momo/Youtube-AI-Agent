@@ -16,17 +16,32 @@ from video_agent.orchestrator.stages import render_continuity_qa as rcq
 from video_agent.utils.json_io import write_json
 
 
-def _write_render_props(job_dir, *, intro_sec, fps):
+def _write_render_props(job_dir, *, intro_sec, fps, disclaimer_sec=0.0):
     (job_dir / "json").mkdir(parents=True, exist_ok=True)
     write_json(
         job_dir / "json" / "render_props.json",
-        {"render": {"fps": fps}, "branding": {"intro_sec": intro_sec, "outro_sec": 1.0}},
+        {
+            "render": {"fps": fps},
+            "branding": {
+                "intro_sec": intro_sec,
+                "outro_sec": 1.0,
+                "medical_disclaimer": {
+                    "enabled": disclaimer_sec > 0,
+                    "duration_sec": disclaimer_sec,
+                },
+            },
+        },
     )
 
 
 def test_intro_offset_frames_from_render_props(tmp_path):
     _write_render_props(tmp_path, intro_sec=2.0, fps=30)
     assert rcq._intro_offset_frames(tmp_path) == 60
+
+
+def test_intro_offset_includes_medical_disclaimer(tmp_path):
+    _write_render_props(tmp_path, intro_sec=2.0, disclaimer_sec=8.0, fps=30)
+    assert rcq._intro_offset_frames(tmp_path) == 300
 
 
 def test_intro_offset_zero_when_no_branding(tmp_path):

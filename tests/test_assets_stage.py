@@ -100,6 +100,261 @@ def test_prepare_assets_auto_prefers_local_directory_before_stock_api(tmp_path):
     assert manifest["scenes"][0]["background"].endswith("scene-01.mp4")
 
 
+def test_prepare_assets_graphic_primary_image_does_not_replace_video_background(
+    tmp_path, monkeypatch
+):
+    job_dir = tmp_path / "jobs" / "job-graphic-video-background"
+    assets_dir = job_dir / "assets"
+    assets_dir.mkdir(parents=True)
+    primary_image = assets_dir / "scene-01.png"
+    Image.new("RGB", (640, 360), (12, 34, 56)).save(primary_image)
+    stock_video = tmp_path / "matched-broll.mp4"
+    stock_video.write_bytes(b"native-video")
+    resolved_scene_ids = []
+
+    def resolve_video(_self, scene, _channel_id, _job_id):
+        resolved_scene_ids.append(scene["id"])
+        return {
+            "local_path": str(stock_video),
+            "provider": "pexels_video",
+            "provider_asset_id": "video-01",
+            "asset_tier": "pexels_video",
+            "asset_selection": {"asset_match_status": "strict_match"},
+        }
+
+    monkeypatch.setattr(
+        "video_agent.stages.assets.StockAssetService.get_scene_asset",
+        resolve_video,
+    )
+    doc = {
+        "total_duration_sec": 10,
+        "scenes": [
+            {
+                "id": "scene-01",
+                "layout": "warning",
+                "duration_sec": 10,
+                "on_screen_text": "Graphic foreground",
+                "visual_prompt": "mature patient discussing surgery with a clinician",
+                "graphic": {
+                    "needed": True,
+                    "image_ref": "assets/graphic-scene-01.png",
+                },
+                "asset_refs": {
+                    "primary": "assets/scene-01.png",
+                    "primary_source": "chatgpt_image",
+                },
+            }
+        ],
+    }
+
+    manifest = prepare_assets(
+        job_dir,
+        STYLE_DNA,
+        doc,
+        visual_config={
+            "strategy": "auto",
+            "providers": ["pexels_video"],
+            "query_cache_path": str(tmp_path / "caches" / "query_cache.db"),
+            "asset_library_path": str(tmp_path / "asset_library"),
+        },
+        render_tts=False,
+    )
+
+    scene = manifest["scenes"][0]
+    assert resolved_scene_ids == ["scene-01"]
+    assert scene["source"] == "asset_library"
+    assert scene["provider"] == "pexels_video"
+    assert scene["media_kind"] == "video"
+    assert doc["scenes"][0]["asset_refs"]["background_media_kind"] == "video"
+
+
+def test_prepare_assets_non_graphic_primary_image_still_overrides_stock(
+    tmp_path,
+):
+    job_dir = tmp_path / "jobs" / "job-primary-image-background"
+    assets_dir = job_dir / "assets"
+    assets_dir.mkdir(parents=True)
+    primary_image = assets_dir / "scene-01.png"
+    Image.new("RGB", (640, 360), (12, 34, 56)).save(primary_image)
+    doc = {
+        "total_duration_sec": 10,
+        "scenes": [
+            {
+                "id": "scene-01",
+                "layout": "subtitle",
+                "duration_sec": 10,
+                "on_screen_text": "Primary image background",
+                "asset_refs": {
+                    "primary": "assets/scene-01.png",
+                    "primary_source": "chatgpt_image",
+                },
+            }
+        ],
+    }
+
+    manifest = prepare_assets(
+        job_dir,
+        STYLE_DNA,
+        doc,
+        visual_config={
+            "strategy": "auto",
+            "providers": ["pexels_video"],
+            "query_cache_path": str(tmp_path / "caches" / "query_cache.db"),
+            "asset_library_path": str(tmp_path / "asset_library"),
+        },
+        stock_client=ExplodingStockClient(),
+        render_tts=False,
+    )
+
+    scene = manifest["scenes"][0]
+    assert scene["source"] == "asset_refs_primary"
+    assert scene["media_kind"] == "image"
+
+
+def test_prepare_assets_graphic_native_video_primary_stays_preferred(
+    tmp_path,
+):
+    job_dir = tmp_path / "jobs" / "job-graphic-native-video"
+    assets_dir = job_dir / "assets"
+    assets_dir.mkdir(parents=True)
+    primary_video = assets_dir / "scene-01.mp4"
+    primary_video.write_bytes(b"native-video")
+    doc = {
+        "total_duration_sec": 10,
+        "scenes": [
+            {
+                "id": "scene-01",
+                "duration_sec": 10,
+                "on_screen_text": "Graphic over native video",
+                "graphic": {"needed": True},
+                "asset_refs": {
+                    "primary": "assets/scene-01.mp4",
+                    "primary_source": "external_video",
+                },
+            }
+        ],
+    }
+
+    manifest = prepare_assets(
+        job_dir,
+        STYLE_DNA,
+        doc,
+        visual_config={
+            "strategy": "auto",
+            "providers": ["pexels_video"],
+            "query_cache_path": str(tmp_path / "caches" / "query_cache.db"),
+            "asset_library_path": str(tmp_path / "asset_library"),
+        },
+        stock_client=ExplodingStockClient(),
+        render_tts=False,
+    )
+
+    scene = manifest["scenes"][0]
+    assert scene["source"] == "asset_refs_primary"
+    assert scene["source_path"] == str(primary_video.resolve())
+    assert scene["media_kind"] == "video"
+    assert doc["scenes"][0]["asset_refs"]["background_media_kind"] == "video"
+
+
+@pytest.mark.parametrize("stock_result", [None, {"provider": "graphic_fallback"}])
+def test_prepare_assets_graphic_primary_image_is_fallback_when_stock_has_no_video(
+    tmp_path, monkeypatch, stock_result
+):
+    job_dir = tmp_path / "jobs" / "job-graphic-primary-fallback"
+    assets_dir = job_dir / "assets"
+    assets_dir.mkdir(parents=True)
+    primary_image = assets_dir / "scene-01.png"
+    Image.new("RGB", (640, 360), (12, 34, 56)).save(primary_image)
+
+    monkeypatch.setattr(
+        "video_agent.stages.assets.StockAssetService.get_scene_asset",
+        lambda _self, _scene, _channel_id, _job_id: stock_result,
+    )
+    doc = {
+        "total_duration_sec": 10,
+        "scenes": [
+            {
+                "id": "scene-01",
+                "duration_sec": 10,
+                "on_screen_text": "Graphic with image fallback",
+                "graphic": {"needed": True},
+                "asset_refs": {
+                    "primary": "assets/scene-01.png",
+                    "primary_source": "chatgpt_image",
+                },
+            }
+        ],
+    }
+
+    manifest = prepare_assets(
+        job_dir,
+        STYLE_DNA,
+        doc,
+        visual_config={
+            "strategy": "auto",
+            "providers": ["pexels_video"],
+            "query_cache_path": str(tmp_path / "caches" / "query_cache.db"),
+            "asset_library_path": str(tmp_path / "asset_library"),
+        },
+        render_tts=False,
+    )
+
+    scene = manifest["scenes"][0]
+    assert scene["source"] == "asset_refs_primary"
+    assert scene["source_path"] == str(primary_image.resolve())
+    assert scene["media_kind"] == "image"
+    assert doc["scenes"][0]["asset_refs"]["background_media_kind"] == "image"
+
+
+def test_prepare_assets_graphic_local_directory_keeps_accurate_source_label(
+    tmp_path,
+):
+    job_dir = tmp_path / "jobs" / "job-graphic-local-directory"
+    assets_dir = job_dir / "assets"
+    assets_dir.mkdir(parents=True)
+    primary_image = assets_dir / "scene-01.png"
+    Image.new("RGB", (640, 360), (12, 34, 56)).save(primary_image)
+    source_dir = tmp_path / "image-library"
+    source_dir.mkdir()
+    local_image = source_dir / "scene-01.jpg"
+    Image.new("RGB", (640, 360), (65, 43, 21)).save(local_image)
+    doc = {
+        "total_duration_sec": 10,
+        "scenes": [
+            {
+                "id": "scene-01",
+                "duration_sec": 10,
+                "on_screen_text": "Graphic over local background",
+                "graphic": {"needed": True},
+                "asset_refs": {
+                    "primary": "assets/scene-01.png",
+                    "primary_source": "chatgpt_image",
+                },
+            }
+        ],
+    }
+
+    manifest = prepare_assets(
+        job_dir,
+        STYLE_DNA,
+        doc,
+        visual_config={
+            "strategy": "auto",
+            "source_dir": str(source_dir),
+            "providers": ["pexels_video"],
+            "query_cache_path": str(tmp_path / "caches" / "query_cache.db"),
+            "asset_library_path": str(tmp_path / "asset_library"),
+        },
+        stock_client=ExplodingStockClient(),
+        render_tts=False,
+    )
+
+    scene = manifest["scenes"][0]
+    assert scene["source"] == "local_directory"
+    assert scene["source_path"] == str(local_image.resolve())
+    assert scene["media_kind"] == "image"
+
+
 def test_prepare_assets_full_pass_does_not_partially_replace_assets_when_interrupted(
     tmp_path, monkeypatch
 ):

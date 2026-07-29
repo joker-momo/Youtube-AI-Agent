@@ -16,6 +16,7 @@ from video_agent.assets.media_ops import (  # extracted shared primitives (P1)
     _write_video_from_image,
 )
 from video_agent.assets.scene_prep import (  # extracted shared helpers (P1)
+    SUPPORTED_IMAGE_SUFFIXES,
     _background_source_label,
     _find_asset_refs_primary,
     _find_local_scene_image,
@@ -157,11 +158,50 @@ def prepare_assets(
             except Exception:  # pragma: no cover - reporting must never break asset prep
                 pass
         primary_asset = _find_asset_refs_primary(scene, job_dir)
-        local_image = primary_asset or _find_local_scene_image(scene["id"], source_dir)
+        graphic = scene.get("graphic") if isinstance(scene.get("graphic"), dict) else {}
+        asset_refs = (
+            scene.get("asset_refs")
+            if isinstance(scene.get("asset_refs"), dict)
+            else {}
+        )
+        primary_is_graphic_companion = (
+            primary_asset is not None
+            and primary_asset.suffix.lower() in SUPPORTED_IMAGE_SUFFIXES
+            and asset_refs.get("primary_source") == "chatgpt_image"
+            and bool(graphic.get("needed") or graphic.get("image_ref"))
+        )
+        # A generated scene image and a generated graphic card are separate
+        # foreground candidates. When the graphic card is active, do not let the
+        # scene image consume the background slot and bypass native stock video.
+        local_directory_image = _find_local_scene_image(scene["id"], source_dir)
+        if primary_is_graphic_companion:
+            local_image = local_directory_image
+            local_image_source = "local_directory" if local_image else None
+        else:
+            local_image = primary_asset or local_directory_image
+            local_image_source = (
+                "asset_refs_primary"
+                if primary_asset is not None
+                else ("local_directory" if local_directory_image else None)
+            )
         stock_asset = None
         scene_dur = float(scene.get("duration_sec") or 30)
         if not local_image and stock_service:
             stock_asset = stock_service.get_scene_asset(scene, channel_id, job_dir.name)
+        if (
+            primary_is_graphic_companion
+            and not local_image
+            and (
+                not stock_asset
+                or stock_asset.get("provider") == "graphic_fallback"
+            )
+        ):
+            # Preserve the existing graceful fallback when no usable background
+            # can be acquired. The renderer recognizes this as image-backed and
+            # shows the moving brand background behind the graphic card.
+            local_image = primary_asset
+            local_image_source = "asset_refs_primary"
+            stock_asset = None
         # Encode all scene backgrounds to video so Remotion renders one media path.
         asset_suffix = ".mp4"
         image_path = assets_dir / f"{scene['id']}{asset_suffix}"
@@ -189,9 +229,7 @@ def prepare_assets(
                 )
                 if _write_preview_still(local_image, staged_preview_still):
                     media_kind = "image"
-            source = (
-                "asset_refs_primary" if primary_asset is not None else "local_directory"
-            )
+            source = local_image_source or "local_directory"
             source_path = str(local_image.resolve())
             extra_manifest = {}
         elif stock_asset and stock_asset.get("provider") != "graphic_fallback":

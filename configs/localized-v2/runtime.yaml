@@ -1,0 +1,6 @@
+schemaVersion: "localized-runtime-v2/v1"
+root: "runtime/localized-v2"
+host: "127.0.0.1"
+port: 8792
+busyTimeoutMs: 2500
+leaseSeconds: 30

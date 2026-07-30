@@ -32,9 +32,16 @@ def _locale_pack(locale: str) -> dict:
         "numbers": {"decimalSeparator": "."},
         "medicalSafety": {
             "softClaims": ["research suggests"],
+            "prohibitedClaims": ["cures disease", "guaranteed result"],
             "disclaimer": "Educational information only.",
         },
-        "seo": {"titleMaxChars": 70, "keywordStyle": "natural"},
+        "seo": {
+            "titleMaxChars": 70,
+            "keywordStyle": "natural",
+            "keywordCues": ["healthy aging"],
+            "thumbnailMaxChars": 30,
+            "pinnedCommentStyle": "warm and concise",
+        },
         "narration": {"wordsPerMinute": 125, "sentenceMaxWords": 22},
         "fonts": {"families": ["Inter"], "requiredCodepoints": ["0041"]},
         "visuals": {"peopleContext": "locally representative", "avoid": ["stereotypes"]},
@@ -121,9 +128,11 @@ def test_v2_config_validation_never_reads_legacy_schema(
 @pytest.mark.parametrize(
     ("kind", "payload"),
     [
+        (ArtifactKind.IDEA, {"schemaVersion": "localized-idea-v2/v1"}),
         (ArtifactKind.SCRIPT, {"schemaVersion": "localized-script-v2/v1"}),
         (ArtifactKind.SCENES, {"schemaVersion": "localized-scenes-v2/v1"}),
         (ArtifactKind.SEO, {"schemaVersion": "localized-seo-v2/v1"}),
+        (ArtifactKind.QA, {"schemaVersion": "localized-qa-v2/v1"}),
         (ArtifactKind.AUDIO_TIMING, {"schemaVersion": "localized-audio-timing-v2/v1"}),
         (ArtifactKind.ASSET_MANIFEST, {"schemaVersion": "localized-assets-v2/v1"}),
         (ArtifactKind.RENDER_PROPS, {"schemaVersion": "localized-render-props-v2/v1"}),

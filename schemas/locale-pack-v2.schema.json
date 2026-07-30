@@ -37,18 +37,22 @@
     },
     "medicalSafety": {
       "type": "object", "additionalProperties": false,
-      "required": ["softClaims", "disclaimer"],
+      "required": ["softClaims", "prohibitedClaims", "disclaimer"],
       "properties": {
         "softClaims": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "prohibitedClaims": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
         "disclaimer": {"type": "string", "minLength": 10}
       }
     },
     "seo": {
       "type": "object", "additionalProperties": false,
-      "required": ["titleMaxChars", "keywordStyle"],
+      "required": ["titleMaxChars", "keywordStyle", "keywordCues", "thumbnailMaxChars", "pinnedCommentStyle"],
       "properties": {
         "titleMaxChars": {"type": "integer", "minimum": 40, "maximum": 100},
-        "keywordStyle": {"type": "string", "minLength": 1}
+        "keywordStyle": {"type": "string", "minLength": 1},
+        "keywordCues": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "thumbnailMaxChars": {"type": "integer", "minimum": 10, "maximum": 60},
+        "pinnedCommentStyle": {"type": "string", "minLength": 1}
       }
     },
     "narration": {

@@ -33,6 +33,7 @@ def _locale_pack() -> dict:
         "locale": "en-US",
         "medicalSafety": {
             "softClaims": ["research suggests"],
+            "prohibitedClaims": ["cures disease", "guaranteed result"],
             "disclaimer": "Educational information only.",
         },
         "fonts": {"families": ["Inter"], "requiredCodepoints": ["0041"]},

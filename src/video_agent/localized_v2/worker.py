@@ -131,14 +131,20 @@ class LocalizedWorker:
         except Exception as exc:
             current = self.queue.get_attempt(lease.attempt_id)
             if current and current["status"] == "RUNNING":
-                self.queue.fail_attempt(
-                    lease.attempt_id,
-                    self.worker_id,
-                    {
+                failure_factory = getattr(exc, "to_failure", None)
+                failure = (
+                    failure_factory()
+                    if callable(failure_factory)
+                    else {
                         "code": "STAGE_FAILED",
                         "message": str(exc),
                         "retryable": True,
-                    },
+                    }
+                )
+                self.queue.fail_attempt(
+                    lease.attempt_id,
+                    self.worker_id,
+                    failure,
                 )
             raise
         finally:

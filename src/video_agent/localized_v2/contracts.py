@@ -8,9 +8,11 @@ CONTRACT_VERSION = "localized-v2/v1"
 
 
 class ArtifactKind(StrEnum):
+    IDEA = "idea"
     SCRIPT = "script"
     SCENES = "scenes"
     SEO = "seo"
+    QA = "qa"
     AUDIO_TIMING = "audio-timing"
     ASSET_MANIFEST = "asset-manifest"
     RENDER_PROPS = "render-props"

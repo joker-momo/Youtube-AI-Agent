@@ -65,7 +65,15 @@ def make_dashboard(
         "locale": "en-US",
         "medicalSafety": {
             "softClaims": ["research suggests"],
+            "prohibitedClaims": ["cures disease", "guaranteed result"],
             "disclaimer": "Educational information only.",
+        },
+        "seo": {
+            "titleMaxChars": 70,
+            "keywordStyle": "natural",
+            "keywordCues": ["healthy aging"],
+            "thumbnailMaxChars": 30,
+            "pinnedCommentStyle": "warm and concise",
         },
         "fonts": {"families": ["Inter"], "requiredCodepoints": ["0041"]},
         "textMetrics": {"charsPerWord": 5.0, "expansionRatio": 1.0},

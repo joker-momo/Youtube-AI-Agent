@@ -106,7 +106,11 @@ def run_preflight(
         )
 
     safety = locale_pack.get("medicalSafety") or {}
-    if not safety.get("softClaims") or not safety.get("disclaimer"):
+    if (
+        not safety.get("softClaims")
+        or not safety.get("prohibitedClaims")
+        or not safety.get("disclaimer")
+    ):
         failures.append(
             _failure(
                 locale,

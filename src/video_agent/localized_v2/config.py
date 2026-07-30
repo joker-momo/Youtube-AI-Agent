@@ -10,9 +10,11 @@ import yaml
 from video_agent.localized_v2.contracts import ArtifactKind
 
 ARTIFACT_SCHEMA_FILES = {
+    ArtifactKind.IDEA: "localized-v2/idea-v1.schema.json",
     ArtifactKind.SCRIPT: "localized-v2/script-v1.schema.json",
     ArtifactKind.SCENES: "localized-v2/scenes-v1.schema.json",
     ArtifactKind.SEO: "localized-v2/seo-v1.schema.json",
+    ArtifactKind.QA: "localized-v2/qa-v1.schema.json",
     ArtifactKind.AUDIO_TIMING: "localized-v2/audio-timing-v1.schema.json",
     ArtifactKind.ASSET_MANIFEST: "localized-v2/asset-manifest-v1.schema.json",
     ArtifactKind.RENDER_PROPS: "localized-v2/render-props-v1.schema.json",

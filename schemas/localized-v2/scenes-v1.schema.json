@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object", "additionalProperties": false,
+  "required": ["schemaVersion", "locale", "scenes"],
+  "properties": {
+    "schemaVersion": {"const": "localized-scenes-v2/v1"},
+    "locale": {"enum": ["en-US", "fr-FR", "pt-BR", "ko-KR", "ja-JP"]},
+    "scenes": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "narration", "visualType", "visualPrompt"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "narration": {"type": "string", "minLength": 1},
+          "visualType": {"enum": ["video", "graphic"]},
+          "visualPrompt": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

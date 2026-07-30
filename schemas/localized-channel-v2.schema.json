@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "localized-channel-v2.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "channelId", "locale", "brand", "voice", "render", "content"],
+  "properties": {
+    "schemaVersion": {"const": "localized-channel-v2/v1"},
+    "channelId": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{2,63}$"},
+    "locale": {"enum": ["en-US", "fr-FR", "pt-BR", "ko-KR", "ja-JP"]},
+    "brand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "introClip", "disclaimerClip", "outroClip"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 100},
+        "introClip": {"type": "string", "minLength": 1},
+        "disclaimerClip": {"type": "string", "minLength": 1},
+        "outroClip": {"type": "string", "minLength": 1}
+      }
+    },
+    "voice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "language", "voiceId", "speed"],
+      "properties": {
+        "provider": {"enum": ["kokoro", "melo"]},
+        "language": {"type": "string", "minLength": 1},
+        "voiceId": {"type": "string", "minLength": 1},
+        "speed": {"type": "number", "exclusiveMinimum": 0.5, "maximum": 1.5}
+      }
+    },
+    "render": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["composition", "concurrency", "subtitles"],
+      "properties": {
+        "composition": {"const": "LocalizedV2ChannelVideo"},
+        "concurrency": {"const": "auto"},
+        "subtitles": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled"],
+          "properties": {"enabled": {"const": false}}
+        }
+      }
+    },
+    "content": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "targetDurationSec"],
+      "properties": {
+        "type": {"const": "long_form"},
+        "targetDurationSec": {"type": "integer", "minimum": 300, "maximum": 1800}
+      }
+    }
+  }
+}

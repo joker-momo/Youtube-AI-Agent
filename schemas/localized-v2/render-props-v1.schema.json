@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object", "additionalProperties": false,
+  "required": ["schemaVersion", "locale", "composition", "width", "height", "fps", "narrationAudio", "subtitles", "scenes"],
+  "properties": {
+    "schemaVersion": {"const": "localized-render-props-v2/v1"},
+    "locale": {"enum": ["en-US", "fr-FR", "pt-BR", "ko-KR", "ja-JP"]},
+    "composition": {"const": "LocalizedV2ChannelVideo"},
+    "width": {"type": "integer", "minimum": 1280},
+    "height": {"type": "integer", "minimum": 720},
+    "fps": {"type": "integer", "minimum": 24, "maximum": 60},
+    "narrationAudio": {"type": "string", "minLength": 1},
+    "subtitles": {
+      "type": "object", "additionalProperties": false,
+      "required": ["enabled"], "properties": {"enabled": {"const": false}}
+    },
+    "scenes": {"type": "array", "minItems": 1, "items": {"type": "object"}}
+  }
+}

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import time
 from pathlib import Path
 
 from video_agent.localized_v2.job_state import JobInput
@@ -27,6 +29,21 @@ class FakeRunner:
             assert self.queue is not None
             self.queue.request_cancel(self.job_id)
         return {f"{stage}.json": artifact}
+
+
+class BlockingRunner(FakeRunner):
+    def __init__(self):
+        super().__init__()
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def stages(self, _job: dict) -> tuple[str, ...]:
+        return ("script",)
+
+    def run_stage(self, _job: dict, stage: str, work_dir: Path) -> dict[str, Path]:
+        self.entered.set()
+        assert self.release.wait(timeout=5)
+        return super().run_stage(_job, stage, work_dir)
 
 
 def _input() -> JobInput:
@@ -93,4 +110,32 @@ def test_resume_skips_promoted_stages(tmp_path: Path) -> None:
     worker.run_once()
 
     assert runner.calls == ["render"]
+    assert queue.get_job("job-a")["status"] == "COMPLETED"
+
+
+def test_long_stage_keeps_worker_and_attempt_leases_alive(tmp_path: Path) -> None:
+    runner = BlockingRunner()
+    worker, queue = _worker(tmp_path, runner)
+    worker.lease_seconds = 1
+    queue.create_job(_input())
+    failures: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            worker.run_once()
+        except BaseException as exc:
+            failures.append(exc)
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    assert runner.entered.wait(timeout=2)
+    time.sleep(1.2)
+
+    assert queue.recover_expired_leases() == 0
+    assert queue.has_live_worker(max_age_seconds=1)
+
+    runner.release.set()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    assert failures == []
     assert queue.get_job("job-a")["status"] == "COMPLETED"

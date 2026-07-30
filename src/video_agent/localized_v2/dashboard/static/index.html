@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Localized V2 operator</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/static/styles.css">
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to job controls</a>
+    <header class="app-header">
+      <div>
+        <p class="eyebrow">Independent control plane</p>
+        <h1>Localized V2 operator</h1>
+      </div>
+      <div id="readiness" class="readiness" role="status" aria-live="polite">
+        Checking V2 service…
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="controls" aria-labelledby="create-heading">
+        <div>
+          <h2 id="create-heading">Queue a long-form video</h2>
+          <p class="section-note">
+            Voice-only localized production. The current Spanish pipeline is not used.
+          </p>
+        </div>
+        <form id="create-form">
+          <label for="channel">Channel</label>
+          <select id="channel" name="channelId" required>
+            <option value="">Loading channels…</option>
+          </select>
+          <label for="topic">Video topic</label>
+          <textarea
+            id="topic"
+            name="topic"
+            rows="3"
+            minlength="3"
+            maxlength="240"
+            required
+            placeholder="Describe one locally relevant health topic"
+          ></textarea>
+          <div class="form-footer">
+            <span id="topic-count" class="field-note">0 / 240</span>
+            <button type="submit">Create queued job</button>
+          </div>
+        </form>
+        <div id="mutation-status" class="mutation-status" role="status" aria-live="polite"></div>
+      </section>
+
+      <section class="workspace" aria-label="Localized V2 jobs">
+        <div class="master">
+          <div class="section-heading">
+            <div>
+              <h2>Jobs</h2>
+              <p class="section-note">Newest first</p>
+            </div>
+            <button id="refresh-jobs" class="secondary" type="button">Refresh</button>
+          </div>
+          <form id="filters-form" class="filters">
+            <label for="status-filter">Status</label>
+            <select id="status-filter">
+              <option value="">All statuses</option>
+              <option value="QUEUED">Queued</option>
+              <option value="RUNNING">Running</option>
+              <option value="CANCEL_REQUESTED">Cancel requested</option>
+              <option value="INTERRUPTED">Interrupted</option>
+              <option value="FAILED">Failed</option>
+              <option value="CANCELLED">Cancelled</option>
+              <option value="COMPLETED">Completed</option>
+            </select>
+          </form>
+          <div id="job-list" class="job-list" role="list" aria-busy="true">
+            <p class="empty-state">Loading jobs…</p>
+          </div>
+        </div>
+
+        <article id="job-detail" class="detail" aria-labelledby="detail-heading">
+          <h2 id="detail-heading">Job detail</h2>
+          <p id="detail-empty" class="empty-state">Select a job to inspect its progress.</p>
+          <div id="detail-content" hidden>
+            <div id="detail-summary"></div>
+            <div id="action-bar" class="action-bar" aria-label="Job actions"></div>
+            <section aria-labelledby="events-heading">
+              <h3 id="events-heading">Events</h3>
+              <ol id="event-list" class="event-list"></ol>
+            </section>
+            <section aria-labelledby="artifacts-heading">
+              <h3 id="artifacts-heading">Promoted artifacts</h3>
+              <ul id="artifact-list" class="artifact-list"></ul>
+            </section>
+          </div>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>

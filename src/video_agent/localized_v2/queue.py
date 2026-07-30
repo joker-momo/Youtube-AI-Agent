@@ -123,6 +123,10 @@ class LocalizedQueue:
                         payload_json TEXT NOT NULL,
                         created_at TEXT NOT NULL
                     );
+                    CREATE TABLE IF NOT EXISTS workers (
+                        worker_id TEXT PRIMARY KEY,
+                        heartbeat_at TEXT NOT NULL
+                    );
                     CREATE INDEX IF NOT EXISTS jobs_status_created
                     ON jobs(status, created_at);
                     CREATE INDEX IF NOT EXISTS attempts_lease
@@ -182,7 +186,7 @@ class LocalizedQueue:
                 INSERT INTO jobs(
                     job_id, status, channel_id, locale, topic, input_json,
                     created_at, updated_at
-                ) VALUES (?, 'PENDING', ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, 'QUEUED', ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_input.job_id,
@@ -201,7 +205,7 @@ class LocalizedQueue:
             row = connection.execute(
                 "SELECT status FROM jobs WHERE job_id = ?", (job_id,)
             ).fetchone()
-            if row and row["status"] == "PENDING":
+            if row and row["status"] == "QUEUED":
                 connection.execute("DELETE FROM events WHERE job_id = ?", (job_id,))
                 connection.execute("DELETE FROM jobs WHERE job_id = ?", (job_id,))
 
@@ -298,7 +302,7 @@ class LocalizedQueue:
             job = connection.execute(
                 """
                 SELECT * FROM jobs
-                WHERE status = 'PENDING'
+                WHERE status = 'QUEUED'
                 ORDER BY created_at ASC, job_id ASC
                 LIMIT 1
                 """
@@ -567,7 +571,7 @@ class LocalizedQueue:
             connection.execute(
                 """
                 UPDATE jobs
-                SET status = 'PENDING', current_attempt_id = NULL,
+                SET status = 'QUEUED', current_attempt_id = NULL,
                     cancel_requested_at = NULL, failure_json = NULL, updated_at = ?
                 WHERE job_id = ?
                 """,
@@ -623,3 +627,85 @@ class LocalizedQueue:
                 (job_id,),
             ).fetchall()
             return [dict(row) for row in rows]
+
+    def list_jobs(
+        self,
+        *,
+        page: int,
+        page_size: int,
+        status: str | None = None,
+    ) -> dict[str, Any]:
+        self._ensure_schema()
+        page = max(1, page)
+        page_size = max(1, min(100, page_size))
+        where = "WHERE status = ?" if status else ""
+        parameters: tuple[Any, ...] = (status,) if status else ()
+        with self._connect() as connection:
+            total = connection.execute(
+                f"SELECT COUNT(*) FROM jobs {where}",
+                parameters,
+            ).fetchone()[0]
+            rows = connection.execute(
+                f"""
+                SELECT * FROM jobs {where}
+                ORDER BY created_at DESC, job_id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (*parameters, page_size, (page - 1) * page_size),
+            ).fetchall()
+            data = [self._job_snapshot(connection, row) for row in rows]
+        return {
+            "data": data,
+            "pagination": {
+                "page": page,
+                "pageSize": page_size,
+                "totalItems": total,
+                "totalPages": (total + page_size - 1) // page_size,
+            },
+        }
+
+    def list_events(self, job_id: str) -> list[dict[str, Any]]:
+        if not self.db_path.exists():
+            return []
+        self._ensure_schema()
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT sequence, attempt_id, type, stage, payload_json, created_at
+                FROM events WHERE job_id = ? ORDER BY sequence ASC
+                """,
+                (job_id,),
+            ).fetchall()
+            return [
+                {
+                    "sequence": row["sequence"],
+                    "attemptId": row["attempt_id"],
+                    "type": row["type"],
+                    "stage": row["stage"],
+                    "payload": json.loads(row["payload_json"]),
+                    "createdAt": row["created_at"],
+                }
+                for row in rows
+            ]
+
+    def worker_heartbeat(self, worker_id: str) -> None:
+        with self._write() as connection:
+            connection.execute(
+                """
+                INSERT INTO workers(worker_id, heartbeat_at) VALUES (?, ?)
+                ON CONFLICT(worker_id) DO UPDATE SET heartbeat_at = excluded.heartbeat_at
+                """,
+                (worker_id, _timestamp()),
+            )
+
+    def has_live_worker(self, *, max_age_seconds: int = 90) -> bool:
+        if not self.db_path.exists():
+            return False
+        self._ensure_schema()
+        threshold = _timestamp(_now() - timedelta(seconds=max(1, max_age_seconds)))
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM workers WHERE heartbeat_at >= ? LIMIT 1",
+                (threshold,),
+            ).fetchone()
+            return row is not None

@@ -52,6 +52,8 @@ def _locale_pack(locale: str) -> dict:
 def _channel(locale: str = "en-US") -> dict:
     return {
         "schemaVersion": "localized-channel-v2/v1",
+        "enabled": True,
+        "rolloutOrder": 1,
         "channelId": "healthy-life-en",
         "locale": locale,
         "brand": {
@@ -72,6 +74,23 @@ def _channel(locale: str = "en-US") -> dict:
             "subtitles": {"enabled": False},
         },
         "content": {"type": "long_form", "targetDurationSec": 840},
+        "canary": {
+            "status": "APPROVED",
+            "checks": {
+                "audio": "PASS",
+                "font": "PASS",
+                "render": "PASS",
+                "humanReview": "PASS",
+                "dashboardLifecycle": "PASS",
+            },
+            "evidence": [
+                "canary/audio.json",
+                "canary/font.json",
+                "canary/render.json",
+                "canary/human-review.json",
+                "canary/dashboard-lifecycle.json",
+            ],
+        },
     }
 
 

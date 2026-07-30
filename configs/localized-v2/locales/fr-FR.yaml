@@ -1,0 +1,61 @@
+schemaVersion: localized-locale-v2/v1
+locale: fr-FR
+language: français de France
+market: France
+audienceAddress:
+  formal: true
+  preferred: vous
+lexicalPreferences:
+  prefer:
+    - bien vieillir
+    - habitudes du quotidien
+    - demandez conseil à votre professionnel de santé
+  avoid:
+    - remède miracle
+    - résultat garanti
+    - guérir définitivement
+measurement:
+  system: metric
+  temperature: celsius
+dates:
+  order: DMY
+numbers:
+  decimalSeparator: ","
+medicalSafety:
+  softClaims:
+    - les recherches suggèrent
+    - pourrait contribuer à
+    - les personnes qui adoptent cette habitude constatent souvent
+  prohibitedClaims:
+    - guérit la maladie
+    - remplace un traitement médical
+    - garantit la prévention d'une maladie
+  disclaimer: Ce contenu est proposé uniquement à des fins d'information et d'éducation et ne constitue pas un avis médical. Consultez toujours un professionnel de santé qualifié avant de modifier votre alimentation, votre activité physique ou votre traitement.
+seo:
+  titleMaxChars: 70
+  keywordStyle: Français naturel de France avec l'intention de recherche principale au début
+  keywordCues:
+    - bien vieillir
+    - santé après 50 ans
+    - habitudes simples
+  thumbnailMaxChars: 26
+  pinnedCommentStyle: Chaleureux, poli et concis; inviter au partage d'expérience sans demander de données médicales
+narration:
+  wordsPerMinute: 125
+  sentenceMaxWords: 22
+fonts:
+  families:
+    - Manrope
+  requiredCodepoints:
+    - "00E9"
+    - "00E8"
+    - "00E7"
+visuals:
+  peopleContext: Adultes de 45 ans et plus dans des cadres quotidiens contemporains en France, avec une représentation naturelle et diverse
+  avoid:
+    - clichés touristiques
+    - imagerie médicale anxiogène
+    - stéréotypes liés à l'âge
+textMetrics:
+  charsPerWord: 5.2
+  expansionRatio: 1.15

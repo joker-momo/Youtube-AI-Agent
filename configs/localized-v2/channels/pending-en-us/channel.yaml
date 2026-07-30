@@ -1,0 +1,28 @@
+schemaVersion: localized-channel-v2/v1
+enabled: false
+rolloutOrder: 1
+channelId: pending-healthy-en-us
+locale: en-US
+brand:
+  name: Pending approval — en-US
+  introClip: brand/en-US/intro.mp4
+  disclaimerClip: brand/en-US/disclaimer.mp4
+  outroClip: brand/en-US/outro.mp4
+voice: null
+render:
+  composition: LocalizedV2ChannelVideo
+  concurrency: auto
+  subtitles:
+    enabled: false
+content:
+  type: long_form
+  targetDurationSec: 840
+canary:
+  status: PENDING
+  checks:
+    audio: PENDING
+    font: PENDING
+    render: PENDING
+    humanReview: PENDING
+    dashboardLifecycle: PENDING
+  evidence: []

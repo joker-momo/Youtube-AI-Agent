@@ -24,6 +24,7 @@ ALLOWED_NEW_PREFIXES = (
     "tests/localized_v2/",
 )
 ALLOWED_NEW_FILES = {
+    "docs/runbooks/localized_v2_canary.md",
     "schemas/locale-pack-v2.schema.json",
     "schemas/localized-channel-v2.schema.json",
     "scripts/capture_legacy_localization_baseline.py",

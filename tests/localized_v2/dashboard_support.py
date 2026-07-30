@@ -40,6 +40,8 @@ def make_dashboard(
         (brand_root / name).write_bytes(b"fixture")
     channel = {
         "schemaVersion": "localized-channel-v2/v1",
+        "enabled": True,
+        "rolloutOrder": 1,
         "channelId": "healthy-life-en",
         "locale": "en-US",
         "brand": {
@@ -60,6 +62,23 @@ def make_dashboard(
             "subtitles": {"enabled": False},
         },
         "content": {"type": "long_form", "targetDurationSec": 840},
+        "canary": {
+            "status": "APPROVED",
+            "checks": {
+                "audio": "PASS",
+                "font": "PASS",
+                "render": "PASS",
+                "humanReview": "PASS",
+                "dashboardLifecycle": "PASS",
+            },
+            "evidence": [
+                "canary/audio.json",
+                "canary/font.json",
+                "canary/render.json",
+                "canary/human-review.json",
+                "canary/dashboard-lifecycle.json",
+            ],
+        },
     }
     locale = {
         "locale": "en-US",

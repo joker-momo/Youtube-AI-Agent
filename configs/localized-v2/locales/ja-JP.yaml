@@ -1,0 +1,61 @@
+schemaVersion: localized-locale-v2/v1
+locale: ja-JP
+language: 日本語
+market: 日本
+audienceAddress:
+  formal: true
+  preferred: 皆さん
+lexicalPreferences:
+  prefer:
+    - 健やかな年齢の重ね方
+    - 毎日の習慣
+    - 医療専門家に相談してください
+  avoid:
+    - 奇跡の治療法
+    - 効果を保証します
+    - 病気を完治させます
+measurement:
+  system: metric
+  temperature: celsius
+dates:
+  order: YMD
+numbers:
+  decimalSeparator: "."
+medicalSafety:
+  softClaims:
+    - 研究では
+    - 役立つ可能性があります
+    - この習慣を続ける人は変化を感じることがあります
+  prohibitedClaims:
+    - 病気を治します
+    - 医療行為の代わりになります
+    - 病気の予防を保証します
+  disclaimer: このコンテンツは情報提供と教育のみを目的としており、医学的な助言に代わるものではありません。食事、運動、治療を変更する前に、必ず資格を持つ医療専門家に相談してください。
+seo:
+  titleMaxChars: 55
+  keywordStyle: 日本の視聴者が自然に検索する表現を使い、主要な検索意図を前半に置く
+  keywordCues:
+    - 健やかな年齢の重ね方
+    - 50代からの健康
+    - 簡単な生活習慣
+  thumbnailMaxChars: 18
+  pinnedCommentStyle: 丁寧で温かく簡潔にし、医療上の個人情報を求めず体験の共有を促す
+narration:
+  wordsPerMinute: 115
+  sentenceMaxWords: 18
+fonts:
+  families:
+    - Noto Sans JP
+  requiredCodepoints:
+    - "3042"
+    - "30A2"
+    - "5065"
+visuals:
+  peopleContext: 日本の現代的な家庭、公園、台所など日常の場面で暮らす45歳以上の大人を自然かつ多様に表現
+  avoid:
+    - 文脈のない着物や寺社の演出
+    - 不安をあおる医療画像
+    - 年齢に関する固定観念
+textMetrics:
+  charsPerWord: 2.2
+  expansionRatio: 1.0

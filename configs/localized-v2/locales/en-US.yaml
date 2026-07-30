@@ -1,0 +1,61 @@
+schemaVersion: localized-locale-v2/v1
+locale: en-US
+language: American English
+market: United States
+audienceAddress:
+  formal: false
+  preferred: you
+lexicalPreferences:
+  prefer:
+    - healthy aging
+    - daily habits
+    - talk with your healthcare professional
+  avoid:
+    - miracle cure
+    - guaranteed result
+    - reverse disease
+measurement:
+  system: us
+  temperature: fahrenheit
+dates:
+  order: MDY
+numbers:
+  decimalSeparator: "."
+medicalSafety:
+  softClaims:
+    - research suggests
+    - may help support
+    - people who follow this habit often report
+  prohibitedClaims:
+    - cures disease
+    - replaces medical treatment
+    - guaranteed to prevent illness
+  disclaimer: This content is for educational and informational purposes only and is not medical advice. Always consult a qualified healthcare professional before changing your diet, exercise, or treatment.
+seo:
+  titleMaxChars: 70
+  keywordStyle: Natural American English with the main search intent near the beginning
+  keywordCues:
+    - healthy aging
+    - over 50 health
+    - simple daily habits
+  thumbnailMaxChars: 28
+  pinnedCommentStyle: Warm, direct, and conversational; invite viewers to share experience without requesting medical details
+narration:
+  wordsPerMinute: 130
+  sentenceMaxWords: 22
+fonts:
+  families:
+    - Manrope
+  requiredCodepoints:
+    - "0041"
+    - "0061"
+    - "0030"
+visuals:
+  peopleContext: Everyday adults aged 45 and older in contemporary United States homes, clinics, kitchens, and outdoor settings
+  avoid:
+    - hospital panic imagery
+    - medical procedure imagery unless the topic specifically requires it
+    - stereotypes based on age or ethnicity
+textMetrics:
+  charsPerWord: 5.0
+  expansionRatio: 1.0

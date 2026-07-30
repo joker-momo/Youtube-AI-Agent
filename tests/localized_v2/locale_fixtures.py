@@ -113,8 +113,11 @@ def locale_pack(locale: str) -> dict[str, Any]:
 def channel(locale: str) -> dict[str, Any]:
     provider, language, voice_id = LOCALE_DATA[locale]["voice"]
     slug = locale.lower().replace("-", "-")
+    rollout_order = tuple(LOCALE_DATA).index(locale) + 1
     return {
         "schemaVersion": "localized-channel-v2/v1",
+        "enabled": True,
+        "rolloutOrder": rollout_order,
         "channelId": f"healthy-life-{slug}",
         "locale": locale,
         "brand": {
@@ -135,6 +138,23 @@ def channel(locale: str) -> dict[str, Any]:
             "subtitles": {"enabled": False},
         },
         "content": {"type": "long_form", "targetDurationSec": 840},
+        "canary": {
+            "status": "APPROVED",
+            "checks": {
+                "audio": "PASS",
+                "font": "PASS",
+                "render": "PASS",
+                "humanReview": "PASS",
+                "dashboardLifecycle": "PASS",
+            },
+            "evidence": [
+                f"canary/{locale}/audio.json",
+                f"canary/{locale}/font.json",
+                f"canary/{locale}/render.json",
+                f"canary/{locale}/human-review.json",
+                f"canary/{locale}/dashboard-lifecycle.json",
+            ],
+        },
     }
 
 

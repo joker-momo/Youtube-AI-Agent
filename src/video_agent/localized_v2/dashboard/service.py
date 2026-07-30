@@ -31,6 +31,9 @@ JOB_STATUSES = frozenset(
         "CANCELLED",
     }
 )
+CANARY_CHECKS = frozenset(
+    {"audio", "font", "render", "humanReview", "dashboardLifecycle"}
+)
 
 
 class DashboardError(RuntimeError):
@@ -100,6 +103,23 @@ class DashboardService:
     ):
         self.runtime = runtime
         self.queue = queue
+        for channel_id, registration in channels.items():
+            channel = registration.channel
+            canary = channel.get("canary", {})
+            checks = canary.get("checks", {})
+            if (
+                channel.get("channelId") != channel_id
+                or channel.get("locale") != registration.locale_pack.get("locale")
+                or channel.get("enabled") is not True
+                or not isinstance(channel.get("voice"), dict)
+                or canary.get("status") != "APPROVED"
+                or set(checks) != CANARY_CHECKS
+                or any(result != "PASS" for result in checks.values())
+                or len(canary.get("evidence", [])) < 5
+            ):
+                raise ValueError(
+                    "localized V2 dashboard accepts only approved enabled channels"
+                )
         self.channels = dict(channels)
 
     def health(self) -> dict[str, str]:

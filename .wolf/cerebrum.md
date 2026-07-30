@@ -680,3 +680,8 @@ Short KHÔNG có cover deliverable (YouTube Shorts bỏ qua custom thumbnail). �
 
 ### Key Learning (2026-07-16): non-empty ChatGPT UI errors bypass interrupted-response recovery
 - `ChatGPTDriver.send_message()` currently treats any non-empty stable assistant text as success before calling `_recover_interrupted_response()`. Therefore the exact 154-byte UI message `A network error occurred...` bypasses the existing `/network error/i` recovery marker, is returned with HTTP 200, and later appears misleadingly as `No JSON object found` in promotion. Validate known UI error text before the truthy-text break; otherwise repair prompts only repeat inside the same unhealthy session.
+
+### Key Learning (2026-07-30): long-form scene-01 is a mandatory renderable graphic hook
+- A truthy but unsupported `layout_payload.title` must not shadow a valid grounded `on_screen_text`; hook-title validation must try candidates in priority order and repair the payload from the first safe candidate.
+- Enforce the opening graphic at three distinct layers: planner repairs safe model output, operator validation rejects a non-renderable first scene with a scene-specific error that sharded repair can target, and Gemini QA treats scene-01 as a hard gate rather than a layout-rhythm warning.
+- `graphic_images` already generates `hook` layouts. If scene-01 has no graphic request, trace the layout contract upstream before changing image generation or its per-image non-fatal policy.

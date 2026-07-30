@@ -38,7 +38,7 @@ def _envelope(**overrides):
 
 
 def _scene(scene_id: str, duration: int = 5) -> dict:
-    return {
+    scene = {
         "id": scene_id,
         "duration_sec": duration,
         "narration": f"Narration {scene_id}",
@@ -48,6 +48,21 @@ def _scene(scene_id: str, duration: int = 5) -> dict:
         "motion": "slow_zoom",
         "asset_refs": {},
     }
+    if scene_id == "scene-01":
+        scene.update(
+            {
+                "narration": "Mira este cambio antes de continuar.",
+                "on_screen_text": "Mira este cambio",
+                "layout": "hook",
+                "layout_payload": {
+                    "title": "Mira este cambio",
+                    "body": "",
+                    "bullets": [],
+                    "cta": "",
+                },
+            }
+        )
+    return scene
 
 
 def test_extract_json_envelope_from_raw_text():
@@ -239,8 +254,9 @@ def test_merge_scene_batches_applies_retention_layout_planner_with_script_cta():
     first = _envelope(
         data={
             "scenes": [
+                _scene("scene-01", 5),
                 {
-                    **_scene("scene-01", 5),
+                    **_scene("scene-02", 5),
                     "layout": "checklist",
                     "layout_payload": {"title": "BAD", "body": "", "bullets": ["Proteína"], "cta": ""},
                 }
@@ -250,7 +266,7 @@ def test_merge_scene_batches_applies_retention_layout_planner_with_script_cta():
     second = _envelope(
         batch_index=2,
         batch_total=2,
-        data={"scenes": [{**_scene("scene-02", 5), "layout": "subtitle"}]},
+        data={"scenes": [{**_scene("scene-03", 5), "layout": "subtitle"}]},
     )
     first["batch_total"] = 2
 
@@ -261,10 +277,43 @@ def test_merge_scene_batches_applies_retention_layout_planner_with_script_cta():
         script={"cta": "Prueba esta rutina esta noche."},
     )
 
-    assert merged["scenes"][0]["layout"] == "subtitle"
-    assert merged["scenes"][0]["planner_warnings"]
-    assert merged["scenes"][1]["layout"] == "cta"
-    assert merged["scenes"][1]["layout_payload"]["cta"] == "Prueba esta rutina esta noche."
+    assert merged["scenes"][0]["layout"] == "hook"
+    assert merged["scenes"][1]["layout"] == "subtitle"
+    assert merged["scenes"][1]["planner_warnings"]
+    assert merged["scenes"][2]["layout"] == "cta"
+    assert merged["scenes"][2]["layout_payload"]["cta"] == "Prueba esta rutina esta noche."
+
+
+def test_merge_scene_batches_rejects_first_scene_without_safe_graphic_hook():
+    first = _envelope(
+        data={
+            "scenes": [
+                {
+                    **_scene("scene-01", 5),
+                    "narration": "Una introducción sin titular breve.",
+                    "on_screen_text": "UNO",
+                    "caption": "",
+                    "layout": "hook",
+                    "layout_payload": {
+                        "title": "Paráfrasis que tampoco aparece",
+                        "body": "",
+                        "bullets": [],
+                        "cta": "",
+                    },
+                }
+            ]
+        }
+    )
+
+    with pytest.raises(
+        ShardValidationError,
+        match=r"Scene scene-01: first scene must remain layout='hook'",
+    ):
+        merge_scene_batches(
+            job_id="job-a",
+            channel_id="vida-plena-45",
+            batch_envelopes=[first],
+        )
 
 
 def test_merge_scenes_qa_batches_passes_when_all_pass():
@@ -355,3 +404,4 @@ def test_sharded_prompt_builders_require_json_envelopes():
     assert "layout_payload" in batch_prompt
     assert "layout_reason" in batch_prompt
     assert 'layout="checklist"' in batch_prompt
+    assert "SCENE-01 GRAPHIC HOOK IS A HARD GATE" in qa_prompt

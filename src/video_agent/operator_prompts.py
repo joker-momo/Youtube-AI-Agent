@@ -412,7 +412,7 @@ def _chatgpt_scenes_prompt(
         "- scene ids: sequential scene-01, scene-02, ...",
         "- HOOK RULE: scene-01 narration must match the script hook word-for-word.",
         "  scene-01 on_screen_text: bold 3-6 word Spanish question or statement that hooks the viewer on THIS video's topic.",
-        "- ⚠️ OPENING RETENTION: the render skips logo intro/outro. scene-01 is the very first frame the viewer sees. Keep scene-01 duration_sec between 8 and 12 — short enough to feel snappy but long enough to land the hook.",
+        "- ⚠️ OPENING RETENTION: scene-01 is the first CONTENT frame after the replaceable intro/disclaimer clips. Keep scene-01 duration_sec between 8 and 12 — short enough to feel snappy but long enough to land the hook.",
         "- scenes 01-03 (first ~30 s) must deliver the first concrete payoff promised by the script hook. Do NOT use them for channel name, greetings, or 'today we will talk about'. Open IN the pain or contradiction.",
         "- scenes 01-03 visual_prompt must show the pain/situation of THIS video's topic directly (a real mature person in the relevant everyday setting the narration describes), not a generic logo card or wide establishing shot.",
         "- asset_refs: must be an object {}, never an array",
@@ -425,7 +425,8 @@ def _chatgpt_scenes_prompt(
         "- layout: one of [\"hook\", \"subtitle\", \"checklist\", \"warning\", \"quote\", \"cta\", \"stat\", \"steps\", \"comparison\", \"myth\", \"plate_map\", \"recipe_snapshot\", \"quote_portrait\", \"evidence_nugget\", \"do_dont\"].",
         "- layout_payload: object with exactly these fields: {\"title\": string, \"body\": string, \"bullets\": array of strings, \"cta\": string}. The new layouts REUSE these fields (see each rule below).",
         "- layout_reason: short English reason explaining why the layout fits the narration.",
-        "- scene-01 should use layout=\"hook\" with a 2-8 word Spanish title when safe.",
+        "- scene-01 MUST use layout=\"hook\"; this is the mandatory opening graphic and must never be subtitle.",
+        "- scene-01 layout_payload.title MUST contain a supported 2-8 word Spanish title copied exactly from on_screen_text or a contiguous phrase in narration/caption.",
         "- final scene should use layout=\"cta\" only if it contains a clear final action.",
         *_LAYOUT_SELECTION_RULES,
         "- ⚠️ VISUAL RHYTHM (critical for retention): the graphic layouts (hook/checklist/warning/quote/cta/stat/steps/comparison/myth/plate_map/recipe_snapshot/quote_portrait/evidence_nugget/do_dont) render as full design cards. Two or more cards back-to-back feel like a static slideshow and lose viewers. NEVER place two graphic-layout scenes consecutively — separate EVERY graphic scene with at least one (ideally two) layout=\"subtitle\" narrative scene(s) that play over moving video. This applies right after the scene-01 hook too: scene-02 onward must be \"subtitle\" until the next genuine card moment. Most scenes should be \"subtitle\"; spread the graphic cards sparingly across the whole script.",
@@ -599,7 +600,8 @@ def _chatgpt_scenes_batch_prompt(
         "- layout must be one of: hook, subtitle, checklist, warning, quote, cta, stat, steps, comparison, myth, plate_map, recipe_snapshot, quote_portrait, evidence_nugget, do_dont.",
         "- layout_payload must be an object with {title, body, bullets, cta}; use empty strings/[] for unused fields.",
         "- layout_reason must be a short English reason explaining why the layout fits the narration.",
-        "- scene-01 should use layout=\"hook\" with a 2-8 word Spanish title when safe.",
+        "- scene-01 MUST use layout=\"hook\"; this is the mandatory opening graphic and must never be subtitle.",
+        "- scene-01 layout_payload.title MUST contain a supported 2-8 word Spanish title copied exactly from on_screen_text or a contiguous phrase in narration/caption.",
         "- final scene should use layout=\"cta\" only if it contains a clear final action.",
         *_LAYOUT_SELECTION_RULES,
         "- ⚠️ VISUAL RHYTHM (critical for retention): the graphic layouts (hook/checklist/warning/quote/cta/stat/steps/comparison/myth/plate_map/recipe_snapshot/quote_portrait/evidence_nugget/do_dont) render as full design cards. Two or more cards back-to-back feel like a static slideshow and lose viewers. NEVER place two graphic-layout scenes consecutively — separate EVERY graphic scene with at least one (ideally two) layout=\"subtitle\" narrative scene(s) that play over moving video. This applies right after the scene-01 hook too: scene-02 onward must be \"subtitle\" until the next genuine card moment. Most scenes should be \"subtitle\"; spread the graphic cards sparingly across the whole script.",
@@ -677,7 +679,11 @@ def _gemini_scenes_qa_batch_prompt(
             "- If any scene has policy, safety, or schema issue, verdict must be NEEDS_REWORK.",
             "- youtube_policy.compliant must be false if there is any concern.",
             "",
-            "LAYOUT & VISUAL RHYTHM QA — add these to warnings for visibility, but do NOT set NEEDS_REWORK for grounding/rhythm/semantic issues alone: the Python planner already downgrades ungrounded cards, clears their payload, and enforces rhythm. ONLY set NEEDS_REWORK here if a layout value is literally not renderable:",
+            "SCENE-01 GRAPHIC HOOK IS A HARD GATE:",
+            "- If this batch contains scene-01, it MUST use layout=\"hook\" with a supported 2-8 word layout_payload.title.",
+            "- If scene-01 is subtitle, has no valid title, or cannot render as a graphic hook, verdict MUST be NEEDS_REWORK with a specific required_change.",
+            "",
+            "LAYOUT & VISUAL RHYTHM QA — except for the scene-01 hard gate above, add these to warnings for visibility, but do NOT set NEEDS_REWORK for grounding/rhythm/semantic issues alone: the Python planner already downgrades ungrounded cards, clears their payload, and enforces rhythm. ONLY set NEEDS_REWORK here if a layout value is literally not renderable:",
             "- Renderable layout (this one CAN block): every non-subtitle layout MUST be one of hook, checklist, warning, quote, cta, stat, steps, comparison, myth, plate_map, recipe_snapshot, quote_portrait, evidence_nugget, do_dont. Flag any other value.",
             "- Rhythm (warning only): note two graphic-layout scenes back-to-back, or very long runs (6+) of consecutive subtitle scenes with no card moment.",
             "- Grounding (warning only): note card payload text (title/body/bullets) that does not appear in the scene's narration/caption — the planner downgrades these automatically, so a warning is enough.",
@@ -845,6 +851,14 @@ def _gemini_qa_prompt(
     locale_qa_lines.append(
         "• Flag placeholder missing-resource text such as 'no proporcionadas', 'redes adicionales', 'not provided', or 'sin enlaces' in any SEO field."
     )
+    artifact_qa_lines: list[str] = []
+    if artifact_name.lower() == "scenes":
+        artifact_qa_lines = [
+            "",
+            "SCENE-01 GRAPHIC HOOK IS A HARD GATE:",
+            "• scene-01 MUST use layout=\"hook\" with a supported 2-8 word layout_payload.title.",
+            "• If scene-01 is subtitle, has no valid title, or cannot render as a graphic hook, verdict MUST be NEEDS_REWORK with a specific required_change.",
+        ]
     return "\n".join(
         [
             f"You are QA reviewer for the {artifact_name.upper()} artifact of a Spanish-language YouTube health channel.",
@@ -891,6 +905,7 @@ def _gemini_qa_prompt(
             "• Safety: no specific medical diagnoses, no supplement promotion, no miracle cures",
             "• Clarity: language is natural, readable, appropriate pace",
             f"• Duration accuracy (for scenes): total_duration_sec must match sum of scene durations",
+            *artifact_qa_lines,
             "",
             "════════════════════════════════════════",
             "REQUIRED JSON OUTPUT SCHEMA",

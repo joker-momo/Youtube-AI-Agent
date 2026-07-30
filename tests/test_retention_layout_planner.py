@@ -99,6 +99,37 @@ def test_first_scene_promotes_to_hook_only_with_safe_text():
     assert planned["layout"] == "hook"
 
 
+def test_hook_repairs_unsupported_payload_title_from_safe_on_screen_text():
+    """A bad model-supplied title must not suppress a valid opening hook.
+
+    The July 30 potato job proposed an unsupported paraphrase in
+    ``layout_payload.title`` while its on-screen question was already safe. The
+    planner used the bad title exclusively and silently downgraded scene-01.
+    """
+    scene = _scene(
+        narration=(
+            "Si la patata te deja con sueño o hambre poco después, quizá no sea "
+            "solo la cantidad: cocinarla, enfriarla y combinarla bien puede "
+            "cambiar la respuesta."
+        ),
+        caption="La forma de preparar la patata también importa.",
+        on_screen_text="¿Y si no es solo la cantidad?",
+        layout="hook",
+        layout_payload={
+            "title": "No es solo cantidad",
+            "body": "cocinarla, enfriarla y combinarla bien puede cambiar la respuesta",
+            "bullets": [],
+            "cta": "",
+        },
+    )
+
+    [planned] = apply_retention_layouts([scene])
+
+    assert planned["layout"] == "hook"
+    assert planned["layout_payload"]["title"] == "¿Y si no es solo la cantidad?"
+    assert any("repaired" in warning.lower() for warning in planned["planner_warnings"])
+
+
 def test_pattern_break_warning_when_no_safe_candidate():
     scenes = [
         _scene(id=f"scene-{idx:02d}", layout="subtitle", on_screen_text="", caption="", narration="")
@@ -166,6 +197,19 @@ def test_pattern_break_promotes_proposed_checklist_with_valid_payload():
         _scene(id=f"scene-{idx:02d}", layout="subtitle")
         for idx in range(1, 16)
     ]
+    scenes[0].update(
+        {
+            "layout": "hook",
+            "narration": "Abre con calma antes de empezar.",
+            "on_screen_text": "ABRE CON CALMA",
+            "layout_payload": {
+                "title": "ABRE CON CALMA",
+                "body": "",
+                "bullets": [],
+                "cta": "",
+            },
+        }
+    )
     scenes[8]["layout"] = "checklist"
     scenes[8]["narration"] = "Empieza con un plato simple: proteína, verduras y agua."
     scenes[8]["caption"] = "Empieza con un plato simple."

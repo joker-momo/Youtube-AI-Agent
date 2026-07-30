@@ -208,6 +208,28 @@ def test_scenes_prompt_does_not_default_nutrition_to_food_cards():
     assert "Prefer stat, steps, comparison, myth, or do_dont" in prompt
 
 
+def test_scenes_prompts_require_a_renderable_scene_01_graphic_hook():
+    monolithic = _chatgpt_scenes_prompt(SPAIN_CONFIG, VALID_SCRIPT)
+    plan = {
+        "data": {
+            "batches": [
+                {"batch_index": 1, "scene_start": "scene-01", "scene_end": "scene-06"}
+            ]
+        }
+    }
+    batch = _chatgpt_scenes_batch_prompt(
+        SPAIN_CONFIG,
+        VALID_SCRIPT,
+        plan,
+        {"batch_index": 1, "scene_start": "scene-01", "scene_end": "scene-06"},
+    )
+
+    for prompt in (monolithic, batch):
+        assert 'scene-01 MUST use layout="hook"' in prompt
+        assert "layout_payload.title MUST" in prompt
+        assert "must never be subtitle" in prompt
+
+
 def test_scenes_batch_prompt_does_not_default_nutrition_to_food_cards():
     plan = {
         "data": {
@@ -261,6 +283,25 @@ def test_qa_prompt_with_channel_config_contains_locale_qa():
     assert "not EXACTLY the expected language, verdict MUST be NEEDS_REWORK" in prompt
     assert "forbidden age-positioning" in prompt
     assert "no proporcionadas" in prompt
+
+
+def test_scenes_qa_prompt_blocks_missing_scene_01_graphic_hook():
+    prompt = _gemini_qa_prompt(
+        "scenes",
+        {
+            "scenes": [
+                {
+                    "id": "scene-01",
+                    "layout": "subtitle",
+                    "layout_payload": {"title": ""},
+                }
+            ]
+        },
+        SPAIN_CONFIG,
+    )
+
+    assert "SCENE-01 GRAPHIC HOOK IS A HARD GATE" in prompt
+    assert "verdict MUST be NEEDS_REWORK" in prompt
 
 
 def test_seo_task_briefing_uses_channel_language_contract():

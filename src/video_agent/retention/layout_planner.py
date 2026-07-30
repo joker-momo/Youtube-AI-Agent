@@ -84,9 +84,39 @@ def has_valid_bullets(scene: dict[str, Any]) -> bool:
 
 
 def has_valid_hook_text(scene: dict[str, Any]) -> bool:
+    title, _source = _supported_hook_title(scene)
+    return bool(title)
+
+
+def _supported_hook_title(scene: dict[str, Any]) -> tuple[str, str]:
     payload = normalize_payload(scene.get("layout_payload"))
-    text = payload.get("title") or str(scene.get("on_screen_text") or "").strip()
-    return 2 <= word_count(text) <= 8 and _is_supported(scene, text)
+    candidates = (
+        ("layout_payload.title", payload.get("title", "")),
+        ("on_screen_text", str(scene.get("on_screen_text") or "").strip()),
+    )
+    for source, text in candidates:
+        if 2 <= word_count(text) <= 8 and _is_supported(scene, text):
+            return text, source
+    return "", ""
+
+
+def ensure_valid_hook_title(scene: dict[str, Any]) -> bool:
+    """Keep a hook when any existing, grounded short title is available.
+
+    Models sometimes provide an unsupported paraphrase in
+    ``layout_payload.title`` while ``on_screen_text`` is already a valid hook.
+    The old truthy ``title or on_screen_text`` selection never tried the safe
+    fallback and silently downgraded the opening graphic.
+    """
+    title, source = _supported_hook_title(scene)
+    if not title:
+        return False
+    payload = normalize_payload(scene.get("layout_payload"))
+    if payload.get("title") != title:
+        payload["title"] = title
+        scene["layout_payload"] = payload
+        add_warning(scene, f"Hook title repaired from supported {source}.")
+    return True
 
 
 def has_valid_quote_text(scene: dict[str, Any]) -> bool:
@@ -196,7 +226,7 @@ def apply_retention_layouts(
         scene["layout"] = layout
         is_last = idx == len(scenes) - 1
 
-        if layout == "hook" and not has_valid_hook_text(scene):
+        if layout == "hook" and not ensure_valid_hook_title(scene):
             downgrade(scene, "Hook downgraded to subtitle: missing 2-8 word title.")
         elif layout == "checklist" and not has_valid_bullets(scene):
             downgrade(scene, "Checklist downgraded to subtitle: missing 2-4 valid bullets.")
@@ -229,7 +259,7 @@ def apply_retention_layouts(
     if (
         first.get("layout") == "subtitle"
         and str(first.get("_proposed_layout") or "subtitle").lower() == "subtitle"
-        and has_valid_hook_text(first)
+        and ensure_valid_hook_title(first)
     ):
         first["layout"] = "hook"
         add_warning(first, "Planner promoted first scene to hook using existing safe text.")

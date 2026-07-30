@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from video_agent.contracts import repo_root
+from video_agent.retention.layout_planner import has_valid_hook_text
 from video_agent.utils.json_io import read_yaml
 
 
@@ -94,6 +95,20 @@ def _validate_scenes(parsed: dict[str, Any]) -> ValidationResult:
     if not scenes:
         result.errors.append("'scenes' list is empty.")
         return result
+
+    first = scenes[0]
+    if isinstance(first, dict):
+        first_layout = str(first.get("layout") or "subtitle").strip().lower()
+        if first_layout != "hook":
+            result.errors.append(
+                "Scene scene-01: first scene must remain layout='hook' so graphic "
+                "generation cannot be skipped."
+            )
+        elif not has_valid_hook_text(first):
+            result.errors.append(
+                "Scene scene-01: hook requires a supported 2-8 word title in "
+                "layout_payload.title or on_screen_text."
+            )
 
     ids = [scene.get("id") if isinstance(scene, dict) else None for scene in scenes]
     for index, scene in enumerate(scenes):

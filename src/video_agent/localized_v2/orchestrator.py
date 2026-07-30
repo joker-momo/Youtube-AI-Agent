@@ -4,6 +4,12 @@ import json
 from pathlib import Path
 from typing import Any
 
+from video_agent.localized_v2.audio.capabilities import VoiceSpec
+from video_agent.localized_v2.audio.timing import (
+    compile_audio_timing,
+    concatenate_wav,
+)
+from video_agent.localized_v2.audio.tts import LocalizedTTS
 from video_agent.localized_v2.config import validate_artifact
 from video_agent.localized_v2.content_safety import validate_localized_content
 from video_agent.localized_v2.contracts import ArtifactKind
@@ -172,3 +178,80 @@ class LocalizedPromptRunner:
             encoding="utf-8",
         )
         return {output.name: output}
+
+
+class LocalizedOrchestrator:
+    def __init__(
+        self,
+        prompt_runner: LocalizedPromptRunner,
+        tts: LocalizedTTS,
+    ):
+        self.prompt_runner = prompt_runner
+        self.tts = tts
+
+    @property
+    def paths(self) -> RuntimePaths:
+        return self.prompt_runner.paths
+
+    def stages(self, _job: dict[str, Any]) -> tuple[str, ...]:
+        return (*PROMPT_STAGES, "audio", "timing")
+
+    def _audio_paths(
+        self,
+        job_id: str,
+        scene_ids: list[str],
+    ) -> dict[str, Path]:
+        root = (self.paths.jobs / job_id / "artifacts" / "audio").resolve()
+        paths = {scene_id: (root / f"{scene_id}.wav").resolve() for scene_id in scene_ids}
+        if any(not path.is_relative_to(root) for path in paths.values()):
+            raise ValueError("localized V2 narration escaped its audio artifact root")
+        return paths
+
+    def run_stage(
+        self,
+        job: dict[str, Any],
+        stage: str,
+        work_dir: Path,
+    ) -> dict[str, Path]:
+        if stage in PROMPT_STAGES:
+            return self.prompt_runner.run_stage(job, stage, work_dir)
+        _channel, locale_pack = self.prompt_runner._snapshots(job)
+        scenes_artifact = self.prompt_runner._load(job, "scenes", locale_pack)
+        scenes = scenes_artifact["scenes"]
+        if stage == "audio":
+            voice = VoiceSpec.from_channel(job["input"]["channel_snapshot"])
+            outputs = self.tts.synthesize_scenes(
+                locale=job["locale"],
+                voice=voice,
+                scenes=scenes,
+                output_dir=work_dir,
+            )
+            narration = work_dir / "narration.wav"
+            concatenate_wav(
+                [outputs[str(scene["id"])] for scene in scenes],
+                narration,
+            )
+            return {
+                **{path.name: path for path in outputs.values()},
+                narration.name: narration,
+            }
+        if stage == "timing":
+            scene_ids = [str(scene["id"]) for scene in scenes]
+            timing = compile_audio_timing(
+                job["locale"],
+                scenes,
+                self._audio_paths(job["jobId"], scene_ids),
+            )
+            validate_artifact(
+                timing,
+                ArtifactKind.AUDIO_TIMING,
+                self.prompt_runner.schema_root,
+            )
+            work_dir.mkdir(parents=True, exist_ok=True)
+            output = work_dir / "audio-timing.json"
+            output.write_text(
+                json.dumps(timing, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            return {output.name: output}
+        raise ValueError(f"unknown localized V2 stage: {stage}")

@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "localized-v2-fonts/v1",
+  "source": "@remotion/google-fonts",
+  "locales": {
+    "en-US": {"family": "Manrope", "subsets": ["latin", "latin-ext"]},
+    "fr-FR": {"family": "Manrope", "subsets": ["latin", "latin-ext"]},
+    "pt-BR": {"family": "Manrope", "subsets": ["latin", "latin-ext"]},
+    "ko-KR": {"family": "Noto Sans KR", "subsets": ["korean"]},
+    "ja-JP": {"family": "Noto Sans JP", "subsets": ["japanese"]}
+  }
+}

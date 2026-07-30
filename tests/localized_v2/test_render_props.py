@@ -131,9 +131,9 @@ def test_render_props_are_voice_only_and_graphics_keep_video_backing(
     assert props["render"]["subtitles"] == {"enabled": False}
     assert props["audio"]["music"] is None
     assert "word_segments" not in scene
-    assert scene["asset_refs"]["background"].endswith("opening.mp4")
+    assert scene["asset_refs"]["background"] == "assets/opening.mp4"
     assert scene["asset_refs"]["background_media_kind"] == "video"
-    assert scene["graphic"]["image_ref"].endswith("opening.png")
+    assert scene["graphic"]["image_ref"] == "assets/opening.png"
     assert props["branding"]["hybrid_card_bg"]
     assert props["render"]["duration_sec"] == 25.0
 

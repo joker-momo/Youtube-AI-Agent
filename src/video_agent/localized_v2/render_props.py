@@ -22,6 +22,10 @@ class RenderPropsError(ValueError):
     pass
 
 
+def _public_ref(path: Path, artifacts_root: Path) -> str:
+    return path.resolve().relative_to(artifacts_root.resolve()).as_posix()
+
+
 def _promoted_file(
     raw: str | Path,
     *,
@@ -161,7 +165,10 @@ def compile_render_props(
             "caption": "",
             "motion": "slow_push",
             "asset_refs": {
-                "background": indexed[(scene_id, "background")].as_uri(),
+                "background": _public_ref(
+                    indexed[(scene_id, "background")],
+                    artifacts_root,
+                ),
                 "background_media_kind": "video",
             },
         }
@@ -169,7 +176,10 @@ def compile_render_props(
             compiled["graphic"] = {
                 "needed": True,
                 "prompt": scene["visualPrompt"],
-                "image_ref": indexed[(scene_id, "graphic")].as_uri(),
+                "image_ref": _public_ref(
+                    indexed[(scene_id, "graphic")],
+                    artifacts_root,
+                ),
             }
         compiled_scenes.append(compiled)
 
@@ -195,23 +205,38 @@ def compile_render_props(
             "subtitles": {"enabled": False},
         },
         "scenes": compiled_scenes,
-        "audio": {"narration": narration.as_uri(), "music": None},
+        "audio": {
+            "narration": _public_ref(narration, artifacts_root),
+            "music": None,
+        },
         "seo": {
             "title": seo["title"],
             "description": seo["description"],
-            "thumbnail_path": thumbnail.as_uri(),
+            "thumbnail_path": _public_ref(thumbnail, artifacts_root),
             "thumbnail_text": seo["thumbnailText"],
         },
         "branding": {
-            "intro_video_path": verified_clips["intro"].path.as_uri(),
-            "disclaimer_video_path": verified_clips["disclaimer"].path.as_uri(),
-            "outro_video_path": verified_clips["outro"].path.as_uri(),
+            "intro_video_path": _public_ref(
+                verified_clips["intro"].path,
+                artifacts_root,
+            ),
+            "disclaimer_video_path": _public_ref(
+                verified_clips["disclaimer"].path,
+                artifacts_root,
+            ),
+            "outro_video_path": _public_ref(
+                verified_clips["outro"].path,
+                artifacts_root,
+            ),
             "intro_sec": verified_clips["intro"].duration_sec,
             "disclaimer_sec": verified_clips["disclaimer"].duration_sec,
             "outro_sec": verified_clips["outro"].duration_sec,
             "watermark_enabled": False,
             "show_channel_name_overlay": False,
-            "hybrid_card_bg": verified_clips["intro"].path.as_uri(),
+            "hybrid_card_bg": _public_ref(
+                verified_clips["intro"].path,
+                artifacts_root,
+            ),
         },
     }
     validate_artifact(props, ArtifactKind.RENDER_PROPS, schema_root)

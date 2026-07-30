@@ -2,6 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
+  "$defs": {
+    "publicPath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$",
+      "not": {"pattern": "(^|/)\\.\\.(/|$)"}
+    }
+  },
   "required": ["schemaVersion", "locale", "composition", "channel", "style", "render", "scenes", "audio", "seo", "branding"],
   "properties": {
     "schemaVersion": {"const": "localized-render-props-v2/v1"},
@@ -65,7 +73,7 @@
             "type": "object", "additionalProperties": false,
             "required": ["background", "background_media_kind"],
             "properties": {
-              "background": {"type": "string", "minLength": 1},
+              "background": {"$ref": "#/$defs/publicPath"},
               "background_media_kind": {"const": "video"}
             }
           },
@@ -75,7 +83,7 @@
             "properties": {
               "needed": {"const": true},
               "prompt": {"type": "string", "minLength": 1},
-              "image_ref": {"type": "string", "minLength": 1}
+              "image_ref": {"$ref": "#/$defs/publicPath"}
             }
           }
         },
@@ -92,7 +100,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["narration", "music"],
       "properties": {
-        "narration": {"type": "string", "minLength": 1},
+        "narration": {"$ref": "#/$defs/publicPath"},
         "music": {"const": null}
       }
     },
@@ -102,7 +110,7 @@
       "properties": {
         "title": {"type": "string", "minLength": 1},
         "description": {"type": "string", "minLength": 1},
-        "thumbnail_path": {"type": "string"},
+        "thumbnail_path": {"$ref": "#/$defs/publicPath"},
         "thumbnail_text": {"type": "string", "minLength": 1}
       }
     },
@@ -110,15 +118,15 @@
       "type": "object", "additionalProperties": false,
       "required": ["intro_video_path", "disclaimer_video_path", "outro_video_path", "intro_sec", "disclaimer_sec", "outro_sec", "watermark_enabled", "show_channel_name_overlay", "hybrid_card_bg"],
       "properties": {
-        "intro_video_path": {"type": "string", "minLength": 1},
-        "disclaimer_video_path": {"type": "string", "minLength": 1},
-        "outro_video_path": {"type": "string", "minLength": 1},
+        "intro_video_path": {"$ref": "#/$defs/publicPath"},
+        "disclaimer_video_path": {"$ref": "#/$defs/publicPath"},
+        "outro_video_path": {"$ref": "#/$defs/publicPath"},
         "intro_sec": {"type": "number", "exclusiveMinimum": 0},
         "disclaimer_sec": {"type": "number", "exclusiveMinimum": 0},
         "outro_sec": {"type": "number", "exclusiveMinimum": 0},
         "watermark_enabled": {"const": false},
         "show_channel_name_overlay": {"const": false},
-        "hybrid_card_bg": {"type": "string", "minLength": 1}
+        "hybrid_card_bg": {"$ref": "#/$defs/publicPath"}
       }
     }
   }

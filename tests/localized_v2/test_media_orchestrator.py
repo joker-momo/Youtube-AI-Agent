@@ -59,6 +59,21 @@ class FakeAssetProvider:
         )
 
 
+class FakeRenderer:
+    def render(
+        self,
+        *,
+        artifacts_root: Path,
+        props_path: Path,
+        output_path: Path,
+    ) -> Path:
+        assert props_path.is_relative_to(artifacts_root)
+        props = json.loads(props_path.read_text(encoding="utf-8"))
+        assert props["render"]["subtitles"]["enabled"] is False
+        output_path.write_bytes(b"localized-v2-final")
+        return output_path
+
+
 def test_full_v2_worker_promotes_assets_branding_and_render_props(
     tmp_path: Path,
 ) -> None:
@@ -102,6 +117,7 @@ def test_full_v2_worker_promotes_assets_branding_and_render_props(
         LocalizedAssetPipeline(FakeAssetProvider()),
         clips,
         queue,
+        renderer=FakeRenderer(),
     )
     worker = LocalizedWorker("media-worker", paths, queue, runner)
 
@@ -118,6 +134,7 @@ def test_full_v2_worker_promotes_assets_branding_and_render_props(
         "assets",
         "branding",
         "render_props",
+        "render",
     )
     artifacts = queue.list_artifacts("media-job")
     render_path = next(
@@ -127,11 +144,13 @@ def test_full_v2_worker_promotes_assets_branding_and_render_props(
     )
     props = json.loads(render_path.read_text(encoding="utf-8"))
     assert queue.get_job("media-job")["status"] == "COMPLETED"
+    assert any(item["name"] == "final.mp4" for item in artifacts)
     assert props["render"]["subtitles"]["enabled"] is False
     assert props["audio"]["music"] is None
     assert props["branding"]["disclaimer_sec"] == 4.0
-    assert props["scenes"][0]["asset_refs"]["background"].endswith(
-        "opening-background.mp4"
+    assert (
+        props["scenes"][0]["asset_refs"]["background"]
+        == "assets/opening-background.mp4"
     )
     assert not any(
         forbidden in item["name"]

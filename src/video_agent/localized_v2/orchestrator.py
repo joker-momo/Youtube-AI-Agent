@@ -29,6 +29,7 @@ from video_agent.localized_v2.providers import (
     validate_structured_response,
 )
 from video_agent.localized_v2.queue import LocalizedQueue
+from video_agent.localized_v2.render import VideoRenderer
 from video_agent.localized_v2.render_props import compile_render_props
 
 PROMPT_STAGES = ("idea", "script", "scenes", "seo", "qa")
@@ -271,6 +272,7 @@ class LocalizedMediaOrchestrator:
         assets: LocalizedAssetPipeline,
         brand_clips: dict[str, BrandClip],
         queue: LocalizedQueue,
+        renderer: VideoRenderer | None = None,
     ):
         if set(brand_clips) != {"intro", "disclaimer", "outro"}:
             raise ValueError("localized V2 requires intro, disclaimer, and outro clips")
@@ -278,13 +280,15 @@ class LocalizedMediaOrchestrator:
         self.assets = assets
         self.brand_clips = brand_clips
         self.queue = queue
+        self.renderer = renderer
 
     @property
     def paths(self) -> RuntimePaths:
         return self.content.paths
 
     def stages(self, job: dict[str, Any]) -> tuple[str, ...]:
-        return (*self.content.stages(job), *self.MEDIA_STAGES)
+        stages = (*self.content.stages(job), *self.MEDIA_STAGES)
+        return (*stages, "render") if self.renderer else stages
 
     def _artifact_json(
         self,
@@ -313,7 +317,7 @@ class LocalizedMediaOrchestrator:
         stage: str,
         work_dir: Path,
     ) -> dict[str, Path]:
-        if stage not in self.MEDIA_STAGES:
+        if stage not in (*self.MEDIA_STAGES, "render"):
             return self.content.run_stage(job, stage, work_dir)
         job_id = str(job["jobId"])
         channel, locale_pack = self.content.prompt_runner._snapshots(job)
@@ -385,4 +389,14 @@ class LocalizedMediaOrchestrator:
                 encoding="utf-8",
             )
             return {output.name: output}
+        if stage == "render" and self.renderer is not None:
+            work_dir.mkdir(parents=True, exist_ok=True)
+            output = work_dir / "final.mp4"
+            artifacts_root = self.paths.jobs / job_id / "artifacts"
+            result = self.renderer.render(
+                artifacts_root=artifacts_root,
+                props_path=artifacts_root / "render_props" / "render-props.json",
+                output_path=output,
+            )
+            return {result.name: result}
         raise ValueError(f"unknown localized V2 media stage: {stage}")

@@ -53,6 +53,7 @@ def _inventory(root: Path) -> CapabilityInventory:
         media_root=root,
         voices=frozenset({("kokoro", "a", "af_heart")}),
         fonts=frozenset({"Inter"}),
+        brand_clips=frozenset((root / "brand").glob("*.mp4")),
     )
 
 
@@ -77,12 +78,14 @@ def test_missing_capability_fails_closed(
             media_root=tmp_path,
             voices=frozenset(),
             fonts=inventory.fonts,
+            brand_clips=inventory.brand_clips,
         )
     elif mutation == "font":
         inventory = CapabilityInventory(
             media_root=tmp_path,
             voices=inventory.voices,
             fonts=frozenset(),
+            brand_clips=inventory.brand_clips,
         )
     elif mutation == "safety":
         locale_pack["medicalSafety"] = {}

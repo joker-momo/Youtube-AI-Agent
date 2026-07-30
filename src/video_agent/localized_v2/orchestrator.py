@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
+from video_agent.localized_v2.assets import LocalizedAssetPipeline
 from video_agent.localized_v2.audio.capabilities import VoiceSpec
 from video_agent.localized_v2.audio.timing import (
     compile_audio_timing,
     concatenate_wav,
 )
 from video_agent.localized_v2.audio.tts import LocalizedTTS
+from video_agent.localized_v2.brand_assets import BrandClip
 from video_agent.localized_v2.config import validate_artifact
 from video_agent.localized_v2.content_safety import validate_localized_content
 from video_agent.localized_v2.contracts import ArtifactKind
@@ -25,6 +28,8 @@ from video_agent.localized_v2.providers import (
     StructuredProvider,
     validate_structured_response,
 )
+from video_agent.localized_v2.queue import LocalizedQueue
+from video_agent.localized_v2.render_props import compile_render_props
 
 PROMPT_STAGES = ("idea", "script", "scenes", "seo", "qa")
 ARTIFACT_NAMES = {stage: f"{stage}.json" for stage in PROMPT_STAGES}
@@ -255,3 +260,129 @@ class LocalizedOrchestrator:
             )
             return {output.name: output}
         raise ValueError(f"unknown localized V2 stage: {stage}")
+
+
+class LocalizedMediaOrchestrator:
+    MEDIA_STAGES = ("assets", "branding", "render_props")
+
+    def __init__(
+        self,
+        content: LocalizedOrchestrator,
+        assets: LocalizedAssetPipeline,
+        brand_clips: dict[str, BrandClip],
+        queue: LocalizedQueue,
+    ):
+        if set(brand_clips) != {"intro", "disclaimer", "outro"}:
+            raise ValueError("localized V2 requires intro, disclaimer, and outro clips")
+        self.content = content
+        self.assets = assets
+        self.brand_clips = brand_clips
+        self.queue = queue
+
+    @property
+    def paths(self) -> RuntimePaths:
+        return self.content.paths
+
+    def stages(self, job: dict[str, Any]) -> tuple[str, ...]:
+        return (*self.content.stages(job), *self.MEDIA_STAGES)
+
+    def _artifact_json(
+        self,
+        job_id: str,
+        stage: str,
+        name: str,
+    ) -> dict[str, Any]:
+        root = (self.paths.jobs / job_id / "artifacts").resolve()
+        path = (root / stage / name).resolve()
+        if not path.is_relative_to(root):
+            raise ValueError("localized V2 artifact path escaped its job root")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError(f"localized V2 {name} must contain an object")
+        return payload
+
+    def _promoted_artifacts(self, job_id: str) -> dict[Path, str]:
+        return {
+            Path(item["path"]).resolve(): str(item["sha256"])
+            for item in self.queue.list_artifacts(job_id)
+        }
+
+    def run_stage(
+        self,
+        job: dict[str, Any],
+        stage: str,
+        work_dir: Path,
+    ) -> dict[str, Path]:
+        if stage not in self.MEDIA_STAGES:
+            return self.content.run_stage(job, stage, work_dir)
+        job_id = str(job["jobId"])
+        channel, locale_pack = self.content.prompt_runner._snapshots(job)
+        if stage == "assets":
+            scenes = self.content.prompt_runner._load(job, "scenes", locale_pack)
+            seo = self.content.prompt_runner._load(job, "seo", locale_pack)
+            outputs = self.assets.build(
+                locale_pack=locale_pack,
+                topic=str(job["topic"]),
+                scenes=scenes,
+                seo=seo,
+                output_dir=work_dir,
+                promoted_root=self.paths.jobs / job_id / "artifacts" / "assets",
+            )
+            manifest = json.loads(
+                outputs["asset-manifest.json"].read_text(encoding="utf-8")
+            )
+            validate_artifact(
+                manifest,
+                ArtifactKind.ASSET_MANIFEST,
+                self.content.prompt_runner.schema_root,
+            )
+            return outputs
+        if stage == "branding":
+            work_dir.mkdir(parents=True, exist_ok=True)
+            outputs: dict[str, Path] = {}
+            for name, clip in self.brand_clips.items():
+                suffix = clip.path.suffix.lower() or ".mp4"
+                destination = work_dir / f"{name}{suffix}"
+                shutil.copyfile(clip.path, destination)
+                outputs[destination.name] = destination
+            return outputs
+        if stage == "render_props":
+            scenes = self.content.prompt_runner._load(job, "scenes", locale_pack)
+            seo = self.content.prompt_runner._load(job, "seo", locale_pack)
+            timing = self._artifact_json(job_id, "timing", "audio-timing.json")
+            manifest = self._artifact_json(job_id, "assets", "asset-manifest.json")
+            promoted = self._promoted_artifacts(job_id)
+            artifacts_root = self.paths.jobs / job_id / "artifacts"
+            promoted_brand = {
+                name: BrandClip(
+                    path=next(
+                        path
+                        for path in promoted
+                        if path.parent == (artifacts_root / "branding").resolve()
+                        and path.stem == name
+                    ),
+                    duration_sec=clip.duration_sec,
+                )
+                for name, clip in self.brand_clips.items()
+            }
+            props = compile_render_props(
+                job_root=self.paths.jobs / job_id,
+                promoted_artifacts=promoted,
+                schema_root=self.content.prompt_runner.schema_root,
+                channel=channel,
+                locale_pack=locale_pack,
+                scenes=scenes,
+                timing=timing,
+                seo=seo,
+                asset_manifest=manifest,
+                narration_path=artifacts_root / "audio" / "narration.wav",
+                brand_clips=promoted_brand,
+            )
+            work_dir.mkdir(parents=True, exist_ok=True)
+            output = work_dir / "render-props.json"
+            output.write_text(
+                json.dumps(props, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            return {output.name: output}
+        raise ValueError(f"unknown localized V2 media stage: {stage}")

@@ -1,16 +1,71 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 from video_agent.localized_v2.config import (
     ContractValidationError,
     validate_artifact,
 )
 from video_agent.localized_v2.content_safety import validate_localized_content
+from video_agent.localized_v2.paths import RuntimePaths
 from video_agent.localized_v2.prompts import PromptEnvelope
 
 MAX_STRUCTURED_RESPONSE_BYTES = 1024 * 1024
+
+
+@dataclass(frozen=True, slots=True)
+class BrowserProviderConfig:
+    endpoint: str
+    profile_root: Path
+    session_namespace: str
+
+
+def validate_browser_provider_config(
+    config: BrowserProviderConfig,
+    *,
+    expected_endpoint: str,
+    runtime_paths: RuntimePaths,
+    legacy_endpoints: frozenset[str] = frozenset(),
+    active_legacy_sessions: frozenset[str] = frozenset(),
+) -> BrowserProviderConfig:
+    expected = urlsplit(expected_endpoint)
+    actual = urlsplit(config.endpoint)
+    if (
+        actual.scheme != "http"
+        or actual.hostname not in {"127.0.0.1", "::1", "localhost"}
+        or actual.username
+        or actual.password
+        or actual.query
+        or actual.fragment
+        or actual.path not in {"", "/"}
+        or (actual.hostname, actual.port) != (expected.hostname, expected.port)
+    ):
+        raise ValueError("browser provider must use the dedicated loopback V2 endpoint")
+    normalized_endpoint = f"http://{actual.hostname}:{actual.port}"
+    normalized_legacy = {
+        endpoint.rstrip("/").casefold() for endpoint in legacy_endpoints
+    }
+    if normalized_endpoint.casefold() in normalized_legacy:
+        raise ValueError("browser provider endpoint overlaps the legacy worker")
+    expected_profile = runtime_paths.browser_profile.resolve()
+    if config.profile_root.resolve() != expected_profile:
+        raise ValueError("browser provider must use the dedicated V2 profile root")
+    namespace = config.session_namespace.strip()
+    if (
+        not namespace.startswith("localized-v2:")
+        or namespace in active_legacy_sessions
+        or any(part in namespace.casefold() for part in ("vida-plena", "legacy"))
+    ):
+        raise ValueError("browser provider must use an isolated V2 session namespace")
+    return BrowserProviderConfig(
+        endpoint=normalized_endpoint,
+        profile_root=expected_profile,
+        session_namespace=namespace,
+    )
 
 
 class StructuredProvider(Protocol):

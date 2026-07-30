@@ -82,6 +82,7 @@ def make_dashboard(
         media_root=media_root,
         voices=frozenset({("kokoro", "a", "af_heart")}),
         fonts=frozenset({"Inter"}),
+        brand_clips=frozenset(brand_root.glob("*.mp4")),
     )
     queue = LocalizedQueue(paths.queue_db)
     runtime = LocalizedRuntime(paths, queue)

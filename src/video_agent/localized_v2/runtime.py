@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -37,6 +38,7 @@ class RuntimeSettings:
     root: Path
     host: str
     port: int
+    browser_worker_url: str
     busy_timeout_ms: int
     lease_seconds: int
 
@@ -45,7 +47,15 @@ def load_runtime_settings(path: Path, *, repo_root: Path) -> RuntimeSettings:
     payload = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("localized V2 runtime config must be an object")
-    allowed = {"schemaVersion", "root", "host", "port", "busyTimeoutMs", "leaseSeconds"}
+    allowed = {
+        "schemaVersion",
+        "root",
+        "host",
+        "port",
+        "browserWorkerUrl",
+        "busyTimeoutMs",
+        "leaseSeconds",
+    }
     unknown = set(payload) - allowed
     if unknown:
         raise ValueError(f"unknown localized V2 runtime fields: {sorted(unknown)}")
@@ -53,6 +63,21 @@ def load_runtime_settings(path: Path, *, repo_root: Path) -> RuntimeSettings:
         raise ValueError("unsupported localized V2 runtime schemaVersion")
     if payload.get("host") not in {"127.0.0.1", "::1", "localhost"}:
         raise ValueError("localized V2 dashboard must bind to loopback")
+    browser_worker = urlsplit(str(payload.get("browserWorkerUrl", "")))
+    if (
+        browser_worker.scheme != "http"
+        or browser_worker.hostname not in {"127.0.0.1", "::1", "localhost"}
+        or browser_worker.username
+        or browser_worker.password
+        or browser_worker.query
+        or browser_worker.fragment
+        or browser_worker.path not in {"", "/"}
+        or browser_worker.port is None
+        or browser_worker.port == int(payload["port"])
+    ):
+        raise ValueError(
+            "localized V2 browser worker must use a separate loopback endpoint"
+        )
     root = Path(str(payload["root"]))
     if not root.is_absolute():
         root = repo_root / root
@@ -60,6 +85,7 @@ def load_runtime_settings(path: Path, *, repo_root: Path) -> RuntimeSettings:
         root=root.resolve(),
         host=str(payload["host"]),
         port=int(payload["port"]),
+        browser_worker_url=f"http://{browser_worker.hostname}:{browser_worker.port}",
         busy_timeout_ms=int(payload["busyTimeoutMs"]),
         lease_seconds=int(payload["leaseSeconds"]),
     )

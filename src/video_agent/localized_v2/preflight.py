@@ -11,6 +11,7 @@ class CapabilityInventory:
     media_root: Path
     voices: frozenset[tuple[str, str, str]]
     fonts: frozenset[str]
+    brand_clips: frozenset[Path]
 
 
 def _failure(
@@ -31,7 +32,7 @@ def _failure(
 
 def _brand_clip_failure(
     locale: str,
-    media_root: Path,
+    inventory: CapabilityInventory,
     relative_path: object,
     capability: str,
 ) -> CapabilityFailure | None:
@@ -43,15 +44,20 @@ def _brand_clip_failure(
             "MISSING_BRAND_CLIP",
             f"configure a locale-specific {capability} clip",
         )
-    root = media_root.resolve()
+    root = inventory.media_root.resolve()
     candidate = (root / relative_path).resolve()
-    if not candidate.is_relative_to(root) or not candidate.is_file():
+    verified = {path.resolve() for path in inventory.brand_clips}
+    if (
+        not candidate.is_relative_to(root)
+        or not candidate.is_file()
+        or candidate not in verified
+    ):
         return _failure(
             locale,
             capability,
             "filesystem",
-            "MISSING_BRAND_CLIP",
-            f"provide {relative_path} inside the V2 media root",
+            "INVALID_BRAND_CLIP",
+            f"provide and media-probe {relative_path} inside the V2 media root",
         )
     return None
 
@@ -141,7 +147,7 @@ def run_preflight(
     ):
         failure = _brand_clip_failure(
             locale,
-            inventory.media_root,
+            inventory,
             brand.get(field),
             capability,
         )

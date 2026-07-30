@@ -9,12 +9,14 @@
       "type": "array", "minItems": 1,
       "items": {
         "type": "object", "additionalProperties": false,
-        "required": ["sceneId", "type", "path", "source"],
+        "required": ["sceneId", "role", "mediaKind", "path", "source", "sha256"],
         "properties": {
           "sceneId": {"type": "string", "minLength": 1},
-          "type": {"enum": ["video", "graphic"]},
+          "role": {"enum": ["background", "graphic", "thumbnail"]},
+          "mediaKind": {"enum": ["video", "image"]},
           "path": {"type": "string", "minLength": 1},
-          "source": {"type": "string", "minLength": 1}
+          "source": {"type": "string", "minLength": 1},
+          "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
         }
       }
     }

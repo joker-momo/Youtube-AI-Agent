@@ -42,6 +42,57 @@ Before a canary, replace the pending values only for the locale being qualified:
 Do not reuse a Vida Plena identity, Spanish copy, subscription ID, browser
 session, media path, published-title registry, or runtime directory.
 
+## Runtime capability manifest
+
+The production dashboard loads approved channels from the V2 registries at
+startup. It never hardcodes channel objects. If every channel is disabled, the
+dashboard starts with an empty channel list and does not require a capability
+manifest.
+
+Before enabling the first channel, create
+`runtime/localized-v2/capabilities.yaml` with only capabilities qualified on
+this machine:
+
+```yaml
+schemaVersion: localized-capabilities-v2/v1
+voices:
+  - provider: kokoro
+    language: a
+    voiceId: <qualified-voice-id>
+fonts:
+  - Manrope
+brandClips:
+  - brand/en-US/intro.mp4
+  - brand/en-US/disclaimer.mp4
+  - brand/en-US/outro.mp4
+```
+
+Store the referenced clips under `runtime/localized-v2/media/`. Dashboard
+startup checks the exact local TTS backend, verifies each font with `fc-match`,
+and probes every clip with `ffprobe`. Missing, duplicate, malformed, symlinked,
+out-of-root, or unavailable capabilities stop startup. A manifest declaration
+does not override a failed runtime probe.
+
+## Dedicated browser worker identity
+
+The structured-content adapter accepts only the V2 endpoint configured in
+`configs/localized-v2/runtime.yaml`. Before sending any prompt it calls the
+endpoint's `/health` route and requires this identity:
+
+```json
+{
+  "service": "localized-v2-browser-worker",
+  "sessionNamespace": "localized-v2:<channel-id>",
+  "profileRoot": "<absolute V2 browser-profile path>"
+}
+```
+
+The values must match the worker configuration exactly. The ordinary legacy
+browser-worker health response is deliberately incompatible, so pointing V2 at
+the current production worker fails before content generation. Start the V2
+browser worker with its own process, CDP instance, browser profile, and session
+namespace; a different port alone is not sufficient isolation.
+
 ## Canary evidence gate
 
 Create five evidence files under the dedicated Localized V2 evidence root.

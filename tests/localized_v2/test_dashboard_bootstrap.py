@@ -115,6 +115,8 @@ def test_approved_channel_loads_only_after_capabilities_are_verified(
         schema_root=SCHEMA_ROOT,
         settings=_settings(runtime),
         clip_probe=lambda path, _root: path,
+        font_probe=lambda _family: True,
+        voice_probe=lambda _voice, _repo_root: True,
     )
 
     registration = loaded["healthy-life-en"]
@@ -157,6 +159,36 @@ def test_capability_manifest_rejects_media_path_escape(tmp_path: Path) -> None:
             schema_root=SCHEMA_ROOT,
             settings=_settings(runtime),
             clip_probe=lambda path, _root: path,
+            font_probe=lambda _family: True,
+            voice_probe=lambda _voice, _repo_root: True,
         )
 
     assert error.value.code == "INVALID_CAPABILITY_MANIFEST"
+
+
+@pytest.mark.parametrize("missing", ["font", "voice"])
+def test_declared_capability_must_exist_on_this_runtime(
+    tmp_path: Path,
+    missing: str,
+) -> None:
+    channels, locales, runtime = _roots(tmp_path)
+    _approve_english(channels, runtime)
+    _capabilities(runtime)
+    media_root = runtime / "media" / "brand" / "en-US"
+    media_root.mkdir(parents=True)
+    for name in ("intro.mp4", "disclaimer.mp4", "outro.mp4"):
+        (media_root / name).write_bytes(b"media")
+
+    with pytest.raises(ContractValidationError) as error:
+        load_enabled_channels(
+            channel_root=channels,
+            locale_root=locales,
+            schema_root=SCHEMA_ROOT,
+            settings=_settings(runtime),
+            clip_probe=lambda path, _root: path,
+            font_probe=lambda _family: missing != "font",
+            voice_probe=lambda _voice, _repo_root: missing != "voice",
+        )
+
+    assert error.value.code == "INVALID_CAPABILITY_MANIFEST"
+    assert missing in str(error.value)

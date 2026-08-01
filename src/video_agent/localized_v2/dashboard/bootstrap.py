@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import importlib.util
+import shutil
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -19,6 +22,42 @@ CAPABILITY_FIELDS = frozenset({"schemaVersion", "voices", "fonts", "brandClips"}
 VOICE_FIELDS = frozenset({"provider", "language", "voiceId"})
 
 ClipProbe = Callable[[Path, Path], BrandClip | Path]
+FontProbe = Callable[[str], bool]
+VoiceProbe = Callable[[tuple[str, str, str], Path], bool]
+
+
+def probe_font_family(family: str) -> bool:
+    executable = shutil.which("fc-match")
+    if executable is None:
+        return False
+    try:
+        result = subprocess.run(
+            [executable, "--format=%{family}", family],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    installed = {
+        name.strip().casefold()
+        for name in result.stdout.split(",")
+        if name.strip()
+    }
+    return result.returncode == 0 and family.casefold() in installed
+
+
+def probe_voice_backend(voice: tuple[str, str, str], repo_root: Path) -> bool:
+    provider, _language, _voice_id = voice
+    if provider == "kokoro":
+        return importlib.util.find_spec("kokoro") is not None
+    if provider == "melo":
+        return (
+            (repo_root / "tools" / "melo-venv" / "bin" / "python").is_file()
+            and (repo_root / "src" / "video_agent" / "tts_melo_worker.py").is_file()
+        )
+    return False
 
 
 def _manifest_error(message: str, *, path: Path) -> ContractValidationError:
@@ -53,7 +92,13 @@ def _read_capability_manifest(path: Path) -> dict[str, Any]:
     return payload
 
 
-def _voices(payload: Any, *, path: Path) -> frozenset[tuple[str, str, str]]:
+def _voices(
+    payload: Any,
+    *,
+    path: Path,
+    repo_root: Path,
+    voice_probe: VoiceProbe,
+) -> frozenset[tuple[str, str, str]]:
     if not isinstance(payload, list):
         raise _manifest_error("voices must be a list", path=path)
     voices: set[tuple[str, str, str]] = set()
@@ -63,16 +108,25 @@ def _voices(payload: Any, *, path: Path) -> frozenset[tuple[str, str, str]]:
         key = tuple(str(item[field]).strip() for field in ("provider", "language", "voiceId"))
         if any(not part or len(part) > 128 for part in key) or key in voices:
             raise _manifest_error("voice capability is empty or duplicated", path=path)
+        if not voice_probe(key, repo_root):
+            raise _manifest_error("voice capability is unavailable on this runtime", path=path)
         voices.add(key)
     return frozenset(voices)
 
 
-def _fonts(payload: Any, *, path: Path) -> frozenset[str]:
+def _fonts(
+    payload: Any,
+    *,
+    path: Path,
+    font_probe: FontProbe,
+) -> frozenset[str]:
     if not isinstance(payload, list):
         raise _manifest_error("fonts must be a list", path=path)
     fonts = [str(item).strip() for item in payload]
     if any(not item or len(item) > 128 for item in fonts) or len(fonts) != len(set(fonts)):
         raise _manifest_error("font capability is empty or duplicated", path=path)
+    if any(not font_probe(item) for item in fonts):
+        raise _manifest_error("font capability is unavailable on this runtime", path=path)
     return frozenset(fonts)
 
 
@@ -120,6 +174,8 @@ def load_enabled_channels(
     schema_root: Path,
     settings: RuntimeSettings,
     clip_probe: ClipProbe = probe_brand_clip,
+    font_probe: FontProbe = probe_font_family,
+    voice_probe: VoiceProbe = probe_voice_backend,
 ) -> dict[str, EnabledChannel]:
     """Load only approved channels with independently qualified capabilities."""
 
@@ -135,10 +191,20 @@ def load_enabled_channels(
     locale_registry = LocaleRegistry(locale_root, schema_root)
     manifest_path = settings.root / "capabilities.yaml"
     manifest = _read_capability_manifest(manifest_path)
+    repo_root = schema_root.resolve().parent
     inventory = CapabilityInventory(
         media_root=settings.root / "media",
-        voices=_voices(manifest["voices"], path=manifest_path),
-        fonts=_fonts(manifest["fonts"], path=manifest_path),
+        voices=_voices(
+            manifest["voices"],
+            path=manifest_path,
+            repo_root=repo_root,
+            voice_probe=voice_probe,
+        ),
+        fonts=_fonts(
+            manifest["fonts"],
+            path=manifest_path,
+            font_probe=font_probe,
+        ),
         brand_clips=_brand_clips(
             manifest["brandClips"],
             path=manifest_path,

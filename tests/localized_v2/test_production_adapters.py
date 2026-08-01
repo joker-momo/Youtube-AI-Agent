@@ -10,6 +10,7 @@ from video_agent.localized_v2.paths import RuntimePaths
 from video_agent.localized_v2.production_assets import (
     BrowserImageProvider,
     StockVideoProvider,
+    load_stock_provider_credentials,
 )
 from video_agent.localized_v2.providers import BrowserProviderConfig
 
@@ -35,6 +36,16 @@ class FakeStockService:
     def get_scene_asset(self, scene: dict, channel_id: str, job_id: str):
         self.calls.append((scene, channel_id, job_id))
         return self.asset
+
+
+class SequencedStockService(FakeStockService):
+    def __init__(self, assets: list[dict | None]) -> None:
+        super().__init__(None)
+        self.assets = iter(assets)
+
+    def get_scene_asset(self, scene: dict, channel_id: str, job_id: str):
+        self.calls.append((scene, channel_id, job_id))
+        return next(self.assets)
 
 
 class FakeImageProvider:
@@ -116,6 +127,49 @@ def test_stock_video_provider_uses_search_brief_and_returns_real_video(
     assert job_id == "job-123"
 
 
+def test_stock_video_provider_tries_search_brief_queries_in_order(
+    tmp_path: Path,
+) -> None:
+    local = tmp_path / "stock.mp4"
+    local.write_bytes(MP4)
+    service = SequencedStockService(
+        [
+            None,
+            {
+                "local_path": str(local),
+                "media_type": "video",
+                "original_url": "https://pixabay.com/videos/456/",
+                "provider": "pixabay",
+                "provider_asset_id": "456",
+            },
+        ]
+    )
+    provider = StockVideoProvider(service, FakeImageProvider())
+
+    response = provider.background(
+        {
+            "id": "sodium",
+            "visualType": "video",
+            "visualPrompt": "An adult choosing a lower-sodium breakfast",
+            "searchBrief": {
+                "language": "en",
+                "queries": [
+                    "reading nutrition facts label",
+                    "grocery shopping breakfast aisle",
+                    "homemade healthy breakfast",
+                ],
+            },
+        },
+        {"channelId": "channel", "jobId": "job"},
+    )
+
+    assert response.body == MP4
+    assert [call[0]["visual_prompt"] for call in service.calls] == [
+        "reading nutrition facts label",
+        "grocery shopping breakfast aisle",
+    ]
+
+
 @pytest.mark.parametrize(
     "asset",
     [
@@ -179,6 +233,7 @@ def test_browser_image_provider_verifies_identity_and_reads_only_v2_output(
         session_namespace="localized-v2:en-us",
     )
     posts: list[dict] = []
+    post_timeouts: list[float] = []
 
     def get(_url: str, **_kwargs) -> FakeResponse:
         return FakeResponse(
@@ -192,6 +247,7 @@ def test_browser_image_provider_verifies_identity_and_reads_only_v2_output(
 
     def post(_url: str, *, json: dict, **_kwargs) -> FakeResponse:
         posts.append(json)
+        post_timeouts.append(float(_kwargs["timeout"]))
         output = Path(json["out_path"])
         assert output.is_relative_to(paths.work)
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -215,12 +271,28 @@ def test_browser_image_provider_verifies_identity_and_reads_only_v2_output(
         {"id": "graphic-1", "visualPrompt": "A clear healthy aging checklist"},
         {"locale": "en-US", "topic": "healthy walking", "avoid": []},
     )
+    cached = provider.graphic(
+        {"id": "graphic-1", "visualPrompt": "A clear healthy aging checklist"},
+        {"locale": "en-US", "topic": "healthy walking", "avoid": []},
+    )
 
     assert response.body == PNG
+    assert cached.body == PNG
     assert response.content_type == "image/png"
+    assert len(posts) == 1
+    assert post_timeouts[0] >= 780.0
     assert posts[0]["aspect_ratio"] == "16:9"
     assert "healthy aging checklist" in posts[0]["prompt"]
     assert not Path(posts[0]["out_path"]).exists()
+
+    cache_file = next((paths.cache / "browser-images").glob("*.bin"))
+    cache_file.write_bytes(b"corrupt cached image")
+    recovered = provider.graphic(
+        {"id": "graphic-1", "visualPrompt": "A clear healthy aging checklist"},
+        {"locale": "en-US", "topic": "healthy walking", "avoid": []},
+    )
+    assert recovered.body == PNG
+    assert len(posts) == 2
 
 
 def test_stock_provider_exposes_browser_isolation_contract(tmp_path: Path) -> None:
@@ -247,3 +319,39 @@ def test_stock_provider_exposes_browser_isolation_contract(tmp_path: Path) -> No
 
     assert provider.transport == "browser"
     assert provider.browser_config == config
+
+
+def test_stock_credentials_load_only_allowlisted_keys_without_overwriting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / ".env"
+    source.write_text(
+        "PEXELS_API_KEY=pexels-key\n"
+        "PIXABAY_API_KEY='pixabay-key'\n"
+        "ADMIN_TOKEN=must-not-load\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PEXELS_API_KEY", "already-set")
+    monkeypatch.delenv("PIXABAY_API_KEY", raising=False)
+    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+
+    loaded = load_stock_provider_credentials(source)
+
+    assert loaded == frozenset({"PEXELS_API_KEY", "PIXABAY_API_KEY"})
+    assert __import__("os").environ["PEXELS_API_KEY"] == "already-set"
+    assert __import__("os").environ["PIXABAY_API_KEY"] == "pixabay-key"
+    assert "ADMIN_TOKEN" not in __import__("os").environ
+
+
+def test_stock_credentials_fail_closed_without_a_video_provider_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / ".env"
+    source.write_text("ADMIN_TOKEN=not-a-stock-key\n", encoding="utf-8")
+    monkeypatch.delenv("PEXELS_API_KEY", raising=False)
+    monkeypatch.delenv("PIXABAY_API_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="stock video credential"):
+        load_stock_provider_credentials(source)

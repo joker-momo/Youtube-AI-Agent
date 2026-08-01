@@ -15,7 +15,7 @@ from video_agent.localized_v2.audio.capabilities import VoiceCapabilityRegistry
 from video_agent.localized_v2.audio.production import KokoroBackend
 from video_agent.localized_v2.audio.tts import LocalizedTTS
 from video_agent.localized_v2.brand_assets import BrandClip, probe_brand_clip
-from video_agent.localized_v2.dashboard.bootstrap import load_enabled_channels
+from video_agent.localized_v2.dashboard.bootstrap import load_dashboard_channels
 from video_agent.localized_v2.dashboard.service import EnabledChannel
 from video_agent.localized_v2.orchestrator import (
     LocalizedMediaOrchestrator,
@@ -26,6 +26,7 @@ from video_agent.localized_v2.paths import RuntimePaths
 from video_agent.localized_v2.production_assets import (
     BrowserImageProvider,
     StockVideoProvider,
+    load_stock_provider_credentials,
 )
 from video_agent.localized_v2.providers import (
     BrowserProviderConfig,
@@ -179,8 +180,13 @@ def main() -> None:
     )
     paths = RuntimePaths.build(settings.root, legacy_jobs_root=repo_root / "jobs")
     paths.initialize()
+    provider_env = os.environ.get("LOCALIZED_V2_PROVIDER_ENV")
+    if provider_env:
+        load_stock_provider_credentials(Path(provider_env))
+    elif not (os.environ.get("PEXELS_API_KEY") or os.environ.get("PIXABAY_API_KEY")):
+        raise RuntimeError("localized V2 stock provider credentials are not configured")
     queue = LocalizedQueue(paths.queue_db, busy_timeout_ms=settings.busy_timeout_ms)
-    channels = load_enabled_channels(
+    channels = load_dashboard_channels(
         channel_root=repo_root / "configs" / "localized-v2" / "channels",
         locale_root=repo_root / "configs" / "localized-v2" / "locales",
         schema_root=repo_root / "schemas",

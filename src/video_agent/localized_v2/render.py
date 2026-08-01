@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
@@ -71,16 +73,18 @@ def build_render_command(
     artifacts_root: Path,
     props_path: Path,
     output_path: Path,
+    public_root: Path | None = None,
 ) -> tuple[str, ...]:
     root = remotion_root.resolve(strict=True)
-    public = artifacts_root.resolve(strict=True)
+    artifacts = artifacts_root.resolve(strict=True)
+    public = (public_root or artifacts_root).resolve(strict=True)
     props = props_path.resolve(strict=True)
     output = output_path.resolve()
     if not (root / "src" / "localized-v2" / "index.ts").is_file():
         raise ValueError("localized V2 Remotion entrypoint is missing")
     if not props.is_file() or props.name != "render-props.json":
         raise ValueError("localized V2 render requires promoted render-props.json")
-    if not props.is_relative_to(public):
+    if not props.is_relative_to(artifacts):
         raise ValueError("localized V2 render props must stay inside the artifact root")
     if output.suffix.lower() != ".mp4":
         raise ValueError("localized V2 render output must be MP4")
@@ -96,6 +100,41 @@ def build_render_command(
         "--public-dir",
         str(public),
     )
+
+
+def _prepare_public_dir(
+    *,
+    remotion_root: Path,
+    artifacts_root: Path,
+    destination: Path,
+) -> Path:
+    artifacts = artifacts_root.resolve(strict=True)
+    source_fonts = remotion_root.resolve(strict=True) / "public" / "localized-v2" / "fonts"
+    font_names = ("Manrope-latin.woff2", "Manrope-latin-ext.woff2")
+    for name in font_names:
+        body = (source_fonts / name).read_bytes()
+        if not body.startswith(b"wOF2"):
+            raise LocalizedRenderError(
+                "REMOTION_RENDER_FAILED",
+                "localized V2 bundled font is missing or invalid",
+            )
+    public = destination.resolve()
+    shutil.rmtree(public, ignore_errors=True)
+    sources = [path for path in artifacts.rglob("*") if path.is_file()]
+    public.mkdir(parents=True)
+    for source in sources:
+        relative = source.relative_to(artifacts)
+        target = public / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.link(source, target)
+        except OSError:
+            shutil.copyfile(source, target)
+    target_fonts = public / "localized-v2" / "fonts"
+    target_fonts.mkdir(parents=True, exist_ok=True)
+    for name in font_names:
+        shutil.copyfile(source_fonts / name, target_fonts / name)
+    return public
 
 
 def render_localized_video(
@@ -128,11 +167,17 @@ def render_localized_video(
         ) from exc
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.unlink(missing_ok=True)
+    public_root = _prepare_public_dir(
+        remotion_root=remotion_root,
+        artifacts_root=artifacts_root,
+        destination=output_path.parent / ".localized-v2-public",
+    )
     command: Sequence[str] = build_render_command(
         remotion_root=remotion_root,
         artifacts_root=artifacts_root,
         props_path=props_path,
         output_path=output_path,
+        public_root=public_root,
     )
     try:
         result = runner(
@@ -150,8 +195,10 @@ def render_localized_video(
         ) from exc
     if result.returncode != 0 or not output_path.is_file():
         output_path.unlink(missing_ok=True)
+        detail = (result.stderr or result.stdout or "").strip().splitlines()
+        suffix = f": {detail[-1][:600]}" if detail else ""
         raise LocalizedRenderError(
             "REMOTION_RENDER_FAILED",
-            "localized V2 Remotion render did not produce final media",
+            f"localized V2 Remotion render did not produce final media{suffix}",
         )
     return output_path

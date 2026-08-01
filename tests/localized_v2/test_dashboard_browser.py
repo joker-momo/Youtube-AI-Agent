@@ -42,6 +42,19 @@ def test_dashboard_real_browser_desktop_and_narrow(tmp_path: Path) -> None:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
             page = browser.new_page(viewport={"width": 1440, "height": 900})
+            page.add_init_script(
+                """() => {
+                  const nativeFetch = window.fetch.bind(window);
+                  window.fetch = async (...args) => {
+                    const response = await nativeFetch(...args);
+                    const url = String(args[0]);
+                    if (url.includes('/api/v2/jobs?') && url.includes('status=COMPLETED')) {
+                      await new Promise((resolve) => setTimeout(resolve, 250));
+                    }
+                    return response;
+                  };
+                }"""
+            )
             page.on(
                 "console",
                 lambda message: errors.append(message.text)
@@ -63,10 +76,11 @@ def test_dashboard_real_browser_desktop_and_narrow(tmp_path: Path) -> None:
             page.get_by_text(hostile, exact=True).first.wait_for()
             assert page.get_by_role("button", name="Cancel job").is_visible()
             page.get_by_label("Status").select_option("COMPLETED")
-            page.get_by_text("No localized V2 jobs match this filter.").wait_for()
-            assert page.get_by_text("Select a job to inspect its progress.").is_visible()
             page.get_by_label("Status").select_option("")
             page.get_by_text(hostile, exact=True).first.wait_for()
+            page.wait_for_timeout(400)
+            assert page.get_by_text(hostile, exact=True).first.is_visible()
+            assert page.get_by_text("No localized V2 jobs match this filter.").count() == 0
             page.keyboard.press("Tab")
             assert page.evaluate("document.activeElement !== document.body")
             for width in (320, 768, 1024, 1440):

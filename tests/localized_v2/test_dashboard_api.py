@@ -37,6 +37,7 @@ def test_health_and_channels_report_only_v2_readiness(tmp_path: Path) -> None:
                 "channelId": "healthy-life-en",
                 "locale": "en-US",
                 "name": "Healthy Life 45+",
+                "mode": "production",
             }
         ]
     }
@@ -147,3 +148,23 @@ def test_unknown_status_filter_is_rejected(tmp_path: Path) -> None:
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_unknown_channel_preserves_not_enabled_error_contract(tmp_path: Path) -> None:
+    client, headers = _client(tmp_path)
+
+    response = client.post(
+        "/api/v2/jobs",
+        headers=headers,
+        json={"channelId": "unknown-channel", "topic": "A calm daily habit"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"] == {
+        "code": "CHANNEL_NOT_ENABLED",
+        "message": (
+            "The selected localized V2 channel is not available for "
+            "production or qualification."
+        ),
+        "details": {"channelId": "unknown-channel"},
+    }

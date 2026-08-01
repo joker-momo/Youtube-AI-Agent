@@ -27,6 +27,24 @@ VoiceProbe = Callable[[tuple[str, str, str], Path], bool]
 
 
 def probe_font_family(family: str) -> bool:
+    if family == "Manrope":
+        font_root = (
+            Path(__file__).resolve().parents[4]
+            / "remotion"
+            / "public"
+            / "localized-v2"
+            / "fonts"
+        )
+        required = (
+            font_root / "Manrope-latin.woff2",
+            font_root / "Manrope-latin-ext.woff2",
+        )
+        return all(
+            path.is_file()
+            and not path.is_symlink()
+            and path.stat().st_size >= 10_000
+            for path in required
+        )
     executable = shutil.which("fc-match")
     if executable is None:
         return False
@@ -167,7 +185,7 @@ def _brand_clips(
     return frozenset(clips)
 
 
-def load_enabled_channels(
+def _load_channels(
     *,
     channel_root: Path,
     locale_root: Path,
@@ -176,16 +194,17 @@ def load_enabled_channels(
     clip_probe: ClipProbe = probe_brand_clip,
     font_probe: FontProbe = probe_font_family,
     voice_probe: VoiceProbe = probe_voice_backend,
+    allow_qualification: bool,
 ) -> dict[str, EnabledChannel]:
-    """Load only approved channels with independently qualified capabilities."""
+    """Load channels after independently checking declared runtime capabilities."""
 
     registry = ChannelRegistry(
         channel_root,
         schema_root,
         settings.root / "canary-evidence",
     )
-    enabled = registry.enabled()
-    if not enabled:
+    selected = registry.runnable() if allow_qualification else registry.enabled()
+    if not selected:
         return {}
 
     locale_registry = LocaleRegistry(locale_root, schema_root)
@@ -214,7 +233,7 @@ def load_enabled_channels(
     )
 
     registrations: dict[str, EnabledChannel] = {}
-    for channel_id, channel in enabled.items():
+    for channel_id, channel in selected.items():
         locale_pack = locale_registry.resolve(channel["locale"])
         preflight = run_preflight(channel, locale_pack, inventory)
         if not preflight.ok:
@@ -228,3 +247,15 @@ def load_enabled_channels(
             )
         registrations[channel_id] = EnabledChannel(channel, locale_pack, inventory)
     return registrations
+
+
+def load_enabled_channels(**kwargs) -> dict[str, EnabledChannel]:
+    """Load only fully approved production channels."""
+
+    return _load_channels(**kwargs, allow_qualification=False)
+
+
+def load_dashboard_channels(**kwargs) -> dict[str, EnabledChannel]:
+    """Load production channels and explicit pre-production canaries."""
+
+    return _load_channels(**kwargs, allow_qualification=True)

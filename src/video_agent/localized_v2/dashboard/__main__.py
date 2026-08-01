@@ -5,7 +5,7 @@ from pathlib import Path
 import uvicorn
 
 from video_agent.localized_v2.dashboard.app import create_app
-from video_agent.localized_v2.dashboard.bootstrap import load_enabled_channels
+from video_agent.localized_v2.dashboard.bootstrap import load_dashboard_channels
 from video_agent.localized_v2.dashboard.service import DashboardService
 from video_agent.localized_v2.paths import RuntimePaths
 from video_agent.localized_v2.queue import LocalizedQueue
@@ -29,7 +29,7 @@ def main() -> None:
     paths = RuntimePaths.build(settings.root, legacy_jobs_root=repo_root / "jobs")
     paths.initialize()
     queue = LocalizedQueue(paths.queue_db, busy_timeout_ms=settings.busy_timeout_ms)
-    channels = load_enabled_channels(
+    channels = load_dashboard_channels(
         channel_root=repo_root / "configs" / "localized-v2" / "channels",
         locale_root=repo_root / "configs" / "localized-v2" / "locales",
         schema_root=repo_root / "schemas",

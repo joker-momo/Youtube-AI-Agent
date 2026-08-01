@@ -1,5 +1,4 @@
-import {loadFont as loadManrope} from '@remotion/google-fonts/Manrope';
-import {loadFont as loadMontserrat} from '@remotion/google-fonts/Montserrat';
+import {cancelRender, continueRender, delayRender, staticFile} from 'remotion';
 import {
   getInfo as getNotoSansJPInfo,
   loadFont as loadNotoSansJP,
@@ -9,14 +8,29 @@ import {
   loadFont as loadNotoSansKR,
 } from '@remotion/google-fonts/NotoSansKR';
 
-loadMontserrat('normal', {
-  weights: ['400', '600', '700', '800', '900'],
-  subsets: ['latin', 'latin-ext'],
-});
-loadManrope('normal', {
-  weights: ['600', '700', '800'],
-  subsets: ['latin', 'latin-ext'],
-});
+const loadBundledManrope = (): void => {
+  if (typeof FontFace === 'undefined' || typeof document === 'undefined') {
+    return;
+  }
+  const handle = delayRender('Loading bundled localized-V2 Manrope');
+  const faces = [
+    new FontFace(
+      'Manrope',
+      `url(${staticFile('localized-v2/fonts/Manrope-latin.woff2')}) format('woff2')`,
+      {style: 'normal', weight: '200 800'},
+    ),
+    new FontFace(
+      'Manrope',
+      `url(${staticFile('localized-v2/fonts/Manrope-latin-ext.woff2')}) format('woff2')`,
+      {style: 'normal', weight: '200 800'},
+    ),
+  ];
+  Promise.all(faces.map(async (face) => document.fonts.add(await face.load())))
+    .then(() => continueRender(handle))
+    .catch((error) => cancelRender(error));
+};
+
+loadBundledManrope();
 type FontInfo = ReturnType<typeof getNotoSansJPInfo>;
 
 const codepointInRange = (codepoint: number, expression: string): boolean =>
@@ -90,5 +104,5 @@ export const localeFontFamily = (locale: string): string => {
   if (locale === 'ja-JP') {
     return '"Noto Sans JP", "Hiragino Sans", sans-serif';
   }
-  return 'Manrope, Montserrat, "Helvetica Neue", sans-serif';
+  return 'Manrope, "Helvetica Neue", sans-serif';
 };

@@ -7,6 +7,7 @@
   "properties": {
     "schemaVersion": {"const": "localized-channel-v2/v1"},
     "enabled": {"type": "boolean"},
+    "qualification": {"type": "boolean"},
     "rolloutOrder": {"type": "integer", "minimum": 1, "maximum": 5},
     "channelId": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{2,63}$"},
     "locale": {"enum": ["en-US", "fr-FR", "pt-BR", "ko-KR", "ja-JP"]},
@@ -106,21 +107,38 @@
         }
       },
       "else": {
-        "properties": {
-          "voice": {"type": "null"},
-          "canary": {
-            "properties": {
-              "status": {"const": "PENDING"},
-              "checks": {
-                "properties": {
-                  "audio": {"const": "PENDING"},
-                  "font": {"const": "PENDING"},
-                  "render": {"const": "PENDING"},
-                  "humanReview": {"const": "PENDING"},
-                  "dashboardLifecycle": {"const": "PENDING"}
-                }
-              },
-              "evidence": {"maxItems": 0}
+        "if": {
+          "required": ["qualification"],
+          "properties": {"qualification": {"const": true}}
+        },
+        "then": {
+          "properties": {
+            "enabled": {"const": false},
+            "voice": {"type": "object"},
+            "canary": {
+              "properties": {
+                "status": {"const": "PENDING"}
+              }
+            }
+          }
+        },
+        "else": {
+          "properties": {
+            "voice": {"type": "null"},
+            "canary": {
+              "properties": {
+                "status": {"const": "PENDING"},
+                "checks": {
+                  "properties": {
+                    "audio": {"const": "PENDING"},
+                    "font": {"const": "PENDING"},
+                    "render": {"const": "PENDING"},
+                    "humanReview": {"const": "PENDING"},
+                    "dashboardLifecycle": {"const": "PENDING"}
+                  }
+                },
+                "evidence": {"maxItems": 0}
+              }
             }
           }
         }

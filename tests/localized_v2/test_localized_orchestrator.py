@@ -67,7 +67,7 @@ class FakeLocalizedProvider:
                             "Research suggests that regular walking may support "
                             "wellbeing for many adults."
                         ),
-                        "visualType": "video",
+                        "visualType": "graphic",
                         "visualPrompt": "An ordinary adult taking a calm daily walk",
                         "searchBrief": {
                             "language": "en",
@@ -152,6 +152,52 @@ def test_prompt_orchestrator_validates_and_promotes_each_stage(tmp_path: Path) -
         "seo.json",
         "qa.json",
     ]
+
+
+def test_live_provider_prompt_contains_the_authoritative_artifact_schema(
+    tmp_path: Path,
+) -> None:
+    provider = FakeLocalizedProvider()
+    worker, queue = _worker(tmp_path, provider)
+    job = queue.get_job("localized-job")
+    assert job is not None
+
+    prompt = worker.runner._prompt(job, "idea")
+    contract = prompt.payload["responseContract"]
+
+    assert contract["schemaVersion"] == "localized-idea-v2/v1"
+    assert contract["jsonSchema"]["required"] == [
+        "schemaVersion",
+        "locale",
+        "angle",
+        "audiencePromise",
+        "localRelevance",
+        "evidenceQuestions",
+    ]
+    assert set(contract["jsonSchema"]["properties"]) == set(
+        contract["jsonSchema"]["required"]
+    )
+    assert contract["jsonSchema"]["additionalProperties"] is False
+    assert "artifactKind" not in contract
+    assert "responseContract.jsonSchema is authoritative" in prompt.system
+
+
+def test_scenes_reject_a_non_graphic_opening(tmp_path: Path) -> None:
+    class AllVideoProvider(FakeLocalizedProvider):
+        def generate(self, prompt: PromptEnvelope) -> dict:
+            payload = super().generate(prompt)
+            if prompt.stage == "scenes":
+                payload["scenes"][0]["visualType"] = "video"
+            return payload
+
+    worker, queue = _worker(tmp_path, AllVideoProvider())
+
+    with pytest.raises(ValueError, match="first scene must be a graphic"):
+        worker.run_once()
+
+    failure = queue.get_job("localized-job")["failure"]
+    assert failure["code"] == "INVALID_PROVIDER_RESPONSE"
+    assert failure["stage"] == "scenes"
 
 
 def test_failed_qa_is_structured_and_never_promoted(tmp_path: Path) -> None:

@@ -46,6 +46,19 @@ def test_v2_font_manifest_covers_every_supported_locale() -> None:
     assert manifest["locales"]["ja-JP"]["family"] == "Noto Sans JP"
 
 
+def test_english_manrope_is_bundled_instead_of_fetched_at_render_time() -> None:
+    source = (LOCALIZED_ROOT / "loadFonts.ts").read_text(encoding="utf-8")
+    font_root = REPO_ROOT / "remotion" / "public" / "localized-v2" / "fonts"
+
+    assert "@remotion/google-fonts/Manrope" not in source
+    assert "@remotion/google-fonts/Montserrat" not in source
+    assert "loadMontserrat" not in source
+    assert "Manrope-latin.woff2" in source
+    assert "Manrope-latin-ext.woff2" in source
+    assert (font_root / "Manrope-latin.woff2").stat().st_size >= 10_000
+    assert (font_root / "Manrope-latin-ext.woff2").stat().st_size >= 10_000
+
+
 def test_v2_renderer_has_no_bottom_subtitle_or_transcription_dependency() -> None:
     source = "\n".join(
         path.read_text(encoding="utf-8")

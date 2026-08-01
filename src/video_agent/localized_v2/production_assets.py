@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import tempfile
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -19,6 +22,34 @@ from video_agent.localized_v2.providers import (
     BrowserProviderConfig,
     validate_browser_provider_config,
 )
+
+STOCK_CREDENTIAL_KEYS = frozenset({"PEXELS_API_KEY", "PIXABAY_API_KEY"})
+
+
+def load_stock_provider_credentials(env_path: Path) -> frozenset[str]:
+    """Load only stock-video credentials from an explicit, read-only env file."""
+
+    path = env_path.expanduser().resolve()
+    if not path.is_file() or path.stat().st_size > 64 * 1024:
+        raise RuntimeError("localized V2 stock credential file is missing or invalid")
+    discovered: set[str] = set()
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key not in STOCK_CREDENTIAL_KEYS:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        if value:
+            discovered.add(key)
+            os.environ.setdefault(key, value)
+    if not any(os.environ.get(key) for key in STOCK_CREDENTIAL_KEYS):
+        raise RuntimeError("localized V2 requires at least one stock video credential")
+    return frozenset(discovered)
 
 
 class ImageAssetProvider(Protocol):
@@ -81,6 +112,32 @@ class BrowserImageProvider:
         raise RuntimeError("localized V2 browser worker returned invalid image bytes")
 
     def _generate(self, prompt: str, *, artifact: str) -> AssetResponse:
+        cache_root = (self.runtime_paths.cache / "browser-images").resolve()
+        cache_key = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+        cached_path = cache_root / f"{cache_key}.bin"
+        if cached_path.is_file():
+            cached_body = cached_path.read_bytes()
+            try:
+                content_type = self._content_type(cached_body)
+                if not cached_body or len(cached_body) > MAX_MEDIA_BYTES:
+                    raise RuntimeError("cached browser image size is invalid")
+            except RuntimeError:
+                cached_path.unlink(missing_ok=True)
+            else:
+                return AssetResponse(
+                    status=200,
+                    content_type=content_type,
+                    body=cached_body,
+                    source_url="https://chatgpt.com/",
+                    metadata=json.dumps(
+                        {
+                            "provider": "chatgpt",
+                            "artifact": artifact,
+                            "cacheHit": True,
+                        },
+                        separators=(",", ":"),
+                    ),
+                )
         output = (
             self.runtime_paths.work
             / "browser-images"
@@ -99,7 +156,9 @@ class BrowserImageProvider:
                     "response_timeout_ms": self.response_timeout_ms,
                     "aspect_ratio": "16:9",
                 },
-                timeout=self.response_timeout_ms / 1000.0 + 30.0,
+                # The isolated browser worker performs one bounded recovery retry.
+                # Keep the outer transport alive for both bounded attempts.
+                timeout=(self.response_timeout_ms / 1000.0 * 2) + 60.0,
             )
             if response.status_code not in {200, 201}:
                 raise RuntimeError(
@@ -110,9 +169,26 @@ class BrowserImageProvider:
             if returned != output or not output.is_file():
                 raise RuntimeError("localized V2 browser worker returned an unsafe image path")
             body = output.read_bytes()
+            content_type = self._content_type(body)
+            if not body or len(body) > MAX_MEDIA_BYTES:
+                raise RuntimeError("localized V2 browser image size is invalid")
+            cache_root.mkdir(parents=True, exist_ok=True)
+            descriptor, temporary = tempfile.mkstemp(
+                prefix=f".{cache_key}.",
+                dir=cache_root,
+            )
+            try:
+                with os.fdopen(descriptor, "wb") as handle:
+                    handle.write(body)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary, cached_path)
+            except BaseException:
+                Path(temporary).unlink(missing_ok=True)
+                raise
             return AssetResponse(
                 status=200,
-                content_type=self._content_type(body),
+                content_type=content_type,
                 body=body,
                 source_url="https://chatgpt.com/",
                 metadata=json.dumps(
@@ -172,12 +248,22 @@ class StockVideoProvider:
         job_id: str = "",
     ) -> StockVideoProvider:
         cache_root = runtime_paths.cache.resolve()
+        providers = [
+            provider
+            for provider, credential in (
+                ("pexels_video", "PEXELS_API_KEY"),
+                ("pixabay_video", "PIXABAY_API_KEY"),
+            )
+            if os.environ.get(credential)
+        ]
+        if not providers:
+            raise RuntimeError("localized V2 has no configured stock video provider")
         service = StockAssetService(
             {
-                "providers": ["pexels_video"],
+                "providers": providers,
                 # Repeating the video provider suppresses the legacy photo tier:
                 # V2's render contract requires a real video behind every scene.
-                "photo_providers": ["pexels_video"],
+                "photo_providers": providers,
                 "fallback_providers": [],
                 "orientation": "landscape",
                 "per_page": 10,
@@ -196,10 +282,8 @@ class StockVideoProvider:
         return cls(service, images, channel_id=channel_id, job_id=job_id)
 
     @staticmethod
-    def _stock_scene(scene: dict[str, Any]) -> dict[str, Any]:
-        brief = scene.get("searchBrief") or {}
-        queries = brief.get("queries") or []
-        query = str(queries[0] if queries else scene.get("visualPrompt") or "").strip()
+    def _stock_scene(scene: dict[str, Any], query: str) -> dict[str, Any]:
+        query = query.strip()
         if not query:
             raise RuntimeError("localized V2 scene has no stock video search query")
         return {
@@ -212,11 +296,22 @@ class StockVideoProvider:
         }
 
     def background(self, scene: dict[str, Any], _context: dict[str, Any]) -> AssetResponse:
-        asset = self.service.get_scene_asset(
-            self._stock_scene(scene),
-            str(_context.get("channelId") or self.channel_id),
-            str(_context.get("jobId") or self.job_id),
-        )
+        brief = scene.get("searchBrief") or {}
+        queries = [str(query).strip() for query in brief.get("queries") or []]
+        if not queries:
+            queries = [str(scene.get("visualPrompt") or "").strip()]
+        asset = None
+        for query in queries:
+            if not query:
+                continue
+            candidate = self.service.get_scene_asset(
+                self._stock_scene(scene, query),
+                str(_context.get("channelId") or self.channel_id),
+                str(_context.get("jobId") or self.job_id),
+            )
+            if candidate and candidate.get("media_type") == "video":
+                asset = candidate
+                break
         if not asset or asset.get("media_type") != "video":
             raise RuntimeError("localized V2 stock video provider found no real stock video")
         raw_path = asset.get("local_path")

@@ -224,7 +224,13 @@ def test_actual_locale_and_channel_matrix_is_complete_and_fail_closed(tmp_path: 
     }
     assert len(channel_registry.all()) == 5
     assert channel_registry.enabled() == {}
-    assert all(channel["voice"] is None for channel in channel_registry.all().values())
+    assert set(channel_registry.runnable()) == {"healthy-life-en"}
+    assert channel_registry.runnable()["healthy-life-en"]["qualification"] is True
+    assert all(
+        channel["voice"] is None
+        for channel in channel_registry.all().values()
+        if channel["locale"] != "en-US"
+    )
     assert all(channel["render"]["concurrency"] == "auto" for channel in channel_registry.all().values())
     assert all(channel["render"]["subtitles"]["enabled"] is False for channel in channel_registry.all().values())
     assert all(channel["content"]["type"] == "long_form" for channel in channel_registry.all().values())
@@ -279,9 +285,53 @@ def test_later_locale_cannot_skip_earlier_canary(tmp_path: Path) -> None:
     assert error.value.code == "ROLLOUT_DEPENDENCY_FAILED"
 
 
+def _qualify(path: Path) -> None:
+    payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    payload["qualification"] = True
+    payload["voice"] = {
+        "provider": "kokoro",
+        "language": "a",
+        "voiceId": "qualification-test-voice",
+        "speed": 1.0,
+    }
+    path.write_text(yaml.safe_dump(payload, allow_unicode=True), encoding="utf-8")
+
+
+def test_later_locale_cannot_enter_qualification_before_earlier_locale(
+    tmp_path: Path,
+) -> None:
+    channels = tmp_path / "channels"
+    shutil.copytree(CHANNEL_ROOT, channels)
+    english = channels / "pending-en-us" / "channel.yaml"
+    english_payload = yaml.safe_load(english.read_text(encoding="utf-8"))
+    english_payload.pop("qualification")
+    english_payload["voice"] = None
+    english.write_text(
+        yaml.safe_dump(english_payload, allow_unicode=True), encoding="utf-8"
+    )
+    _qualify(channels / "pending-fr-fr" / "channel.yaml")
+
+    with pytest.raises(ContractValidationError, match="enabled or qualified") as error:
+        ChannelRegistry(channels, SCHEMA_ROOT, tmp_path / "evidence")
+
+    assert error.value.code == "ROLLOUT_DEPENDENCY_FAILED"
+
+
+def test_only_one_locale_can_be_under_qualification(tmp_path: Path) -> None:
+    channels = tmp_path / "channels"
+    shutil.copytree(CHANNEL_ROOT, channels)
+    _qualify(channels / "pending-fr-fr" / "channel.yaml")
+
+    with pytest.raises(ContractValidationError) as error:
+        ChannelRegistry(channels, SCHEMA_ROOT, tmp_path / "evidence")
+
+    assert error.value.code == "MULTIPLE_QUALIFICATION_CHANNELS"
+    assert error.value.details == {"locales": ["en-US", "fr-FR"]}
+
+
 def test_disabled_template_cannot_hide_voice_or_partial_canary(tmp_path: Path) -> None:
     payload = yaml.safe_load(
-        (CHANNEL_ROOT / "pending-en-us" / "channel.yaml").read_text(encoding="utf-8")
+        (CHANNEL_ROOT / "pending-fr-fr" / "channel.yaml").read_text(encoding="utf-8")
     )
     payload["voice"] = {
         "provider": "kokoro",
@@ -298,17 +348,17 @@ def test_disabled_template_cannot_hide_voice_or_partial_canary(tmp_path: Path) -
 
 def test_dashboard_rejects_direct_injection_of_disabled_template(tmp_path: Path) -> None:
     channel = load_channel_config(
-        CHANNEL_ROOT / "pending-en-us" / "channel.yaml",
+        CHANNEL_ROOT / "pending-fr-fr" / "channel.yaml",
         SCHEMA_ROOT,
     )
-    locale_pack = LocaleRegistry(LOCALE_ROOT, SCHEMA_ROOT).resolve("en-US")
+    locale_pack = LocaleRegistry(LOCALE_ROOT, SCHEMA_ROOT).resolve("fr-FR")
     legacy = tmp_path / "legacy"
     legacy.mkdir()
     paths = RuntimePaths.build(tmp_path / "runtime", legacy_jobs_root=legacy)
     paths.initialize()
     queue = LocalizedQueue(paths.queue_db)
 
-    with pytest.raises(ValueError, match="approved enabled channels"):
+    with pytest.raises(ValueError, match="production or qualification channels"):
         DashboardService(
             LocalizedRuntime(paths, queue),
             queue,

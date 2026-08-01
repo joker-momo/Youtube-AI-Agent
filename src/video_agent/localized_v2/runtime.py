@@ -39,6 +39,7 @@ class RuntimeSettings:
     host: str
     port: int
     browser_worker_url: str
+    browser_cdp_url: str
     busy_timeout_ms: int
     lease_seconds: int
 
@@ -53,6 +54,7 @@ def load_runtime_settings(path: Path, *, repo_root: Path) -> RuntimeSettings:
         "host",
         "port",
         "browserWorkerUrl",
+        "browserCdpUrl",
         "busyTimeoutMs",
         "leaseSeconds",
     }
@@ -78,7 +80,23 @@ def load_runtime_settings(path: Path, *, repo_root: Path) -> RuntimeSettings:
         raise ValueError(
             "localized V2 browser worker must use a separate loopback endpoint"
         )
-    root = Path(str(payload["root"]))
+    browser_cdp = urlsplit(str(payload.get("browserCdpUrl", "")))
+    reserved_ports = {int(payload["port"]), browser_worker.port, 9222}
+    if (
+        browser_cdp.scheme != "http"
+        or browser_cdp.hostname not in {"127.0.0.1", "::1", "localhost"}
+        or browser_cdp.username
+        or browser_cdp.password
+        or browser_cdp.query
+        or browser_cdp.fragment
+        or browser_cdp.path not in {"", "/"}
+        or browser_cdp.port is None
+        or browser_cdp.port in reserved_ports
+    ):
+        raise ValueError(
+            "localized V2 browser CDP must use a separate V2 loopback endpoint"
+        )
+    root = Path(str(payload["root"])).expanduser()
     if not root.is_absolute():
         root = repo_root / root
     return RuntimeSettings(
@@ -86,6 +104,7 @@ def load_runtime_settings(path: Path, *, repo_root: Path) -> RuntimeSettings:
         host=str(payload["host"]),
         port=int(payload["port"]),
         browser_worker_url=f"http://{browser_worker.hostname}:{browser_worker.port}",
+        browser_cdp_url=f"http://{browser_cdp.hostname}:{browser_cdp.port}",
         busy_timeout_ms=int(payload["busyTimeoutMs"]),
         lease_seconds=int(payload["leaseSeconds"]),
     )

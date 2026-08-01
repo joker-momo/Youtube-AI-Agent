@@ -16,6 +16,14 @@ def build_qa_prompt(
             "Audit the candidate artifacts without rewriting them.",
             "Fail locale leakage, medical overclaims, unsupported evidence, stereotypes,",
             "non-English stock-search queries, subtitle instructions, or schema inconsistency.",
+            (
+                "No external source packet was provided. A missing citation alone is not a QA "
+                "failure for a conservative, high-level, clearly hedged health statement."
+            ),
+            (
+                "Fail any invented specific study, statistic, effect size, or evidence ranking, "
+                "and fail any unhedged medical recommendation."
+            ),
             "A PASS verdict must have an empty failures array.",
         ]
     )

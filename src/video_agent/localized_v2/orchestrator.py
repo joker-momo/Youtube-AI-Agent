@@ -13,7 +13,7 @@ from video_agent.localized_v2.audio.timing import (
 )
 from video_agent.localized_v2.audio.tts import LocalizedTTS
 from video_agent.localized_v2.brand_assets import BrandClip
-from video_agent.localized_v2.config import validate_artifact
+from video_agent.localized_v2.config import ARTIFACT_SCHEMA_FILES, validate_artifact
 from video_agent.localized_v2.content_safety import validate_localized_content
 from video_agent.localized_v2.contracts import ArtifactKind
 from video_agent.localized_v2.paths import RuntimePaths
@@ -115,34 +115,61 @@ class LocalizedPromptRunner:
     def _prompt(self, job: dict[str, Any], stage: str) -> PromptEnvelope:
         channel, locale_pack = self._snapshots(job)
         if stage == "idea":
-            return build_idea_prompt(channel, locale_pack, job["topic"])
-        if stage == "script":
-            return build_script_prompt(
+            prompt = build_idea_prompt(channel, locale_pack, job["topic"])
+        elif stage == "script":
+            prompt = build_script_prompt(
                 channel,
                 locale_pack,
                 self._load(job, "idea", locale_pack),
             )
-        if stage == "scenes":
-            return build_scenes_prompt(
+        elif stage == "scenes":
+            prompt = build_scenes_prompt(
                 channel,
                 locale_pack,
                 self._load(job, "script", locale_pack),
             )
-        if stage == "seo":
-            return build_seo_prompt(
+        elif stage == "seo":
+            prompt = build_seo_prompt(
                 channel,
                 locale_pack,
                 self._load(job, "script", locale_pack),
             )
-        if stage == "qa":
-            return build_qa_prompt(
+        elif stage == "qa":
+            prompt = build_qa_prompt(
                 locale_pack,
                 {
                     name: self._load(job, name, locale_pack)
                     for name in ("idea", "script", "scenes", "seo")
                 },
             )
-        raise ValueError(f"unknown localized V2 prompt stage: {stage}")
+        else:
+            raise ValueError(f"unknown localized V2 prompt stage: {stage}")
+        return self._attach_response_schema(prompt)
+
+    def _attach_response_schema(self, prompt: PromptEnvelope) -> PromptEnvelope:
+        schema_path = self.schema_root / ARTIFACT_SCHEMA_FILES[prompt.artifact_kind]
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        if not isinstance(schema, dict):
+            raise ValueError("localized V2 response schema must contain an object")
+        payload = dict(prompt.payload)
+        contract = dict(payload.get("responseContract") or {})
+        contract.pop("artifactKind", None)
+        contract["jsonSchema"] = schema
+        payload["responseContract"] = contract
+        system = "\n".join(
+            [
+                prompt.system,
+                "responseContract.jsonSchema is authoritative for the output object.",
+                "Include every required field and no field absent from jsonSchema.properties.",
+                "Do not copy request metadata such as artifactKind into the output.",
+            ]
+        )
+        return PromptEnvelope(
+            stage=prompt.stage,
+            system=system,
+            payload=payload,
+            artifact_kind=prompt.artifact_kind,
+        )
 
     def run_stage(
         self,

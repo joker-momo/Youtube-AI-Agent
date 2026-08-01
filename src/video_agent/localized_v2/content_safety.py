@@ -146,6 +146,12 @@ def validate_localized_content(
                 "script must include locale-specific informational medical wording",
             )
     if kind is ArtifactKind.SCENES:
+        if payload["scenes"][0]["visualType"] != "graphic":
+            raise LocalizedContentError(
+                "GRAPHIC_HOOK_REQUIRED",
+                "scenes.0.visualType",
+                "the first scene must be a graphic visual hook",
+            )
         for index, scene in enumerate(payload["scenes"]):
             brief = scene["searchBrief"]
             if brief["language"] != "en":

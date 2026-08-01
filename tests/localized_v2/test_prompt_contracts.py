@@ -67,6 +67,33 @@ def test_visual_search_language_does_not_change_audience_language() -> None:
     assert "Keep narration in the target language." in prompt.system
     assert "searchBrief query in concise English" in prompt.system
     assert prompt.payload["responseContract"]["searchBriefLanguage"] == "en"
+    assert "positive visible scene description" in prompt.system
+    assert "first scene must use visualType graphic" in prompt.system
+    assert "real, filmable video background" in prompt.system
+    assert "Graphic scenes remain voice-only" not in prompt.system
+
+
+def test_script_without_source_packet_forbids_invented_evidence_specificity() -> None:
+    channel, locale_pack = snapshots("en-US")
+    idea = {
+        "schemaVersion": "localized-idea-v2/v1",
+        "locale": "en-US",
+        "angle": "Practical evidence",
+        "audiencePromise": "One realistic habit",
+        "localRelevance": "Daily routines",
+        "evidenceQuestions": ["What is known?", "What remains uncertain?"],
+    }
+
+    script = build_script_prompt(channel, locale_pack, idea)
+    qa = build_qa_prompt(locale_pack, {"idea": idea})
+
+    assert script.payload["evidencePolicy"] == {
+        "sourcePacketProvided": False,
+        "allowSpecificStudiesStatisticsOrEffectSizes": False,
+    }
+    assert "Do not invent citations, named studies, trial designs" in script.system
+    assert "A missing citation alone is not a QA failure" in qa.system
+    assert "specific study, statistic, effect size, or evidence ranking" in qa.system
 
 
 def test_channel_and_topic_injection_remain_untrusted_json_data() -> None:

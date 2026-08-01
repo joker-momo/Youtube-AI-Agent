@@ -21,8 +21,12 @@ def build_scenes_prompt(
             "Split the narration into a clear visual sequence without changing its meaning.",
             "Keep narration in the target language.",
             "Write each searchBrief query in concise English for stock-media providers.",
+            "Every searchBrief query must describe a real, filmable video background, even when visualType is graphic.",
             "Visual prompts must be topic-faithful and avoid the locale pack's exclusions.",
-            "Graphic scenes remain voice-only and must not request bottom subtitles.",
+            "Each visualPrompt must be a positive visible scene description only.",
+            "The first scene must use visualType graphic for a strong visual hook.",
+            "Use visualType video for later scenes when real footage best supports the narration.",
+            "Production controls are enforced downstream and must not appear in output fields.",
         ]
     )
     return PromptEnvelope(

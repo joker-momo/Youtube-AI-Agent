@@ -37,6 +37,7 @@ class ChannelSummary(StrictModel):
     channel_id: str = Field(alias="channelId")
     locale: str
     name: str
+    mode: str = Field(pattern=r"^(production|qualification)$")
 
 
 class ChannelListResponse(StrictModel):

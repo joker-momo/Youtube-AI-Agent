@@ -107,18 +107,26 @@ class DashboardService:
             channel = registration.channel
             canary = channel.get("canary", {})
             checks = canary.get("checks", {})
+            production_ready = (
+                channel.get("enabled") is True
+                and canary.get("status") == "APPROVED"
+                and set(checks) == CANARY_CHECKS
+                and all(result == "PASS" for result in checks.values())
+                and len(canary.get("evidence", [])) >= 5
+            )
+            qualification_ready = (
+                channel.get("enabled") is False
+                and channel.get("qualification") is True
+                and canary.get("status") == "PENDING"
+            )
             if (
                 channel.get("channelId") != channel_id
                 or channel.get("locale") != registration.locale_pack.get("locale")
-                or channel.get("enabled") is not True
                 or not isinstance(channel.get("voice"), dict)
-                or canary.get("status") != "APPROVED"
-                or set(checks) != CANARY_CHECKS
-                or any(result != "PASS" for result in checks.values())
-                or len(canary.get("evidence", [])) < 5
+                or not (production_ready or qualification_ready)
             ):
                 raise ValueError(
-                    "localized V2 dashboard accepts only approved enabled channels"
+                    "localized V2 dashboard accepts only production or qualification channels"
                 )
         self.channels = dict(channels)
 
@@ -135,6 +143,11 @@ class DashboardService:
                 "channelId": channel_id,
                 "locale": registration.channel["locale"],
                 "name": registration.channel["brand"]["name"],
+                "mode": (
+                    "production"
+                    if registration.channel["enabled"]
+                    else "qualification"
+                ),
             }
             for channel_id, registration in sorted(self.channels.items())
         ]
@@ -146,7 +159,7 @@ class DashboardService:
             raise DashboardError(
                 422,
                 "CHANNEL_NOT_ENABLED",
-                "The selected localized V2 channel is not enabled.",
+                "The selected localized V2 channel is not available for production or qualification.",
                 details={"channelId": channel_id},
             ) from exc
         topic = topic.strip()

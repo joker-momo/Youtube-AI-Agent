@@ -79,13 +79,25 @@ class ChannelRegistry:
                 )
 
     def _validate_rollout_dependencies(self) -> None:
+        qualification_locales = [
+            locale
+            for locale in SUPPORTED_LOCALES
+            if self._by_locale[locale].get("qualification") is True
+        ]
+        if len(qualification_locales) > 1:
+            raise ContractValidationError(
+                "MULTIPLE_QUALIFICATION_CHANNELS",
+                "only one localized V2 channel may be under qualification",
+                details={"locales": qualification_locales},
+            )
         earlier_enabled = True
         for locale in SUPPORTED_LOCALES:
             channel = self._by_locale[locale]
-            if channel["enabled"] and not earlier_enabled:
+            active = channel["enabled"] or channel.get("qualification") is True
+            if active and not earlier_enabled:
                 raise ContractValidationError(
                     "ROLLOUT_DEPENDENCY_FAILED",
-                    f"{locale} cannot be enabled before all earlier locales",
+                    f"{locale} cannot be enabled or qualified before all earlier locales",
                     details={"locale": locale},
                 )
             earlier_enabled = earlier_enabled and channel["enabled"]
@@ -95,6 +107,15 @@ class ChannelRegistry:
             channel_id: channel
             for channel_id, channel in self._channels.items()
             if channel["enabled"]
+        }
+
+    def runnable(self) -> dict[str, dict[str, Any]]:
+        """Return production channels plus explicitly isolated canary channels."""
+
+        return {
+            channel_id: channel
+            for channel_id, channel in self._channels.items()
+            if channel["enabled"] or channel.get("qualification") is True
         }
 
     def all(self) -> dict[str, dict[str, Any]]:

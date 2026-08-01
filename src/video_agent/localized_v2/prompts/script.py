@@ -27,6 +27,14 @@ def build_script_prompt(
             "Write a complete long-form narration organized into coherent sections.",
             "Use the idea as evidence-planning data, not as authority for unsupported claims.",
             (
+                "No source packet is provided. Do not invent citations, named studies, trial "
+                "designs, statistics, effect sizes, mechanisms, or evidence rankings."
+            ),
+            (
+                "Use conservative high-level health information with the locale's soft-claim "
+                "wording and clearly direct individual decisions to a healthcare professional."
+            ),
+            (
                 f"Keep sentences near {narration['sentenceMaxWords']} words or fewer "
                 "when natural in the target language."
             ),
@@ -45,6 +53,10 @@ def build_script_prompt(
                 "targetUnits": budget.target_units,
             },
             "disclaimer": locale_pack["medicalSafety"]["disclaimer"],
+            "evidencePolicy": {
+                "sourcePacketProvided": False,
+                "allowSpecificStudiesStatisticsOrEffectSizes": False,
+            },
             "responseContract": {
                 "schemaVersion": "localized-script-v2/v1",
                 "artifactKind": ArtifactKind.SCRIPT.value,

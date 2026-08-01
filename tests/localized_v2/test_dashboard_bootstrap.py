@@ -7,7 +7,11 @@ import pytest
 import yaml
 
 from video_agent.localized_v2.config import ContractValidationError
-from video_agent.localized_v2.dashboard.bootstrap import load_enabled_channels
+from video_agent.localized_v2.dashboard.bootstrap import (
+    load_dashboard_channels,
+    load_enabled_channels,
+    probe_font_family,
+)
 from video_agent.localized_v2.runtime import RuntimeSettings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -22,6 +26,7 @@ def _settings(root: Path) -> RuntimeSettings:
         host="127.0.0.1",
         port=8792,
         browser_worker_url="http://127.0.0.1:8793",
+        browser_cdp_url="http://127.0.0.1:9322",
         busy_timeout_ms=2500,
         lease_seconds=30,
     )
@@ -96,6 +101,36 @@ def test_disabled_matrix_bootstraps_without_capability_manifest(tmp_path: Path) 
 
     assert loaded == {}
     assert not (runtime / "capabilities.yaml").exists()
+
+
+def test_english_font_probe_uses_bundled_remotion_assets() -> None:
+    assert probe_font_family("Manrope") is True
+
+
+def test_explicit_english_qualification_loads_without_production_approval(
+    tmp_path: Path,
+) -> None:
+    channels, locales, runtime = _roots(tmp_path)
+    _capabilities(runtime)
+    media_root = runtime / "media" / "brand" / "en-US"
+    media_root.mkdir(parents=True)
+    for name in ("intro.mp4", "disclaimer.mp4", "outro.mp4"):
+        (media_root / name).write_bytes(b"media")
+
+    loaded = load_dashboard_channels(
+        channel_root=channels,
+        locale_root=locales,
+        schema_root=SCHEMA_ROOT,
+        settings=_settings(runtime),
+        clip_probe=lambda path, _root: path,
+        font_probe=lambda _family: True,
+        voice_probe=lambda _voice, _repo_root: True,
+    )
+
+    registration = loaded["healthy-life-en"]
+    assert registration.channel["enabled"] is False
+    assert registration.channel["qualification"] is True
+    assert registration.channel["canary"]["status"] == "PENDING"
 
 
 def test_approved_channel_loads_only_after_capabilities_are_verified(

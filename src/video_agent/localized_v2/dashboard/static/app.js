@@ -2,6 +2,7 @@ const state = {
   csrfToken: "",
   selectedJobId: new URLSearchParams(window.location.search).get("job"),
   status: new URLSearchParams(window.location.search).get("status") || "",
+  jobsRequestVersion: 0,
 };
 
 const elements = {
@@ -227,9 +228,14 @@ async function selectJob(jobId) {
 }
 
 async function loadJobs() {
+  const requestVersion = ++state.jobsRequestVersion;
+  const requestedStatus = state.status;
   elements.jobList.setAttribute("aria-busy", "true");
-  const statusQuery = state.status ? `&status=${encodeURIComponent(state.status)}` : "";
+  const statusQuery = requestedStatus ? `&status=${encodeURIComponent(requestedStatus)}` : "";
   const payload = await api(`/api/v2/jobs?page=1&pageSize=50${statusQuery}`);
+  if (requestVersion !== state.jobsRequestVersion || requestedStatus !== state.status) {
+    return state.selectedJobId;
+  }
   const selectionIsVisible = payload.data.some(
     (job) => job.jobId === state.selectedJobId,
   );
@@ -255,13 +261,14 @@ async function loadChannels() {
   const options = payload.data.map((channel) => {
     const option = document.createElement("option");
     option.value = channel.channelId;
-    option.textContent = `${channel.name} (${channel.locale})`;
+    const label = channel.mode === "qualification" ? "CANARY" : "PRODUCTION";
+    option.textContent = `${channel.name} (${channel.locale}) — ${label}`;
     return option;
   });
   if (!options.length) {
     const option = document.createElement("option");
     option.value = "";
-    option.textContent = "No channels enabled";
+    option.textContent = "No production or canary channels available";
     options.push(option);
     elements.channel.disabled = true;
   }

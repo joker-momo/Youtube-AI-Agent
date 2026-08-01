@@ -123,6 +123,46 @@ def test_unknown_channel_field_is_rejected(tmp_path: Path) -> None:
     assert "legacyChannelFallback" in str(error.value)
 
 
+def test_explicit_english_qualification_can_run_without_claiming_approval(
+    tmp_path: Path,
+) -> None:
+    payload = _channel()
+    payload["enabled"] = False
+    payload["qualification"] = True
+    payload["canary"] = {
+        "status": "PENDING",
+        "checks": {
+            "audio": "PASS",
+            "font": "PASS",
+            "render": "PENDING",
+            "humanReview": "PENDING",
+            "dashboardLifecycle": "PENDING",
+        },
+        "evidence": ["en-US/audio.json", "en-US/font.json"],
+    }
+    path = tmp_path / "channel.yaml"
+    path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+
+    loaded = load_channel_config(path, SCHEMA_ROOT)
+
+    assert loaded["enabled"] is False
+    assert loaded["qualification"] is True
+    assert loaded["canary"]["status"] == "PENDING"
+
+
+def test_qualification_flag_cannot_bypass_voice_requirement(tmp_path: Path) -> None:
+    payload = _channel()
+    payload["enabled"] = False
+    payload["qualification"] = True
+    payload["voice"] = None
+    payload["canary"]["status"] = "PENDING"
+    path = tmp_path / "channel.yaml"
+    path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+
+    with pytest.raises(ContractValidationError):
+        load_channel_config(path, SCHEMA_ROOT)
+
+
 def test_v2_config_validation_never_reads_legacy_schema(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

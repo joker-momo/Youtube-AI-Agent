@@ -47,7 +47,9 @@ def test_render_validates_props_before_process_and_requires_output(
 ) -> None:
     inputs = _inputs(tmp_path)
     payload = compile_render_props(**inputs)
-    props_path = tmp_path / "render-props.json"
+    artifacts_root = Path(inputs["job_root"]) / "artifacts"
+    props_path = artifacts_root / "render_props" / "render-props.json"
+    props_path.parent.mkdir(parents=True)
     props_path.write_text(
         json.dumps(payload, ensure_ascii=False),
         encoding="utf-8",
@@ -55,13 +57,20 @@ def test_render_validates_props_before_process_and_requires_output(
     output = tmp_path / "rendered.mp4"
 
     def successful_runner(*_args, **_kwargs):
+        command = _args[0]
+        public_root = Path(command[command.index("--public-dir") + 1])
+        assert public_root != tmp_path.resolve()
+        assert (public_root / "assets" / "opening.mp4").is_file()
+        assert (
+            public_root / "localized-v2" / "fonts" / "Manrope-latin.woff2"
+        ).read_bytes().startswith(b"wOF2")
         output.write_bytes(b"rendered")
         return subprocess.CompletedProcess([], 0, "", "")
 
     assert (
         render_localized_video(
             remotion_root=REMOTION_ROOT,
-            artifacts_root=tmp_path,
+            artifacts_root=artifacts_root,
             schema_root=SCHEMA_ROOT,
             props_path=props_path,
             output_path=output,
@@ -74,7 +83,7 @@ def test_render_validates_props_before_process_and_requires_output(
     with pytest.raises(LocalizedRenderError) as error:
         render_localized_video(
             remotion_root=REMOTION_ROOT,
-            artifacts_root=tmp_path,
+            artifacts_root=artifacts_root,
             schema_root=SCHEMA_ROOT,
             props_path=props_path,
             output_path=output,
@@ -83,6 +92,7 @@ def test_render_validates_props_before_process_and_requires_output(
             ),
         )
     assert error.value.code == "REMOTION_RENDER_FAILED"
+    assert "failed" in str(error.value)
 
 
 def test_render_rejects_external_or_traversing_media_paths(tmp_path: Path) -> None:

@@ -14,8 +14,11 @@ The V2 contract is voice-only:
 - intro, disclaimer, and outro are independent video clips;
 - `render.concurrency` remains `auto`.
 
-All five channel templates are disabled by default. A disabled template has no
-voice and no canary evidence, so it cannot accidentally enter the dashboard.
+All five channel templates are disabled by default. A normal disabled template
+has no voice and no canary evidence, so it cannot accidentally enter the
+dashboard. Exactly one locale may temporarily use `qualification: true`; that
+template remains `enabled: false`, must declare a qualified voice, and appears
+in the dashboard as `CANARY` while its canary status is still `PENDING`.
 
 ## Rollout order
 
@@ -27,7 +30,8 @@ Enable one locale at a time, in this exact order:
 4. `ko-KR`
 5. `ja-JP`
 
-A locale cannot be enabled until every earlier locale is enabled and approved.
+A locale cannot be enabled or placed under qualification until every earlier
+locale is enabled and approved. More than one qualification locale is rejected.
 Do not perform parallel first canaries.
 
 ## Required channel decisions
@@ -45,13 +49,16 @@ session, media path, published-title registry, or runtime directory.
 ## Runtime capability manifest
 
 The production dashboard loads approved channels from the V2 registries at
-startup. It never hardcodes channel objects. If every channel is disabled, the
+startup. It never hardcodes channel objects. The qualification dashboard uses
+the same registries and additionally loads the single explicitly qualified
+channel. If every channel is disabled and none is under qualification, the
 dashboard starts with an empty channel list and does not require a capability
 manifest.
 
-Before enabling the first channel, create
-`runtime/localized-v2/capabilities.yaml` with only capabilities qualified on
-this machine:
+Before starting qualification for the first channel, create the runtime-root
+`capabilities.yaml` with only capabilities qualified on this machine. The
+macOS V2 launcher copies the selected locale manifest into that location; for
+the English qualification it uses `configs/localized-v2/capabilities-en-us.yaml`:
 
 ```yaml
 schemaVersion: localized-capabilities-v2/v1
@@ -154,9 +161,11 @@ Only after all five checks pass:
 3. Set canary status to `APPROVED`.
 4. Add the five safe relative evidence paths.
 5. Set the qualified voice object.
-6. Set `enabled: true`.
-7. Validate the complete channel matrix; the rollout dependency gate must pass.
-8. Restart only the Localized V2 dashboard and confirm exactly the approved
+6. Set `qualification: false`; an approved production channel must not keep the
+   temporary qualification slot.
+7. Set `enabled: true`.
+8. Validate the complete channel matrix; the rollout dependency gate must pass.
+9. Restart only the Localized V2 dashboard and confirm exactly the approved
    channels are listed.
 
 Schema validation, evidence validation, or rollout validation failure is a hard
@@ -165,8 +174,24 @@ service.
 
 ## Current readiness
 
-The locale contracts and deterministic five-locale pipeline matrix are ready.
-No real channel is approved yet: final channel identities, brand clips, voices,
-native human reviews, and real dashboard canary artifacts have not been
-provided. Therefore all five templates intentionally remain disabled and the
-V2 dashboard exposes zero production channels.
+The isolated English pipeline is technically qualified end to end, but it is
+not production-approved:
+
+- `healthy-life-en` (`en-US`) is the only `qualification: true` channel and is
+  visible in the V2 dashboard as `CANARY`;
+- the real dashboard job
+  `7-gentle-morning-habits-that-may-support-healthy-en-us-20260801-171539-eede6e8b`
+  completed every stage and produced a 1920x1080 H.264/AAC MP4;
+- final duration is `371.882667` seconds and final SHA-256 is
+  `36863c1eb851f99e10a72c1bd33ef027fcd35ddf708552b3ebad5af7d9047e74`;
+- the technical test gate is 207 localized-V2 tests plus Ruff, compileall,
+  TypeScript, shell syntax, real dashboard browser checks, and repeat-launch
+  worker-lifecycle verification;
+- no subtitles, captions, word alignment, background music, legacy queue,
+  legacy browser profile, or legacy job tree are used.
+
+The English channel intentionally remains `enabled: false`, with canary status
+and checks still `PENDING`, until a qualified human reviewer records the five
+required evidence files and explicitly approves language, localization,
+medical wording, SEO, thumbnail, visuals, and audience fit. The other four
+locale templates remain disabled and are not runnable.

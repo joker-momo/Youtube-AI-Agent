@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urlsplit
+
+import httpx
 
 from video_agent.localized_v2.config import (
     ContractValidationError,
@@ -15,6 +18,7 @@ from video_agent.localized_v2.paths import RuntimePaths
 from video_agent.localized_v2.prompts import PromptEnvelope
 
 MAX_STRUCTURED_RESPONSE_BYTES = 1024 * 1024
+MAX_PROMPT_BYTES = 512 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +76,75 @@ class StructuredProvider(Protocol):
     name: str
 
     def generate(self, prompt: PromptEnvelope) -> str | bytes | dict[str, Any]: ...
+
+
+class BrowserStructuredProvider:
+    """Synchronous structured-text adapter for the isolated V2 browser worker."""
+
+    name = "chatgpt-browser-v2"
+
+    def __init__(
+        self,
+        config: BrowserProviderConfig,
+        *,
+        runtime_paths: RuntimePaths,
+        expected_endpoint: str,
+        post: Callable[..., Any] = httpx.post,
+        legacy_endpoints: frozenset[str] = frozenset(),
+        active_legacy_sessions: frozenset[str] = frozenset(),
+        response_timeout_ms: int = 300_000,
+    ):
+        self.config = validate_browser_provider_config(
+            config,
+            expected_endpoint=expected_endpoint,
+            runtime_paths=runtime_paths,
+            legacy_endpoints=legacy_endpoints,
+            active_legacy_sessions=active_legacy_sessions,
+        )
+        self._post = post
+        self.response_timeout_ms = max(1_000, min(900_000, response_timeout_ms))
+
+    @staticmethod
+    def _render_prompt(prompt: PromptEnvelope) -> str:
+        system, user = prompt.messages()
+        rendered = (
+            "SYSTEM INSTRUCTIONS\n"
+            f"{system['content']}\n\n"
+            "USER REQUEST\n"
+            f"{user['content']}"
+        )
+        if len(rendered.encode("utf-8")) > MAX_PROMPT_BYTES:
+            raise ValueError("localized V2 provider prompt exceeds size limit")
+        return rendered
+
+    def generate(self, prompt: PromptEnvelope) -> str:
+        try:
+            response = self._post(
+                f"{self.config.endpoint}/chatgpt/send",
+                json={
+                    "prompt": self._render_prompt(prompt),
+                    "response_timeout_ms": self.response_timeout_ms,
+                },
+                timeout=self.response_timeout_ms / 1000.0 + 30.0,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"localized V2 browser transport failed with {type(exc).__name__}"
+            ) from exc
+        if response.status_code not in {200, 201}:
+            raise RuntimeError(
+                f"localized V2 browser worker returned HTTP {response.status_code}"
+            )
+        try:
+            payload = response.json()
+            raw = payload["raw_response"]
+        except Exception as exc:
+            raise RuntimeError("localized V2 browser worker returned an invalid body") from exc
+        if not isinstance(raw, str):
+            raise RuntimeError("localized V2 browser worker returned an invalid response")
+        if len(raw.encode("utf-8")) > MAX_STRUCTURED_RESPONSE_BYTES:
+            raise RuntimeError("localized V2 browser worker response exceeds size limit")
+        return raw
 
 
 class ProviderBoundaryError(ValueError):

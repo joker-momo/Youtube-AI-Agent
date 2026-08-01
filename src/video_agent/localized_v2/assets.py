@@ -227,6 +227,8 @@ class LocalizedAssetPipeline:
         seo: dict[str, Any],
         output_dir: Path,
         promoted_root: Path,
+        channel_id: str = "",
+        job_id: str = "",
         market_relevant: bool = False,
         market_evidence: tuple[str, ...] = (),
     ) -> dict[str, Path]:
@@ -244,6 +246,8 @@ class LocalizedAssetPipeline:
             "marketContext": context.market_context,
             "evidence": list(context.evidence),
             "avoid": list(context.avoid),
+            "channelId": channel_id,
+            "jobId": job_id,
         }
         outputs: dict[str, Path] = {}
         manifest_items: list[dict[str, Any]] = []

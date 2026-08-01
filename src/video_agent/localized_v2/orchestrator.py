@@ -331,6 +331,8 @@ class LocalizedMediaOrchestrator:
                 seo=seo,
                 output_dir=work_dir,
                 promoted_root=self.paths.jobs / job_id / "artifacts" / "assets",
+                channel_id=str(job["channelId"]),
+                job_id=job_id,
             )
             manifest = json.loads(
                 outputs["asset-manifest.json"].read_text(encoding="utf-8")

@@ -155,6 +155,14 @@ def test_browser_structured_provider_uses_only_dedicated_v2_endpoint(
         ),
         runtime_paths=paths,
         expected_endpoint="http://127.0.0.1:8793",
+        get=lambda *_args, **_kwargs: _Response(
+            200,
+            {
+                "service": "localized-v2-browser-worker",
+                "sessionNamespace": "localized-v2:healthy-life-ja",
+                "profileRoot": str(paths.browser_profile),
+            },
+        ),
         post=post,
     )
     prompt = PromptEnvelope(
@@ -196,6 +204,14 @@ def test_browser_structured_provider_rejects_http_and_shape_failures(
         ),
         runtime_paths=paths,
         expected_endpoint="http://127.0.0.1:8793",
+        get=lambda *_args, **_kwargs: _Response(
+            200,
+            {
+                "service": "localized-v2-browser-worker",
+                "sessionNamespace": "localized-v2:healthy-life-en",
+                "profileRoot": str(paths.browser_profile),
+            },
+        ),
         post=lambda *_args, **_kwargs: _Response(status, payload),
     )
     prompt = PromptEnvelope(
@@ -209,3 +225,29 @@ def test_browser_structured_provider_rejects_http_and_shape_failures(
         provider.generate(prompt)
 
     assert "must-not-surface" not in str(error.value)
+
+
+def test_browser_structured_provider_rejects_unverified_worker_identity(
+    tmp_path: Path,
+) -> None:
+    paths = _paths(tmp_path)
+
+    with pytest.raises(RuntimeError, match="identity"):
+        BrowserStructuredProvider(
+            BrowserProviderConfig(
+                endpoint="http://127.0.0.1:8793",
+                profile_root=paths.browser_profile,
+                session_namespace="localized-v2:healthy-life-en",
+            ),
+            runtime_paths=paths,
+            expected_endpoint="http://127.0.0.1:8793",
+            get=lambda *_args, **_kwargs: _Response(
+                200,
+                {
+                    "service": "browser-worker",
+                    "sessionNamespace": "legacy",
+                    "profileRoot": str(tmp_path / "legacy-profile"),
+                },
+            ),
+            post=lambda *_args, **_kwargs: _Response(200, {"raw_response": "{}"}),
+        )

@@ -89,6 +89,7 @@ class BrowserStructuredProvider:
         *,
         runtime_paths: RuntimePaths,
         expected_endpoint: str,
+        get: Callable[..., Any] = httpx.get,
         post: Callable[..., Any] = httpx.post,
         legacy_endpoints: frozenset[str] = frozenset(),
         active_legacy_sessions: frozenset[str] = frozenset(),
@@ -101,8 +102,27 @@ class BrowserStructuredProvider:
             legacy_endpoints=legacy_endpoints,
             active_legacy_sessions=active_legacy_sessions,
         )
+        self._verify_worker_identity(get)
         self._post = post
         self.response_timeout_ms = max(1_000, min(900_000, response_timeout_ms))
+
+    def _verify_worker_identity(self, get: Callable[..., Any]) -> None:
+        try:
+            response = get(f"{self.config.endpoint}/health", timeout=5.0)
+            payload = response.json()
+            profile_root = Path(str(payload["profileRoot"])).resolve()
+        except Exception as exc:
+            raise RuntimeError(
+                "localized V2 browser worker identity could not be verified"
+            ) from exc
+        if (
+            response.status_code != 200
+            or not isinstance(payload, dict)
+            or payload.get("service") != "localized-v2-browser-worker"
+            or payload.get("sessionNamespace") != self.config.session_namespace
+            or profile_root != self.config.profile_root.resolve()
+        ):
+            raise RuntimeError("localized V2 browser worker identity mismatch")
 
     @staticmethod
     def _render_prompt(prompt: PromptEnvelope) -> str:

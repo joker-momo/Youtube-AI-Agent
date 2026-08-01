@@ -55,6 +55,40 @@ def test_exact_voice_is_used_without_provider_fallback(tmp_path: Path) -> None:
     assert melo.calls == []
 
 
+def test_same_provider_routes_each_language_to_its_qualified_backend(
+    tmp_path: Path,
+) -> None:
+    korean = FakeTTSBackend()
+    japanese = FakeTTSBackend()
+    tts = LocalizedTTS(
+        {("melo", "KR"): korean, ("melo", "JP"): japanese},
+        VoiceCapabilityRegistry(
+            frozenset(
+                {
+                    ("melo", "KR", "KR-voice"),
+                    ("melo", "JP", "JP-voice"),
+                }
+            )
+        ),
+    )
+
+    tts.synthesize_scenes(
+        locale="ko-KR",
+        voice=VoiceSpec("melo", "KR", "KR-voice", 1.0),
+        scenes=[{"id": "korean", "narration": "건강한 습관입니다."}],
+        output_dir=tmp_path / "ko",
+    )
+    tts.synthesize_scenes(
+        locale="ja-JP",
+        voice=VoiceSpec("melo", "JP", "JP-voice", 1.0),
+        scenes=[{"id": "japanese", "narration": "健やかな習慣です。"}],
+        output_dir=tmp_path / "ja",
+    )
+
+    assert [call["language"] for call in korean.calls] == ["KR"]
+    assert [call["language"] for call in japanese.calls] == ["JP"]
+
+
 def test_missing_backend_fails_as_capability_before_synthesis(tmp_path: Path) -> None:
     voice = VoiceSpec("kokoro", "a", "af_heart", 1.0)
     tts = LocalizedTTS(

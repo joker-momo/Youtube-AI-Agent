@@ -61,11 +61,19 @@ class TTSFailure(RuntimeError):
 class LocalizedTTS:
     def __init__(
         self,
-        backends: dict[str, TTSBackend],
+        backends: dict[str | tuple[str, str], TTSBackend],
         capabilities: VoiceCapabilityRegistry,
     ):
         self.backends = dict(backends)
         self.capabilities = capabilities
+
+    def _backend(self, locale: str, voice: VoiceSpec) -> TTSBackend:
+        backend = self.backends.get((voice.provider, voice.language))
+        if backend is None:
+            backend = self.backends.get(voice.provider)
+        if backend is None:
+            raise AudioCapabilityError(locale, voice)
+        return backend
 
     def synthesize_scenes(
         self,
@@ -76,10 +84,7 @@ class LocalizedTTS:
         output_dir: Path,
     ) -> dict[str, Path]:
         self.capabilities.require(locale, voice)
-        try:
-            backend = self.backends[voice.provider]
-        except KeyError as exc:
-            raise AudioCapabilityError(locale, voice) from exc
+        backend = self._backend(locale, voice)
         output_dir.mkdir(parents=True, exist_ok=True)
         outputs: dict[str, Path] = {}
         for scene in scenes:

@@ -49,6 +49,12 @@ const PIPELINE_STAGES = PIPELINE_PHASES.flatMap((phase) => phase.stages);
 
 const elements = {
   readiness: document.querySelector("#readiness"),
+  jobCount: document.querySelector("#job-count"),
+  panelCount: document.querySelector("#panel-count"),
+  kpis: document.querySelector("#kpis"),
+  newJobOverlay: document.querySelector("#new-job-overlay"),
+  openNewJob: document.querySelector("#open-new-job"),
+  closeNewJob: document.querySelector("#close-new-job"),
   createForm: document.querySelector("#create-form"),
   channel: document.querySelector("#channel"),
   topic: document.querySelector("#topic"),
@@ -273,8 +279,45 @@ function renderReadiness(health) {
   elements.readiness.dataset.worker = health.worker;
 }
 
+function openNewJobModal() {
+  elements.newJobOverlay.hidden = false;
+  elements.mutationStatus.textContent = "";
+  elements.channel.focus();
+}
+
+function closeNewJobModal() {
+  elements.newJobOverlay.hidden = true;
+  elements.openNewJob.focus();
+}
+
+function renderKpis(jobs) {
+  const active = jobs.filter((job) =>
+    ["QUEUED", "RUNNING", "CANCEL_REQUESTED", "INTERRUPTED"].includes(job.status),
+  ).length;
+  const completed = jobs.filter((job) => job.status === "COMPLETED").length;
+  const failed = jobs.filter((job) => job.status === "FAILED").length;
+  const cards = [
+    ["Total jobs", String(jobs.length), "Localized V2 queue"],
+    ["Active", String(active), "Queued or in progress"],
+    ["Completed", String(completed), "Final videos ready"],
+    ["Needs attention", String(failed), "Failed jobs"],
+  ].map(([label, value, note]) => {
+    const card = document.createElement("div");
+    card.className = "kpi";
+    card.append(
+      textElement("div", "kpi-label", label),
+      textElement("div", "kpi-value", value),
+      textElement("div", "kpi-sub", note),
+    );
+    return card;
+  });
+  replaceChildren(elements.kpis, cards);
+}
+
 function renderJobs(jobs) {
   elements.jobList.setAttribute("aria-busy", "false");
+  elements.jobCount.textContent = `${jobs.length} job${jobs.length === 1 ? "" : "s"}`;
+  elements.panelCount.textContent = elements.jobCount.textContent;
   if (!jobs.length) {
     replaceChildren(
       elements.jobList,
@@ -285,14 +328,32 @@ function renderJobs(jobs) {
   const rows = jobs.map((job) => {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "job-row";
+    button.className = "job-card";
     button.dataset.selected = String(job.jobId === state.selectedJobId);
     button.setAttribute("role", "listitem");
-    button.append(
-      textElement("span", "job-topic", job.topic),
-      textElement("span", "job-meta", `${job.locale} · ${statusLabel(job.status)}`),
-      textElement("span", "job-time", new Date(job.createdAt).toLocaleString()),
+    const row = document.createElement("div");
+    row.className = "job-row";
+    const main = document.createElement("div");
+    main.className = "job-main";
+    main.append(textElement("div", "job-title", job.topic));
+    row.append(main, textElement("span", "job-locale", job.locale));
+    const stage = document.createElement("div");
+    stage.className = "job-stage";
+    stage.append(
+      textElement("span", `state-dot ${job.status.toLowerCase()}`, ""),
+      textElement(
+        "span",
+        "",
+        `${statusLabel(job.status)} · ${job.currentStage || "waiting"}`,
+      ),
     );
+    const meta = document.createElement("div");
+    meta.className = "job-meta";
+    meta.append(
+      textElement("span", "", `Attempt ${job.attemptCount}`),
+      textElement("span", "", new Date(job.createdAt).toLocaleString()),
+    );
+    button.append(row, stage, meta);
     button.addEventListener("click", () => selectJob(job.jobId));
     return button;
   });
@@ -423,14 +484,18 @@ async function loadDetail(jobId) {
     detailLine("Created", new Date(job.createdAt).toLocaleString()),
     detailLine("Updated", new Date(job.updatedAt).toLocaleString()),
   );
-  replaceChildren(
-    elements.detailSummary,
-    [
-      textElement("p", "detail-id", job.jobId),
-      textElement("h3", "detail-topic", job.topic),
-      description,
-    ],
+  const summary = document.createElement("div");
+  summary.className = "summary-card";
+  const head = document.createElement("div");
+  head.className = "summary-card-head";
+  const identity = document.createElement("div");
+  identity.append(
+    textElement("h3", "detail-topic", job.topic),
+    textElement("p", "detail-id", job.jobId),
   );
+  head.append(identity, textElement("span", "status-badge", statusLabel(job.status)));
+  summary.append(head, description);
+  replaceChildren(elements.detailSummary, [summary]);
   renderActions(job);
   renderPipeline(job, events.data);
   renderEvents(events.data);
@@ -460,11 +525,16 @@ async function loadJobs() {
     updateUrl();
   }
   renderJobs(payload.data);
+  if (!requestedStatus) renderKpis(payload.data);
   return state.selectedJobId;
 }
 
 async function refreshDashboard() {
   const selectedJobId = await loadJobs();
+  if (state.status) {
+    const allJobs = await api("/api/v2/jobs?page=1&pageSize=50");
+    renderKpis(allJobs.data);
+  }
   if (selectedJobId) {
     await loadDetail(selectedJobId);
   } else {
@@ -499,6 +569,15 @@ elements.description.addEventListener("input", () => {
   elements.descriptionCount.textContent = `${elements.description.value.length} / 2000`;
 });
 
+elements.openNewJob.addEventListener("click", openNewJobModal);
+elements.closeNewJob.addEventListener("click", closeNewJobModal);
+elements.newJobOverlay.addEventListener("click", (event) => {
+  if (event.target === elements.newJobOverlay) closeNewJobModal();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !elements.newJobOverlay.hidden) closeNewJobModal();
+});
+
 elements.createForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const submit = elements.createForm.querySelector("button[type='submit']");
@@ -518,6 +597,7 @@ elements.createForm.addEventListener("submit", async (event) => {
     elements.description.value = "";
     elements.descriptionCount.textContent = "0 / 2000";
     elements.mutationStatus.textContent = "Queued successfully.";
+    closeNewJobModal();
     await selectJob(job.jobId);
   } catch (error) {
     elements.mutationStatus.textContent = `${error.code}: ${error.message}`;

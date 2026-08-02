@@ -62,14 +62,26 @@ def test_dashboard_real_browser_desktop_and_narrow(tmp_path: Path) -> None:
                 else None,
             )
             page.goto(origin, wait_until="networkidle")
-            assert page.get_by_role("heading", name="Localized V2 operator").is_visible()
+            assert page.get_by_role("heading", name="Localized V2 Dashboard").is_visible()
+            assert page.locator(".app-shell > .rail").is_visible()
+            assert page.locator(".rail .logo").is_visible()
+            assert (
+                page.get_by_role("button", name="Jobs").get_attribute("aria-current")
+                == "page"
+            )
+            assert page.locator("#kpis .kpi").count() == 4
+            assert page.locator(".content-grid .jobs-panel").is_visible()
+            assert page.locator(".content-grid .detail-panel").is_visible()
             assert page.get_by_text("Worker offline", exact=False).is_visible()
+            assert page.locator("#new-job-overlay").get_attribute("hidden") is not None
+            page.get_by_role("button", name="New Job").click()
+            assert page.locator("#new-job-overlay").is_visible()
             page.get_by_label("Channel").select_option("healthy-life-en")
             hostile = "<img src=x onerror=document.body.dataset.pwned=1>"
             page.get_by_label("Video topic").fill(hostile)
             description = "A practical audience angle with realistic safety boundaries."
             page.get_by_label("Description").fill(description)
-            page.get_by_role("button", name="Create queued job").click()
+            page.get_by_role("button", name="Create Job").click()
             page.get_by_text(hostile, exact=True).first.wait_for()
             assert page.get_by_text(description, exact=True).is_visible()
             assert page.locator("img[src='x']").count() == 0
@@ -100,6 +112,8 @@ def test_dashboard_real_browser_desktop_and_narrow(tmp_path: Path) -> None:
             page.locator("[data-stage-id='script'][data-status='running']").wait_for(
                 timeout=7_000
             )
+            assert page.locator(".summary-card").is_visible()
+            assert page.locator(".timeline.compact").is_visible()
             progress = page.get_by_role("progressbar", name="Overall job progress")
             assert progress.get_attribute("aria-valuenow") == "9"
             assert page.locator("[data-phase-id]").count() == 5

@@ -18,6 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_ROOT = REPO_ROOT / "schemas"
 LOCALE_ROOT = REPO_ROOT / "configs" / "localized-v2" / "locales"
 CHANNEL_ROOT = REPO_ROOT / "configs" / "localized-v2" / "channels"
+ENGLISH_VOICE_ID = "am_michael"
 
 
 def _settings(root: Path) -> RuntimeSettings:
@@ -41,8 +42,8 @@ def _approve_english(channel_root: Path, runtime_root: Path) -> None:
     payload["voice"] = {
         "provider": "kokoro",
         "language": "a",
-        "voiceId": "af_heart",
-        "speed": 1.0,
+        "voiceId": ENGLISH_VOICE_ID,
+        "speed": 0.94,
     }
     checks = {
         "audio": "PASS",
@@ -67,7 +68,11 @@ def _capabilities(runtime_root: Path, *, clip: str = "brand/en-US/intro.mp4") ->
     payload = {
         "schemaVersion": "localized-capabilities-v2/v1",
         "voices": [
-            {"provider": "kokoro", "language": "a", "voiceId": "af_heart"}
+            {
+                "provider": "kokoro",
+                "language": "a",
+                "voiceId": ENGLISH_VOICE_ID,
+            }
         ],
         "fonts": ["Manrope"],
         "brandClips": [
@@ -158,7 +163,7 @@ def test_approved_channel_loads_only_after_capabilities_are_verified(
     assert registration.channel["enabled"] is True
     assert registration.locale_pack["locale"] == "en-US"
     assert registration.inventory.voices == frozenset(
-        {("kokoro", "a", "af_heart")}
+        {("kokoro", "a", ENGLISH_VOICE_ID)}
     )
     assert registration.inventory.fonts == frozenset({"Manrope"})
     assert len(registration.inventory.brand_clips) == 3

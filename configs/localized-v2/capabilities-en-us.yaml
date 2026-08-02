@@ -2,7 +2,7 @@ schemaVersion: localized-capabilities-v2/v1
 voices:
   - provider: kokoro
     language: a
-    voiceId: af_heart
+    voiceId: am_michael
 fonts:
   - Manrope
 brandClips:

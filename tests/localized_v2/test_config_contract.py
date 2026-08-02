@@ -163,6 +163,29 @@ def test_qualification_flag_cannot_bypass_voice_requirement(tmp_path: Path) -> N
         load_channel_config(path, SCHEMA_ROOT)
 
 
+def test_english_qualification_pins_selected_voice_without_enabling_rollout() -> None:
+    path = (
+        REPO_ROOT
+        / "configs"
+        / "localized-v2"
+        / "channels"
+        / "pending-en-us"
+        / "channel.yaml"
+    )
+
+    loaded = load_channel_config(path, SCHEMA_ROOT)
+
+    assert loaded["voice"] == {
+        "provider": "kokoro",
+        "language": "a",
+        "voiceId": "am_michael",
+        "speed": 0.94,
+    }
+    assert loaded["enabled"] is False
+    assert loaded["canary"]["status"] == "PENDING"
+    assert loaded["render"]["concurrency"] == "auto"
+
+
 def test_v2_config_validation_never_reads_legacy_schema(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

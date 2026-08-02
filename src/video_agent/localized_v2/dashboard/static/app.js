@@ -5,6 +5,48 @@ const state = {
   jobsRequestVersion: 0,
 };
 
+const PIPELINE_PHASES = [
+  {
+    id: "content",
+    label: "Content",
+    stages: [
+      {id: "idea", label: "Idea"},
+      {id: "script", label: "Script"},
+      {id: "scenes", label: "Scenes"},
+      {id: "seo", label: "SEO"},
+      {id: "qa", label: "QA"},
+    ],
+  },
+  {
+    id: "voice",
+    label: "Voice",
+    stages: [
+      {id: "audio", label: "Narration"},
+      {id: "timing", label: "Timing"},
+    ],
+  },
+  {
+    id: "media",
+    label: "Media",
+    stages: [{id: "assets", label: "Assets"}],
+  },
+  {
+    id: "assembly",
+    label: "Assembly",
+    stages: [
+      {id: "branding", label: "Branding"},
+      {id: "render_props", label: "Render setup"},
+    ],
+  },
+  {
+    id: "render",
+    label: "Render",
+    stages: [{id: "render", label: "Final video"}],
+  },
+];
+
+const PIPELINE_STAGES = PIPELINE_PHASES.flatMap((phase) => phase.stages);
+
 const elements = {
   readiness: document.querySelector("#readiness"),
   createForm: document.querySelector("#create-form"),
@@ -19,9 +61,169 @@ const elements = {
   detailContent: document.querySelector("#detail-content"),
   detailSummary: document.querySelector("#detail-summary"),
   actionBar: document.querySelector("#action-bar"),
+  overallProgress: document.querySelector("#overall-progress"),
+  overallProgressFill: document.querySelector("#overall-progress-fill"),
+  pipelinePercent: document.querySelector("#pipeline-percent"),
+  pipelineSummary: document.querySelector("#pipeline-summary"),
+  phaseList: document.querySelector("#phase-list"),
+  stageList: document.querySelector("#stage-list"),
   eventList: document.querySelector("#event-list"),
   artifactList: document.querySelector("#artifact-list"),
 };
+
+function parseTime(value) {
+  const time = Date.parse(value || "");
+  return Number.isNaN(time) ? null : time;
+}
+
+function formatDuration(startedAt, endedAt) {
+  const start = parseTime(startedAt);
+  if (start === null) return "Waiting";
+  const end = parseTime(endedAt) ?? Date.now();
+  const seconds = Math.max(0, Math.floor((end - start) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
+
+function eventFailureText(event) {
+  const payload = event.payload || {};
+  return payload.message || payload.detail || payload.code || "Stage failed";
+}
+
+function buildStageStates(job, events) {
+  const stages = Object.fromEntries(
+    PIPELINE_STAGES.map((stage) => [
+      stage.id,
+      {...stage, status: "pending", startedAt: null, endedAt: null},
+    ]),
+  );
+  [...events]
+    .sort((left, right) => (left.sequence || 0) - (right.sequence || 0))
+    .forEach((event) => {
+      const stageId = event.stage || event.payload?.stage;
+      const stage = stages[stageId];
+      if (!stage) return;
+      if (event.type === "STAGE_STARTED") {
+        stage.status = "running";
+        stage.startedAt = event.createdAt;
+        stage.endedAt = null;
+        delete stage.error;
+      } else if (event.type === "STAGE_COMPLETED") {
+        stage.status = "completed";
+        stage.startedAt ||= event.createdAt;
+        stage.endedAt = event.createdAt;
+        delete stage.error;
+      } else if (event.type === "FAILED") {
+        stage.status = "failed";
+        stage.startedAt ||= event.createdAt;
+        stage.endedAt = event.createdAt;
+        stage.error = eventFailureText(event);
+      }
+    });
+
+  const currentStage = stages[job.currentStage];
+  if (
+    currentStage &&
+    ["RUNNING", "CANCEL_REQUESTED"].includes(job.status) &&
+    currentStage.status === "pending"
+  ) {
+    currentStage.status = "running";
+    currentStage.startedAt = job.updatedAt;
+  }
+  if (job.status === "FAILED") {
+    const failedStage = stages[job.failure?.stage || job.currentStage];
+    if (failedStage && failedStage.status !== "completed") {
+      failedStage.status = "failed";
+      failedStage.startedAt ||= job.updatedAt;
+      failedStage.endedAt ||= job.updatedAt;
+      failedStage.error ||= job.failure?.message || job.failure?.code || "Stage failed";
+    }
+  }
+  return stages;
+}
+
+function phaseStatus(phase, stages) {
+  const statuses = phase.stages.map((stage) => stages[stage.id].status);
+  if (statuses.includes("failed")) return "failed";
+  if (statuses.includes("running")) return "running";
+  if (statuses.every((status) => status === "completed")) return "completed";
+  return "pending";
+}
+
+function statusText(status) {
+  return {
+    pending: "Waiting",
+    running: "In progress",
+    completed: "Complete",
+    failed: "Needs attention",
+  }[status];
+}
+
+function renderPipeline(job, events) {
+  const stages = buildStageStates(job, events);
+  const completedCount = Object.values(stages).filter(
+    (stage) => stage.status === "completed",
+  ).length;
+  const percent = Math.round((completedCount / PIPELINE_STAGES.length) * 100);
+  elements.overallProgress.setAttribute("aria-valuenow", String(percent));
+  elements.overallProgress.setAttribute(
+    "aria-valuetext",
+    `${completedCount} of ${PIPELINE_STAGES.length} steps complete`,
+  );
+  elements.overallProgressFill.style.width = `${percent}%`;
+  elements.pipelinePercent.textContent = `${percent}%`;
+  elements.pipelineSummary.textContent = `${completedCount} of ${PIPELINE_STAGES.length} steps complete`;
+
+  replaceChildren(
+    elements.phaseList,
+    PIPELINE_PHASES.map((phase, index) => {
+      const status = phaseStatus(phase, stages);
+      const item = document.createElement("div");
+      item.className = "phase-card";
+      item.setAttribute("role", "listitem");
+      item.dataset.phaseId = phase.id;
+      item.dataset.status = status;
+      item.append(
+        textElement("span", "phase-index", String(index + 1).padStart(2, "0")),
+        textElement("strong", "phase-label", phase.label),
+        textElement("span", "phase-status", statusText(status)),
+      );
+      return item;
+    }),
+  );
+
+  replaceChildren(
+    elements.stageList,
+    PIPELINE_STAGES.map((definition, index) => {
+      const stage = stages[definition.id];
+      const item = document.createElement("li");
+      item.className = "stage-card";
+      item.dataset.stageId = stage.id;
+      item.dataset.status = stage.status;
+      const marker = textElement(
+        "span",
+        "stage-marker",
+        stage.status === "completed" ? "✓" : String(index + 1),
+      );
+      marker.setAttribute("aria-hidden", "true");
+      const copy = document.createElement("div");
+      copy.className = "stage-copy";
+      copy.append(
+        textElement("strong", "stage-label", stage.label),
+        textElement("span", "stage-status", statusText(stage.status)),
+      );
+      const meta = textElement(
+        "span",
+        "stage-duration",
+        formatDuration(stage.startedAt, stage.endedAt),
+      );
+      item.append(marker, copy, meta);
+      if (stage.error) item.append(textElement("p", "stage-error", stage.error));
+      return item;
+    }),
+  );
+}
 
 function textElement(tag, className, text) {
   const element = document.createElement(tag);
@@ -185,6 +387,16 @@ function clearDetail() {
   elements.detailContent.hidden = true;
   replaceChildren(elements.detailSummary, []);
   replaceChildren(elements.actionBar, []);
+  elements.overallProgress.setAttribute("aria-valuenow", "0");
+  elements.overallProgress.setAttribute(
+    "aria-valuetext",
+    `0 of ${PIPELINE_STAGES.length} steps complete`,
+  );
+  elements.overallProgressFill.style.width = "0%";
+  elements.pipelinePercent.textContent = "0%";
+  elements.pipelineSummary.textContent = `0 of ${PIPELINE_STAGES.length} steps complete`;
+  replaceChildren(elements.phaseList, []);
+  replaceChildren(elements.stageList, []);
   replaceChildren(elements.eventList, []);
   replaceChildren(elements.artifactList, []);
 }
@@ -217,6 +429,7 @@ async function loadDetail(jobId) {
     ],
   );
   renderActions(job);
+  renderPipeline(job, events.data);
   renderEvents(events.data);
   renderArtifacts(artifacts.data);
 }

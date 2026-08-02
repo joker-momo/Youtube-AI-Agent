@@ -72,9 +72,70 @@ def test_dashboard_real_browser_desktop_and_narrow(tmp_path: Path) -> None:
             assert page.locator("img[src='x']").count() == 0
             assert page.locator("body").get_attribute("data-pwned") is None
             assert "job=" in page.url
+            job_id = page.url.split("job=", 1)[1].split("&", 1)[0]
+            lease = context.queue.claim_next("browser-test-worker", lease_seconds=30)
+            assert lease is not None
+            assert lease.job_id == job_id
+            context.queue.record_stage(
+                lease.attempt_id,
+                "browser-test-worker",
+                "idea",
+                completed=False,
+            )
+            context.queue.record_stage(
+                lease.attempt_id,
+                "browser-test-worker",
+                "idea",
+                completed=True,
+            )
+            context.queue.record_stage(
+                lease.attempt_id,
+                "browser-test-worker",
+                "script",
+                completed=False,
+            )
+            page.locator("[data-stage-id='script'][data-status='running']").wait_for(
+                timeout=7_000
+            )
+            progress = page.get_by_role("progressbar", name="Overall job progress")
+            assert progress.get_attribute("aria-valuenow") == "9"
+            assert page.locator("[data-phase-id]").count() == 5
+            assert page.locator("[data-stage-id]").count() == 11
+            assert (
+                page.locator("[data-phase-id='content']").get_attribute("data-status")
+                == "running"
+            )
+            assert (
+                page.locator("[data-stage-id='idea']").get_attribute("data-status")
+                == "completed"
+            )
+            assert page.get_by_text("1 of 11 steps complete", exact=True).is_visible()
             page.reload(wait_until="networkidle")
             page.get_by_text(hostile, exact=True).first.wait_for()
+            assert (
+                page.locator("[data-stage-id='script']").get_attribute("data-status")
+                == "running"
+            )
             assert page.get_by_role("button", name="Cancel job").is_visible()
+            context.queue.fail_attempt(
+                lease.attempt_id,
+                "browser-test-worker",
+                {
+                    "code": "SCRIPT_REJECTED",
+                    "message": "Script needs safer claims.",
+                    "stage": "script",
+                    "retryable": True,
+                },
+            )
+            page.locator("[data-stage-id='script'][data-status='failed']").wait_for(
+                timeout=7_000
+            )
+            assert (
+                page.locator("[data-phase-id='content']").get_attribute("data-status")
+                == "failed"
+            )
+            assert page.get_by_text("Script needs safer claims.", exact=True).is_visible()
+            assert page.get_by_role("button", name="Retry job").is_visible()
             page.get_by_label("Status").select_option("COMPLETED")
             page.get_by_label("Status").select_option("")
             page.get_by_text(hostile, exact=True).first.wait_for()
@@ -106,7 +167,7 @@ def test_dashboard_real_browser_desktop_and_narrow(tmp_path: Path) -> None:
                     })"""
                 )
                 assert layout["scrollWidth"] <= layout["clientWidth"], json.dumps(layout)
-                assert page.get_by_role("button", name="Cancel job").is_visible()
+                assert page.get_by_role("button", name="Retry job").is_visible()
             assert errors == []
             browser.close()
     finally:

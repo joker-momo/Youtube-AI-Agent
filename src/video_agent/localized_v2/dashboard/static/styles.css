@@ -10,6 +10,9 @@
   --accent-strong: #0d4f40;
   --focus: #0b6ea8;
   --danger: #9f2d2d;
+  --success: #147a57;
+  --running: #176ea6;
+  --waiting: #74807c;
   --radius: 0.375rem;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
@@ -320,6 +323,201 @@ dd {
   color: var(--text-muted);
 }
 
+.pipeline {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #fbfcfc;
+}
+
+.pipeline-heading-row {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.pipeline-heading-row h3 {
+  margin: 0;
+  font-size: 1.125rem;
+}
+
+.pipeline-heading-row .eyebrow {
+  margin-bottom: 0.125rem;
+}
+
+.pipeline-percent {
+  color: var(--accent-strong);
+  font-size: 1.5rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.overall-progress {
+  height: 0.625rem;
+  margin-top: 0.875rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #dfe7e4;
+}
+
+.overall-progress-fill {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 240ms ease;
+}
+
+.pipeline-summary {
+  margin: 0.5rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+
+.phase-list {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.375rem;
+  margin-top: 1rem;
+}
+
+.phase-card {
+  display: grid;
+  gap: 0.125rem;
+  min-width: 0;
+  padding: 0.625rem;
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--waiting);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.phase-card[data-status="completed"] {
+  border-top-color: var(--success);
+  background: #edf8f3;
+}
+
+.phase-card[data-status="running"] {
+  border-top-color: var(--running);
+  background: #edf6fc;
+}
+
+.phase-card[data-status="failed"] {
+  border-top-color: var(--danger);
+  background: #fff1f1;
+}
+
+.phase-index,
+.phase-status {
+  color: var(--text-muted);
+  font-size: 0.6875rem;
+  font-weight: 750;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.phase-label {
+  overflow-wrap: anywhere;
+  font-size: 0.8125rem;
+}
+
+.stage-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stage-card {
+  display: grid;
+  grid-template-columns: 1.75rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.625rem;
+  min-width: 0;
+  padding: 0.625rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.stage-card[data-status="running"] {
+  border-color: #86b9d9;
+  background: #f1f8fc;
+}
+
+.stage-card[data-status="failed"] {
+  border-color: #d99a9a;
+  background: #fff5f5;
+}
+
+.stage-marker {
+  display: grid;
+  width: 1.75rem;
+  height: 1.75rem;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--surface-muted);
+  color: var(--waiting);
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.stage-card[data-status="completed"] .stage-marker {
+  background: var(--success);
+  color: #ffffff;
+}
+
+.stage-card[data-status="running"] .stage-marker {
+  background: var(--running);
+  color: #ffffff;
+  animation: stage-pulse 1.8s ease-in-out infinite;
+}
+
+.stage-card[data-status="failed"] .stage-marker {
+  background: var(--danger);
+  color: #ffffff;
+}
+
+.stage-copy {
+  display: grid;
+  min-width: 0;
+}
+
+.stage-label {
+  overflow-wrap: anywhere;
+  font-size: 0.8125rem;
+}
+
+.stage-status,
+.stage-duration {
+  color: var(--text-muted);
+  font-size: 0.6875rem;
+}
+
+.stage-duration {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.stage-error {
+  grid-column: 2 / -1;
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+@keyframes stage-pulse {
+  50% {
+    box-shadow: 0 0 0 0.3rem rgb(23 110 166 / 14%);
+  }
+}
+
 .event-list,
 .artifact-list {
   display: grid;
@@ -353,6 +551,32 @@ dd {
 
   .mutation-status {
     grid-column: 2;
+  }
+}
+
+@media (max-width: 47.999rem) {
+  .phase-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .stage-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 25rem) {
+  .phase-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overall-progress-fill {
+    transition: none;
+  }
+
+  .stage-card[data-status="running"] .stage-marker {
+    animation: none;
   }
 }
 

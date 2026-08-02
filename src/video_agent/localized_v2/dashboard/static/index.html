@@ -84,6 +84,36 @@
           <div id="detail-content" hidden>
             <div id="detail-summary"></div>
             <div id="action-bar" class="action-bar" aria-label="Job actions"></div>
+            <section class="pipeline" aria-labelledby="pipeline-heading">
+              <div class="pipeline-heading-row">
+                <div>
+                  <p class="eyebrow">Live pipeline</p>
+                  <h3 id="pipeline-heading">Production progress</h3>
+                </div>
+                <strong id="pipeline-percent" class="pipeline-percent">0%</strong>
+              </div>
+              <div
+                id="overall-progress"
+                class="overall-progress"
+                role="progressbar"
+                aria-label="Overall job progress"
+                aria-valuemin="0"
+                aria-valuemax="100"
+                aria-valuenow="0"
+              >
+                <span id="overall-progress-fill" class="overall-progress-fill"></span>
+              </div>
+              <p id="pipeline-summary" class="pipeline-summary" aria-live="polite">
+                0 of 11 steps complete
+              </p>
+              <div
+                id="phase-list"
+                class="phase-list"
+                role="list"
+                aria-label="Production phases"
+              ></div>
+              <ol id="stage-list" class="stage-list" aria-label="Production steps"></ol>
+            </section>
             <section aria-labelledby="events-heading">
               <h3 id="events-heading">Events</h3>
               <ol id="event-list" class="event-list"></ol>

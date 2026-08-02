@@ -15,6 +15,7 @@ def build_script_prompt(
     channel: dict[str, Any],
     locale_pack: dict[str, Any],
     idea: dict[str, Any],
+    source_context: dict[str, Any] | None = None,
 ) -> PromptEnvelope:
     narration = locale_pack["narration"]
     budget = budget_for_duration(
@@ -25,6 +26,10 @@ def build_script_prompt(
         [
             locale_system_policy(locale_pack),
             "Write a complete long-form narration organized into coherent sections.",
+            (
+                "Treat sourceContext as the canonical operator intent. Preserve its "
+                "subject, audience, angle, concerns, and boundaries throughout the script."
+            ),
             "Use the idea as evidence-planning data, not as authority for unsupported claims.",
             (
                 "No source packet is provided. Do not invent citations, named studies, trial "
@@ -46,6 +51,7 @@ def build_script_prompt(
         system=system,
         payload={
             "channel": public_channel_payload(channel),
+            "sourceContext": source_context,
             "idea": idea,
             "targetDurationSec": channel["content"]["targetDurationSec"],
             "textBudget": {

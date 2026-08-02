@@ -215,13 +215,15 @@ class LocalizedQueue:
         attempts = connection.execute(
             "SELECT COUNT(*) FROM attempts WHERE job_id = ?", (row["job_id"],)
         ).fetchone()[0]
+        job_input = json.loads(row["input_json"])
         return {
             "jobId": row["job_id"],
             "status": row["status"],
             "channelId": row["channel_id"],
             "locale": row["locale"],
             "topic": row["topic"],
-            "input": json.loads(row["input_json"]),
+            "description": job_input.get("description"),
+            "input": job_input,
             "currentStage": row["current_stage"],
             "currentAttemptId": row["current_attempt_id"],
             "attemptCount": attempts,

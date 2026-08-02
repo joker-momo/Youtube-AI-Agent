@@ -17,6 +17,7 @@ class CreateJobRequest(StrictModel):
         pattern=r"^[a-z0-9][a-z0-9-]+$",
     )
     topic: str = Field(min_length=3, max_length=240)
+    description: str = Field(min_length=10, max_length=2000)
 
 
 class ErrorBody(StrictModel):

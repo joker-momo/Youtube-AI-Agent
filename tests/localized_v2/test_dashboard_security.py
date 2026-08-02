@@ -11,6 +11,8 @@ from video_agent.localized_v2.job_state import JobInput, PromotedArtifact
 
 from .dashboard_support import DASHBOARD_BASE_URL, make_dashboard
 
+DESCRIPTION = "Focus on practical routines and realistic safety boundaries."
+
 
 @pytest.mark.parametrize(
     ("host", "expected"),
@@ -32,7 +34,11 @@ def _csrf(client: TestClient) -> dict[str, str]:
 def test_rejects_unexpected_host_foreign_origin_and_missing_csrf(tmp_path: Path) -> None:
     context = make_dashboard(tmp_path)
     client = TestClient(context.app, base_url=DASHBOARD_BASE_URL)
-    body = {"channelId": "healthy-life-en", "topic": "Safe topic"}
+    body = {
+        "channelId": "healthy-life-en",
+        "topic": "Safe topic",
+        "description": DESCRIPTION,
+    }
 
     bad_host = client.get("/api/v2/health", headers={"Host": "evil.example"})
     missing = client.post("/api/v2/jobs", json=body)
@@ -78,25 +84,70 @@ def test_hostile_text_is_data_and_input_is_bounded(tmp_path: Path) -> None:
     created = client.post(
         "/api/v2/jobs",
         headers=headers,
-        json={"channelId": "healthy-life-en", "topic": hostile},
+        json={
+            "channelId": "healthy-life-en",
+            "topic": hostile,
+            "description": hostile,
+        },
     )
     oversized = client.post(
         "/api/v2/jobs",
         headers=headers,
-        json={"channelId": "healthy-life-en", "topic": "x" * 241},
+        json={
+            "channelId": "healthy-life-en",
+            "topic": "x" * 241,
+            "description": DESCRIPTION,
+        },
     )
     whitespace = client.post(
         "/api/v2/jobs",
         headers=headers,
-        json={"channelId": "healthy-life-en", "topic": "   "},
+        json={
+            "channelId": "healthy-life-en",
+            "topic": "   ",
+            "description": DESCRIPTION,
+        },
     )
 
     assert created.status_code == 201
     assert created.json()["topic"] == hostile
+    assert created.json()["description"] == hostile
     assert oversized.status_code == 422
     assert oversized.json()["error"]["code"] == "VALIDATION_ERROR"
     assert whitespace.status_code == 422
     assert whitespace.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+@pytest.mark.parametrize("description", ["", "   ", "x" * 9, "x" * 2001])
+def test_description_is_required_trimmed_and_bounded(
+    tmp_path: Path, description: str
+) -> None:
+    client = TestClient(make_dashboard(tmp_path).app, base_url=DASHBOARD_BASE_URL)
+
+    response = client.post(
+        "/api/v2/jobs",
+        headers=_csrf(client),
+        json={
+            "channelId": "healthy-life-en",
+            "topic": "A safe topic",
+            "description": description,
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_missing_description_is_rejected(tmp_path: Path) -> None:
+    client = TestClient(make_dashboard(tmp_path).app, base_url=DASHBOARD_BASE_URL)
+
+    response = client.post(
+        "/api/v2/jobs",
+        headers=_csrf(client),
+        json={"channelId": "healthy-life-en", "topic": "A safe topic"},
+    )
+
+    assert response.status_code == 422
 
 
 @pytest.mark.parametrize("bind_host", ["0.0.0.0", "192.168.1.10", "example.com"])

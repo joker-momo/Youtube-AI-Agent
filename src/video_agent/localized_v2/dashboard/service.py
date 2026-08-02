@@ -152,7 +152,12 @@ class DashboardService:
             for channel_id, registration in sorted(self.channels.items())
         ]
 
-    def create_job(self, channel_id: str, topic: str) -> dict[str, Any]:
+    def create_job(
+        self,
+        channel_id: str,
+        topic: str,
+        description: str,
+    ) -> dict[str, Any]:
         try:
             registration = self.channels[channel_id]
         except KeyError as exc:
@@ -169,6 +174,13 @@ class DashboardService:
                 "VALIDATION_ERROR",
                 "Video topic must contain between 3 and 240 non-whitespace characters.",
             )
+        description = description.strip()
+        if not 10 <= len(description) <= 2000:
+            raise DashboardError(
+                422,
+                "VALIDATION_ERROR",
+                "Description must contain between 10 and 2000 non-whitespace characters.",
+            )
         preflight = run_preflight(
             registration.channel,
             registration.locale_pack,
@@ -184,6 +196,7 @@ class DashboardService:
             channel_id=channel_id,
             locale=registration.channel["locale"],
             topic=topic,
+            description=description,
             channel_snapshot=registration.channel,
             locale_snapshot=registration.locale_pack,
         )

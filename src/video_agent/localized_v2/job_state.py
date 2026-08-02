@@ -19,6 +19,7 @@ class JobInput:
     topic: str
     channel_snapshot: dict
     locale_snapshot: dict
+    description: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)

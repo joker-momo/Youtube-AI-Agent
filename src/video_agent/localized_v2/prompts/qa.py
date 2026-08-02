@@ -9,11 +9,13 @@ from video_agent.localized_v2.prompts import PromptEnvelope, locale_system_polic
 def build_qa_prompt(
     locale_pack: dict[str, Any],
     artifacts: dict[str, dict[str, Any]],
+    source_context: dict[str, Any] | None = None,
 ) -> PromptEnvelope:
     system = "\n".join(
         [
             locale_system_policy(locale_pack),
             "Audit the candidate artifacts without rewriting them.",
+            "Fail material drift from the canonical operator sourceContext.",
             "Fail locale leakage, medical overclaims, unsupported evidence, stereotypes,",
             "non-English stock-search queries, subtitle instructions, or schema inconsistency.",
             (
@@ -31,6 +33,7 @@ def build_qa_prompt(
         stage="qa",
         system=system,
         payload={
+            "sourceContext": source_context,
             "artifacts": artifacts,
             "responseContract": {
                 "schemaVersion": "localized-qa-v2/v1",

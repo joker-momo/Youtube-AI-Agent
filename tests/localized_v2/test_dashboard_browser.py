@@ -67,8 +67,11 @@ def test_dashboard_real_browser_desktop_and_narrow(tmp_path: Path) -> None:
             page.get_by_label("Channel").select_option("healthy-life-en")
             hostile = "<img src=x onerror=document.body.dataset.pwned=1>"
             page.get_by_label("Video topic").fill(hostile)
+            description = "A practical audience angle with realistic safety boundaries."
+            page.get_by_label("Description").fill(description)
             page.get_by_role("button", name="Create queued job").click()
             page.get_by_text(hostile, exact=True).first.wait_for()
+            assert page.get_by_text(description, exact=True).is_visible()
             assert page.locator("img[src='x']").count() == 0
             assert page.locator("body").get_attribute("data-pwned") is None
             assert "job=" in page.url
@@ -112,6 +115,7 @@ def test_dashboard_real_browser_desktop_and_narrow(tmp_path: Path) -> None:
             assert page.get_by_text("1 of 11 steps complete", exact=True).is_visible()
             page.reload(wait_until="networkidle")
             page.get_by_text(hostile, exact=True).first.wait_for()
+            assert page.get_by_text(description, exact=True).is_visible()
             assert (
                 page.locator("[data-stage-id='script']").get_attribute("data-status")
                 == "running"

@@ -57,7 +57,11 @@ def test_v2_dashboard_lists_only_v2_jobs(tmp_path: Path) -> None:
     created = client.post(
         "/api/v2/jobs",
         headers={"Origin": DASHBOARD_BASE_URL, "X-CSRF-Token": csrf},
-        json={"channelId": "healthy-life-en", "topic": "Only V2"},
+        json={
+            "channelId": "healthy-life-en",
+            "topic": "Only V2",
+            "description": "Only the isolated V2 runtime may receive this request.",
+        },
     ).json()
     jobs = client.get("/api/v2/jobs").json()["data"]
 

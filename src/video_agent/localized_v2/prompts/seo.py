@@ -14,11 +14,13 @@ def build_seo_prompt(
     channel: dict[str, Any],
     locale_pack: dict[str, Any],
     script: dict[str, Any],
+    source_context: dict[str, Any] | None = None,
 ) -> PromptEnvelope:
     system = "\n".join(
         [
             locale_system_policy(locale_pack),
             "Create locale-native YouTube metadata from the script.",
+            "Keep title, description, thumbnail text, and keywords faithful to sourceContext.",
             "Use the locale SEO title, keyword, thumbnail, and pinned-comment rules.",
             "Do not invent a subscription URL or copy branding from another channel.",
         ]
@@ -28,6 +30,7 @@ def build_seo_prompt(
         system=system,
         payload={
             "channel": public_channel_payload(channel),
+            "sourceContext": source_context,
             "script": script,
             "seoRules": locale_pack["seo"],
             "responseContract": {

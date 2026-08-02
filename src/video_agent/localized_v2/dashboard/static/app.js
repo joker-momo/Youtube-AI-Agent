@@ -53,6 +53,8 @@ const elements = {
   channel: document.querySelector("#channel"),
   topic: document.querySelector("#topic"),
   topicCount: document.querySelector("#topic-count"),
+  description: document.querySelector("#description"),
+  descriptionCount: document.querySelector("#description-count"),
   mutationStatus: document.querySelector("#mutation-status"),
   refreshJobs: document.querySelector("#refresh-jobs"),
   statusFilter: document.querySelector("#status-filter"),
@@ -413,6 +415,7 @@ async function loadDetail(jobId) {
   const description = document.createElement("dl");
   description.append(
     detailLine("Topic", job.topic),
+    detailLine("Description", job.description),
     detailLine("Status", statusLabel(job.status)),
     detailLine("Locale", job.locale),
     detailLine("Current stage", job.currentStage),
@@ -492,6 +495,10 @@ elements.topic.addEventListener("input", () => {
   elements.topicCount.textContent = `${elements.topic.value.length} / 240`;
 });
 
+elements.description.addEventListener("input", () => {
+  elements.descriptionCount.textContent = `${elements.description.value.length} / 2000`;
+});
+
 elements.createForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const submit = elements.createForm.querySelector("button[type='submit']");
@@ -503,10 +510,13 @@ elements.createForm.addEventListener("submit", async (event) => {
       body: JSON.stringify({
         channelId: elements.channel.value,
         topic: elements.topic.value,
+        description: elements.description.value,
       }),
     });
     elements.topic.value = "";
     elements.topicCount.textContent = "0 / 240";
+    elements.description.value = "";
+    elements.descriptionCount.textContent = "0 / 2000";
     elements.mutationStatus.textContent = "Queued successfully.";
     await selectJob(job.jobId);
   } catch (error) {

@@ -114,25 +114,37 @@ class LocalizedPromptRunner:
 
     def _prompt(self, job: dict[str, Any], stage: str) -> PromptEnvelope:
         channel, locale_pack = self._snapshots(job)
+        source_context = {
+            "topic": job["topic"],
+            "description": job["input"].get("description"),
+        }
         if stage == "idea":
-            prompt = build_idea_prompt(channel, locale_pack, job["topic"])
+            prompt = build_idea_prompt(
+                channel,
+                locale_pack,
+                job["topic"],
+                job["input"].get("description"),
+            )
         elif stage == "script":
             prompt = build_script_prompt(
                 channel,
                 locale_pack,
                 self._load(job, "idea", locale_pack),
+                source_context,
             )
         elif stage == "scenes":
             prompt = build_scenes_prompt(
                 channel,
                 locale_pack,
                 self._load(job, "script", locale_pack),
+                source_context,
             )
         elif stage == "seo":
             prompt = build_seo_prompt(
                 channel,
                 locale_pack,
                 self._load(job, "script", locale_pack),
+                source_context,
             )
         elif stage == "qa":
             prompt = build_qa_prompt(
@@ -141,6 +153,7 @@ class LocalizedPromptRunner:
                     name: self._load(job, name, locale_pack)
                     for name in ("idea", "script", "scenes", "seo")
                 },
+                source_context,
             )
         else:
             raise ValueError(f"unknown localized V2 prompt stage: {stage}")

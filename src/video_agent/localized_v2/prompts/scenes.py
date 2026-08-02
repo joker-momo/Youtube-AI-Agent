@@ -14,6 +14,7 @@ def build_scenes_prompt(
     channel: dict[str, Any],
     locale_pack: dict[str, Any],
     script: dict[str, Any],
+    source_context: dict[str, Any] | None = None,
 ) -> PromptEnvelope:
     system = "\n".join(
         [
@@ -23,6 +24,7 @@ def build_scenes_prompt(
             "Write each searchBrief query in concise English for stock-media providers.",
             "Every searchBrief query must describe a real, filmable video background, even when visualType is graphic.",
             "Visual prompts must be topic-faithful and avoid the locale pack's exclusions.",
+            "Keep every visual faithful to the canonical sourceContext.",
             "Each visualPrompt must be a positive visible scene description only.",
             "The first scene must use visualType graphic for a strong visual hook.",
             "Use visualType video for later scenes when real footage best supports the narration.",
@@ -34,6 +36,7 @@ def build_scenes_prompt(
         system=system,
         payload={
             "channel": public_channel_payload(channel),
+            "sourceContext": source_context,
             "script": script,
             "visualGuidance": locale_pack["visuals"],
             "responseContract": {

@@ -60,7 +60,11 @@ def build_router(service: DashboardService) -> APIRouter:
 
     @router.post("/jobs", status_code=201)
     def create_job(payload: CreateJobRequest) -> dict[str, Any]:
-        return service.create_job(payload.channel_id, payload.topic)
+        return service.create_job(
+            payload.channel_id,
+            payload.topic,
+            payload.description,
+        )
 
     @router.get("/jobs/{job_id}")
     def job(job_id: str) -> dict[str, Any]:

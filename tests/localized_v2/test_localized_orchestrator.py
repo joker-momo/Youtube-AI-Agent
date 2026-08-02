@@ -25,9 +25,11 @@ class FakeLocalizedProvider:
     def __init__(self, *, qa_verdict: str = "PASS"):
         self.qa_verdict = qa_verdict
         self.calls: list[str] = []
+        self.payloads: dict[str, dict] = {}
 
     def generate(self, prompt: PromptEnvelope) -> dict:
         self.calls.append(prompt.stage)
+        self.payloads[prompt.stage] = prompt.payload
         locale = prompt.payload.get("channel", {}).get("locale", "en-US")
         if prompt.stage == "idea":
             return {
@@ -122,6 +124,9 @@ def _worker(
             channel_id=channel["channelId"],
             locale="en-US",
             topic="A realistic walking habit",
+            description=(
+                "Focus on adults over 45 who need a realistic, safe starting routine."
+            ),
             channel_snapshot=channel,
             locale_snapshot=locale_pack,
         )
@@ -137,6 +142,16 @@ def test_prompt_orchestrator_validates_and_promotes_each_stage(tmp_path: Path) -
     assert worker.run_once()
 
     assert provider.calls == ["idea", "script", "scenes", "seo", "qa"]
+    expected_source = {
+        "topic": "A realistic walking habit",
+        "description": (
+            "Focus on adults over 45 who need a realistic, safe starting routine."
+        ),
+    }
+    assert provider.payloads["idea"]["topic"] == expected_source["topic"]
+    assert provider.payloads["idea"]["description"] == expected_source["description"]
+    for stage in ("script", "scenes", "seo", "qa"):
+        assert provider.payloads[stage]["sourceContext"] == expected_source
     assert queue.completed_stages("localized-job") == (
         "idea",
         "script",
@@ -165,6 +180,9 @@ def test_live_provider_prompt_contains_the_authoritative_artifact_schema(
     prompt = worker.runner._prompt(job, "idea")
     contract = prompt.payload["responseContract"]
 
+    assert prompt.payload["description"] == (
+        "Focus on adults over 45 who need a realistic, safe starting routine."
+    )
     assert contract["schemaVersion"] == "localized-idea-v2/v1"
     assert contract["jsonSchema"]["required"] == [
         "schemaVersion",

@@ -42,9 +42,25 @@
             maxlength="240"
             required
             placeholder="Describe one locally relevant health topic"
+            aria-describedby="topic-count"
           ></textarea>
+          <span id="topic-count" class="field-note">0 / 240</span>
+          <label for="description">Description</label>
+          <textarea
+            id="description"
+            name="description"
+            rows="5"
+            minlength="10"
+            maxlength="2000"
+            required
+            aria-describedby="description-help description-count"
+            placeholder="Add the audience, angle, concerns, practical limits, and locally relevant context that the video must cover"
+          ></textarea>
+          <span id="description-help" class="field-note">
+            Topic names the subject; Description defines how the video should approach it.
+          </span>
           <div class="form-footer">
-            <span id="topic-count" class="field-note">0 / 240</span>
+            <span id="description-count" class="field-note">0 / 2000</span>
             <button type="submit">Create queued job</button>
           </div>
         </form>

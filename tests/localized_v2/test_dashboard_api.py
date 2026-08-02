@@ -8,6 +8,8 @@ from video_agent.localized_v2.job_state import JobInput
 
 from .dashboard_support import DASHBOARD_BASE_URL, make_dashboard
 
+DESCRIPTION = "Focus on realistic routines, audience concerns, and safe practical limits."
+
 
 def _client(tmp_path: Path) -> tuple[TestClient, dict[str, str]]:
     context = make_dashboard(tmp_path)
@@ -49,7 +51,11 @@ def test_create_job_without_worker_stays_queued(tmp_path: Path) -> None:
     response = client.post(
         "/api/v2/jobs",
         headers=headers,
-        json={"channelId": "healthy-life-en", "topic": "A calm daily habit"},
+        json={
+            "channelId": "healthy-life-en",
+            "topic": "A calm daily habit",
+            "description": DESCRIPTION,
+        },
     )
 
     assert response.status_code == 201
@@ -57,6 +63,8 @@ def test_create_job_without_worker_stays_queued(tmp_path: Path) -> None:
     assert snapshot["status"] == "QUEUED"
     assert snapshot["locale"] == "en-US"
     assert snapshot["input"]["topic"] == "A calm daily habit"
+    assert snapshot["description"] == DESCRIPTION
+    assert snapshot["input"]["description"] == DESCRIPTION
 
 
 def test_paginated_job_list_is_newest_first_with_stable_tie_break(
@@ -98,7 +106,11 @@ def test_detail_events_and_state_survive_app_restart(tmp_path: Path) -> None:
     created = client.post(
         "/api/v2/jobs",
         headers={"Origin": DASHBOARD_BASE_URL, "X-CSRF-Token": csrf},
-        json={"channelId": "healthy-life-en", "topic": "Persistent state"},
+        json={
+            "channelId": "healthy-life-en",
+            "topic": "Persistent state",
+            "description": DESCRIPTION,
+        },
     ).json()
     restarted = make_dashboard(tmp_path)
     second_client = TestClient(restarted.app, base_url=DASHBOARD_BASE_URL)
@@ -108,6 +120,7 @@ def test_detail_events_and_state_survive_app_restart(tmp_path: Path) -> None:
 
     assert detail.status_code == 200
     assert detail.json()["topic"] == "Persistent state"
+    assert detail.json()["description"] == DESCRIPTION
     assert [event["type"] for event in events.json()["data"]] == ["JOB_CREATED"]
 
 
@@ -116,7 +129,11 @@ def test_invalid_state_actions_share_error_envelope(tmp_path: Path) -> None:
     created = client.post(
         "/api/v2/jobs",
         headers=headers,
-        json={"channelId": "healthy-life-en", "topic": "Queued job"},
+        json={
+            "channelId": "healthy-life-en",
+            "topic": "Queued job",
+            "description": DESCRIPTION,
+        },
     ).json()
 
     retry = client.post(
@@ -156,7 +173,11 @@ def test_unknown_channel_preserves_not_enabled_error_contract(tmp_path: Path) ->
     response = client.post(
         "/api/v2/jobs",
         headers=headers,
-        json={"channelId": "unknown-channel", "topic": "A calm daily habit"},
+        json={
+            "channelId": "unknown-channel",
+            "topic": "A calm daily habit",
+            "description": DESCRIPTION,
+        },
     )
 
     assert response.status_code == 422

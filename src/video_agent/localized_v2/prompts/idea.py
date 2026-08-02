@@ -14,11 +14,19 @@ def build_idea_prompt(
     channel: dict[str, Any],
     locale_pack: dict[str, Any],
     topic: str,
+    description: str | None = None,
 ) -> PromptEnvelope:
     system = "\n".join(
         [
             locale_system_policy(locale_pack),
             "Develop one evidence-oriented angle for the requested long-form topic.",
+            (
+                "Use the combined meaning of topic and description. The topic names "
+                "the subject; the description supplies audience pain, desired angle, "
+                "constraints, and practical boundaries that must not be dropped."
+                if description
+                else "No operator description was supplied for this legacy job."
+            ),
             "Local relevance must be practical and must not rely on stereotypes.",
             "List evidence questions that a later script stage must answer.",
         ]
@@ -29,6 +37,7 @@ def build_idea_prompt(
         payload={
             "channel": public_channel_payload(channel),
             "topic": topic,
+            "description": description,
             "visualGuidance": locale_pack["visuals"],
             "responseContract": {
                 "schemaVersion": "localized-idea-v2/v1",

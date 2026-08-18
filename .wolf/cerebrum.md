@@ -13,6 +13,9 @@ Before running ANY request: confirm it serves this goal. If a request/spec/edit 
 
 ## User Preferences
 
+### 2026-07-30: Multilingual V2 must have a wholly separate dashboard/control plane
+For future multilingual channels, the user requires a new dashboard unrelated to the stable current pipeline. Do not add localized routes, navigation, config, queue rows, worker commands, job discovery, or startup dependencies to the current dashboard/runtime. The V2 dashboard owns its API, queue database, worker, job/cache/log/process roots, ports, and provider browser profile/session; keep it voice-only and do not add bottom subtitles. This supersedes the earlier CLI-only V2 pilot plan.
+
 ### 2026-07-14: Manual idea Description is long-form Dashboard-only
 When adding the Description input to Create video from idea, scope it to the long-form Dashboard. Do not alter Shorts Studio merely because it shares a backend route; preserve title-only compatibility at the shared API boundary and prove it with a backend regression.
 

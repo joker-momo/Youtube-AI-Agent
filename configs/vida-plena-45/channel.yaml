@@ -11,8 +11,9 @@ branding:
   intro_video_path: "asset_library/source/intro.mp4"
   outro_video_path: "asset_library/source/outro.mp4"
   # Replaceable disclaimer clip shown after the intro and before narration.
-  # Duration is auto-probed, so swapping this file needs no timing changes.
+  # The configured duration caps the auto-probed source length.
   disclaimer_video_path: "asset_library/source/disclaimer.mp4"
+  disclaimer_sec: 3.0
   # Channel-name label in the top-left corner. Hidden by default to keep the
   # opening frame clean. Flip to true when a special cut needs the brand
   # text visible on every scene.

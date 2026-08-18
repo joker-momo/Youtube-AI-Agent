@@ -193,7 +193,16 @@ def _prepare_branding(channel_config: dict) -> dict:
     if outro_video_source:
         outro_sec = _probe_duration_sec(outro_video_source)
     if disclaimer_video_source:
-        disclaimer_sec = _probe_duration_sec(disclaimer_video_source)
+        probed_disclaimer_sec = _probe_duration_sec(disclaimer_video_source)
+        configured_disclaimer_sec = branding_cfg.get("disclaimer_sec")
+        disclaimer_sec = (
+            probed_disclaimer_sec
+            if configured_disclaimer_sec is None
+            else min(
+                probed_disclaimer_sec,
+                max(0.0, float(configured_disclaimer_sec)),
+            )
+        )
     if logo_source or intro_video_source or outro_video_source or disclaimer_video_source:
         dest_dir = root / "remotion" / "public" / "branding" / str(channel_id)
         dest_dir.mkdir(parents=True, exist_ok=True)
@@ -237,7 +246,7 @@ def _prepare_branding(channel_config: dict) -> dict:
         # needs the brand label visible.
         "show_channel_name_overlay": bool(branding_cfg.get("show_channel_name_overlay", False)),
         # Replaceable video clip between intro and main content. Its duration
-        # is always probed from the file, just like intro/outro.
+        # is probed from the file and may be shortened by branding.disclaimer_sec.
         "disclaimer_video_path": disclaimer_video_public,
         "disclaimer_sec": disclaimer_sec,
         # Hybrid graphic cards over a fixed brand-gradient bg (visual.hybrid_card).

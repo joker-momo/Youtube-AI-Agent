@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 from datetime import UTC
 
+import pytest
 import yaml
 
 from video_agent.contracts import repo_root
@@ -109,12 +110,85 @@ def test_prepare_branding_auto_probes_medical_disclaimer_video(monkeypatch):
     ]
 
 
-def test_vida_plena_channel_config_uses_replaceable_disclaimer_video():
+@pytest.mark.parametrize(
+    ("configured_sec", "expected_sec"),
+    [(6.0, 6.0), (0.0, 0.0), (-1.0, 0.0)],
+)
+def test_prepare_branding_honors_disclaimer_duration_cap(
+    monkeypatch, configured_sec, expected_sec
+):
+    import video_agent.pipeline as pipeline_module
+
+    source = repo_root() / "asset_library/source/disclaimer.mp4"
+    monkeypatch.setattr(
+        pipeline_module,
+        "_resolve_brand_video_source",
+        lambda _config, kind: source if kind == "disclaimer" else None,
+    )
+    monkeypatch.setattr(pipeline_module, "_resolve_brand_logo_source", lambda *a, **kw: None)
+    monkeypatch.setattr(pipeline_module, "_probe_duration_sec", lambda path: 8.0)
+    monkeypatch.setattr(pipeline_module, "materialize_media", lambda source, dest: None)
+
+    branding = _prepare_branding(
+        {
+            "channel": {"id": "disclaimer-test"},
+            "branding": {
+                "disclaimer_video_path": "asset_library/source/disclaimer.mp4",
+                "disclaimer_sec": configured_sec,
+            },
+        }
+    )
+
+    assert branding["disclaimer_sec"] == expected_sec
+
+
+def test_prepare_branding_clamps_disclaimer_duration_to_source(monkeypatch):
+    import video_agent.pipeline as pipeline_module
+
+    source = repo_root() / "asset_library/source/disclaimer.mp4"
+    monkeypatch.setattr(
+        pipeline_module,
+        "_resolve_brand_video_source",
+        lambda _config, kind: source if kind == "disclaimer" else None,
+    )
+    monkeypatch.setattr(pipeline_module, "_resolve_brand_logo_source", lambda *a, **kw: None)
+    monkeypatch.setattr(pipeline_module, "_probe_duration_sec", lambda path: 8.0)
+    monkeypatch.setattr(pipeline_module, "materialize_media", lambda source, dest: None)
+
+    branding = _prepare_branding(
+        {
+            "channel": {"id": "disclaimer-test"},
+            "branding": {
+                "disclaimer_video_path": "asset_library/source/disclaimer.mp4",
+                "disclaimer_sec": 20.0,
+            },
+        }
+    )
+
+    assert branding["disclaimer_sec"] == 8.0
+
+
+def test_vida_plena_channel_config_uses_replaceable_disclaimer_video(monkeypatch):
+    import video_agent.pipeline as pipeline_module
+
     cfg = _load_vida_plena_config()
     assert cfg["branding"]["disclaimer_video_path"] == (
         "asset_library/source/disclaimer.mp4"
     )
+    assert cfg["branding"]["disclaimer_sec"] == 3.0
     assert "medical_disclaimer" not in cfg["branding"]
+
+    source = repo_root() / "asset_library/source/disclaimer.mp4"
+    monkeypatch.setattr(
+        pipeline_module,
+        "_resolve_brand_video_source",
+        lambda _config, kind: source if kind == "disclaimer" else None,
+    )
+    monkeypatch.setattr(pipeline_module, "_resolve_brand_logo_source", lambda *a, **kw: None)
+    monkeypatch.setattr(pipeline_module, "_probe_duration_sec", lambda path: 8.0)
+    monkeypatch.setattr(pipeline_module, "materialize_media", lambda source, dest: None)
+
+    assert _prepare_branding(cfg)["disclaimer_sec"] == 3.0
 
 
 def test_prepare_branding_hides_channel_name_overlay_by_default():

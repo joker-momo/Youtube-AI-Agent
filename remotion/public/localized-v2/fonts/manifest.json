@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "localized-v2-fonts/v1",
+  "source": "bundled for latin and latin-ext; generated CJK chunks remain provider-backed",
+  "bundled": {
+    "Manrope": ["Manrope-latin.woff2", "Manrope-latin-ext.woff2"]
+  },
+  "locales": {
+    "en-US": {"family": "Manrope", "subsets": ["latin", "latin-ext"]},
+    "fr-FR": {"family": "Manrope", "subsets": ["latin", "latin-ext"]},
+    "pt-BR": {"family": "Manrope", "subsets": ["latin", "latin-ext"]},
+    "ko-KR": {"family": "Noto Sans KR", "subsets": ["korean"]},
+    "ja-JP": {"family": "Noto Sans JP", "subsets": ["japanese"]}
+  }
+}

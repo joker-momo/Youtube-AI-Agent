@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "locale", "verdict", "failures"],
+  "properties": {
+    "schemaVersion": {"const": "localized-qa-v2/v1"},
+    "locale": {"enum": ["en-US", "fr-FR", "pt-BR", "ko-KR", "ja-JP"]},
+    "verdict": {"enum": ["PASS", "FAIL"]},
+    "failures": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "field", "message"],
+        "properties": {
+          "code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,63}$"},
+          "field": {"type": "string", "minLength": 1, "maxLength": 160},
+          "message": {"type": "string", "minLength": 1, "maxLength": 500}
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"verdict": {"const": "PASS"}}},
+      "then": {"properties": {"failures": {"maxItems": 0}}}
+    },
+    {
+      "if": {"properties": {"verdict": {"const": "FAIL"}}},
+      "then": {"properties": {"failures": {"minItems": 1}}}
+    }
+  ]
+}

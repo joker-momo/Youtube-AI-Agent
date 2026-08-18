@@ -1,0 +1,13 @@
+{
+  "artifact": "script",
+  "verdict": "PASS",
+  "issues": [],
+  "required_changes": [],
+  "scores": {
+    "schema_fit": 5,
+    "channel_fit": 5,
+    "safety": 5,
+    "clarity": 5,
+    "youtube_policy": 5
+  }
+}

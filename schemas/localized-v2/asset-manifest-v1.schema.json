@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object", "additionalProperties": false,
+  "required": ["schemaVersion", "locale", "assets"],
+  "properties": {
+    "schemaVersion": {"const": "localized-assets-v2/v1"},
+    "locale": {"enum": ["en-US", "fr-FR", "pt-BR", "ko-KR", "ja-JP"]},
+    "assets": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["sceneId", "role", "mediaKind", "path", "source", "sha256"],
+        "properties": {
+          "sceneId": {"type": "string", "minLength": 1},
+          "role": {"enum": ["background", "graphic", "thumbnail"]},
+          "mediaKind": {"enum": ["video", "image"]},
+          "path": {"type": "string", "minLength": 1},
+          "source": {"type": "string", "minLength": 1},
+          "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+        }
+      }
+    }
+  }
+}

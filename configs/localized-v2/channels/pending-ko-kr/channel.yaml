@@ -1,0 +1,28 @@
+schemaVersion: localized-channel-v2/v1
+enabled: false
+rolloutOrder: 4
+channelId: pending-healthy-ko-kr
+locale: ko-KR
+brand:
+  name: 승인 대기 — ko-KR
+  introClip: brand/ko-KR/intro.mp4
+  disclaimerClip: brand/ko-KR/disclaimer.mp4
+  outroClip: brand/ko-KR/outro.mp4
+voice: null
+render:
+  composition: LocalizedV2ChannelVideo
+  concurrency: auto
+  subtitles:
+    enabled: false
+content:
+  type: long_form
+  targetDurationSec: 840
+canary:
+  status: PENDING
+  checks:
+    audio: PENDING
+    font: PENDING
+    render: PENDING
+    humanReview: PENDING
+    dashboardLifecycle: PENDING
+  evidence: []

@@ -1,0 +1,28 @@
+schemaVersion: localized-channel-v2/v1
+enabled: false
+rolloutOrder: 5
+channelId: pending-healthy-ja-jp
+locale: ja-JP
+brand:
+  name: 承認待ち — ja-JP
+  introClip: brand/ja-JP/intro.mp4
+  disclaimerClip: brand/ja-JP/disclaimer.mp4
+  outroClip: brand/ja-JP/outro.mp4
+voice: null
+render:
+  composition: LocalizedV2ChannelVideo
+  concurrency: auto
+  subtitles:
+    enabled: false
+content:
+  type: long_form
+  targetDurationSec: 840
+canary:
+  status: PENDING
+  checks:
+    audio: PENDING
+    font: PENDING
+    render: PENDING
+    humanReview: PENDING
+    dashboardLifecycle: PENDING
+  evidence: []

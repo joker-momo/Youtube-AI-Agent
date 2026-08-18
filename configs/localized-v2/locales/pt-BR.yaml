@@ -1,0 +1,61 @@
+schemaVersion: localized-locale-v2/v1
+locale: pt-BR
+language: português brasileiro
+market: Brasil
+audienceAddress:
+  formal: false
+  preferred: você
+lexicalPreferences:
+  prefer:
+    - envelhecimento saudável
+    - hábitos do dia a dia
+    - converse com seu profissional de saúde
+  avoid:
+    - cura milagrosa
+    - resultado garantido
+    - eliminar a doença
+measurement:
+  system: metric
+  temperature: celsius
+dates:
+  order: DMY
+numbers:
+  decimalSeparator: ","
+medicalSafety:
+  softClaims:
+    - estudos sugerem
+    - pode ajudar a apoiar
+    - pessoas que adotam esse hábito costumam perceber
+  prohibitedClaims:
+    - cura a doença
+    - substitui o tratamento médico
+    - garante a prevenção de doenças
+  disclaimer: Este conteúdo tem finalidade exclusivamente informativa e educativa e não substitui orientação médica. Consulte sempre um profissional de saúde qualificado antes de mudar sua alimentação, rotina de exercícios ou tratamento.
+seo:
+  titleMaxChars: 70
+  keywordStyle: Português brasileiro natural com a principal intenção de busca no início
+  keywordCues:
+    - envelhecimento saudável
+    - saúde depois dos 50
+    - hábitos simples
+  thumbnailMaxChars: 28
+  pinnedCommentStyle: Acolhedor, direto e respeitoso; incentivar relatos sem solicitar informações médicas pessoais
+narration:
+  wordsPerMinute: 128
+  sentenceMaxWords: 22
+fonts:
+  families:
+    - Manrope
+  requiredCodepoints:
+    - "00E3"
+    - "00E7"
+    - "00F4"
+visuals:
+  peopleContext: Adultos com 45 anos ou mais em ambientes cotidianos brasileiros contemporâneos, com diversidade regional e étnica natural
+  avoid:
+    - estereótipos de carnaval ou praia sem relação com o tema
+    - imagens médicas alarmistas
+    - estereótipos de idade
+textMetrics:
+  charsPerWord: 5.1
+  expansionRatio: 1.08

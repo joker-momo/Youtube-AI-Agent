@@ -1,0 +1,33 @@
+schemaVersion: localized-channel-v2/v1
+enabled: false
+qualification: true
+rolloutOrder: 1
+channelId: healthy-life-en
+locale: en-US
+brand:
+  name: Healthy Life 45+
+  introClip: brand/en-US/intro.mp4
+  disclaimerClip: brand/en-US/disclaimer.mp4
+  outroClip: brand/en-US/outro.mp4
+voice:
+  provider: kokoro
+  language: a
+  voiceId: am_michael
+  speed: 0.94
+render:
+  composition: LocalizedV2ChannelVideo
+  concurrency: auto
+  subtitles:
+    enabled: false
+content:
+  type: long_form
+  targetDurationSec: 300
+canary:
+  status: PENDING
+  checks:
+    audio: PENDING
+    font: PENDING
+    render: PENDING
+    humanReview: PENDING
+    dashboardLifecycle: PENDING
+  evidence: []

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object", "additionalProperties": false,
+  "required": ["schemaVersion", "locale", "title", "description", "tags", "thumbnailText", "pinnedComment"],
+  "properties": {
+    "schemaVersion": {"const": "localized-seo-v2/v1"},
+    "locale": {"enum": ["en-US", "fr-FR", "pt-BR", "ko-KR", "ja-JP"]},
+    "title": {"type": "string", "minLength": 1, "maxLength": 200},
+    "description": {"type": "string", "minLength": 1, "maxLength": 5000},
+    "tags": {
+      "type": "array", "minItems": 3, "maxItems": 30, "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 80}
+    },
+    "thumbnailText": {"type": "string", "minLength": 1, "maxLength": 100},
+    "pinnedComment": {"type": "string", "minLength": 1, "maxLength": 2000}
+  }
+}

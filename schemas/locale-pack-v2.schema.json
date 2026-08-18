@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "locale-pack-v2.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "locale", "language", "market", "audienceAddress", "lexicalPreferences", "measurement", "dates", "numbers", "medicalSafety", "seo", "narration", "fonts", "visuals", "textMetrics"],
+  "properties": {
+    "schemaVersion": {"const": "localized-locale-v2/v1"},
+    "locale": {"enum": ["en-US", "fr-FR", "pt-BR", "ko-KR", "ja-JP"]},
+    "language": {"type": "string", "minLength": 2},
+    "market": {"type": "string", "minLength": 2},
+    "audienceAddress": {
+      "type": "object", "additionalProperties": false,
+      "required": ["formal", "preferred"],
+      "properties": {"formal": {"type": "boolean"}, "preferred": {"type": "string", "minLength": 1}}
+    },
+    "lexicalPreferences": {
+      "type": "object", "additionalProperties": false,
+      "required": ["prefer", "avoid"],
+      "properties": {
+        "prefer": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "avoid": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "measurement": {
+      "type": "object", "additionalProperties": false,
+      "required": ["system", "temperature"],
+      "properties": {"system": {"enum": ["metric", "us"]}, "temperature": {"enum": ["celsius", "fahrenheit"]}}
+    },
+    "dates": {
+      "type": "object", "additionalProperties": false,
+      "required": ["order"], "properties": {"order": {"enum": ["DMY", "MDY", "YMD"]}}
+    },
+    "numbers": {
+      "type": "object", "additionalProperties": false,
+      "required": ["decimalSeparator"], "properties": {"decimalSeparator": {"enum": [".", ","]}}
+    },
+    "medicalSafety": {
+      "type": "object", "additionalProperties": false,
+      "required": ["softClaims", "prohibitedClaims", "disclaimer"],
+      "properties": {
+        "softClaims": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "prohibitedClaims": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "disclaimer": {"type": "string", "minLength": 10}
+      }
+    },
+    "seo": {
+      "type": "object", "additionalProperties": false,
+      "required": ["titleMaxChars", "keywordStyle", "keywordCues", "thumbnailMaxChars", "pinnedCommentStyle"],
+      "properties": {
+        "titleMaxChars": {"type": "integer", "minimum": 40, "maximum": 100},
+        "keywordStyle": {"type": "string", "minLength": 1},
+        "keywordCues": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "thumbnailMaxChars": {"type": "integer", "minimum": 10, "maximum": 60},
+        "pinnedCommentStyle": {"type": "string", "minLength": 1}
+      }
+    },
+    "narration": {
+      "type": "object", "additionalProperties": false,
+      "required": ["wordsPerMinute", "sentenceMaxWords"],
+      "properties": {
+        "wordsPerMinute": {"type": "integer", "minimum": 80, "maximum": 200},
+        "sentenceMaxWords": {"type": "integer", "minimum": 8, "maximum": 35}
+      }
+    },
+    "fonts": {
+      "type": "object", "additionalProperties": false,
+      "required": ["families", "requiredCodepoints"],
+      "properties": {
+        "families": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "requiredCodepoints": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^[0-9A-F]{4,6}$"}}
+      }
+    },
+    "visuals": {
+      "type": "object", "additionalProperties": false,
+      "required": ["peopleContext", "avoid"],
+      "properties": {
+        "peopleContext": {"type": "string", "minLength": 1},
+        "avoid": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "textMetrics": {
+      "type": "object", "additionalProperties": false,
+      "required": ["charsPerWord", "expansionRatio"],
+      "properties": {
+        "charsPerWord": {"type": "number", "exclusiveMinimum": 0},
+        "expansionRatio": {"type": "number", "exclusiveMinimum": 0}
+      }
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object", "additionalProperties": false,
+  "required": ["schemaVersion", "locale", "title", "sections"],
+  "properties": {
+    "schemaVersion": {"const": "localized-script-v2/v1"},
+    "locale": {"enum": ["en-US", "fr-FR", "pt-BR", "ko-KR", "ja-JP"]},
+    "title": {"type": "string", "minLength": 1, "maxLength": 200},
+    "sections": {
+      "type": "array", "minItems": 1, "maxItems": 80,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "narration"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"},
+          "narration": {"type": "string", "minLength": 1, "maxLength": 5000}
+        }
+      }
+    }
+  }
+}

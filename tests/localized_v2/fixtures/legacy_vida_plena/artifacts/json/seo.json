@@ -1,0 +1,111 @@
+{
+  "job_id": "how-to-cook-potatoes-to-lower-their-glycemic-index-for-bette-vida-plena-45-20260730-122514",
+  "channel_id": "vida-plena-45",
+  "title": "El paso oculto con la patata: más saciedad al comerla",
+  "title_variants": [
+    {
+      "title": "El paso oculto con la patata: más saciedad al comerla",
+      "thumbnail_text": "HAMBRE POCO DESPUÉS DE PATATA",
+      "score": 69,
+      "score_breakdown": {
+        "title_score": 32,
+        "thumbnail_score": 37,
+        "title_detail": {
+          "word_count_score": 15,
+          "digit_score": 0,
+          "question_score": 0,
+          "power_score": 10,
+          "length_score": 7,
+          "total": 32
+        },
+        "thumbnail_detail": {
+          "word_count_score": 20,
+          "caps_score": 10,
+          "emotion_score": 0,
+          "length_score": 8,
+          "all_caps": true,
+          "standalone_value_score": 14,
+          "audience_fit_score": 0,
+          "vagueness_penalty": 0,
+          "trust_penalty": 0,
+          "total": 37
+        }
+      }
+    },
+    {
+      "title": "Cómo cocinar patatas para reducir su índice glucémico",
+      "thumbnail_text": "PATATAS: 24 HORAS PUEDE MODERAR TU RESPUESTA",
+      "score": 59,
+      "score_breakdown": {
+        "title_score": 32,
+        "thumbnail_score": 27,
+        "title_detail": {
+          "word_count_score": 15,
+          "digit_score": 0,
+          "question_score": 0,
+          "power_score": 10,
+          "length_score": 7,
+          "total": 32
+        },
+        "thumbnail_detail": {
+          "word_count_score": 12,
+          "caps_score": 10,
+          "emotion_score": 0,
+          "length_score": 0,
+          "all_caps": true,
+          "standalone_value_score": 14,
+          "audience_fit_score": 0,
+          "vagueness_penalty": 0,
+          "trust_penalty": 0,
+          "total": 27
+        }
+      }
+    },
+    {
+      "title": "No es solo la patata: prepárala para favorecer saciedad",
+      "thumbnail_text": "PATATA COCIDA FRÍA: MENOS HAMBRE DESPUÉS",
+      "score": 54,
+      "score_breakdown": {
+        "title_score": 22,
+        "thumbnail_score": 32,
+        "title_detail": {
+          "word_count_score": 15,
+          "digit_score": 0,
+          "question_score": 0,
+          "power_score": 0,
+          "length_score": 7,
+          "total": 22
+        },
+        "thumbnail_detail": {
+          "word_count_score": 20,
+          "caps_score": 10,
+          "emotion_score": 0,
+          "length_score": 0,
+          "all_caps": true,
+          "standalone_value_score": 14,
+          "audience_fit_score": 0,
+          "vagueness_penalty": 0,
+          "trust_penalty": 0,
+          "total": 32
+        }
+      }
+    }
+  ],
+  "description": "Cómo cocinar patatas puede influir en su respuesta glucémica y en la saciedad. En este vídeo aprenderás una forma práctica de cocerlas, enfriarlas y combinarlas mejor.\n\nExplicamos qué es el almidón resistente y por qué refrigerar la patata cocida alrededor de 24 horas puede modificar una parte de su estructura. También verás cómo recalentarla sin realizar una segunda cocción larga.\n\nAdemás, aprenderás a ajustar la ración, distinguir índice glucémico y carga glucémica, y completar el plato con proteína, verduras y una pequeña cantidad de grasa saludable. Incluimos ejemplos de ensalada templada, lentejas y guarniciones sencillas.\n\n00:00 - La patata no responde siempre igual\n01:49 - Qué es el almidón resistente\n02:49 - Elegir y preparar las patatas\n03:45 - Cocerlas sin complicaciones\n04:13 - Enfriar y refrigerar bien\n05:44 - Comerlas frías o recalentadas\n06:45 - La cantidad sigue importando\n07:37 - Añadir proteína al plato\n07:54 - Sumar fibra y grasas saludables\n09:06 - Tres comidas cotidianas\n10:17 - Errores que reducen el beneficio\n10:58 - Cuándo pedir orientación\n\nSuscríbete a Vida Plena 45+ para descubrir más hábitos sencillos de alimentación y bienestar práctico: https://www.youtube.com/channel/UCKUswqsAaLsEkcsgzTuKAmw?sub_confirmation=1\n\nVida Plena 45+ comparte consejos realistas para personas de más de 45 años, sin dietas extremas ni promesas milagro. Aviso: este contenido es informativo y no sustituye la opinión de un profesional sanitario. Este vídeo utiliza voz generada y apoyo visual mediante inteligencia artificial.\n\n#Patatas #AlmidónResistente #AlimentaciónSaludable #Bienestar45\n",
+  "tags": [
+    "alimentación saludable",
+    "nutrición después de los 45",
+    "cómo cocinar patatas",
+    "patata e índice glucémico",
+    "almidón resistente patata",
+    "enfriar patatas cocidas",
+    "carga glucémica de la patata",
+    "recetas saludables con patata"
+  ],
+  "language": "es-ES",
+  "ai_disclosure": true,
+  "thumbnail_path": "jobs/how-to-cook-potatoes-to-lower-their-glycemic-index-for-bette-vida-plena-45-20260730-122514/outputs/thumbnail_1.jpg",
+  "thumbnail_text": "HAMBRE POCO DESPUÉS DE PATATA",
+  "suggested_pinned_comments": "🥔 ¿Sueles comer la patata recién hecha, fría o recalentada al día siguiente? Cuéntanos qué preparación encaja mejor en tu rutina. 💚 Suscríbete para seguir aprendiendo hábitos sencillos: https://www.youtube.com/channel/UCKUswqsAaLsEkcsgzTuKAmw?sub_confirmation=1",
+  "topic_accent_color": "#C9784F"
+}

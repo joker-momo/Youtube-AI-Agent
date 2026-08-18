@@ -1,0 +1,61 @@
+schemaVersion: localized-locale-v2/v1
+locale: ko-KR
+language: 한국어
+market: 대한민국
+audienceAddress:
+  formal: true
+  preferred: 시청자 여러분
+lexicalPreferences:
+  prefer:
+    - 건강한 노화
+    - 일상 습관
+    - 의료 전문가와 상담하세요
+  avoid:
+    - 기적의 치료법
+    - 효과를 보장합니다
+    - 질병을 완치합니다
+measurement:
+  system: metric
+  temperature: celsius
+dates:
+  order: YMD
+numbers:
+  decimalSeparator: "."
+medicalSafety:
+  softClaims:
+    - 연구에 따르면
+    - 도움을 줄 수 있습니다
+    - 이 습관을 실천한 사람들은 흔히 변화를 느낍니다
+  prohibitedClaims:
+    - 질병을 치료합니다
+    - 의학적 치료를 대체합니다
+    - 질병 예방을 보장합니다
+  disclaimer: 이 콘텐츠는 정보 제공과 교육만을 목적으로 하며 의학적 조언을 대신하지 않습니다. 식단, 운동 또는 치료를 변경하기 전에 반드시 자격을 갖춘 의료 전문가와 상담하세요.
+seo:
+  titleMaxChars: 55
+  keywordStyle: 한국 시청자가 자연스럽게 검색하는 표현을 사용하고 핵심 검색 의도를 앞부분에 배치
+  keywordCues:
+    - 건강한 노화
+    - 50대 건강
+    - 쉬운 생활 습관
+  thumbnailMaxChars: 18
+  pinnedCommentStyle: 존댓말로 따뜻하고 간결하게 작성하며 개인 의료정보를 요구하지 않고 경험 공유를 권유
+narration:
+  wordsPerMinute: 115
+  sentenceMaxWords: 18
+fonts:
+  families:
+    - Noto Sans KR
+  requiredCodepoints:
+    - "AC00"
+    - "B098"
+    - "D55C"
+visuals:
+  peopleContext: 대한민국의 현대적인 가정, 공원, 주방 등 일상 공간에서 생활하는 45세 이상 성인을 자연스럽고 다양하게 표현
+  avoid:
+    - 전통 의상이나 의례를 맥락 없이 사용
+    - 불안을 유발하는 의료 이미지
+    - 연령에 대한 고정관념
+textMetrics:
+  charsPerWord: 2.4
+  expansionRatio: 1.0

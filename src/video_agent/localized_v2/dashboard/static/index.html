@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Localized V2 Dashboard</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/static/styles.css">
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to job controls</a>
+    <div class="app-shell">
+      <aside class="rail" aria-label="Localized V2 navigation">
+        <div class="logo" aria-hidden="true"></div>
+        <nav class="rail-nav" aria-label="Dashboard sections">
+          <button type="button" class="rail-pill active" aria-current="page">Jobs</button>
+        </nav>
+        <span class="rail-version">V2</span>
+      </aside>
+
+      <div class="app-workspace">
+        <header class="topbar">
+          <div class="brand">
+            <h1>Localized V2 Dashboard</h1>
+            <p>Long-form production · isolated multilingual runtime</p>
+          </div>
+          <div class="top-meta">
+            <span id="readiness" class="readiness" role="status" aria-live="polite">
+              Checking V2 service…
+            </span>
+            <span id="job-count">0 jobs</span>
+            <button id="refresh-jobs" class="refresh-btn" type="button">Refresh</button>
+          </div>
+        </header>
+
+        <main id="main" class="page">
+          <div class="page-head">
+            <div class="page-title">
+              <h2>Long-form production</h2>
+              <p>Same operator workflow as Spain, with locale-specific content and voice.</p>
+            </div>
+            <button id="open-new-job" class="primary-action" type="button">New Job</button>
+          </div>
+
+          <div
+            id="new-job-overlay"
+            class="modal-overlay"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="new-job-title"
+            hidden
+          >
+            <div class="modal">
+              <h2 id="new-job-title" class="modal-title">Create Long-form Job</h2>
+              <p class="modal-note">Voice-only localized production. Spain remains isolated.</p>
+              <form id="create-form">
+                <div class="modal-field">
+                  <label for="channel">Channel</label>
+                  <select id="channel" name="channelId" required>
+                    <option value="">Loading channels…</option>
+                  </select>
+                </div>
+                <div class="modal-field">
+                  <label for="topic">Video topic</label>
+                  <textarea
+                    id="topic"
+                    name="topic"
+                    rows="3"
+                    minlength="3"
+                    maxlength="240"
+                    required
+                    placeholder="Describe one locally relevant health topic"
+                    aria-describedby="topic-count"
+                  ></textarea>
+                  <span id="topic-count" class="field-note">0 / 240</span>
+                </div>
+                <div class="modal-field">
+                  <label for="description">Description</label>
+                  <textarea
+                    id="description"
+                    name="description"
+                    rows="5"
+                    minlength="10"
+                    maxlength="2000"
+                    required
+                    aria-describedby="description-help description-count"
+                    placeholder="Add the audience, angle, concerns, practical limits, and locally relevant context that the video must cover"
+                  ></textarea>
+                  <span id="description-help" class="field-note">
+                    Topic names the subject; Description defines how the video should approach it.
+                  </span>
+                  <span id="description-count" class="field-note counter">0 / 2000</span>
+                </div>
+                <div id="mutation-status" class="mutation-status" role="status" aria-live="polite"></div>
+                <div class="modal-actions">
+                  <button id="close-new-job" class="modal-cancel" type="button">Cancel</button>
+                  <button class="modal-submit" type="submit">Create Job</button>
+                </div>
+              </form>
+            </div>
+          </div>
+
+          <section id="kpis" class="kpis" aria-label="Job summary"></section>
+
+          <section class="content-grid" aria-label="Localized V2 jobs">
+            <div class="panel jobs-panel">
+              <div class="panel-head">
+                <div>
+                  <div class="panel-title">Job queue</div>
+                  <div id="panel-count" class="panel-count">0 jobs</div>
+                </div>
+                <form id="filters-form" class="filters">
+                  <label for="status-filter">Status</label>
+                  <select id="status-filter">
+                    <option value="">All statuses</option>
+                    <option value="QUEUED">Queued</option>
+                    <option value="RUNNING">Running</option>
+                    <option value="CANCEL_REQUESTED">Cancel requested</option>
+                    <option value="INTERRUPTED">Interrupted</option>
+                    <option value="FAILED">Failed</option>
+                    <option value="CANCELLED">Cancelled</option>
+                    <option value="COMPLETED">Completed</option>
+                  </select>
+                </form>
+              </div>
+              <div id="job-list" role="list" aria-busy="true">
+                <p class="empty-state">Loading jobs…</p>
+              </div>
+            </div>
+
+            <article id="job-detail" class="panel detail-panel" aria-labelledby="detail-heading">
+              <h2 id="detail-heading" class="sr-only">Job detail</h2>
+              <p id="detail-empty" class="empty">Select a job to inspect its timeline, artifacts, and output.</p>
+              <div id="detail-content" hidden>
+                <div id="detail-summary"></div>
+                <div id="action-bar" class="action-bar" aria-label="Job actions"></div>
+                <section class="pipeline" aria-labelledby="pipeline-heading">
+                  <div class="pipeline-heading-row">
+                    <div>
+                      <p class="eyebrow">Live pipeline</p>
+                      <h3 id="pipeline-heading">Production progress</h3>
+                    </div>
+                    <strong id="pipeline-percent" class="pipeline-percent">0%</strong>
+                  </div>
+                  <div
+                    id="overall-progress"
+                    class="overall-progress"
+                    role="progressbar"
+                    aria-label="Overall job progress"
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                    aria-valuenow="0"
+                  >
+                    <span id="overall-progress-fill" class="overall-progress-fill"></span>
+                  </div>
+                  <p id="pipeline-summary" class="pipeline-summary" aria-live="polite">
+                    0 of 11 steps complete
+                  </p>
+                  <div id="phase-list" class="phase-list" role="list" aria-label="Production phases"></div>
+                  <ol id="stage-list" class="stage-list timeline compact" aria-label="Production steps"></ol>
+                </section>
+                <div class="detail-columns">
+                  <section aria-labelledby="events-heading">
+                    <h3 id="events-heading">Events</h3>
+                    <ol id="event-list" class="event-list"></ol>
+                  </section>
+                  <section aria-labelledby="artifacts-heading">
+                    <h3 id="artifacts-heading">Promoted artifacts</h3>
+                    <ul id="artifact-list" class="artifact-list"></ul>
+                  </section>
+                </div>
+              </div>
+            </article>
+          </section>
+        </main>
+      </div>
+    </div>
+  </body>
+</html>

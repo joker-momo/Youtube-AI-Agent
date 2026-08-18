@@ -3,7 +3,6 @@ from video_agent.qa.scene_qa import check_scenes
 from video_agent.qa.script_qa import check_script
 from video_agent.qa.thumbnail_title_qa import check_thumbnail_title
 
-
 CHANNEL = {
     "channel": {"id": "vida-plena-45", "name": "Vida Plena 45+"},
     "audience": {"language": "es-LA"},
@@ -56,3 +55,91 @@ def test_mock_seo_passes_thumbnail_title_qa():
     qa = check_thumbnail_title(seo, CHANNEL)
     assert qa["verdict"] == "PASS"
     assert seo["ai_disclosure"] is True
+
+
+def test_thumbnail_qa_measures_thumbnail_text_not_title():
+    seo = {
+        "title": "Título breve",
+        "thumbnail_text": "UNO DOS TRES CUATRO CINCO SEIS SIETE",
+        "ai_disclosure": True,
+    }
+
+    qa = check_thumbnail_title(seo, CHANNEL)
+
+    assert qa["verdict"] == "REVISE"
+    assert qa["issues"][0]["type"] == "THUMBNAIL_TEXT_DENSE"
+
+
+def test_thumbnail_qa_checks_every_generated_variant():
+    seo = {
+        "title": "Título breve",
+        "thumbnail_text": "DUERME MEJOR HOY",
+        "title_variants": [
+            {"title": "Variante uno", "thumbnail_text": "DUERME MEJOR HOY"},
+            {
+                "title": "Variante dos",
+                "thumbnail_text": "UNO DOS TRES CUATRO CINCO SEIS SIETE",
+            },
+        ],
+        "ai_disclosure": True,
+    }
+
+    qa = check_thumbnail_title(seo, CHANNEL)
+
+    assert qa["verdict"] == "REVISE"
+    assert qa["issues"][0]["type"] == "THUMBNAIL_TEXT_DENSE"
+    assert "variant 2" in qa["issues"][0]["message"].lower()
+
+
+def test_thumbnail_qa_accepts_six_word_copy_for_every_variant():
+    seo = {
+        "title": "Título claro y breve",
+        "thumbnail_text": "PAN O PATATA QUÉ ELEGIR HOY",
+        "title_variants": [
+            {
+                "title": "Variante uno",
+                "thumbnail_text": "PAN O PATATA QUÉ ELEGIR HOY",
+            },
+            {
+                "title": "Variante dos",
+                "thumbnail_text": "EVITA PESADEZ AL ELEGIR TUS CARBOHIDRATOS",
+            },
+        ],
+        "ai_disclosure": True,
+    }
+
+    qa = check_thumbnail_title(seo, CHANNEL)
+
+    assert qa["verdict"] == "PASS"
+
+
+def test_thumbnail_qa_rejects_selected_copy_shorter_than_three_words():
+    seo = {
+        "title": "Título claro y breve",
+        "thumbnail_text": "POCAS PALABRAS",
+        "ai_disclosure": True,
+    }
+
+    qa = check_thumbnail_title(seo, CHANNEL)
+
+    assert qa["verdict"] == "REVISE"
+    assert qa["issues"][0]["type"] == "THUMBNAIL_TEXT_SPARSE"
+    assert "selected thumbnail_text" in qa["issues"][0]["message"]
+
+
+def test_thumbnail_qa_rejects_sparse_copy_in_every_variant():
+    seo = {
+        "title": "Título claro y breve",
+        "thumbnail_text": "DUERME MEJOR HOY",
+        "title_variants": [
+            {"title": "Variante uno", "thumbnail_text": "DUERME MEJOR HOY"},
+            {"title": "Variante dos", "thumbnail_text": "PAN"},
+        ],
+        "ai_disclosure": True,
+    }
+
+    qa = check_thumbnail_title(seo, CHANNEL)
+
+    assert qa["verdict"] == "REVISE"
+    assert qa["issues"][0]["type"] == "THUMBNAIL_TEXT_SPARSE"
+    assert "variant 2" in qa["issues"][0]["message"]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from video_agent import thumbnail_planner as tp
+from video_agent.style_dna import is_valid_hex
 
 # --- §12 normalize_thumbnail_variants -------------------------------------
 
@@ -96,6 +97,35 @@ def test_classify_surgery_after_60_maps_to_medical_decision():
     assert profile["risk_level"] == "medical_sensitive"
     assert profile["age_signal"] == "60+"
     assert any("cirugia" in keyword for keyword in profile["keywords"])
+
+
+def test_classify_hunger_and_craving_as_food_choice_not_daily_routine():
+    profile = tp.classify_thumbnail_topic(
+        "Cómo distinguir el hambre física del antojo por la tarde",
+        "¿HAMBRE O ANTOJO?",
+    )
+
+    assert profile["primary_category"] == "food_choice"
+
+
+def test_hunger_thumbnail_uses_food_visual_instead_of_calendar_or_checklist():
+    seo = {
+        "title": "Cómo distinguir el hambre física del antojo por la tarde",
+        "title_variants": [
+            {
+                "title": "Cómo distinguir el hambre física del antojo",
+                "thumbnail_text": "¿HAMBRE O ANTOJO?",
+            }
+        ],
+    }
+
+    plan = tp.plan_thumbnail_prompts(seo, {})[0]
+
+    assert plan["primary_category"] == "food_choice"
+    visual = f'{plan["scene"]} {plan["main_prop"]}'.lower()
+    assert any(food_cue in visual for food_cue in ("food", "bread", "plate", "fruit", "yogurt"))
+    assert "calendar" not in visual
+    assert "checklist" not in visual
 
 
 def test_age_phrase_alone_does_not_imply_protein_or_muscle():
@@ -388,6 +418,22 @@ def test_backward_compat_wrapper_still_works():
     )
     assert "HOOK" in prompt
     assert "OBJECT-DRIVEN" in prompt or "object-driven" in prompt.lower()
+    assert "OBJECT PROOF" in prompt
+    assert "HUMAN STORY" not in prompt
+    assert "no presenter" in prompt.lower()
+
+
+def test_backward_compat_wrapper_uses_comparison_art_direction_for_variant_three():
+    from video_agent.orchestrator.stages import _build_thumbnail_prompt
+
+    prompt = _build_thumbnail_prompt(
+        "Topic", "HOOK", "#F2C94C", "Wellness desc", variant_index=3
+    )
+
+    assert "COMPARISON-DRIVEN" in prompt
+    assert "DECISION CONTRAST" in prompt
+    assert "HUMAN STORY" not in prompt
+    assert "no duplicated presenter" in prompt.lower()
 
 
 # --- §4/§13 signature -------------------------------------------------------
@@ -510,7 +556,7 @@ def test_plan_schema_includes_category_safety_rules_and_strategy_description():
         assert plan.get("primary_category_label")
 
 
-# --- competitor-teardown CTR formula (2026-06-29) --------------------------
+# --- CTR diversity without a repeated clickbait template -------------------
 
 _SEO_3 = {
     "title": "El mejor pan después de los 60",
@@ -522,65 +568,128 @@ _SEO_3 = {
 }
 
 
-def test_plan_includes_punch_color():
+def test_variant_palette_uses_distinct_brand_compatible_colors():
+    cfg = {
+        "style": {
+            "palette": {
+                "primary": "#2F6B57",
+                "secondary": "#D98C5F",
+                "accent": "#F5C24B",
+            }
+        }
+    }
+    seo = {**_SEO_3, "topic_accent_color": "#C9784F"}
+
+    plans = tp.plan_thumbnail_prompts(seo, cfg)
+
+    assert len({plan["accent_color"] for plan in plans}) == 3
+    assert all(is_valid_hex(plan["accent_color"]) for plan in plans)
+    assert "#E11D2A" not in " ".join(plan["prompt"] for plan in plans)
+
+
+def test_variant_palette_falls_back_when_every_configured_color_is_invalid():
+    cfg = {
+        "thumbnail": {"accent_color": "red"},
+        "style": {
+            "palette": {
+                "primary": "forest",
+                "secondary": "clay",
+                "accent": "gold",
+            }
+        },
+    }
+
+    plans = tp.plan_thumbnail_prompts(_SEO_3, cfg)
+
+    assert len({plan["accent_color"] for plan in plans}) == 3
+    assert all(is_valid_hex(plan["accent_color"]) for plan in plans)
+
+
+def test_different_topics_rotate_the_primary_variant_palette():
+    cfg = {
+        "style": {
+            "palette": {
+                "primary": "#2F6B57",
+                "secondary": "#D98C5F",
+                "accent": "#F5C24B",
+            }
+        }
+    }
+    colors = {
+        tp.plan_thumbnail_prompts(
+            {
+                **_SEO_3,
+                "title": title,
+                "topic_accent_color": "#C9784F",
+            },
+            cfg,
+        )[0]["accent_color"]
+        for title in (
+            "Dormir mejor después de los 60",
+            "Elegir carbohidratos sin pesadez",
+            "Distinguir hambre física y antojo",
+            "Mover las rodillas con menos rigidez",
+            "Comparar etiquetas en el supermercado",
+        )
+    }
+    assert len(colors) >= 2
+
+
+def test_strategies_forbid_template_graphics_and_extra_labels():
+    descriptions = " ".join(
+        tp.describe_strategy(strategy)
+        for strategy in ("face_driven", "object_driven", "comparison_driven")
+    ).lower()
+
+    for forbidden in ("red arrow", "red cross", "green check", "antes", "después"):
+        assert forbidden not in descriptions
+    assert "no arrow" in descriptions
+    assert "no printed labels" in descriptions
+
+
+def test_prompt_uses_compact_text_and_no_clickbait_device_contradiction():
     plans = tp.plan_thumbnail_prompts(_SEO_3, {})
-    assert all(p["punch_color"] for p in plans)
+    combined = "\n".join(plan["prompt"] for plan in plans).lower()
 
-
-def test_resolve_punch_color_default_and_override():
-    assert tp.resolve_thumbnail_punch_color({}) == "#E11D2A"
-    assert tp.resolve_thumbnail_punch_color(
-        {"thumbnail": {"punch_color": "#FF0000"}}
-    ) == "#FF0000"
-
-
-def test_prompt_bakes_red_punch_box_and_mobile_rule():
-    plans = tp.plan_thumbnail_prompts(_SEO_3, {})
-    p = plans[0]["prompt"]
-    assert "red box" in p
-    assert plans[0]["punch_color"] in p
-    assert "210" in p  # mobile-readability rule
-    assert "7 words" in p
-    assert "DOMINANT like top competitor channels" in p
-
-
-def test_object_strategy_has_arrow_and_number_badges():
-    desc = tp.describe_strategy("object_driven")
-    assert "red arrow" in desc
-    assert "number badges" in desc
-
-
-def test_comparison_strategy_has_check_cross_and_labels():
-    desc = tp.describe_strategy("comparison_driven")
-    assert "red cross" in desc
-    assert "green check" in desc
-    assert "ANTES" in desc
-
-
-def test_strategy_graphics_allowed_in_prompt():
-    plans = tp.plan_thumbnail_prompts(_SEO_3, {})
-    assert "Strategy graphics" in plans[1]["prompt"]
+    assert "210 px" in combined
+    assert "no more than 6 words" in combined
+    assert "25-35%" in combined
+    for forbidden in (
+        "red box",
+        "red arrow",
+        "red cross",
+        "green check",
+        "number badges",
+        "antes / después",
+        "top competitor channels",
+    ):
+        assert forbidden not in combined
 
 
 # --- competitor lessons #2/#3 + persona identity lock (2026-07-07) -----------
 
-def test_prompt_demands_dominant_text_share():
+def test_prompt_keeps_text_readable_without_overwhelming_the_visual_story():
     plans = tp.plan_thumbnail_prompts(_seo_three(), {})
     for plan in plans:
-        assert "cover roughly 40-50% of the frame" in plan["prompt"]
-        assert "2-3 huge lines" in plan["prompt"]
+        assert "25-35% of the frame" in plan["prompt"]
+        assert "2-3 compact lines" in plan["prompt"]
 
 
 def test_persona_identity_lock_only_when_reference_configured():
     cfg = {"thumbnail": {"persona_reference": "configs/vida-plena-45/persona/thumbnail_face.jpeg"}}
     locked = tp.plan_thumbnail_prompts(_seo_three(), cfg)
-    for plan in locked:
-        assert plan["persona_locked"] is True
-        assert plan["persona_reference"].endswith("thumbnail_face.jpeg")
-        # Identity is now a TEXT description of the recurring presenter — no
-        # attached reference photo.
-        assert "RECURRING PRESENTER" in plan["prompt"]
-        assert "ATTACHED" not in plan["prompt"]
+    assert locked[0]["persona_locked"] is True
+    assert "RECURRING PRESENTER" in locked[0]["prompt"]
+    for plan in locked[1:]:
+        assert plan["persona_locked"] is False
+        assert "RECURRING PRESENTER" not in plan["prompt"]
+        assert "recurring presenter" not in plan["persona"].lower()
+    assert all(plan["persona_reference"].endswith("thumbnail_face.jpeg") for plan in locked)
+    assert all("ATTACHED" not in plan["prompt"] for plan in locked)
+
+    assert len({plan["variant_art_direction"] for plan in locked}) == 3
+    assert "no presenter" in locked[1]["variant_art_direction"].lower()
+    assert "no duplicated presenter" in locked[2]["variant_art_direction"].lower()
     unlocked = tp.plan_thumbnail_prompts(_seo_three(), {})
     for plan in unlocked:
         assert plan["persona_locked"] is False

@@ -121,7 +121,9 @@ def test_seo_prompt_thumbnail_text_uses_clear_audience_fit_micro_promises():
     """Readable but cryptic fragments did not tell ES 45+/60+ viewers what
     practical value they would receive. Copy must be standalone and dignified."""
     prompt = _chatgpt_seo_prompt(SPAIN_CONFIG, VALID_SCRIPT, VALID_SCENES)
-    assert "4-7 words" in prompt
+    assert "3-6 words" in prompt
+    assert "4-7 words" not in prompt
+    assert "3-7 words" not in prompt
     assert "STANDALONE MICRO-PROMISE" in prompt
     assert "pain-led clarity" in prompt
     assert "outcome-led practical hope" in prompt

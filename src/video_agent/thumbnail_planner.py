@@ -10,6 +10,9 @@ See docs/specs/thumbnail-prompt-planner-v1.3.md.
 
 from __future__ import annotations
 
+import colorsys
+import hashlib
+import math
 import re
 import unicodedata
 from typing import Any
@@ -41,6 +44,7 @@ CATEGORY_TRIGGERS: dict[str, list[str]] = {
     "food_choice": [
         "pan", "tostada", "desayuno", "cena", "comida", "plato",
         "aceite", "yogur", "fruta", "verduras", "arroz", "pasta", "integral",
+        "hambre", "antojo", "apetito", "picoteo",
     ],
     "functional_foods_superfoods": [
         "cafe", "chia", "avena", "yogur", "curcuma", "frutos secos",
@@ -710,20 +714,18 @@ def category_label(category: str | None) -> str:
 def describe_strategy(strategy: str, primary_category: str | None = None) -> str:
     if strategy == "face_driven":
         return (
-            "FACE-DRIVEN. A real, expressive mature face is the main hook — "
-            "confident or concerned-but-hopeful, ideally mid-gesture (e.g. pointing "
-            "at the prop). Use a genuine photographic person; this authenticity is "
-            "the channel's edge over AI-looking competitors. The topic prop stays "
-            "visible but secondary."
+            "FACE-DRIVEN. Use one candid mature face as the emotional anchor, "
+            "captured in a believable unscripted moment with natural eye direction "
+            "toward the topic prop. Keep the gesture subtle: no pointing pose, no "
+            "arrow, badge, or reaction-face exaggeration. The topic prop remains "
+            "clearly readable but secondary."
         )
     if strategy == "object_driven":
         return (
-            "OBJECT-DRIVEN. The topic object is the dominant hook: large, sharp and "
-            "instantly understandable at thumbnail size. Add ONE bold red arrow "
-            "pointing at the key object. If the topic is a numbered list, tag the "
-            "relevant objects with large red number badges 1, 2, 3. A person is "
-            "optional (hands-only or absent) — a strong object plus curiosity can "
-            "out-click a face."
+            "OBJECT-DRIVEN. Build a tactile editorial still life around the exact "
+            "topic object. Use a close or overhead camera angle and let scale, light, "
+            "and natural hand placement guide the eye. Use no presenter, no arrow, "
+            "no badge, and no decorative symbol; the object itself carries the hook."
         )
     if strategy == "comparison_driven":
         if primary_category == "surgery_medical_decision":
@@ -735,10 +737,10 @@ def describe_strategy(strategy: str, primary_category: str | None = None) -> str
                 "the exact thumbnail wording remains the only text."
             )
         return (
-            "COMPARISON-DRIVEN. Split the frame into two clear zones — a worse/old "
-            "habit versus a better/new one — marked with a large red cross and a "
-            "green check, plus small ANTES / DESPUÉS labels. Keep it about everyday "
-            "habits or food, never body-shaming or medical fear."
+            "COMPARISON-DRIVEN. Contrast two concrete choices or states in one "
+            "coherent editorial frame through object placement, lighting, and space. "
+            "Use no duplicated presenter, no printed labels, no cross/check symbols, "
+            "and no body-shaming or medical-fear shorthand."
         )
     return "FACE-DRIVEN. Use a clear expressive face and one topic-relevant visual cue."
 
@@ -747,6 +749,25 @@ VISUAL_STRATEGIES: dict[int, str] = {
     1: "face_driven",
     2: "object_driven",
     3: "comparison_driven",
+}
+
+
+ART_DIRECTION_BY_STRATEGY: dict[str, str] = {
+    "face_driven": (
+        "HUMAN STORY: intimate eye-level crop with one candid presenter on one side "
+        "and the topic prop on the other; quiet lived-in background; compact text in "
+        "the clean negative space."
+    ),
+    "object_driven": (
+        "OBJECT PROOF: no presenter; close or overhead view of the exact topic object, "
+        "with hands only when a real action must be shown; different camera angle and "
+        "background from the human-story variant."
+    ),
+    "comparison_driven": (
+        "DECISION CONTRAST: two concrete choices in one balanced frame, no duplicated "
+        "presenter and no symbolic verdict graphics; communicate the contrast using "
+        "real objects, spacing, and light."
+    ),
 }
 
 
@@ -813,12 +834,13 @@ def select_thumbnail_persona(profile: dict, strategy: str, variant_index: int) -
     age_range = AGE_RANGE_BY_SIGNAL.get(profile.get("age_signal", "unknown"), "45–65")
     if strategy == "object_driven":
         return (
-            f"hands or partial view of a Mediterranean Spanish adult aged {age_range}"
+            "no presenter; natural hands of a Mediterranean Spanish adult aged "
+            f"{age_range} only if the action requires them"
         )
     if strategy == "comparison_driven":
         return (
-            f"Mediterranean Spanish adult aged {age_range}, "
-            "or two simple choice zones with minimal people"
+            "no duplicated presenter; use real objects or one subtle partial figure "
+            f"of a Mediterranean Spanish adult aged {age_range}"
         )
     return f"natural-looking Mediterranean Spanish adult aged {age_range}"
 
@@ -879,12 +901,69 @@ def resolve_thumbnail_accent_color(channel_config: dict) -> str:
     return "#F2C94C"
 
 
-def resolve_thumbnail_punch_color(channel_config: dict) -> str:
-    """Red box color for the 1-2 word punch line (competitor-proven CTR device)."""
-    thumbnail_cfg = (channel_config or {}).get("thumbnail") or {}
-    if thumbnail_cfg.get("punch_color"):
-        return str(thumbnail_cfg["punch_color"])
-    return "#E11D2A"
+def _normalize_color_hex(value: str) -> str:
+    value = str(value).strip().lstrip("#")
+    if len(value) == 3:
+        value = "".join(character * 2 for character in value)
+    return f"#{value.upper()}"
+
+
+def _hex_to_rgb(value: str) -> tuple[int, int, int]:
+    value = _normalize_color_hex(value).lstrip("#")
+    return int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16)
+
+
+def _rgb_distance(left: str, right: str) -> float:
+    return math.dist(_hex_to_rgb(left), _hex_to_rgb(right))
+
+
+def _shift_thumbnail_color(value: str, hue_shift: float) -> str:
+    red, green, blue = (component / 255 for component in _hex_to_rgb(value))
+    hue, lightness, saturation = colorsys.rgb_to_hls(red, green, blue)
+    hue = (hue + hue_shift) % 1.0
+    saturation = min(0.68, max(0.38, saturation))
+    lightness = min(0.62, max(0.34, lightness))
+    shifted = colorsys.hls_to_rgb(hue, lightness, saturation)
+    return "#" + "".join(f"{round(component * 255):02X}" for component in shifted)
+
+
+def resolve_thumbnail_variant_colors(
+    channel_config: dict,
+    topic_accent: str | None,
+    seed_text: str,
+) -> list[str]:
+    """Return three deterministic, visibly distinct, brand-grounded accents."""
+    palette = ((channel_config or {}).get("style") or {}).get("palette") or {}
+    candidates = [
+        topic_accent,
+        ((channel_config or {}).get("thumbnail") or {}).get("accent_color"),
+        palette.get("accent"),
+        palette.get("secondary"),
+        palette.get("primary"),
+    ]
+    colors: list[str] = []
+    for candidate in candidates:
+        if not is_valid_hex(candidate):
+            continue
+        color = _normalize_color_hex(str(candidate))
+        if all(_rgb_distance(color, existing) >= 48 for existing in colors):
+            colors.append(color)
+
+    fallback = resolve_thumbnail_accent_color(channel_config)
+    base = colors[0] if colors else (
+        _normalize_color_hex(fallback) if is_valid_hex(fallback) else "#F2C94C"
+    )
+    for shift in (0.16, -0.18, 0.34, -0.34):
+        if len(colors) >= 3:
+            break
+        candidate = _shift_thumbnail_color(base, shift)
+        if all(_rgb_distance(candidate, existing) >= 48 for existing in colors):
+            colors.append(candidate)
+
+    digest = hashlib.sha256(normalize_for_thumbnail_classification(seed_text).encode("utf-8")).digest()
+    offset = digest[0] % len(colors)
+    rotated = colors[offset:] + colors[:offset]
+    return [rotated[index % len(rotated)] for index in range(3)]
 
 
 # ---------------------------------------------------------------------------
@@ -899,7 +978,9 @@ _CHANNEL_DESCRIPTION_DEFAULT = (
 
 def build_thumbnail_prompt(plan: dict) -> str:
     return (
-        "Create a complete photorealistic YouTube thumbnail, 16:9, 1920x1080.\n"
+        "Create an authentic editorial YouTube thumbnail from a candid photograph, "
+        "16:9, 1920x1080. It must feel observed and specific, not like a generic "
+        "AI thumbnail template.\n"
         "\n"
         f"Topic:\n\"{plan.get('variant_title', '')}\"\n"
         "\n"
@@ -913,23 +994,23 @@ def build_thumbnail_prompt(plan: dict) -> str:
         "\n"
         f"Visual strategy:\n{plan.get('visual_strategy_description', '')}\n"
         "\n"
+        f"Variant art direction:\n{plan.get('variant_art_direction', '')}\n"
+        "\n"
         f"Scene:\n{plan.get('scene', '')}\n"
         "\n"
         "Subject:\n"
         + (
-            "RECURRING PRESENTER: depict the channel's recurring presenter — the SAME "
-            "woman across every thumbnail: a natural-looking mature Mediterranean Spanish "
-            "woman (around 55-65) with a silver-gray bob haircut, same face and age each "
-            "time, recognizably consistent. Wardrobe/pose/expression may vary with the "
-            "topic; her identity may not.\n"
+            "RECURRING PRESENTER FOR THIS FACE-LED VARIANT: a natural-looking mature "
+            "Mediterranean Spanish woman (around 55-65) with a silver-gray bob. Preserve "
+            "recognizable identity while keeping pores, asymmetry, expression lines, and "
+            "a candid non-model pose.\n"
             if plan.get("persona_locked")
             else ""
         )
         + f"{plan.get('persona', '')}\n"
         "Place the subject according to the visual strategy.\n"
         "Face should be clear when the strategy is face_driven.\n"
-        "Expression should match the hook and topic: concerned but hopeful, "
-        "practical urgency, curiosity, or realization.\n"
+        "Expression should match the hook without staged shock or exaggerated urgency.\n"
         "Do not make the person look frail, sick, helpless, or like a sad senior stereotype.\n"
         "\n"
         "Main prop:\n"
@@ -952,38 +1033,34 @@ def build_thumbnail_prompt(plan: dict) -> str:
         "\n"
         "Composition (SIMPLE beats clever):\n"
         "Design for YouTube thumbnail readability at feed size.\n"
-        "ONE person + the topic prop(s) + a clean, uncluttered background. "
+        "Use only the people allowed by the variant art direction, the topic prop(s), "
+        "and a clean, uncluttered background. "
         "At most 3 distinct objects in the whole frame; every object must help "
         "tell the hook's message, remove everything else.\n"
-        "High contrast, vivid and attention-grabbing while staying photographic "
-        "and trustworthy (not over-saturated or fake).\n"
+        "Use clear tonal separation while staying photographic, calm, and trustworthy.\n"
         "Reserve clean space for the hook text. Keep ONE clear focal point.\n"
-        "Strategy graphics: you MAY add ONE bold red arrow, a red cross + green "
-        "check, OR large number badges (1, 2, 3) ONLY when the visual strategy "
-        "above calls for them, to guide the eye. No emojis, stickers, logos, "
-        "watermarks, or medical diagrams.\n"
+        "Do not add directional graphics, verdict symbols, decorative counters, emojis, stickers, logos, "
+        "watermarks, decorative labels, or medical diagrams.\n"
         "\n"
-        "Text (mobile-first, DOMINANT like top competitor channels):\n"
+        "Text (mobile-first, clear but subordinate to the visual story):\n"
         f"Use this EXACT wording only:\n\"{plan.get('thumbnail_text', '')}\"\n"
         "Preserve Spanish accents and punctuation: ñ, á, é, í, ó, ú, ü, ¿, ¡.\n"
-        "The text is the PRIMARY hook: stack it in 2-3 huge lines that together "
-        "cover roughly 40-50% of the frame (one side or the top band), the way the "
-        "top channels in this niche do — viewers aged 60+ must read it instantly.\n"
-        "The single most important 1-2 "
-        f"words go inside a solid {plan.get('punch_color', '#E11D2A')} red box as "
-        "the punch line; the rest is huge bold white ALL-CAPS with a thick black "
-        f"outline and drop shadow, using accent {plan.get('accent_color', '#F2C94C')} "
-        "to highlight one key word.\n"
+        "Set the wording in 2-3 compact lines covering about 25-35% of the frame. "
+        "It must be immediately readable for viewers aged 60+ without covering the "
+        "face, action, or evidence object. Use restrained high-contrast editorial "
+        "lettering with a subtle shadow or thin keyline only when needed.\n"
+        f"Use accent {plan.get('accent_color', '#F2C94C')} only for one key word, "
+        "a thin underline, or a small editorial tag. Do not use a solid text box, "
+        "giant outline, heavy shadow, or full-width banner.\n"
         "Readability rule: the wording must be legible when the thumbnail is only "
-        "about 210 px wide (mobile feed) — letters as large as possible, total "
-        "wording no more than 7 words, never a full sentence.\n"
+        "about 210 px wide (mobile feed), with no more than 6 words and no full sentence.\n"
         "No other text beyond the wording above.\n"
         "\n"
         "Style:\n"
-        "Photorealistic editorial YouTube thumbnail.\n"
-        "Warm natural light, high contrast, crisp details.\n"
-        "Sharp face when visible. Sharp topic prop.\n"
-        "No blur, no plastic skin, no warped anatomy, no extra fingers.\n"
+        "Candid editorial photography, natural window or location light, realistic "
+        "skin texture, restrained color, and slight photographic grain.\n"
+        "Keep the face and topic prop optically credible; background depth of field is "
+        "allowed. No plastic skin, warped anatomy, or extra fingers.\n"
         "\n"
         "Safety and tone:\n"
         f"{plan.get('category_safety_rules', '')}\n"
@@ -1005,10 +1082,18 @@ def plan_thumbnail_prompts(seo: dict, channel_config: dict) -> list[dict]:
     # each video's thumbnail gets its own highlight colour instead of every
     # video reusing the same static brand accent.
     topic_accent = (seo or {}).get("topic_accent_color")
-    accent_color = (
-        topic_accent if is_valid_hex(topic_accent) else resolve_thumbnail_accent_color(channel_config)
+    variant_colors = resolve_thumbnail_variant_colors(
+        channel_config,
+        str(topic_accent) if is_valid_hex(topic_accent) else None,
+        str((seo or {}).get("title") or ""),
     )
-    punch_color = resolve_thumbnail_punch_color(channel_config)
+    if len(variants) == 1:
+        single_accent = (
+            str(topic_accent)
+            if is_valid_hex(topic_accent)
+            else resolve_thumbnail_accent_color(channel_config)
+        )
+        variant_colors[0] = _normalize_color_hex(single_accent)
     channel_description = (
         (channel_config or {}).get("description")
         or _CHANNEL_DESCRIPTION_DEFAULT
@@ -1049,6 +1134,9 @@ def plan_thumbnail_prompts(seo: dict, channel_config: dict) -> list[dict]:
             "visual_strategy_description": describe_strategy(
                 strategy, profile["primary_category"]
             ),
+            "variant_art_direction": ART_DIRECTION_BY_STRATEGY.get(
+                strategy, ART_DIRECTION_BY_STRATEGY["face_driven"]
+            ),
             "persona": persona,
             "scene": primary_preset["scene"],
             "main_prop": merge_main_prop(primary_preset, secondary_preset),
@@ -1059,11 +1147,10 @@ def plan_thumbnail_prompts(seo: dict, channel_config: dict) -> list[dict]:
                 profile["risk_level"],
                 profile["primary_category"],
             ),
-            "accent_color": accent_color,
-            "punch_color": punch_color,
+            "accent_color": variant_colors[(index - 1) % len(variant_colors)],
             "channel_description": channel_description,
             "persona_reference": persona_reference,
-            "persona_locked": bool(persona_reference),
+            "persona_locked": bool(persona_reference) and strategy == "face_driven",
         }
         # Topic-first override: when the hook/title name concrete objects,
         # those objects lead the composition and pick the scene; the category

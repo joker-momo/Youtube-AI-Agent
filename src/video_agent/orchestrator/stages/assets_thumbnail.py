@@ -197,15 +197,20 @@ def _build_thumbnail_prompt(
     # composition without rerouting the underlying classification.
     if variant_index in {2, 3}:
         from video_agent.thumbnail_planner import (
+            ART_DIRECTION_BY_STRATEGY,
             VISUAL_STRATEGIES,
             build_thumbnail_prompt,
             describe_strategy,
+            select_thumbnail_persona,
         )
 
         strategy = VISUAL_STRATEGIES.get(variant_index, "face_driven")
         plan = dict(plan)
         plan["visual_strategy"] = strategy
         plan["visual_strategy_description"] = describe_strategy(strategy)
+        plan["variant_art_direction"] = ART_DIRECTION_BY_STRATEGY[strategy]
+        plan["persona"] = select_thumbnail_persona(plan, strategy, variant_index)
+        plan["persona_locked"] = False
         return build_thumbnail_prompt(plan)
     return plan["prompt"]
 
@@ -512,9 +517,12 @@ async def auto_thumbnail_image_stage(
 
     planner_channel_config = dict(channel_config or {})
     planner_channel_config["description"] = channel_description
-    planner_channel_config.setdefault(
-        "thumbnail", {"accent_color": accent_color}
+    planner_channel_config["style"] = brand_style
+    planner_thumbnail_config = dict(
+        planner_channel_config.get("thumbnail") or {}
     )
+    planner_thumbnail_config.setdefault("accent_color", accent_color)
+    planner_channel_config["thumbnail"] = planner_thumbnail_config
     plans = plan_thumbnail_prompts(seo, planner_channel_config)
 
     variants: list[dict[str, str]] = [

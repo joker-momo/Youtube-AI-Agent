@@ -177,6 +177,58 @@ def test_auto_thumbnail_image_stage_binds_variant_title_per_image(tmp_path, chan
     assert sum("COMPARISON-DRIVEN" in p for p in captured) == 1
 
 
+def test_auto_thumbnail_image_stage_passes_style_dna_palette_to_planner(
+    tmp_path, channel_path
+):
+    job_dir = tmp_path / "job-thumb-brand-palette"
+    _seed_at_thumbnail_image(job_dir)
+    seo = json.loads((job_dir / "seo.json").read_text())
+    seo["title_variants"] = [
+        {"title": "Variant A", "thumbnail_text": "DUERME MEJOR HOY"},
+        {"title": "Variant B", "thumbnail_text": "MEJORA TU DESCANSO"},
+        {"title": "Variant C", "thumbnail_text": "CAMBIA TU RUTINA"},
+    ]
+    (job_dir / "seo.json").write_text(json.dumps(seo))
+
+    channel = yaml.safe_load(channel_path.read_text())
+    channel.pop("style", None)
+    channel["thumbnail"] = {"persona_reference": "persona.jpeg"}
+    channel_path.write_text(yaml.safe_dump(channel))
+    style_dna = {
+        "palette": {
+            "primary": "#2F6B57",
+            "secondary": "#D98C5F",
+            "accent": "#F5C24B",
+        }
+    }
+
+    async def fake_image_fn(*, prompt, project_name, out_path, **kwargs):
+        from PIL import Image
+
+        Image.new("RGB", (640, 360), (12, 34, 56)).save(out_path, format="PNG")
+        return {"src": "x", "bytes": 9}
+
+    with (
+        patch("video_agent.contracts.repo_root", return_value=tmp_path),
+        patch(
+            "video_agent.orchestrator.stages.assets_thumbnail.load_style_dna",
+            return_value=style_dna,
+        ),
+    ):
+        asyncio.run(
+            auto_thumbnail_image_stage(job_dir, channel_path, fake_image_fn, throttle_sec=0)
+        )
+
+    plans = json.loads(
+        (job_dir / "json" / "thumbnail_prompt_plans.json").read_text()
+    )
+    assert {plan["accent_color"] for plan in plans} == {
+        "#2F6B57",
+        "#D98C5F",
+        "#F5C24B",
+    }
+
+
 def test_auto_thumbnail_image_stage_writes_prompt_logs(tmp_path, channel_path):
     """Spec v5.6 P1: persist per-variant prompts under operator/chatgpt/."""
     job_dir = tmp_path / "job-thumb-logs"

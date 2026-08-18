@@ -658,7 +658,40 @@ class ChatGPTImageDriver:
                 screenshot_path=shot,
             )
 
-    async def _click_send(self) -> None:
+    async def _user_turn_count(self) -> int:
+        try:
+            return await self.page.locator(
+                "[data-message-author-role='user']"
+            ).count()
+        except Exception:
+            return 0
+
+    async def _submission_already_started(self, before_user_turns: int) -> bool:
+        """Detect the new UI state where Create image submits before our click.
+
+        A visible Stop button alone is insufficient: in a batch it can belong
+        to the previous turn. Require a newly-added user message as proof that
+        the current prompt already left the composer.
+        """
+        stop_visible = False
+        for sel in STOP_BUTTON_SELECTORS:
+            try:
+                if await self.page.locator(sel).first.is_visible(timeout=500):
+                    stop_visible = True
+                    break
+            except Exception:
+                continue
+        if not stop_visible:
+            return False
+        return await self._user_turn_count() > before_user_turns
+
+    async def _click_send(self, *, before_user_turns: int) -> None:
+        if await self._submission_already_started(before_user_turns):
+            print(
+                "[chatgpt-image] prompt already submitted; continuing from Stop state",
+                flush=True,
+            )
+            return
         for sel in SEND_BUTTON_SELECTORS:
             try:
                 btn = self.page.locator(sel).first
@@ -666,7 +699,19 @@ class ChatGPTImageDriver:
                     await human_click(btn)
                     return
             except Exception:
+                if await self._submission_already_started(before_user_turns):
+                    print(
+                        "[chatgpt-image] send click transitioned to Stop state",
+                        flush=True,
+                    )
+                    return
                 continue
+        if await self._submission_already_started(before_user_turns):
+            print(
+                "[chatgpt-image] prompt transitioned to Stop state while locating Send",
+                flush=True,
+            )
+            return
         shot = await save_trace_screenshot(self.page, prefix="chatgpt-image-no-send")
         raise BrowserDriverError("ChatGPT send button not found.", screenshot_path=shot)
 
@@ -919,6 +964,7 @@ class ChatGPTImageDriver:
 
         try:
             await self._ensure_image_session(project_name)
+            before_user_turns = await self._user_turn_count()
             if aspect_ratio != "16:9":
                 await self._select_create_image_mode_and_aspect_ratio(aspect_ratio=aspect_ratio)
             else:
@@ -929,7 +975,7 @@ class ChatGPTImageDriver:
             full_prompt = build_image_gen_prompt(prompt, aspect_ratio=aspect_ratio)
             await self._fill_composer_robust(composer, full_prompt)
             await human_pause(self.page, min_ms=1500, max_ms=3500)
-            await self._click_send()
+            await self._click_send(before_user_turns=before_user_turns)
 
             # We do NOT wait for the stop button to disappear. ChatGPT often writes
             # a massive text explanation after the image is drawn, and waiting for
@@ -976,6 +1022,7 @@ class ChatGPTImageDriver:
                 if not prompt.strip():
                     raise BrowserDriverError(f"Empty prompt at index {i}")
 
+                before_user_turns = await self._user_turn_count()
                 if aspect_ratio != "16:9":
                     await self._select_create_image_mode_and_aspect_ratio(aspect_ratio=aspect_ratio)
                 else:
@@ -986,7 +1033,7 @@ class ChatGPTImageDriver:
                 full_prompt = build_image_gen_prompt(prompt, aspect_ratio=aspect_ratio)
                 await self._fill_composer_robust(composer, full_prompt)
                 await human_pause(self.page, min_ms=1500, max_ms=3500)
-                await self._click_send()
+                await self._click_send(before_user_turns=before_user_turns)
 
                 # We do NOT wait for the stop button to disappear. ChatGPT often writes
                 # a massive text explanation after the image is drawn, and waiting for

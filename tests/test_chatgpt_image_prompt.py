@@ -30,6 +30,31 @@ def test_build_image_gen_prompt_strips_user_prompt():
     assert build_image_gen_prompt("  hi  ").endswith("hi")
 
 
+def test_click_send_accepts_stop_button_when_prompt_auto_submitted(monkeypatch):
+    class FakeLocator:
+        def __init__(self, visible: bool):
+            self.first = self
+            self._visible = visible
+
+        async def is_visible(self, timeout):
+            return self._visible
+
+        async def count(self):
+            return 1
+
+    class FakePage:
+        def locator(self, selector):
+            return FakeLocator(selector in chatgpt_image.STOP_BUTTON_SELECTORS)
+
+    async def fail_screenshot(*args, **kwargs):
+        raise AssertionError("already-submitted prompts must not be treated as failures")
+
+    driver = ChatGPTImageDriver(page=FakePage())
+    monkeypatch.setattr(chatgpt_image, "save_trace_screenshot", fail_screenshot)
+
+    asyncio.run(driver._click_send(before_user_turns=0))
+
+
 def test_generate_image_selects_create_image_mode_before_typing(monkeypatch, tmp_path):
     events: list[str] = []
     out_path = tmp_path / "thumb.png"
@@ -58,7 +83,7 @@ def test_generate_image_selects_create_image_mode_before_typing(monkeypatch, tmp
     async def fake_pause(*args, **kwargs):
         events.append("pause")
 
-    async def click_send():
+    async def click_send(*args, **kwargs):
         events.append("send")
 
     async def wait_for_image(timeout, exclude_urls=None):
@@ -118,7 +143,7 @@ def test_generate_images_selects_create_image_mode_for_each_prompt(monkeypatch, 
     async def fake_pause(*args, **kwargs):
         events.append("pause")
 
-    async def click_send():
+    async def click_send(*args, **kwargs):
         events.append("send")
 
     async def wait_for_image(timeout, exclude_urls=None):

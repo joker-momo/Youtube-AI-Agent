@@ -14,6 +14,7 @@ from video_agent.operator import (
     _chatgpt_scenes_plan_prompt,
     _gemini_scenes_qa_batch_prompt,
 )
+from video_agent.operator_json import is_json_object_complete
 from video_agent.operator_shards import (
     ShardValidationError,
     extract_json_envelope,
@@ -46,6 +47,7 @@ SessionFn = Callable[[Sequence[str]], Awaitable[str]]
 # Total attempts (1 initial + retries) to obtain a scenes batch that passes
 # validate_scenes_batch before the stage fails.
 _BATCH_VALIDATE_ATTEMPTS = 3
+_MAX_GENERATION_BATCH_SIZE = 4
 
 
 def _batch_contract_header(
@@ -66,6 +68,44 @@ def _batch_contract_header(
         f'Tu respuesta DEBE llevar "batch_index": {batch_index} y cubrir '
         f"exactamente {scene_start}..{scene_end}.\n\n"
     )
+
+
+def _limit_scenes_plan_batch_size(
+    plan_envelope: dict, *, max_batch_size: int = _MAX_GENERATION_BATCH_SIZE
+) -> dict:
+    """Split oversized cached/model-planned ranges without dropping scenes.
+
+    Browser UI responses for six or more fully described scenes can exceed the
+    stable response window.  Balanced subranges keep every original purpose and
+    script-section constraint while avoiding a tiny final shard.
+    """
+    limited = json.loads(json.dumps(plan_envelope))
+    data = limited.get("data") or {}
+    batches = data.get("batches") or []
+    split_batches: list[dict] = []
+
+    for batch in batches:
+        start = int(str(batch.get("scene_start") or "scene-0").rsplit("-", 1)[-1])
+        end = int(str(batch.get("scene_end") or "scene-0").rsplit("-", 1)[-1])
+        count = end - start + 1
+        part_count = max(1, (count + max_batch_size - 1) // max_batch_size)
+        base_size, extra = divmod(count, part_count)
+        cursor = start
+        for part_index in range(part_count):
+            part_size = base_size + (1 if part_index < extra else 0)
+            part_end = cursor + part_size - 1
+            split_batch = dict(batch)
+            split_batch["scene_start"] = f"scene-{cursor:02d}"
+            split_batch["scene_end"] = f"scene-{part_end:02d}"
+            split_batches.append(split_batch)
+            cursor = part_end + 1
+
+    for batch_index, batch in enumerate(split_batches, start=1):
+        batch["batch_index"] = batch_index
+    data["batch_size"] = max_batch_size
+    data["batches"] = split_batches
+    limited["data"] = data
+    return limited
 
 
 # Gemini QA slices the merged scene list into batches of this size. Shared by
@@ -242,9 +282,11 @@ async def _request_shard_envelope(
     last_error: Exception | None = None
     last_preview = ""
     current_prompt = prompt
-    for attempt in range(max_attempts):
-        raw = await session_fn([current_prompt])
-        if not isinstance(raw, str) or not raw.strip():
+    raw_response = ""
+    append_continuation = False
+    for _attempt in range(max_attempts):
+        chunk = await session_fn([current_prompt])
+        if not isinstance(chunk, str) or not chunk.strip():
             last_error = StageInputMissingError(
                 f"Empty model response for {expected_artifact_type}"
             )
@@ -254,9 +296,36 @@ async def _request_shard_envelope(
                 f"channel_id='{expected_channel_id}', y la sección data{{...}}.\n\n"
                 + prompt
             )
+            append_continuation = False
+            continue
+        is_fresh_envelope = bool(
+            append_continuation
+            and re.search(
+                rf'"artifact_type"\s*:\s*"{re.escape(expected_artifact_type)}"',
+                chunk,
+            )
+        )
+        if is_fresh_envelope:
+            raw_response = chunk
+        else:
+            raw_response = raw_response + chunk if append_continuation else chunk
+
+        if "{" in raw_response and not is_json_object_complete(raw_response):
+            last_error = StageInputMissingError(
+                f"Truncated JSON response for {expected_artifact_type}"
+            )
+            last_preview = raw_response[:400].replace("\n", " ")
+            current_prompt = (
+                "Continúa EXACTAMENTE desde el último carácter de tu respuesta "
+                "anterior hasta cerrar el objeto JSON completo. No repitas, no "
+                "reinicies y no añadas markdown ni explicaciones. Incluye todos "
+                "los campos finales que faltan, incluido warnings, y cierra cada "
+                "corchete y llave."
+            )
+            append_continuation = True
             continue
         try:
-            envelope = extract_json_envelope(raw)
+            envelope = extract_json_envelope(raw_response)
             validate_envelope(
                 envelope,
                 expected_artifact_type=expected_artifact_type,
@@ -266,7 +335,7 @@ async def _request_shard_envelope(
             return envelope
         except Exception as exc:
             last_error = exc
-            last_preview = (raw or "")[:400].replace("\n", " ")
+            last_preview = raw_response[:400].replace("\n", " ")
             current_prompt = (
                 f"ERROR: tu respuesta anterior no validó como envelope `{expected_artifact_type}`. "
                 f"Razón: {str(exc)[:300]}. "
@@ -283,6 +352,7 @@ async def _request_shard_envelope(
                 "Vuelve a generar el artefacto cumpliendo este esquema.\n\n"
                 + prompt
             )
+            append_continuation = False
     raise StageInputMissingError(
         f"{expected_artifact_type} failed validation after {max_attempts} attempts: "
         f"{last_error}. Last preview: {last_preview!r}"
@@ -499,8 +569,9 @@ async def auto_scenes_stage_sharded(
                 expected_job_id=job_id,
                 expected_channel_id=channel_id,
             )
-            validate_scenes_plan(plan_envelope)
-            save_envelope(cached_plan_path, plan_envelope)
+        plan_envelope = _limit_scenes_plan_batch_size(plan_envelope)
+        validate_scenes_plan(plan_envelope)
+        save_envelope(cached_plan_path, plan_envelope)
 
         batches = (plan_envelope.get("data") or {}).get("batches") or []
         if not isinstance(batches, list) or not batches:

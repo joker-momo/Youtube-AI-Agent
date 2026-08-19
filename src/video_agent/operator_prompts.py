@@ -179,7 +179,7 @@ def _chatgpt_script_prompt(channel_config: dict[str, Any], idea: dict[str, Any])
             f"- ⚠️ WORD-COUNT FLOOR (MANDATORY): the combined narration across ALL sections MUST contain AT LEAST {min_words} spoken Spanish words. There is NO upper limit. Count every word; if you are under {min_words}, expand with more concrete steps, examples, mini-stories, or sensory detail.",
             "- QUALITY OVER BREVITY: develop every idea fully. Never cut, compress, or skip a useful point to save time — completeness and depth win. Never pad with filler, slogans, or repeated phrases.",
             "- Each of the 6-10 sections must be fully developed (practical how-to, amounts, timing, one short relatable example where it helps); do not leave any section thin just to balance length.",
-            f"- hook: opening sentence ≤28 words. Pattern: [relatable symptom] + [implicit promise].",
+            "- hook: opening sentence ≤28 words. Pattern: [relatable symptom] + [implicit promise].",
             "  Example: 'Si después de los 45 te cuesta conciliar el sueño o despiertas a las 3 de la mañana, esto es exactamente para ti.'",
             "- cta: closing call-to-action sentence",
             "- qa.verdict: set to PASS when you believe the script is ready",
@@ -295,7 +295,7 @@ def get_scenes_qa_feedback(job_dir: Path) -> str | None:
             if verdict == "NEEDS_REWORK":
                 issues = qa_data.get("issues") or []
                 changes = qa_data.get("required_changes") or []
-                
+
                 feedback_lines = []
                 if issues:
                     feedback_lines.append("Issues found in previous version:")
@@ -305,7 +305,7 @@ def get_scenes_qa_feedback(job_dir: Path) -> str | None:
                     feedback_lines.append("Required changes for this revision:")
                     for change in changes:
                         feedback_lines.append(f"- {change}")
-                
+
                 if feedback_lines:
                     return "\n".join(feedback_lines)
     except Exception:
@@ -451,7 +451,7 @@ def _chatgpt_scenes_prompt(
             qa_feedback,
             "",
         ])
-        
+
     prompt_parts.extend([
         "Channel config:",
         _json_block(channel_config),
@@ -467,7 +467,7 @@ def _chatgpt_scenes_prompt(
         "• If you run low on space, ADD more scenes — never shorten, summarize, or drop the script's content to fit.",
         "• Double-check: every { has a matching } before you finish.",
     ])
-    
+
     return "\n".join(prompt_parts)
 
 
@@ -512,7 +512,7 @@ def _chatgpt_scenes_plan_prompt(channel_config: dict[str, Any], script: dict[str
             '  "data": {',
             f'    "target_scene_count": {target_scene_count},',
             f'    "target_total_duration_sec": {target_sec},',
-            '    "batch_size": 6,',
+            '    "batch_size": 4,',
             '    "batches": [',
             '      {',
             '        "batch_index": 1,',
@@ -527,7 +527,7 @@ def _chatgpt_scenes_plan_prompt(channel_config: dict[str, Any], script: dict[str
             "}",
             "",
             "Plan rules:",
-            "- batch_size must be between 6 and 8 scenes.",
+            "- batch_size must be between 3 and 4 scenes.",
             "- scene ranges must cover the full target_scene_count.",
             "- scene IDs must be sequential: scene-01, scene-02, ...",
             "- final batch must include the final scene.",
@@ -904,7 +904,7 @@ def _gemini_qa_prompt(
             f"• Channel fit: content matches {locale['language']} Spanish health channel ({locale['target_locale']}-first) for adults {min_age}+",
             "• Safety: no specific medical diagnoses, no supplement promotion, no miracle cures",
             "• Clarity: language is natural, readable, appropriate pace",
-            f"• Duration accuracy (for scenes): total_duration_sec must match sum of scene durations",
+            "• Duration accuracy (for scenes): total_duration_sec must match sum of scene durations",
             *artifact_qa_lines,
             "",
             "════════════════════════════════════════",

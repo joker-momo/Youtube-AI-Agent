@@ -40,7 +40,7 @@ def _escape_control_chars_in_strings(text: str) -> str:
                 continue
             code = ord(char)
             if code < 0x20:
-                out.append(_JSON_CTRL_ESCAPES.get(code, "\\u%04x" % code))
+                out.append(_JSON_CTRL_ESCAPES.get(code, f"\\u{code:04x}"))
             else:
                 out.append(char)
         else:
@@ -61,12 +61,12 @@ def extract_json_objects(text: str) -> list[dict[str, Any]]:
         start = text.find("{", index)
         if start == -1:
             break
-        
+
         depth = 0
         in_string = False
         escape = False
         parsed_successfully = False
-        
+
         for idx in range(start, len(text)):
             char = text[idx]
             if in_string:
@@ -77,7 +77,7 @@ def extract_json_objects(text: str) -> list[dict[str, Any]]:
                 elif char == '"':
                     in_string = False
                 continue
-            
+
             if char == '"':
                 in_string = True
             elif char == "{":
@@ -116,7 +116,7 @@ def extract_json_objects(text: str) -> list[dict[str, Any]]:
                                     break
                             except Exception:
                                 pass
-        
+
         if not parsed_successfully:
             index = start + 1
 
@@ -133,6 +133,49 @@ def extract_json_objects(text: str) -> list[dict[str, Any]]:
             objects.insert(0, repaired_root)
 
     return objects
+
+
+def is_json_object_complete(text: str) -> bool:
+    """Return whether the first JSON object has all structural closers.
+
+    ``extract_json_objects`` deliberately repairs truncated model output for
+    best-effort promotion.  Callers that can request a continuation need the
+    pre-repair truth so they do not mistake a synthetically closed object for a
+    complete response.
+    """
+    start = text.find("{")
+    if start == -1:
+        return False
+
+    stack: list[str] = []
+    in_string = False
+    escape = False
+    for char in text[start:]:
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+        elif char in "{[":
+            stack.append(char)
+        elif char == "}":
+            if not stack or stack[-1] != "{":
+                return False
+            stack.pop()
+            if not stack:
+                return True
+        elif char == "]":
+            if not stack or stack[-1] != "[":
+                return False
+            stack.pop()
+
+    return False
 
 
 def _repair_truncated_json_object(span: str) -> dict[str, Any] | None:

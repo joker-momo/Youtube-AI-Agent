@@ -30,6 +30,8 @@ from video_agent.orchestrator.stages import (
     run_script_stage,
     run_visual_spans_stage,
 )
+from video_agent.orchestrator.stages import sharding as sharding_stage
+from video_agent.orchestrator.stages.sharding import _request_shard_envelope
 from video_agent.web.app import (
     app,
     get_browser_client,
@@ -126,6 +128,112 @@ def valid_seo_payload() -> dict:
 
 
 # ---------- fake client ----------------------------------------------------
+
+
+def test_request_shard_envelope_continues_truncated_json_instead_of_regenerating():
+    envelope = {
+        "artifact_type": "scenes_batch",
+        "schema_version": "2026-05-json-shards-v1",
+        "job_id": "job-auto",
+        "channel_id": "vida-plena-45",
+        "status": "complete",
+        "data": {"scenes": [{"id": "scene-01"}]},
+        "warnings": [],
+    }
+    complete = json.dumps(envelope)
+    split_at = complete.index('"warnings"')
+    responses = iter((complete[:split_at], complete[split_at:]))
+    prompts: list[str] = []
+
+    async def session_fn(messages):
+        prompts.append(messages[0])
+        return next(responses)
+
+    result = asyncio.run(
+        _request_shard_envelope(
+            session_fn=session_fn,
+            prompt="generate batch",
+            expected_artifact_type="scenes_batch",
+            expected_job_id="job-auto",
+            expected_channel_id="vida-plena-45",
+            max_attempts=2,
+        )
+    )
+
+    assert result == envelope
+    assert len(prompts) == 2
+    assert "contin" in prompts[1].lower()
+    assert "regener" not in prompts[1].lower()
+
+
+def test_request_shard_envelope_accepts_complete_replacement_for_truncated_json():
+    envelope = {
+        "artifact_type": "scenes_batch",
+        "schema_version": "2026-05-json-shards-v1",
+        "job_id": "job-auto",
+        "channel_id": "vida-plena-45",
+        "status": "complete",
+        "data": {"scenes": [{"id": "scene-01"}]},
+        "warnings": [],
+    }
+    complete = json.dumps(envelope)
+    responses = iter((complete[: complete.index('"warnings"')], complete))
+
+    async def session_fn(_messages):
+        return next(responses)
+
+    result = asyncio.run(
+        _request_shard_envelope(
+            session_fn=session_fn,
+            prompt="generate batch",
+            expected_artifact_type="scenes_batch",
+            expected_job_id="job-auto",
+            expected_channel_id="vida-plena-45",
+            max_attempts=2,
+        )
+    )
+
+    assert result == envelope
+
+
+def test_limit_scenes_plan_batch_size_splits_cached_six_scene_batch_evenly():
+    plan = {
+        "artifact_type": "scenes_plan",
+        "schema_version": "2026-05-json-shards-v1",
+        "job_id": "job-auto",
+        "channel_id": "vida-plena-45",
+        "status": "complete",
+        "batch_index": None,
+        "batch_total": None,
+        "data": {
+            "target_scene_count": 6,
+            "target_total_duration_sec": 180,
+            "batch_size": 6,
+            "batches": [
+                {
+                    "batch_index": 1,
+                    "scene_start": "scene-01",
+                    "scene_end": "scene-06",
+                    "purpose": "opening",
+                    "script_sections": ["Hook", "Context"],
+                }
+            ],
+        },
+        "warnings": [],
+    }
+
+    limited = sharding_stage._limit_scenes_plan_batch_size(plan, max_batch_size=4)
+
+    assert limited is not plan
+    assert limited["data"]["batch_size"] == 4
+    assert [
+        (batch["batch_index"], batch["scene_start"], batch["scene_end"])
+        for batch in limited["data"]["batches"]
+    ] == [(1, "scene-01", "scene-03"), (2, "scene-04", "scene-06")]
+    assert all(
+        batch["script_sections"] == ["Hook", "Context"]
+        for batch in limited["data"]["batches"]
+    )
 
 
 class FakeBrowserClient:

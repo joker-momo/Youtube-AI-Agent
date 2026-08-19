@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from video_agent.orchestrator.orchestrator import create_job
-from video_agent.orchestrator.stages.graphic_images import run_graphic_images_stage
+from video_agent.orchestrator.stages.graphic_images import _content_lines, run_graphic_images_stage
 
 
 @pytest.fixture(autouse=True)
@@ -131,6 +131,164 @@ def test_graphic_prompt_omits_style_dna_and_prioritizes_scene_content(tmp_path):
     assert "brand palette" in prompt
     assert "cream" not in prompt.lower() and "green" not in prompt.lower()
     assert "scene's specific idea" in prompt
+
+
+def test_graphic_prompt_sent_to_generator_is_premium_mobile_clear_and_single_idea(tmp_path):
+    scenes = [{
+        "id": "scene-01",
+        "layout": "steps",
+        "graphic": {"needed": True, "prompt": "A real kitchen counter with potatoes"},
+        "layout_payload": {
+            "title": "Tres preguntas",
+            "body": "Elige una respuesta clara",
+            "bullets": ["¿Qué añades?", "¿Cuándo lo haces?", "¿Cuánto usas?"],
+            "cta": "",
+        },
+    }]
+    job_dir = _make_job(tmp_path, scenes)
+    captured: list[str] = []
+
+    async def _capture(*, prompt: str, project_name: str, out_path: str):
+        captured.append(prompt)
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(out_path).write_bytes(b"\x89PNG\r\n")
+        return {"src": "https://chatgpt/img", "bytes": 6}
+
+    asyncio.run(run_graphic_images_stage(job_dir, None, _capture))
+
+    final_prompt = captured[0]
+    assert "PREMIUM EDITORIAL STANDARD" in final_prompt
+    assert "one visual idea" in final_prompt.lower()
+    assert "aimed at adults 45+" in final_prompt
+    assert "phone-sized preview" in final_prompt
+    assert "no more than 24 rendered words" in final_prompt
+    assert 'Closing line: "Elige una respuesta clara".' in final_prompt
+
+
+def test_steps_content_does_not_repeat_bullets_as_a_closing_line():
+    questions = ["¿Qué añades?", "¿Cuándo lo haces?", "¿Cuánto usas?"]
+    repeated_body = "QUÉ AÑADES, CUÁNDO LO HACES; CUÁNTO USAS"
+
+    lines = _content_lines("steps", "Tres preguntas", repeated_body, questions, "")
+    rendered = " ".join(lines)
+
+    assert rendered.count("¿Qué añades?") == 1
+    assert "Closing line" not in rendered
+
+
+def test_content_deduplicates_body_and_cta_against_any_visible_field():
+    lines = _content_lines(
+        "cta",
+        "Cuida tu rutina",
+        "CUIDA TU RUTINA",
+        ["Paso sencillo"],
+        "Paso sencillo",
+    )
+    rendered = " ".join(lines)
+
+    assert rendered.count("Cuida tu rutina") == 1
+    assert "Supporting line" not in rendered
+    assert "Call-to-action button" not in rendered
+
+
+def test_distinct_cta_is_rendered():
+    rendered = " ".join(
+        _content_lines("cta", "Cuida tu rutina", "Paso sencillo", [], "Suscríbete")
+    )
+
+    assert 'Call-to-action button labelled: "Suscríbete".' in rendered
+
+
+def test_cta_channel_name_is_included_inside_24_word_budget(tmp_path):
+    scene = {
+        "id": "scene-01",
+        "layout": "cta",
+        "graphic": {"needed": True, "prompt": "A calm editorial closing"},
+        "layout_payload": {
+            "title": "Cuida hoy tu rutina diaria",
+            "body": "Consejos sencillos para sentirte mejor",
+            "bullets": [
+                "Paso fácil hoy",
+                "Cambio real mañana",
+                "Rutina sin prisa",
+                "Bienestar cada día",
+            ],
+            "cta": "Suscríbete ahora",
+        },
+    }
+    job_dir = _make_job(tmp_path, [scene])
+    channel_path = tmp_path / "channel.yaml"
+    channel_path.write_text("channel:\n  name: Vida Plena 45 Plus\n", encoding="utf-8")
+    captured: list[str] = []
+
+    async def _capture(*, prompt: str, project_name: str, out_path: str):
+        captured.append(prompt)
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(out_path).write_bytes(b"\x89PNG\r\n")
+        return {"src": "https://chatgpt/img", "bytes": 6}
+
+    asyncio.run(run_graphic_images_stage(job_dir, channel_path, _capture))
+
+    prompt = captured[0]
+    assert '"Suscríbete ahora"' in prompt
+    assert '"Vida Plena 45 Plus"' in prompt
+    assert "Consejos sencillos" not in prompt
+    assert "Paso fácil hoy" in prompt
+
+
+def test_cta_too_long_to_fit_with_channel_name_skips_unreadable_graphic(tmp_path):
+    long_cta = (
+        "Suscríbete ahora para recibir cada semana más consejos prácticos claros "
+        "sencillos realistas seguros útiles cercanos y fáciles de aplicar hoy siempre"
+    )
+    scene = {
+        "id": "scene-01",
+        "layout": "cta",
+        "graphic": {"needed": True, "prompt": "A calm editorial closing"},
+        "layout_payload": {"title": "Sigue aprendiendo", "body": "", "bullets": [], "cta": long_cta},
+    }
+    job_dir = _make_job(tmp_path, [scene])
+    channel_path = tmp_path / "channel.yaml"
+    channel_path.write_text("channel:\n  name: Vida Plena 45 Plus\n", encoding="utf-8")
+    captured: list[str] = []
+
+    async def _capture(*, prompt: str, project_name: str, out_path: str):
+        captured.append(prompt)
+        raise AssertionError("over-budget CTA must not reach image generation")
+
+    out = asyncio.run(run_graphic_images_stage(job_dir, channel_path, _capture))
+
+    assert captured == []
+    graphic = json.loads(out.read_text())["scenes"][0]["graphic"]
+    assert "image_ref" not in graphic
+
+
+def test_structured_payload_with_empty_body_does_not_reintroduce_long_caption(tmp_path):
+    scene = {
+        "id": "scene-01",
+        "layout": "steps",
+        "caption": "Una explicación oral larga que no debe convertirse en letra pequeña.",
+        "graphic": {"needed": True, "prompt": "A practical kitchen action"},
+        "layout_payload": {
+            "title": "Tres pasos",
+            "body": "",
+            "bullets": ["Añade", "Espera", "Sirve"],
+            "cta": "",
+        },
+    }
+    job_dir = _make_job(tmp_path, [scene])
+    captured: list[str] = []
+
+    async def _capture(*, prompt: str, project_name: str, out_path: str):
+        captured.append(prompt)
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(out_path).write_bytes(b"\x89PNG\r\n")
+        return {"src": "https://chatgpt/img", "bytes": 6}
+
+    asyncio.run(run_graphic_images_stage(job_dir, None, _capture))
+
+    assert "explicación oral larga" not in captured[0]
+    assert all(word in captured[0] for word in ("Añade", "Espera", "Sirve"))
 
 
 def test_graphic_metadata_records_style_dna_disabled(tmp_path):

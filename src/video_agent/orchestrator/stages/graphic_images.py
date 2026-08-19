@@ -35,6 +35,7 @@ from video_agent.orchestrator.stages._shared import (
     _start_stage,
     dag_mode,
 )
+from video_agent.retention.layout_planner import deduplicate_visible_payload, word_count
 from video_agent.storage.atomic import atomic_write_json
 from video_agent.utils.json_io import read_json, read_yaml
 from video_agent.utils.logging import EventLogger
@@ -126,6 +127,16 @@ def _content_first_style() -> str:
     )
 
 
+_PREMIUM_READABILITY_STYLE = (
+    "PREMIUM EDITORIAL STANDARD: design for mature viewers with one visual idea, "
+    "one unmistakable focal point, generous breathing room, restrained decoration, "
+    "and a calm, credible magazine-documentary finish. The hierarchy must be clear "
+    "in a phone-sized preview: the main message reads first, supporting detail second. "
+    "Use no more than 24 rendered words, no tiny labels, no repeated message, no busy "
+    "icon row, no sales-slide styling, and no generic AI-template ornament."
+)
+
+
 _CARD_KIND = {
     "hook": "a bold full-bleed hook TITLE BANNER — headline set VERY large across the whole frame with minimal panel, no bullet list and no check-marks",
     "checklist": "a clean checklist card, each item on its own row led by a small check-mark or clear marker",
@@ -153,6 +164,13 @@ _CARD_KIND = {
 def _content_lines(layout: str, title: str, body: str, bullets: list[str], cta: str) -> list[str]:
     """Structural render instructions per layout — each type gets a DISTINCT shape so the
     cards stop collapsing into a universal check-mark list (the old behaviour)."""
+    payload = deduplicate_visible_payload(
+        {"title": title, "body": body, "bullets": bullets, "cta": cta}
+    )
+    title = payload["title"]
+    body = payload["body"]
+    bullets = payload["bullets"]
+    cta = payload["cta"]
     items = "; ".join(f'"{b}"' for b in bullets)
     lines: list[str] = []
     if layout == "stat":
@@ -284,9 +302,32 @@ def _graphic_prompt(
     lp_raw = scene.get("layout_payload")
     lp = lp_raw if isinstance(lp_raw, dict) else {}
     title = str(lp.get("title") or _text_to_render(scene) or "").strip()
-    body = str(lp.get("body") or scene.get("caption") or "").strip()
+    body_source = lp.get("body") if isinstance(lp_raw, dict) else scene.get("caption")
+    body = str(body_source or "").strip()
     bullets = [str(b).strip() for b in (lp.get("bullets") or []) if str(b).strip()]
     cta = str(lp.get("cta") or "").strip()
+
+    visible_payload = deduplicate_visible_payload(
+        {"title": title, "body": body, "bullets": bullets, "cta": cta}
+    )
+    title = visible_payload["title"]
+    body = visible_payload["body"]
+    bullets = visible_payload["bullets"]
+    cta = visible_payload["cta"]
+
+    if layout == "cta" and channel_name:
+        payload_budget = max(0, 24 - word_count(channel_name))
+        if word_count(cta) > payload_budget:
+            return ""
+        while word_count(" ".join([title, body, *bullets, cta])) > payload_budget:
+            if body:
+                body = ""
+            elif bullets:
+                bullets = []
+            elif title:
+                title = ""
+            else:
+                break
 
     lines = _content_lines(layout, title, body, bullets, cta)
 
@@ -306,6 +347,7 @@ def _graphic_prompt(
             "never faint or washed out. Spell everything exactly with correct Spanish accents; "
             "add no other text."
         )
+        parts.append(_PREMIUM_READABILITY_STYLE)
         if layout == "cta" and channel_name:
             # The final CTA card must show the exact channel name so viewers know
             # which channel to subscribe to (smaller than the heading, near the CTA).

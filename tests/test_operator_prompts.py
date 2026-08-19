@@ -132,6 +132,43 @@ def test_seo_prompt_thumbnail_text_uses_clear_audience_fit_micro_promises():
     assert "3-5 words ALL-CAPS Spanish emotional hook" not in prompt
 
 
+def test_seo_prompt_keeps_the_distinctive_topic_mechanism_in_every_thumbnail_variant():
+    """A variant may change angle, but must not dilute a specific causal topic
+    into generic category copy such as "what preparation to choose"."""
+    prompt = _chatgpt_seo_prompt(SPAIN_CONFIG, VALID_SCRIPT, VALID_SCENES)
+
+    assert "EVERY variant must preserve the distinctive topic mechanism" in prompt
+    assert "[INGREDIENT] + [ACTION] + [RESULT]" in prompt
+    assert "generic category wording" in prompt
+    assert "REJECT" in prompt
+
+
+def test_scene_prompts_cap_repeated_card_archetypes_and_require_premium_clarity():
+    monolithic = _chatgpt_scenes_prompt(SPAIN_CONFIG, VALID_SCRIPT)
+    batch = _chatgpt_scenes_batch_prompt(
+        SPAIN_CONFIG,
+        VALID_SCRIPT,
+        {
+            "data": {
+                "batches": [
+                    {
+                        "batch_index": 1,
+                        "scene_start": "scene-01",
+                        "scene_end": "scene-06",
+                    }
+                ]
+            }
+        },
+        {"batch_index": 1, "scene_start": "scene-01", "scene_end": "scene-06"},
+    )
+
+    for prompt in (monolithic, batch):
+        assert "Within this generated response, do not reuse the same non-hook card layout" in prompt
+        assert "one visual idea per card" in prompt.lower()
+        assert "premium editorial" in prompt.lower()
+        assert "adults 45+" in prompt.lower()
+
+
 def test_script_prompt_varies_mechanism_opener():
     """The mechanism rule must not funnel every section into 'Esto ocurre porque'."""
     prompt = _chatgpt_script_prompt(SPAIN_CONFIG, {"topic": "dormir mejor"})

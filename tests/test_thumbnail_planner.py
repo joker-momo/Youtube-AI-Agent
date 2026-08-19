@@ -185,6 +185,18 @@ def test_prompt_includes_exact_thumbnail_text():
     assert "DUERME MEJOR HOY" in plans[0]["prompt"]
 
 
+def test_final_thumbnail_prompts_apply_premium_audience_readability_to_every_variant():
+    plans = tp.plan_thumbnail_prompts(_seo_three(), {})
+
+    assert len(plans) == 3
+    for plan in plans:
+        prompt = plan["prompt"]
+        assert "PREMIUM EDITORIAL STANDARD" in prompt
+        assert "viewers aged 45-75" in prompt
+        assert "one focal action" in prompt
+        assert "large literal evidence" in prompt
+
+
 def test_prompt_includes_spanish_diacritics_instruction():
     """Test 14."""
     plans = tp.plan_thumbnail_prompts(_seo_three(), {})

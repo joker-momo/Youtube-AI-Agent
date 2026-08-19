@@ -346,7 +346,10 @@ _LAYOUT_SELECTION_RULES = [
     "- Use layout=\"quote_portrait\" for the most emotional/transitional sentence you want to feature magazine-style: put the sentence in body (a stronger variant of quote).",
     "- Use layout=\"evidence_nugget\" for a single credible number/fact tied to age/health ('después de los 60', 'masa muscular'): put the number/fact in title and short context in body (a documentary variant of stat).",
     "- Use layout=\"do_dont\" when the narration contrasts a WORSE choice vs a clearly BETTER one ('esto no, mejor esto'): put the worse option in bullets[0], the better in bullets[1] (both supported). Use comparison instead when the two options are NEUTRAL.",
+    "- PREMIUM EDITORIAL CLARITY FOR ADULTS 45+: use one visual idea per card, one unmistakable focal point, restrained decoration, generous breathing room, and short literal copy that can be understood in a phone-sized preview. The result should feel calm, credible, and premium editorial — never like a sales slide, social-media sticker collage, or generic AI template.",
+    "- CARD TEXT BUDGET: title 2-5 words; optional body no more than 6 words; 2-4 bullets no more than 3 words each; no more than 24 rendered words total. CTA cards normally use title + body + CTA instead of bullets. Never repeat a bullet, question, or title again in body/cta.",
     "- Prefer variety: across the whole script, do NOT make every card a checklist — pick the layout that matches the content shape (a number → stat, a sequence → steps, a contrast → comparison, a myth → myth). Never reuse the same title on two different graphic scenes.",
+    "- Within this generated response, do not reuse the same non-hook card layout. Choose another semantically valid archetype for the next card; never change a layout in a way that misrepresents the narration.",
 ]
 
 
@@ -746,6 +749,7 @@ def _chatgpt_seo_prompt(
             "      BAD: 'TU SEMANA TIENE HUECOS'  -> GOOD: '5 ALIMENTOS PARA CUIDAR TUS MÚSCULOS'",
             "      BAD: 'NO ES POR LA HORA'       -> GOOD: 'ACEITE DE OLIVA: CUÁNDO TOMARLO'",
             "    - The 3 variants take three DIFFERENT audience-fit angles: variant 1 = pain-led clarity (name the familiar problem plainly); variant 2 = outcome-led practical hope (the realistic improvement); variant 3 = action/decision-led specificity (what to do, when, or what to choose).",
+            "    - EVERY variant must preserve the distinctive topic mechanism: the concrete ingredient, action, comparison, timing, or cause that makes THIS video different from generic niche advice. Different angles may change the promise, but may not erase that mechanism. Build the anchor as [INGREDIENT] + [ACTION] + [RESULT] (or the equivalent structure for a non-food topic). REJECT generic category wording that could fit many videos, even if it is grammatical and 3-6 words.",
             "    - Age or a number may strengthen a candidate but is NOT MANDATORY when topic and value are already explicit; do not force an imperative + age template when it makes the copy generic or unnatural.",
             "    - Respect the viewer's dignity and autonomy: practical agency (CÓMO, CUÁNDO, QUÉ ELEGIR, PARA CUIDAR, PUEDE AFECTAR), never frail/helpless framing, no degrading age labels.",
             "    - Still honest: no fake authority, no fear/death, no miracle claims, no unsupported certainty (write 'PUEDE AFECTAR TU SUEÑO', never 'ARRUINA TU SALUD' when the content only says it may influence wellbeing).",

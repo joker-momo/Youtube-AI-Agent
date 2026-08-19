@@ -43,6 +43,43 @@ def word_count(text: str) -> int:
     return len(re.findall(r"\b[\wáéíóúñüÁÉÍÓÚÑÜ]+\b", str(text or "")))
 
 
+def _same_message(candidate: str, rendered_parts: list[str]) -> bool:
+    """True when a field repeats one visible field or their full sequence."""
+    normalized = " ".join(re.findall(r"\w+", str(candidate).casefold()))
+    if not normalized:
+        return False
+
+    existing = {
+        " ".join(re.findall(r"\w+", str(part).casefold()))
+        for part in rendered_parts
+        if str(part).strip()
+    }
+    existing.add(
+        " ".join(re.findall(r"\w+", " ".join(rendered_parts).casefold()))
+    )
+    return normalized in existing
+
+
+def deduplicate_visible_payload(value: Any) -> dict[str, Any]:
+    payload = normalize_payload(value)
+    if _same_message(payload["body"], [payload["title"]]) or _same_message(
+        payload["body"], payload["bullets"]
+    ):
+        payload["body"] = ""
+    if _same_message(
+        payload["cta"],
+        [payload["title"], payload["body"], *payload["bullets"]],
+    ):
+        payload["cta"] = ""
+    return payload
+
+
+def visible_payload_word_count(scene: dict[str, Any]) -> int:
+    payload = deduplicate_visible_payload(scene.get("layout_payload"))
+    fields = [payload["title"], payload["body"], *payload["bullets"], payload["cta"]]
+    return sum(word_count(field) for field in fields)
+
+
 def _supported_text(scene: dict[str, Any]) -> str:
     return " ".join(
         str(part or "")
@@ -279,6 +316,10 @@ def apply_retention_layouts(
         apply_pattern_break_rhythm(scenes)
         if [scene.get("layout") for scene in scenes] == before:
             break
+
+    for scene in scenes:
+        if scene.get("layout") != "subtitle" and visible_payload_word_count(scene) > 24:
+            downgrade(scene, "Graphic downgraded to subtitle: payload exceeds 24 visible words.")
 
     # Dedup: two graphic cards with the same headline read as repetitive (e.g. two
     # scenes titled "Evita los dos extremos") — downgrade the later duplicate to subtitle.

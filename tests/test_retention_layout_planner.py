@@ -308,6 +308,81 @@ def test_duplicate_graphic_headline_downgraded():
     assert planned[2]["layout"] == "subtitle"  # duplicate headline downgraded
 
 
+def test_graphic_payload_over_24_visible_words_downgrades_to_subtitle():
+    bullets = [
+        "proteína en cada comida",
+        "verduras de varios tipos",
+        "agua durante todo el día",
+        "fruta fresca como postre",
+    ]
+    narration = " ".join(bullets)
+    scene = _scene(
+        layout="checklist",
+        narration=narration,
+        layout_payload={
+            "title": "Tu plato diario más completo",
+            "body": "Una guía sencilla para cada comida",
+            "bullets": bullets,
+            "cta": "",
+        },
+    )
+
+    [planned] = apply_retention_layouts([scene])
+
+    assert planned["layout"] == "subtitle"
+    assert any("exceeds 24 visible words" in warning for warning in planned["planner_warnings"])
+
+
+def test_graphic_payload_at_exactly_24_visible_words_remains_a_card():
+    bullets = [
+        "proteína cada comida",
+        "verduras de temporada",
+        "agua durante el día",
+        "fruta fresca después",
+    ]
+    narration = " ".join(bullets)
+    scene = _scene(
+        layout="checklist",
+        narration=narration,
+        layout_payload={
+            "title": "Tu plato diario más completo",
+            "body": "Guía sencilla para comer mucho mejor",
+            "bullets": bullets,
+            "cta": "",
+        },
+    )
+
+    [planned] = apply_retention_layouts([scene])
+
+    assert planned["layout"] == "checklist"
+    assert not any("exceeds 24 visible words" in warning for warning in planned["planner_warnings"])
+
+
+def test_repeated_body_is_removed_before_visible_word_budget_check():
+    bullets = [
+        "proteína en cada comida",
+        "verduras de varios tipos",
+        "agua durante todo el día",
+        "fruta fresca como postre",
+    ]
+    repeated_body = " ".join(bullets)
+    scene = _scene(
+        layout="steps",
+        narration=repeated_body,
+        layout_payload={
+            "title": "Cuatro pasos claros",
+            "body": repeated_body,
+            "bullets": bullets,
+            "cta": "",
+        },
+    )
+
+    [planned] = apply_retention_layouts([scene])
+
+    assert planned["layout"] == "steps"
+    assert not any("exceeds 24 visible words" in warning for warning in planned["planner_warnings"])
+
+
 def test_new_batch_types_keep_when_supported():
     cases = [
         ("plate_map", "Completa el plato con proteína, vegetal y fibra.", {"title": "Tu plato", "bullets": ["proteína", "vegetal", "fibra"]}),

@@ -46,9 +46,9 @@ This project uses OpenWolf for context management. Read and follow .wolf/OPENWOL
 
 All coding agents working in this project must obey the same project contract:
 
-- Codex: read root `AGENTS.md`.
-- Claude: read this root `CLAUDE.md` plus `.claude/rules/*`.
-- Antigravity: read `.agent/AGENTS.md` plus project-local `.agent/skills/*`.
+- Codex: read root `AGENTS.md` and invoke official `superpowers:<skill-name>` plugin skills.
+- Claude: read this root `CLAUDE.md` plus `.claude/rules/*` and use the official Superpowers plugin.
+- Antigravity: read `.agent/AGENTS.md` and use the `obra/superpowers` plugin.
 
 If an agent can read more than one entrypoint, treat root `AGENTS.md` as the canonical project policy and the harness-specific file as an adapter. Do not weaken the prime directive, OpenWolf protocol, skill-routing policy, dirty worktree safety, or verification requirements in any harness-specific adapter.
 
@@ -68,6 +68,16 @@ from that feedback. Do not mark your own bug fix `verified` or `closed`.
 # Agent Workflow Policy
 
 Use Superpowers as the operating system and `agent-skills` as the toolbox.
+
+## Canonical Superpowers Source (mandatory)
+
+Only upstream `https://github.com/obra/superpowers` or an official marketplace
+plugin is a valid Superpowers source. Claude must use
+`superpowers@claude-plugins-official` or the official
+`superpowers@superpowers-marketplace` distribution. Do not load, adapt, or
+substitute `.agent/skills`, `.agent/workflows`, copied skill files, or an
+unverified cache/mirror as Superpowers. If the official plugin is unavailable,
+stop and request installation or update instead of falling back.
 
 ## Precedence
 

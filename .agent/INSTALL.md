@@ -1,6 +1,6 @@
-# Install Antigravity Superpowers Profile
+# Install Official Superpowers for Antigravity
 
-This package is a standalone Antigravity profile. It does not modify the original Superpowers source workflows.
+This project requires the upstream Superpowers plugin, not this legacy local profile.
 
 ## Prerequisites
 
@@ -13,52 +13,36 @@ This package is a standalone Antigravity profile. It does not modify the origina
 From your project root:
 
 ```bash
-npx antigravity-superpowers init
+agy plugin install https://github.com/obra/superpowers
 ```
 
-Or manually:
-
-```bash
-mkdir -p .agent
-cp -R /path/to/antigravity-superpowers-cli/templates/.agent/* .agent/
-```
-
-If your project already has `.agent/skills`, merge carefully and keep the versions you want.
+Re-run the same command to update the plugin. Do not copy or merge
+`.agent/skills` as a replacement for the official plugin.
 
 ## What Gets Installed
 
-- `.agent/AGENTS.md`
-- `.agent/task.md` (template only)
-- `.agent/skills/*`
-- `.agent/workflows/*`
-- `.agent/agents/*`
-- `.agent/tests/*`
+- Official `obra/superpowers` plugin skills and session-start integration.
 
 Runtime tracking file:
 
 - `docs/plans/task.md` in the target project root (created at runtime by skill flow, list-only table)
 
-## Verify Profile
+## Verify Installation
 
 From your target project root:
 
 ```bash
-bash .agent/tests/run-tests.sh
+agy plugin list
 ```
 
-Expected result: all checks pass with zero failures.
+Expected result: the `obra/superpowers` plugin is listed and enabled.
 
 ## Usage Notes
 
-- This profile uses strict single-flow task execution.
-- Generic coding subagents are intentionally not used.
-- Browser automation can use `browser_subagent` when needed.
-- Skill references are local to `.agent/skills`.
+- Invoke skills from the installed official plugin.
+- Do not invoke `.agent/skills` or `.agent/workflows`; they are legacy local adaptations.
 
 ## Update
 
-Re-run the CLI init with `--force` to update, then rerun validation:
-
-```bash
-bash .agent/tests/run-tests.sh
-```
+Re-run `agy plugin install https://github.com/obra/superpowers`, then run
+`agy plugin list` to confirm it remains enabled.

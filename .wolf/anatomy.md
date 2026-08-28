@@ -1,7 +1,7 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-07-24T01:02:49.281Z
-> Files: 1087 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-08-28T15:14:28.173Z
+> Files: 1091 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../../../../Users/joker/
 
@@ -1156,14 +1156,14 @@
 - `cli.py` — build_parser (~4770 tok)
 - `color_mix.py` — Perceptual colour mixing (OKLab): resolve_topic_accent_color (30% blend, bug-466), resolve_topic_background_color/resolve_topic_text_color (12% blend, bug-467). (~2600 tok)
 - `operator_json.py` — JSON object extraction, truncated-root repair, and JSON prompt utility helpers. (~2500 tok)
-- `operator_prompts.py` — Prompt template builders for operator ChatGPT/Gemini workflows. (~18526 tok)
+- `operator_prompts.py` — Prompt template builders for operator ChatGPT/Gemini workflows. (~20012 tok)
 - `operator_validators.py` — class: is_valid, merge, format_report, load_operator_channel_config + 1 more (~4722 tok)
 - `operator.py` — Declares from (~13912 tok)
 - `persona.py` — Channel presenter identity for AI-generated imagery. (~730 tok)
 - `pipeline.py` — Declares from (~16283 tok)
 - `pipeline.py` — Declares from (~16230 tok)
 - `style_dna.py` — Shared loader for ``configs/<channel>/style-dna.json`` — the single source of (~1043 tok)
-- `thumbnail_planner.py` — Thumbnail prompt planner — spec v1.3. (~12324 tok)
+- `thumbnail_planner.py` — Thumbnail prompt planner — spec v1.3. (~15992 tok)
 - `tts_melo_worker.py` — MeloTTS sidecar worker — runs inside the melo venv, driven over JSON-over-stdio. (~594 tok)
 - `tts.py` — TTSClient: synthesize, synthesize_scene_track, synthesize (~4831 tok)
 
@@ -1218,7 +1218,7 @@
 
 - `__init__.py` — Facade package: re-exports every public (and private) symbol from all (~2111 tok)
 - `_shared.py` — StageInputMissingError: dag_mode, set_dag_mode, require_stage, resolve_stage_fps (~2939 tok)
-- `assets_thumbnail.py` — auto_idea_research_stage, generate_scene_asset (~8543 tok)
+- `assets_thumbnail.py` — auto_idea_research_stage, generate_scene_asset (~12514 tok)
 - `audio.py` — run_whisper_timestamps_stage (~4140 tok)
 - `elena_lipsync.py` — Long-form ``elena_lipsync`` pipeline stage. (~722 tok)
 - `elena_plan.py` — Long-form ``elena_plan`` pipeline stage (Phase 5). (~712 tok)
@@ -1234,13 +1234,17 @@
 - `visual_schedule.py` — Long-form ``visual_schedule`` pipeline stage (Phase 2). (~982 tok)
 - `visual_spans.py` — Long-form ``visual_spans`` pipeline stage (Phase 1, report-only). (~946 tok)
 
+## src/video_agent/qa/
+
+- `thumbnail_package_qa.py` — Pure long-form thumbnail QA — image decode, dHash similarity, injected-OCR (~4892 tok)
+
 ## src/video_agent/retention/
 
 - `layout_planner.py` — normalize_payload, add_warning, word_count, has_warning_intent (~3396 tok)
 
 ## src/video_agent/seo/
 
-- `title_scorer.py` — score_variant, score_variants (~1387 tok)
+- `title_scorer.py` (~6718 tok)
 
 ## src/video_agent/shorts/
 
@@ -1436,7 +1440,7 @@
 - `test_long_visual_schedule.py` — Unit tests for the long-form compiled asset schedule (``video_agent.visual.schedule``). (~2631 tok)
 - `test_long_visual_spans.py` — Unit tests for the long-form visual-span core (``video_agent.visual``). (~2587 tok)
 - `test_materialize.py` — test_materialize_clone_identical, test_materialize_cow_independent, test_materialize_overwrites_exis (~447 tok)
-- `test_operator_prompts.py` — Tests for Spain-first locale-aware operator prompts. (~2394 tok)
+- `test_operator_prompts.py` — Tests for Spain-first locale-aware operator prompts. (~4556 tok)
 - `test_operator_qa_nested_verdict.py` — Gemini QA sometimes echoes the FULL artifact (which natively carries a ``qa`` (~463 tok)
 - `test_operator_render_prepared_routing.py` — Short job dirs must always render through the prepared-short owner, even from (~678 tok)
 - `test_operator_workflow.py` — test_extract_json_object_ignores_model_wrapper_text, test_write_operator_prompts_writes_script_promp (~6703 tok)
@@ -1496,14 +1500,17 @@
 - `test_stage_resolve_fps.py` — Guard for the shared stage fps resolver (overlap #3). (~238 tok)
 - `test_stock_asset_cascade.py` — Tests for the 3-tier visual asset cascade (video -> photo -> AI-gen). (~7236 tok)
 - `test_telegram_short_publish.py` — Tests for the Shorts → Telegram publish-package handoff. (~1810 tok)
+- `test_thumbnail_ctr_benchmark.py` — Deterministic benchmark matrix — Task 9 of the packaging-CTR plan. (~1261 tok)
 - `test_thumbnail_distinctive_subject.py` — Thumbnails must show the video's DISTINCTIVE subject, not a generic category. (~282 tok)
-- `test_thumbnail_image_stage.py` — ── _build_thumbnail_prompt ─────────────────────────────────────────────────── (~2787 tok)
-- `test_thumbnail_planner.py` — Spec v1.3 §18 — 42 tests for thumbnail_planner. (~5181 tok)
+- `test_thumbnail_image_stage.py` — test_build_thumbnail_prompt_contains_title, test_build_thumbnail_prompt_contains_thumbnail_text, tes (~15491 tok)
+- `test_thumbnail_package_qa.py` — Pure long-form thumbnail QA module — Task 4 of the packaging-CTR plan. (~5152 tok)
+- `test_thumbnail_planner.py` — Spec v1.3 §18 — 42 tests for thumbnail_planner. (~9504 tok)
 - `test_thumbnail_seo_write_race.py` — bug-528 regression: _persist_thumbnail_path must not clobber concurrent seo.json description updates. (~600 tok)
 - `test_thumbnail_seo_write_race.py` — Regression tests for bug-528: thumbnail stage clobbering concurrent seo.json updates. (~658 tok)
-- `test_thumbnail_stage_v13.py` — Spec v1.3 Phase 2 stage integration tests. (~2087 tok)
+- `test_thumbnail_stage_v13.py` — Spec v1.3 Phase 2 stage integration tests. (~2254 tok)
 - `test_timeline_dag_mode_status.py` — Regression coverage for timeline status derivation during a DAG-mode run (~2188 tok)
 - `test_title_ctr_formula.py` — CTR-first title formula (2026-06-29, option b). (~440 tok)
+- `test_title_scorer.py` — test_perfect_variant_scores_high, test_weak_variant_scores_low, test_score_returns_required_keys, te (~2236 tok)
 - `test_tokenizers_parallelism_guard.py` — Regression: importing the local semantic-vision module must disable HF (~332 tok)
 - `test_tts_melo.py` — Tests for the MeloTTS provider wiring (Elena voice). (~1662 tok)
 - `test_visual_acquisition_context.py` — test_builds_context_from_structured_span_fields_without_narration, test_channel_avoid_visuals_inject (~1547 tok)

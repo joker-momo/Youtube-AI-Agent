@@ -61,9 +61,9 @@ This project uses OpenWolf for context management.
 
 All coding agents working in this project must obey the same project contract:
 
-- Codex: read this root `AGENTS.md`.
-- Claude: read root `CLAUDE.md` plus `.claude/rules/*`.
-- Antigravity: read `.agent/AGENTS.md` plus project-local `.agent/skills/*`.
+- Codex: read this root `AGENTS.md` and invoke official `superpowers:<skill-name>` plugin skills.
+- Claude: read root `CLAUDE.md` plus `.claude/rules/*` and use the official Superpowers plugin.
+- Antigravity: read `.agent/AGENTS.md` and use the `obra/superpowers` plugin.
 
 If an agent can read more than one entrypoint, treat root `AGENTS.md` as the
 canonical project policy and the harness-specific file as an adapter. Do not
@@ -89,6 +89,21 @@ If verification fails, Codex reopens the task with `verify --status open` or
 ## Skill Orchestration Policy
 
 Use Superpowers as the operating system and `agent-skills` as the toolbox.
+
+### Canonical Superpowers Source (mandatory)
+
+Only upstream [obra/superpowers](https://github.com/obra/superpowers) or an
+official marketplace plugin for the active harness is a valid Superpowers
+source. Do not treat `.agent/skills`, `.agent/workflows`, copied skill files,
+or an unverified cache/mirror as Superpowers.
+
+- **Codex:** invoke the installed official plugin as `superpowers:<skill-name>`.
+- **Claude Code:** use `superpowers@claude-plugins-official` or the official
+  `superpowers@superpowers-marketplace` distribution.
+- **Antigravity:** install and use `agy plugin install https://github.com/obra/superpowers`.
+
+If the required official source is unavailable, stop and request installation
+or update. Never silently substitute a local adaptation or generic workflow.
 
 ### Instruction Priority
 

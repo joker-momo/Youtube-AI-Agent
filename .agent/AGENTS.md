@@ -18,9 +18,8 @@ Khi hai mục tiêu xung đột, mục tiêu xếp trên LUÔN thắng:
 
 # Superpowers for Antigravity
 
-You have superpowers.
-
-This profile adapts Superpowers workflows for Antigravity with strict single-flow execution.
+Use the official upstream `obra/superpowers` plugin. This directory is a
+project policy adapter, not a Superpowers distribution.
 
 ## Cross-Agent Contract
 
@@ -28,7 +27,7 @@ All coding agents working in this project must obey the same project contract:
 
 - Codex reads root `AGENTS.md`.
 - Claude reads root `CLAUDE.md` plus `.claude/rules/*`.
-- Antigravity reads this `.agent/AGENTS.md` plus project-local `.agent/skills/*`.
+- Antigravity reads this `.agent/AGENTS.md` and uses the `obra/superpowers` plugin.
 
 Root `AGENTS.md` is the canonical project policy. This file is Antigravity's
 adapter and must not weaken the prime directive, OpenWolf protocol, skill
@@ -44,7 +43,7 @@ This project uses OpenWolf for context management:
 
 ## Core Rules
 
-1. Prefer local skills in `.agent/skills/<skill-name>/SKILL.md`.
+1. Invoke skills from the official `obra/superpowers` plugin only.
 2. Execute one core task at a time with `task_boundary`.
 3. Use `browser_subagent` only for browser automation tasks.
 4. Track checklist progress in `<project-root>/docs/plans/task.md` (table-only live tracker).
@@ -56,7 +55,7 @@ When source skills reference legacy tool names, use these Antigravity equivalent
 
 - Legacy assistant/platform names -> `Antigravity`
 - `Task` tool -> `browser_subagent` for browser tasks, otherwise sequential `task_boundary`
-- `Skill` tool -> `view_file ~/.gemini/skills/<skill-name>/SKILL.md` (or project-local `.agent/skills/<skill-name>/SKILL.md`)
+- `Skill` tool -> invoke the installed `obra/superpowers` plugin skill.
 - `TodoWrite` -> update `<project-root>/docs/plans/task.md` task list
 - File operations -> `view_file`, `write_to_file`, `replace_file_content`, `multi_replace_file_content`
 - Directory listing -> `list_dir`
@@ -71,11 +70,16 @@ When source skills reference legacy tool names, use these Antigravity equivalent
 
 ## Skill Loading
 
-- First preference: project skills at `.agent/skills`.
-- Second preference: user skills at `~/.gemini/skills`.
-- If both exist, project-local skills win for this profile.
-- Optional parity assets may exist at `.agent/workflows/*` and `.agent/agents/*` as entrypoint shims/reference profiles.
-- These assets do not change the strict single-flow execution requirements in this file.
+Install the required source with:
+
+```bash
+agy plugin install https://github.com/obra/superpowers
+```
+
+Then invoke its skills natively. `.agent/skills` and `.agent/workflows` are
+legacy local adaptations: they are not valid Superpowers sources and must not
+be invoked. If the official plugin is unavailable or outdated, stop and request
+installation or update; do not fall back to local copies.
 
 ## Skill Routing Policy
 

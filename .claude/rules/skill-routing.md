@@ -7,13 +7,22 @@ globs: **/*
 
 All coding agents in this project share one policy:
 
-- Codex reads root `AGENTS.md`.
-- Claude reads root `CLAUDE.md` plus `.claude/rules/*`.
-- Antigravity reads `.agent/AGENTS.md` plus project-local `.agent/skills/*`.
+- Codex reads root `AGENTS.md` and invokes official `superpowers:<skill-name>` plugin skills.
+- Claude reads root `CLAUDE.md` plus `.claude/rules/*` and uses the official Superpowers plugin.
+- Antigravity reads `.agent/AGENTS.md` and uses the `obra/superpowers` plugin.
 
 Root `AGENTS.md` is the canonical project policy. Harness-specific files are
 adapters and must not weaken the prime directive, OpenWolf protocol, dirty
 worktree safety, or verification requirements.
+
+## Canonical Superpowers Source (mandatory)
+
+The only valid source is upstream `https://github.com/obra/superpowers` or an
+official marketplace plugin. Claude must use `superpowers@claude-plugins-official`
+or `superpowers@superpowers-marketplace`; do not load `.agent/skills`,
+`.agent/workflows`, copied skill files, or an unverified cache/mirror as a
+Superpowers fallback. If the official plugin is unavailable, stop and request
+installation or update.
 
 ## Layers
 
@@ -49,9 +58,9 @@ Common mappings:
 | Planning work from requirements | `superpowers:writing-plans` |
 | Starting isolated branch/worktree work | `superpowers:using-git-worktrees` |
 
-If Claude cannot load a required Superpowers skill, it must say so explicitly
-and continue only with the fallback project rules after naming the missing
-skill/path.
+If Claude cannot load a required official Superpowers skill, it must say so
+explicitly and stop to request plugin installation or update; it must not fall
+back to a local adaptation or generic workflow.
 
 ## Shadowed Skills
 

@@ -44,6 +44,26 @@ def channel_path(tmp_path: Path) -> Path:
     return p
 
 
+def _pattern_image(variant_index: int, width: int = 1920, height: int = 1080):
+    """A distinctive synthetic image per variant — a flat solid color hashes
+    identically for every candidate (no gradient), which trips the QA
+    sibling-similarity check as a false "near duplicate" once more than one
+    candidate is generated."""
+    from PIL import Image
+    tiny = Image.new("RGB", (8, 8))
+    pixels = tiny.load()
+    for y in range(8):
+        for x in range(8):
+            if variant_index == 1:
+                on = x % 2 == 0
+            elif variant_index == 2:
+                on = y % 2 == 0
+            else:
+                on = (x + y) % 3 == 0
+            pixels[x, y] = (230, 230, 230) if on else (20, 20, 20)
+    return tiny.resize((width, height), Image.NEAREST)
+
+
 def _seed_at_thumbnail_image(job_dir: Path) -> None:
     """Seed a job at current_stage='thumbnail_image' with completed predecessors."""
     from video_agent.orchestrator.job_state import JobState, StageStatus, save_job
@@ -114,10 +134,11 @@ def _seed_at_thumbnail_image(job_dir: Path) -> None:
 def test_stage_writes_planner_metadata_json(tmp_path: Path, channel_path: Path):
     job_dir = tmp_path / "job-v13-1"
     _seed_at_thumbnail_image(job_dir)
+    calls = {"n": 0}
 
     async def fake_image_fn(*, prompt, project_name, out_path, **kwargs):
-        from PIL import Image
-        Image.new("RGB", (640, 360), (12, 34, 56)).save(out_path, format="PNG")
+        calls["n"] += 1
+        _pattern_image(calls["n"]).save(out_path, format="PNG")
         return {"src": "x", "bytes": 9}
 
     with patch("video_agent.contracts.repo_root", return_value=tmp_path):
@@ -148,8 +169,7 @@ def test_stage_uses_planner_prompts_with_variant_strategies(
 
     async def fake_image_fn(*, prompt, project_name, out_path, **kwargs):
         captured.append(prompt)
-        from PIL import Image
-        Image.new("RGB", (640, 360), (12, 34, 56)).save(out_path, format="PNG")
+        _pattern_image(len(captured)).save(out_path, format="PNG")
         return {"src": "x", "bytes": 9}
 
     with patch("video_agent.contracts.repo_root", return_value=tmp_path):
@@ -172,10 +192,11 @@ def test_stage_persists_prompt_markdown_per_variant(
 ):
     job_dir = tmp_path / "job-v13-3"
     _seed_at_thumbnail_image(job_dir)
+    calls = {"n": 0}
 
     async def fake_image_fn(*, prompt, project_name, out_path, **kwargs):
-        from PIL import Image
-        Image.new("RGB", (640, 360), (12, 34, 56)).save(out_path, format="PNG")
+        calls["n"] += 1
+        _pattern_image(calls["n"]).save(out_path, format="PNG")
         return {"src": "x", "bytes": 9}
 
     with patch("video_agent.contracts.repo_root", return_value=tmp_path):

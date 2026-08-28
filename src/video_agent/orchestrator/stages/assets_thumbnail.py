@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import re
 from pathlib import Path
@@ -23,6 +24,8 @@ from video_agent.orchestrator.stages._shared import (
     _resolve_idea_path,
     dag_mode,
 )
+from video_agent.qa import thumbnail_package_qa as _thumb_qa
+from video_agent.seo.title_scorer import score_variant as _score_variant
 from video_agent.storage.public_jobs import prepare_public_job_dir
 from video_agent.style_dna import load_style_dna
 from video_agent.utils.json_io import read_yaml
@@ -512,17 +515,27 @@ async def auto_thumbnail_image_stage(
     image_fn,
     *,
     throttle_sec: float = 8.0,
+    thumbnail_ocr_fn=None,
 ) -> Path:
     """Generate full-composite thumbnails (background + text baked in) via ChatGPT.
 
     Generates one JPEG per title_variant (up to 3) so each has its own
     visually coherent hook text. Outputs:
-      jobs/<id>/thumbnail_1.jpg  ← variant 1 (primary)
-      jobs/<id>/thumbnail_2.jpg  ← variant 2
-      jobs/<id>/thumbnail_3.jpg  ← variant 3
-      jobs/<id>/thumbnail.jpg    ← alias of thumbnail_1.jpg (backward compat)
+      jobs/<id>/outputs/thumbnail_1.jpg  ← variant 1
+      jobs/<id>/outputs/thumbnail_2.jpg  ← variant 2
+      jobs/<id>/outputs/thumbnail_3.jpg  ← variant 3
+      jobs/<id>/outputs/thumbnail.jpg    ← alias of the SELECTED best-scoring
+        variant (package score + image QA), not necessarily variant 1.
 
-    The render stage detects these files and skips the Remotion still step.
+    Every generated candidate is scored (title_scorer package score) and
+    QA'd (video_agent.qa.thumbnail_package_qa: decode/dimensions, sibling and
+    recent-history dHash similarity, optional injected OCR exact-copy check,
+    and cheap visual heuristics) before the primary is chosen. `thumbnail_ocr_fn`,
+    when given, is called as `thumbnail_ocr_fn(jpg_path, expected_text)` per
+    candidate and must return a `ThumbnailOcrResult` or `None`; omitting it
+    just means every candidate's OCR check is `not_run` (manual review, never
+    a false pass). The render stage detects these files and skips the
+    Remotion still step.
     """
     import shutil as _shutil
 
@@ -604,6 +617,7 @@ async def auto_thumbnail_image_stage(
 
     logger = EventLogger(job_dir / EVENT_LOG)
     generated: list[Path] = []   # successfully created .jpg files
+    generated_by_index: dict[int, Path] = {}  # variant_index -> jpg path
     errors: list[str] = []
     last_exc: Exception | None = None
 
@@ -685,6 +699,7 @@ async def auto_thumbnail_image_stage(
                     _save_thumbnail(png_path, jpg_path)
                     png_path.unlink(missing_ok=True)  # remove intermediate PNG
                     generated.append(jpg_path)
+                    generated_by_index[i] = jpg_path
                     logger.log(
                         "THUMBNAIL_IMAGE_GENERATED",
                         {
@@ -744,6 +759,7 @@ async def auto_thumbnail_image_stage(
                 source_path.unlink(missing_ok=True)  # remove intermediate PNG
 
                 generated.append(jpg_path)
+                generated_by_index[i] = jpg_path
                 logger.log(
                     "THUMBNAIL_IMAGE_GENERATED",
                     {
@@ -762,17 +778,138 @@ async def auto_thumbnail_image_stage(
                     {"job_id": state.job_id, "variant": i, "error": str(exc)},
                 )
 
-    if not generated:
+    if not generated_by_index:
         if last_exc is not None:
             raise last_exc
         raise RuntimeError(
             "All thumbnail variants failed: " + "; ".join(errors)
         )
 
-    # thumbnail.jpg = alias of the FIRST successfully generated variant.
-    # Uses generated[0] (not hardcoded thumbnail_1.jpg) so that if variant 1
-    # failed but variant 2+ succeeded, thumbnail.jpg is still populated.
-    primary = generated[0]
+    # Score and QA every generated candidate, then select the best VALID one
+    # (package score + image QA) as primary — not simply the first candidate
+    # that happened to generate successfully.
+    recent_history = _discover_recent_thumbnail_history(job_dir)
+    history_dhashes: list[tuple[str, int]] = []
+    for entry in recent_history:
+        try:
+            with _PilImage.open(entry["path"]) as history_img:
+                history_dhashes.append((entry["path"], _thumb_qa.compute_dhash(history_img)))
+        except Exception:
+            continue
+
+    decoded_by_index: dict[int, dict] = {
+        index: _thumb_qa.decode_thumbnail_image(jpg_path.read_bytes())
+        for index, jpg_path in generated_by_index.items()
+    }
+
+    candidate_reports: list[_thumb_qa.ThumbnailCandidateReport] = []
+    for index, jpg_path in sorted(generated_by_index.items()):
+        plan = plans[index - 1]
+        variant = variants[index - 1]
+        decode = decoded_by_index[index]
+        expected_text = variant["thumbnail_text"]
+
+        package_score = _score_variant(
+            {"title": variant["title"], "thumbnail_text": expected_text}
+        )["score"]
+
+        ocr_result = None
+        if thumbnail_ocr_fn is not None:
+            try:
+                ocr_result = thumbnail_ocr_fn(jpg_path, expected_text)
+            except Exception:
+                ocr_result = None
+        ocr_check = _thumb_qa.check_ocr_exact_copy(
+            expected_text,
+            ocr_result,
+            decode.get("width", _thumb_qa.EXPECTED_WIDTH),
+            decode.get("height", _thumb_qa.EXPECTED_HEIGHT),
+        )
+
+        with _PilImage.open(jpg_path) as visual_img:
+            visual_check = _thumb_qa.evaluate_visual_heuristics(visual_img)
+        visual_check["quality_score"] = max(
+            0.0,
+            min(
+                100.0,
+                visual_check["contrast_std"] * 4 - visual_check["edge_density"] * 60,
+            ),
+        )
+
+        sibling_checks = [
+            _thumb_qa.compare_sibling_similarity(
+                decode.get("dhash", 0), decoded_by_index[other].get("dhash", 0), str(other_path)
+            )
+            for other, other_path in sorted(generated_by_index.items())
+            if other != index
+        ]
+        history_checks = [
+            _thumb_qa.compare_history_similarity(decode.get("dhash", 0), h_dhash, h_path)
+            for h_path, h_dhash in history_dhashes
+        ]
+
+        candidate_reports.append(
+            _thumb_qa.ThumbnailCandidateReport(
+                variant_index=index,
+                path=str(jpg_path),
+                decode=decode,
+                package_score=package_score,
+                sibling_checks=sibling_checks,
+                history_checks=history_checks,
+                ocr_check=ocr_check,
+                visual_check=visual_check,
+            )
+        )
+        logger.log(
+            "THUMBNAIL_QA_CANDIDATE",
+            {
+                "job_id": state.job_id,
+                "variant": index,
+                "hard_failed": candidate_reports[-1].hard_failed,
+                "package_score": package_score,
+            },
+        )
+
+    quality_report_path = job_dir / "json" / "thumbnail_quality_report.json"
+    report_payload: dict = {
+        "schema_version": _thumb_qa.SCHEMA_VERSION,
+        "candidates": [dataclasses.asdict(r) for r in candidate_reports],
+    }
+    try:
+        selection = _thumb_qa.select_primary_candidate(candidate_reports)
+    except _thumb_qa.ThumbnailQualityError as exc:
+        report_payload["error"] = str(exc)
+        report_payload["reasons"] = exc.reasons
+        quality_report_path.write_text(
+            json.dumps(report_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        logger.log(
+            "THUMBNAIL_QA_ALL_FAILED",
+            {"job_id": state.job_id, "reasons": exc.reasons},
+        )
+        raise
+
+    selected_index = selection["selected_variant_index"]
+    report_payload["selected_variant_index"] = selected_index
+    report_payload["selected_signature"] = plans[selected_index - 1].get("concept_signature")
+    report_payload["requires_manual_review"] = selection["requires_manual_review"]
+    # Written BEFORE the primary alias/copy/seo-persistence below so a reader
+    # can always find the report explaining whatever thumbnail.jpg contains.
+    quality_report_path.write_text(
+        json.dumps(report_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    logger.log(
+        "THUMBNAIL_QA_SELECTED",
+        {
+            "job_id": state.job_id,
+            "variant": selected_index,
+            "requires_manual_review": selection["requires_manual_review"],
+        },
+    )
+
+    # thumbnail.jpg = alias of the SELECTED best-scoring, QA-valid variant —
+    # not necessarily the first candidate that happened to generate.
+    primary = generated_by_index[selected_index]
     _shutil.copy2(primary, job_dir / ARTIFACT_THUMBNAIL)
 
     # Copy all generated thumbnails to remotion/public/ so Remotion Studio

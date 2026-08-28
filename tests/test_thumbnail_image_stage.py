@@ -161,8 +161,7 @@ def test_auto_thumbnail_image_stage_binds_variant_title_per_image(tmp_path, chan
 
     async def fake_image_fn(*, prompt, project_name, out_path, **kwargs):
         captured.append(prompt)
-        from PIL import Image
-        Image.new("RGB", (640, 360), (12, 34, 56)).save(out_path, format="PNG")
+        _pattern_image(len(captured)).save(out_path, format="PNG")
         return {"src": "x", "bytes": 9}
 
     with patch("video_agent.contracts.repo_root", return_value=tmp_path):
@@ -204,10 +203,11 @@ def test_auto_thumbnail_image_stage_passes_style_dna_palette_to_planner(
         }
     }
 
-    async def fake_image_fn(*, prompt, project_name, out_path, **kwargs):
-        from PIL import Image
+    calls = {"n": 0}
 
-        Image.new("RGB", (640, 360), (12, 34, 56)).save(out_path, format="PNG")
+    async def fake_image_fn(*, prompt, project_name, out_path, **kwargs):
+        calls["n"] += 1
+        _pattern_image(calls["n"]).save(out_path, format="PNG")
         return {"src": "x", "bytes": 9}
 
     with (
@@ -401,6 +401,267 @@ def test_history_excludes_shorts_shaped_jobs_without_seo_artifact(tmp_path):
 
     history = _discover_recent_thumbnail_history(current)
     assert all(entry["job_id"] != "shorts-job-20260101-000000" for entry in history)
+
+
+# ── QA-driven primary selection (Task 6) ────────────────────────────────────
+
+_WEAK_TITLE_VARIANT = {"title": "Consejo", "thumbnail_text": "MIRA ESTO"}
+_STRONG_TITLE_VARIANT = {
+    "title": "Pierdes fuerza en las piernas si evitas caminar cada día",
+    "thumbnail_text": "EVITA PERDER FUERZA HOY",
+}
+_WEAK_TITLE_VARIANT_2 = {"title": "Rutina", "thumbnail_text": "CAMBIA ALGO"}
+
+
+def _seed_three_variants(job_dir: Path, variants: list[dict]) -> None:
+    _seed_at_thumbnail_image(job_dir)
+    seo = json.loads((job_dir / "seo.json").read_text())
+    seo["title_variants"] = [dict(v, score=50) for v in variants]
+    (job_dir / "seo.json").write_text(json.dumps(seo))
+
+
+def _pattern_image(variant_index: int, width: int = 1920, height: int = 1080):
+    """A distinctive, non-flat synthetic image per variant.
+
+    A flat solid color has zero gradient anywhere, so every candidate would
+    hash identically (dHash sees no edges) and trip the sibling-similarity
+    QA check as a false "near duplicate". Real generated thumbnails are
+    photographic, so these small distinct stripe patterns are closer to
+    realistic per-candidate variety while staying fast and deterministic.
+    """
+    from PIL import Image
+    tiny = Image.new("RGB", (8, 8))
+    pixels = tiny.load()
+    for y in range(8):
+        for x in range(8):
+            if variant_index == 1:
+                on = x % 2 == 0
+            elif variant_index == 2:
+                on = y % 2 == 0
+            else:
+                on = (x + y) % 3 == 0
+            pixels[x, y] = (230, 230, 230) if on else (20, 20, 20)
+    return tiny.resize((width, height), Image.NEAREST)
+
+
+def _flat_color_image_fn(colors: dict[int, tuple[int, int, int]] | None = None):
+    """Per-call fake image_fn; `colors` is accepted for call-signature parity
+    with earlier tests but each candidate gets a distinct pattern (see
+    `_pattern_image`) so QA similarity checks behave realistically."""
+    calls = {"n": 0}
+
+    async def fake_image_fn(*, prompt, project_name, out_path, **kwargs):
+        calls["n"] += 1
+        _pattern_image(calls["n"]).save(out_path, format="PNG")
+        return {"src": "x", "bytes": 9}
+
+    return fake_image_fn
+
+
+def test_stage_selects_variant_two_when_it_has_highest_valid_score(tmp_path, channel_path):
+    job_dir = tmp_path / "job-select-v2"
+    _seed_three_variants(
+        job_dir, [_WEAK_TITLE_VARIANT, _STRONG_TITLE_VARIANT, _WEAK_TITLE_VARIANT_2]
+    )
+    fake_image_fn = _flat_color_image_fn({1: (10, 10, 10), 2: (200, 30, 30), 3: (10, 200, 10)})
+
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        asyncio.run(auto_thumbnail_image_stage(job_dir, channel_path, fake_image_fn, throttle_sec=0))
+
+    seo = json.loads((job_dir / "seo.json").read_text())
+    assert seo["thumbnail_path"].endswith("thumbnail_2.jpg")
+
+    thumbnail_jpg = job_dir / "outputs" / "thumbnail.jpg"
+    variant_2_jpg = job_dir / "outputs" / "thumbnail_2.jpg"
+    assert thumbnail_jpg.read_bytes() == variant_2_jpg.read_bytes()
+
+
+def test_stage_does_not_publish_first_generated_candidate_when_it_hard_fails(tmp_path, channel_path):
+    """Variant 1 would win on package score alone, but its OCR check hard
+    fails — a later valid variant must be selected instead."""
+    job_dir = tmp_path / "job-hard-fail-v1"
+    _seed_three_variants(
+        job_dir, [_STRONG_TITLE_VARIANT, _WEAK_TITLE_VARIANT, _WEAK_TITLE_VARIANT_2]
+    )
+    fake_image_fn = _flat_color_image_fn({1: (10, 10, 10), 2: (200, 30, 30), 3: (10, 200, 10)})
+
+    def fake_ocr(jpg_path, expected_text):
+        from video_agent.qa.thumbnail_package_qa import OcrBox, ThumbnailOcrResult
+        if str(jpg_path).endswith("thumbnail_1.jpg"):
+            # Completely wrong OCR text -> hard fail on variant 1.
+            return ThumbnailOcrResult(boxes=(OcrBox(text="TEXTO INCORRECTO", left=0, top=0, width=10, height=10),))
+        return ThumbnailOcrResult(boxes=(OcrBox(text=expected_text, left=0, top=0, width=10, height=10),))
+
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        asyncio.run(
+            auto_thumbnail_image_stage(
+                job_dir, channel_path, fake_image_fn, throttle_sec=0, thumbnail_ocr_fn=fake_ocr
+            )
+        )
+
+    seo = json.loads((job_dir / "seo.json").read_text())
+    assert not seo["thumbnail_path"].endswith("thumbnail_1.jpg")
+
+
+def test_stage_fails_when_all_generated_candidates_fail_qa(tmp_path, channel_path):
+    job_dir = tmp_path / "job-all-fail"
+    _seed_three_variants(
+        job_dir, [_STRONG_TITLE_VARIANT, _WEAK_TITLE_VARIANT, _WEAK_TITLE_VARIANT_2]
+    )
+    fake_image_fn = _flat_color_image_fn({1: (10, 10, 10), 2: (200, 30, 30), 3: (10, 200, 10)})
+
+    def fake_ocr_all_wrong(jpg_path, expected_text):
+        from video_agent.qa.thumbnail_package_qa import OcrBox, ThumbnailOcrResult
+        return ThumbnailOcrResult(boxes=(OcrBox(text="COMPLETAMENTE DISTINTO", left=0, top=0, width=10, height=10),))
+
+    from video_agent.qa.thumbnail_package_qa import ThumbnailQualityError
+
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        with pytest.raises(ThumbnailQualityError) as exc_info:
+            asyncio.run(
+                auto_thumbnail_image_stage(
+                    job_dir, channel_path, fake_image_fn, throttle_sec=0,
+                    thumbnail_ocr_fn=fake_ocr_all_wrong,
+                )
+            )
+
+    assert len(exc_info.value.reasons) == 3
+    assert not (job_dir / "outputs" / "thumbnail.jpg").exists()
+    seo = json.loads((job_dir / "seo.json").read_text())
+    assert seo["thumbnail_path"] == ""
+
+
+def test_stage_ocr_supplied_and_passing_is_reflected_in_quality_report(tmp_path, channel_path):
+    job_dir = tmp_path / "job-ocr-pass"
+    _seed_three_variants(
+        job_dir, [_STRONG_TITLE_VARIANT, _WEAK_TITLE_VARIANT, _WEAK_TITLE_VARIANT_2]
+    )
+    fake_image_fn = _flat_color_image_fn({1: (10, 10, 10), 2: (200, 30, 30), 3: (10, 200, 10)})
+
+    def fake_ocr(jpg_path, expected_text):
+        from video_agent.qa.thumbnail_package_qa import OcrBox, ThumbnailOcrResult
+        return ThumbnailOcrResult(boxes=(OcrBox(text=expected_text, left=0, top=0, width=10, height=10),))
+
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        asyncio.run(
+            auto_thumbnail_image_stage(
+                job_dir, channel_path, fake_image_fn, throttle_sec=0, thumbnail_ocr_fn=fake_ocr
+            )
+        )
+
+    report = json.loads((job_dir / "json" / "thumbnail_quality_report.json").read_text())
+    assert report["requires_manual_review"] is False
+    winner = next(c for c in report["candidates"] if c["variant_index"] == report["selected_variant_index"])
+    assert winner["ocr_check"]["status"] == "pass"
+
+
+def test_stage_ocr_absent_produces_manual_review_report_but_still_selects(tmp_path, channel_path):
+    job_dir = tmp_path / "job-ocr-absent"
+    _seed_three_variants(
+        job_dir, [_STRONG_TITLE_VARIANT, _WEAK_TITLE_VARIANT, _WEAK_TITLE_VARIANT_2]
+    )
+    fake_image_fn = _flat_color_image_fn({1: (10, 10, 10), 2: (200, 30, 30), 3: (10, 200, 10)})
+
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        asyncio.run(auto_thumbnail_image_stage(job_dir, channel_path, fake_image_fn, throttle_sec=0))
+
+    report = json.loads((job_dir / "json" / "thumbnail_quality_report.json").read_text())
+    assert report["requires_manual_review"] is True
+    for candidate in report["candidates"]:
+        assert candidate["ocr_check"]["status"] == "not_run"
+    seo = json.loads((job_dir / "seo.json").read_text())
+    assert seo["thumbnail_path"]
+
+
+def test_quality_report_is_written_before_primary_alias_and_persistence(tmp_path, channel_path):
+    """Prove ordering directly (mtime is unreliable here: shutil.copy2
+    preserves the SOURCE candidate's mtime on the alias, not copy time)."""
+    job_dir = tmp_path / "job-order"
+    _seed_three_variants(
+        job_dir, [_STRONG_TITLE_VARIANT, _WEAK_TITLE_VARIANT, _WEAK_TITLE_VARIANT_2]
+    )
+    fake_image_fn = _flat_color_image_fn({1: (10, 10, 10), 2: (200, 30, 30), 3: (10, 200, 10)})
+
+    import shutil as shutil_module
+    original_copy2 = shutil_module.copy2
+    report_path = job_dir / "json" / "thumbnail_quality_report.json"
+    first_copy_seen: dict[str, bool] = {}
+
+    def spy_copy2(src, dst, *args, **kwargs):
+        if "report_existed" not in first_copy_seen:
+            first_copy_seen["report_existed"] = report_path.exists()
+        return original_copy2(src, dst, *args, **kwargs)
+
+    with (
+        patch("video_agent.contracts.repo_root", return_value=tmp_path),
+        patch("shutil.copy2", side_effect=spy_copy2),
+    ):
+        asyncio.run(auto_thumbnail_image_stage(job_dir, channel_path, fake_image_fn, throttle_sec=0))
+
+    assert first_copy_seen.get("report_existed") is True
+
+
+def test_selected_alias_is_copied_to_public_jobs_dir(tmp_path, channel_path):
+    job_dir = tmp_path / "job-public-copy"
+    _seed_three_variants(
+        job_dir, [_STRONG_TITLE_VARIANT, _WEAK_TITLE_VARIANT, _WEAK_TITLE_VARIANT_2]
+    )
+    fake_image_fn = _flat_color_image_fn({1: (10, 10, 10), 2: (200, 30, 30), 3: (10, 200, 10)})
+
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        asyncio.run(auto_thumbnail_image_stage(job_dir, channel_path, fake_image_fn, throttle_sec=0))
+
+    seo = json.loads((job_dir / "seo.json").read_text())
+    public_ref = seo["thumbnail_path"]
+    assert public_ref.startswith("jobs/")
+    selected_name = public_ref.rsplit("/", 1)[-1]
+    public_path = tmp_path / "remotion" / "public" / public_ref
+    selected_jpg = job_dir / "outputs" / selected_name
+    assert public_path.exists()
+    assert public_path.read_bytes() == selected_jpg.read_bytes()
+    assert (job_dir.parent / "remotion" / "public" / "jobs" / job_dir.name / "outputs" / "thumbnail.jpg").exists()
+
+
+def test_variant_one_generation_failure_still_selects_best_valid_survivor(tmp_path, channel_path):
+    job_dir = tmp_path / "job-v1-gen-fail"
+    _seed_three_variants(
+        job_dir, [_STRONG_TITLE_VARIANT, _WEAK_TITLE_VARIANT, _WEAK_TITLE_VARIANT_2]
+    )
+    calls = {"n": 0}
+
+    async def fake_image_fn(*, prompt, project_name, out_path, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("simulated generation failure for variant 1")
+        _pattern_image(calls["n"]).save(out_path, format="PNG")
+        return {"src": "x", "bytes": 9}
+
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        asyncio.run(auto_thumbnail_image_stage(job_dir, channel_path, fake_image_fn, throttle_sec=0))
+
+    seo = json.loads((job_dir / "seo.json").read_text())
+    assert not seo["thumbnail_path"].endswith("thumbnail_1.jpg")
+    assert seo["thumbnail_path"]
+
+
+def test_batch_generation_path_also_uses_qa_selection(tmp_path, channel_path):
+    job_dir = tmp_path / "job-batch-select"
+    _seed_three_variants(
+        job_dir, [_WEAK_TITLE_VARIANT, _STRONG_TITLE_VARIANT, _WEAK_TITLE_VARIANT_2]
+    )
+
+    class FakeBatchImageFn:
+        async def generate_images(self, *, prompts, project_name, out_paths):
+            for index, out_path in enumerate(out_paths, start=1):
+                _pattern_image(index).save(out_path, format="PNG")
+
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        asyncio.run(
+            auto_thumbnail_image_stage(job_dir, channel_path, FakeBatchImageFn(), throttle_sec=0)
+        )
+
+    seo = json.loads((job_dir / "seo.json").read_text())
+    assert seo["thumbnail_path"].endswith("thumbnail_2.jpg")
 
 
 def test_auto_thumbnail_image_stage_wrong_stage_raises(tmp_path, channel_path):

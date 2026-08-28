@@ -39,7 +39,6 @@ _OCR_AREA_WARN = 0.35
 _OCR_AREA_FAIL = 0.40
 
 # §4.6 visual heuristic thresholds.
-_CONTRAST_FAIL_STD = 4.0
 _CONTRAST_WARN_STD = 12.0
 _EDGE_DENSITY_WARN = 0.35
 _EDGE_DELTA_THRESHOLD = 30
@@ -146,7 +145,7 @@ def decode_thumbnail_image(data: bytes) -> dict:
             img.load()
             width, height = img.size
             mode = img.mode
-            dhash = _dhash(img)
+            dhash = compute_dhash(img)
     except Exception:
         return {"status": STATUS_FAIL, "reason_codes": ["decode_error"]}
 
@@ -170,7 +169,7 @@ def decode_thumbnail_image(data: bytes) -> dict:
 # §4.3 dHash and similarity
 # ---------------------------------------------------------------------------
 
-def _dhash(img: Image.Image, hash_size: int = 8) -> int:
+def compute_dhash(img: Image.Image, hash_size: int = 8) -> int:
     small = img.convert("L").resize((hash_size + 1, hash_size), Image.LANCZOS)
     pixels = list(small.getdata())
     bits = 0
@@ -327,7 +326,11 @@ def evaluate_visual_heuristics(img: Image.Image) -> dict:
     reason_codes: list[str] = []
     status = STATUS_PASS
     if contrast_std < _CONTRAST_WARN_STD:
-        status = STATUS_FAIL if contrast_std < _CONTRAST_FAIL_STD else STATUS_WARN
+        # Low contrast is a strong warning, not a hard fail: a flat/minimalist
+        # frame is not automatically unusable, and treating it as a hard
+        # failure would block otherwise-valid candidates from ever winning
+        # selection just for being visually calm.
+        status = STATUS_WARN
         reason_codes.append("low_contrast")
     if edge_density > _EDGE_DENSITY_WARN:
         if status == STATUS_PASS:

@@ -116,11 +116,19 @@ def _package_alignment_evidence(title: str, thumbnail_text: str) -> dict:
     thumb_words = set(re.findall(r"[a-z0-9]+", thumb_norm))
 
     def _pain_tokens(words: set[str]) -> set[str]:
-        return {
-            w for w in words
-            if w in _PAIN_TERMS or w in _DISCOMFORT_TERMS
-            or any(w.startswith(stem) for stem in _PAIN_STEMS)
-        }
+        """Canonicalize pain/stake words to a shared tag so morphological
+        variants of the same concept ('pierdes' the verb vs. 'pérdida' the
+        noun) compare equal instead of failing on exact-string mismatch."""
+        tokens: set[str] = set()
+        for w in words:
+            stem_hit = next((stem for stem in _PAIN_STEMS if w.startswith(stem)), None)
+            if stem_hit is not None:
+                tokens.add(stem_hit)
+            elif w in _PAIN_STEM_ALIASES:
+                tokens.add(_PAIN_STEM_ALIASES[w])
+            elif w in _PAIN_TERMS or w in _DISCOMFORT_TERMS:
+                tokens.add(w)
+        return tokens
 
     title_pain = _pain_tokens(title_words)
     thumb_pain = _pain_tokens(thumb_words)
@@ -128,11 +136,8 @@ def _package_alignment_evidence(title: str, thumbnail_text: str) -> dict:
 
     reason_codes: list[str] = []
     penalty = 0.0
-    shares_pain = bool(title_pain & thumb_words)
+    shares_pain = bool(title_pain & thumb_pain)
     if title_pain and not shares_pain and not thumb_signals["outcome"]:
-        reason_codes.append("pain_mismatch")
-        penalty += 12
-    elif title_pain and thumb_pain and not (title_pain & thumb_pain):
         reason_codes.append("pain_mismatch")
         penalty += 12
 
@@ -231,13 +236,22 @@ _PAIN_TERMS = {
     # Energy-slump family (packaging-CTR): a familiar post-meal/afternoon
     # energy crash is as concrete a pain as insomnia or muscle stiffness.
     "bajon",
+    # Loss/consequence noun form (packaging-CTR): Spanish's e->ie stem
+    # change means "pérdida" (noun) doesn't share a prefix with "pierdes"
+    # (verb) — see _PAIN_STEM_ALIASES for cross-form alignment matching.
+    "perdida",
 }
 # Symptom stems (bug-547): cover inflected forms without whitelisting one exact
 # thumbnail sentence. DESPERTAR / DESPERTARES / DESPIERTAS describe disrupted
 # sleep; HAMBRE / HAMBRIENTO / HAMBRIENTA describe the appetite pain that a
-# concrete food choice promises to address. PIERD- (pierdes/pierde/pérdida)
+# concrete food choice promises to address. PIERD- (pierdes/pierde/pierden)
 # covers the loss/consequence framing a title uses as its personal stake.
 _PAIN_STEMS = ("despert", "hambr", "pierd")
+# Cross-form aliases for package-alignment matching only (packaging-CTR): a
+# word that doesn't share the verb stem above but names the same concept —
+# e.g. "pérdida" (noun) vs "pierdes" (verb, e->ie stem change) — canonicalizes
+# to that stem's tag so title/thumbnail alignment isn't fooled by inflection.
+_PAIN_STEM_ALIASES: dict[str, str] = {"perdida": "pierd"}
 _OUTCOME_PHRASES = (
     "duerme mejor", "dormir mejor", "descansar mejor", "mas energia",
     "fuerza", "energia", "descanso",

@@ -38,6 +38,10 @@ from video_agent.web.app import (
     get_channel_path,
     get_jobs_root,
 )
+from video_agent.web.run_all_pipeline import (
+    _actual_failed_stage,
+    _run_with_stage_attribution,
+)
 
 # ---------- fixtures shared with existing script tests ----------------------
 
@@ -1178,6 +1182,35 @@ def test_browser_client_wraps_transport_errors_as_retryable_502():
 
 
 # ---------- /run-all -------------------------------------------------------
+
+
+def test_parallel_failure_attribution_beats_last_in_progress_stage():
+    """A ChatGPT-lane SEO failure must not be recorded on local Whisper."""
+
+    class Stage:
+        def __init__(self, name: str, status: str):
+            self.name = name
+            self.status = status
+
+    class State:
+        current_stage = "whisper_timestamps"
+        stages = [
+            Stage("seo_qa", "in_progress"),
+            Stage("whisper_timestamps", "in_progress"),
+        ]
+
+    state = State()
+    async def fail_seo_qa():
+        raise StageInputMissingError("SEO copy failed deterministic QA")
+
+    with pytest.raises(StageInputMissingError) as caught:
+        asyncio.run(_run_with_stage_attribution("seo_qa", fail_seo_qa()))
+    error = caught.value
+
+    # Reproduces the old heuristic: the last in-progress stage is Whisper even
+    # though the propagated exception came from the concurrent SEO lane.
+    assert _actual_failed_stage(state) == "whisper_timestamps"
+    assert _actual_failed_stage(state, error) == "seo_qa"
 
 
 def _assert_pipeline_stage_order(stages: list[str], expected: list[str]) -> None:

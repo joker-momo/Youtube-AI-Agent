@@ -2,6 +2,8 @@
 import asyncio
 from pathlib import Path
 
+import pytest
+
 import video_agent.browser_worker.drivers.chatgpt_image as chatgpt_image
 from video_agent.browser_worker.drivers.chatgpt_image import (
     IMAGE_GEN_INSTRUCTION,
@@ -53,6 +55,100 @@ def test_click_send_accepts_stop_button_when_prompt_auto_submitted(monkeypatch):
     monkeypatch.setattr(chatgpt_image, "save_trace_screenshot", fail_screenshot)
 
     asyncio.run(driver._click_send(before_user_turns=0))
+
+
+@pytest.mark.parametrize(
+    "assistant_text",
+    [
+        (
+            "Vui lòng tải lên hoặc chọn lại hình ảnh gốc cần chỉnh sửa. "
+            "Hiện tại hệ thống đang nhận yêu cầu này như một tác vụ chỉnh sửa ảnh "
+            "nhưng không có ảnh nguồn khả dụng để tôi thực hiện."
+        ),
+        "Please upload or select the original image you want me to edit.",
+        "Please upload the image you'd like me to edit.",
+        "Sube o selecciona la imagen original que quieres editar.",
+        "Necesito que subas la imagen que quieres editar.",
+        "Vui lòng tải lên ảnh bạn muốn chỉnh sửa.",
+    ],
+)
+def test_wait_for_image_fails_fast_when_chatgpt_requests_a_source_image(
+    monkeypatch, assistant_text
+):
+    class FakePage:
+        def __init__(self):
+            self.wait_calls = 0
+
+        async def evaluate(self, script, arg=None):
+            if "const containers" in script:
+                return ""
+            if "assistantMessages" in script:
+                return assistant_text
+            return False
+
+        async def wait_for_timeout(self, _ms):
+            self.wait_calls += 1
+
+    async def fake_screenshot(*args, **kwargs):
+        return "/tmp/source-image-required.png"
+
+    page = FakePage()
+    driver = ChatGPTImageDriver(page=page)
+    monkeypatch.setattr(chatgpt_image, "save_trace_screenshot", fake_screenshot)
+
+    with pytest.raises(chatgpt_image.BrowserDriverError, match="source image"):
+        asyncio.run(driver._wait_for_image(10))
+
+    assert page.wait_calls == 0
+
+
+def test_wait_for_image_does_not_misclassify_benign_assistant_status(monkeypatch):
+    class FakePage:
+        async def evaluate(self, script, arg=None):
+            if "const containers" in script:
+                return ""
+            if "assistantMessages" in script:
+                return "I am generating the requested image now."
+            return False
+
+        async def wait_for_timeout(self, _ms):
+            pass
+
+    async def fake_screenshot(*args, **kwargs):
+        return "/tmp/timeout.png"
+
+    driver = ChatGPTImageDriver(page=FakePage())
+    monkeypatch.setattr(chatgpt_image, "save_trace_screenshot", fake_screenshot)
+
+    with pytest.raises(chatgpt_image.BrowserDriverError, match="timed out"):
+        asyncio.run(driver._wait_for_image(10))
+
+
+def test_wait_for_image_ignores_source_request_from_an_older_assistant_turn(
+    monkeypatch,
+):
+    stale_refusal = "Please upload the original image you want me to edit."
+
+    class FakePage:
+        async def evaluate(self, script, arg=None):
+            if "const containers" in script:
+                return ""
+            if "assistantMessages" in script:
+                return "" if arg == 1 else stale_refusal
+            return False
+
+        async def wait_for_timeout(self, _ms):
+            pass
+
+    async def fake_screenshot(*args, **kwargs):
+        return "/tmp/timeout.png"
+
+    driver = ChatGPTImageDriver(page=FakePage())
+    driver._assistant_turn_floor = 1
+    monkeypatch.setattr(chatgpt_image, "save_trace_screenshot", fake_screenshot)
+
+    with pytest.raises(chatgpt_image.BrowserDriverError, match="timed out"):
+        asyncio.run(driver._wait_for_image(10))
 
 
 def test_generate_image_selects_create_image_mode_before_typing(monkeypatch, tmp_path):

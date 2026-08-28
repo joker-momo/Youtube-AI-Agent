@@ -62,7 +62,9 @@ def stop_request_path(job_dir: Path) -> Path:
     return job_dir / STOP_REQUEST_FILE
 
 
-def _actual_failed_stage(state) -> str:
+def _actual_failed_stage(
+    state, exc: StageInputMissingError | None = None
+) -> str:
     """The stage that actually failed, for failure bookkeeping.
 
     ``current_stage`` is a linear pointer that FREEZES once the parallel DAG
@@ -72,8 +74,26 @@ def _actual_failed_stage(state) -> str:
     bug-446/bug-451). The stage genuinely running is the LAST in_progress one
     in pipeline order; fall back to the pointer for linear-mode runs where
     nothing is in_progress."""
+    # Parallel lanes can have several in-progress stages.  The exception's
+    # explicit origin is authoritative; pipeline order is only a fallback for
+    # legacy/linear call sites that do not attach stage context.
+    attributed = getattr(exc, "pipeline_stage", None)
+    if isinstance(attributed, str) and any(
+        stage.name == attributed for stage in state.stages
+    ):
+        return attributed
+
     in_progress = [s.name for s in state.stages if s.status == "in_progress"]
     return in_progress[-1] if in_progress else state.current_stage
+
+
+async def _run_with_stage_attribution(stage_name: str, operation):
+    """Preserve the originating stage on errors crossing ``asyncio.gather``."""
+    try:
+        return await operation
+    except StageInputMissingError as exc:
+        exc.pipeline_stage = stage_name
+        raise
 
 
 def _whisper_timestamps_artifact_invalid_reason(job_dir: Path) -> str | None:
@@ -327,7 +347,7 @@ async def _execute_run_all_locked(
             )
         except StageInputMissingError as exc:
             state = load_job(job_dir)
-            mark_stage_failed(job_dir, _actual_failed_stage(state), str(exc))
+            mark_stage_failed(job_dir, _actual_failed_stage(state, exc), str(exc))
             state = load_job(job_dir)
             raise HTTPException(
                 status_code=409,
@@ -638,32 +658,55 @@ async def _execute_run_all_locked(
                     _check_stop_requested()
                     await _record_gate_and_stop(
                         "seo_promote",
-                        await auto_seo_stage(job_dir, channel_path, chatgpt_fn),
+                        await _run_with_stage_attribution(
+                            "seo_promote",
+                            auto_seo_stage(job_dir, channel_path, chatgpt_fn),
+                        ),
                     )
                 if "seo_qa" in remaining:
                     _check_stop_requested()
                     await _record(
                         "seo_qa",
-                        await auto_qa_with_rework("seo", job_dir, channel_path, chatgpt_fn, qa_fn),
+                        await _run_with_stage_attribution(
+                            "seo_qa",
+                            auto_qa_with_rework(
+                                "seo", job_dir, channel_path, chatgpt_fn, qa_fn
+                            ),
+                        ),
                     )
                 await _close_model_sessions()
                 if "graphic_images" in remaining:
                     _check_stop_requested()
                     await _record(
                         "graphic_images",
-                        await run_graphic_images_stage(job_dir, channel_path, client.generate_image),
+                        await _run_with_stage_attribution(
+                            "graphic_images",
+                            run_graphic_images_stage(
+                                job_dir, channel_path, client.generate_image
+                            ),
+                        ),
                     )
                 if "thumbnail_image" in remaining:
                     _check_stop_requested()
                     await _record_gate_and_stop(
                         "thumbnail_image",
-                        await auto_thumbnail_image_stage(job_dir, channel_path, client.generate_image),
+                        await _run_with_stage_attribution(
+                            "thumbnail_image",
+                            auto_thumbnail_image_stage(
+                                job_dir, channel_path, client.generate_image
+                            ),
+                        ),
                     )
                 if "assets_chatgpt" in remaining:
                     _check_stop_requested()
                     await _record(
                         "assets_chatgpt",
-                        await auto_assets_chatgpt_stage(job_dir, channel_path, client.generate_image),
+                        await _run_with_stage_attribution(
+                            "assets_chatgpt",
+                            auto_assets_chatgpt_stage(
+                                job_dir, channel_path, client.generate_image
+                            ),
+                        ),
                     )
 
             _local_fns = {
@@ -802,7 +845,7 @@ async def _execute_run_all_locked(
         # stage stays 'pending' and dashboard/timeline show a stale in-progress
         # job forever (bug-421), and status derivation misreports it as an
         # approval block (bug-424).
-        mark_stage_failed(job_dir, _actual_failed_stage(state), str(exc))
+        mark_stage_failed(job_dir, _actual_failed_stage(state, exc), str(exc))
         state = load_job(job_dir)
         await notify_job_failed(
             state.job_id,

@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from video_agent.browser_worker import app
 from video_agent.browser_worker.drivers.base import BrowserDriverError
+from video_agent.browser_worker.drivers.chatgpt_image import ImageSourceRequiredError
 
 
 class _FakePage:
@@ -73,6 +75,119 @@ class _FailingGeminiDriver:
 
     async def generate_image(self, *args, **kwargs):
         raise BrowserDriverError("Gemini also down")
+
+
+@pytest.mark.parametrize(
+    ("second_chatgpt_attempt_succeeds", "expected_provider"),
+    [(True, "chatgpt"), (False, "gemini")],
+)
+def test_source_image_misroute_retries_fresh_then_falls_back(
+    monkeypatch, tmp_path, second_chatgpt_attempt_succeeds, expected_provider
+):
+    class FakeContext:
+        def __init__(self):
+            self.pages = []
+
+        async def new_page(self):
+            page = _FakePage()
+            self.pages.append(page)
+            return page
+
+    class FakeBrowser:
+        def __init__(self, context):
+            self.contexts = [context]
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
+
+    class FakePlaywrightContextManager:
+        async def __aenter__(self):
+            return SimpleNamespace()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class RetryThenSucceedDriver:
+        calls = []
+
+        def __init__(self, page):
+            self.page = page
+
+        async def generate_image(self, *args, **kwargs):
+            self.__class__.calls.append(self.page)
+            if (
+                len(self.__class__.calls) == 1
+                or not second_chatgpt_attempt_succeeds
+            ):
+                raise ImageSourceRequiredError(
+                    "ChatGPT image generation was misrouted and requires a "
+                    "source image for editing."
+                )
+            return {
+                "src": "https://example.com/retried.png",
+                "local_path": str(kwargs["out_path"]),
+                "project_name": kwargs["project_name"],
+                "bytes": 123,
+                "provider": "chatgpt",
+            }
+
+    context = FakeContext()
+    browser = FakeBrowser(context)
+    clear_calls = []
+    gemini_calls = []
+
+    async def fake_attach(_pw, _url):
+        return browser
+
+    async def fake_clear(ctx):
+        clear_calls.append(ctx)
+
+    async def fake_pause(*args, **kwargs):
+        return None
+
+    async def fake_gemini_fallback(*args, **kwargs):
+        gemini_calls.append(kwargs)
+        return {
+            "src": "https://example.com/fallback.png",
+            "local_path": str(kwargs["out_path"]),
+            "project_name": kwargs["project_name"],
+            "bytes": 123,
+            "provider": "gemini",
+        }
+
+    monkeypatch.setattr(
+        "playwright.async_api.async_playwright",
+        lambda: FakePlaywrightContextManager(),
+    )
+    monkeypatch.setattr(app, "_attach_cdp_or_503", fake_attach)
+    monkeypatch.setattr(app, "clear_browser_data_keep_login", fake_clear)
+    monkeypatch.setattr(app, "human_pause", fake_pause)
+    monkeypatch.setattr(app, "_generate_image_via_gemini", fake_gemini_fallback)
+    monkeypatch.setattr(app, "_safe_asset_path", lambda _raw: tmp_path / "out.png")
+    monkeypatch.setattr(
+        "video_agent.browser_worker.drivers.ChatGPTImageDriver",
+        RetryThenSucceedDriver,
+    )
+
+    result = asyncio.run(
+        app._chatgpt_image_impl(
+            app.ImagePromptRequest(
+                prompt="create a poster",
+                project_name="proj",
+                out_path="out.png",
+                aspect_ratio="9:16",
+            )
+        )
+    )
+
+    assert result["provider"] == expected_provider
+    assert len(context.pages) == 2
+    assert RetryThenSucceedDriver.calls == context.pages
+    assert context.pages[0].closed is True
+    assert clear_calls == [context]
+    assert len(gemini_calls) == (0 if second_chatgpt_attempt_succeeds else 1)
+    assert browser.closed is True
 
 
 def test_generate_image_via_gemini_calls_driver_and_closes_page(monkeypatch):

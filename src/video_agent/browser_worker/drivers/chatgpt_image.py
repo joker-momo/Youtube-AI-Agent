@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import time
+import unicodedata
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -181,6 +182,85 @@ def _is_login_url(url: str) -> bool:
     )
 
 
+def _normalized_semantic_text(text: str) -> str:
+    """Case/accent-insensitive text for small multilingual UI-error checks."""
+    decomposed = unicodedata.normalize("NFKD", text).casefold()
+    without_marks = "".join(
+        char for char in decomposed if not unicodedata.combining(char)
+    )
+    return " ".join(without_marks.split())
+
+
+def _requires_source_image(text: str) -> bool:
+    """Whether an assistant response asks for an image to edit/select/upload.
+
+    Match both a source-image concept and an edit/upload action so ordinary
+    generation status text cannot trigger recovery. The current account may
+    answer in Vietnamese, while prompt-language responses are usually Spanish;
+    English remains the product UI fallback.
+    """
+    normalized = _normalized_semantic_text(text)
+    language_contracts = (
+        (
+            ("hinh anh goc", "anh goc", "anh nguon"),
+            ("tai len", "chon lai", "chinh sua", "khong co"),
+            (),
+        ),
+        (
+            ("source image", "original image"),
+            ("upload", "select", "edit", "not available", "missing"),
+            (),
+        ),
+        (
+            ("imagen original", "imagen de origen", "imagen fuente"),
+            (
+                "sube",
+                "subas",
+                "subir",
+                "carga",
+                "cargar",
+                "selecciona",
+                "editar",
+                "falta",
+            ),
+            (),
+        ),
+        (
+            ("anh", "hinh anh"),
+            ("tai len", "chon", "dinh kem"),
+            ("chinh sua",),
+        ),
+        (
+            ("image",),
+            ("upload", "select", "attach"),
+            ("edit",),
+        ),
+        (
+            ("imagen",),
+            (
+                "sube",
+                "subas",
+                "subir",
+                "carga",
+                "cargar",
+                "selecciona",
+                "adjunta",
+            ),
+            ("editar",),
+        ),
+    )
+    return any(
+        any(source in normalized for source in source_terms)
+        and any(action in normalized for action in action_terms)
+        and (not edit_terms or any(edit in normalized for edit in edit_terms))
+        for source_terms, action_terms, edit_terms in language_contracts
+    )
+
+
+class ImageSourceRequiredError(BrowserDriverError):
+    """ChatGPT routed a generation-only turn into its image-edit workflow."""
+
+
 class ChatGPTImageDriver:
     """Driver for ChatGPT image generation.
 
@@ -195,6 +275,7 @@ class ChatGPTImageDriver:
     def __init__(self, page: "Page") -> None:
         self.page = page
         self._opened = False
+        self._assistant_turn_floor = 0
         # Kept for back-compat with the old Project cleanup path. The current
         # image flow always uses normal chats and deletes the conversation.
         self._used_project = False
@@ -666,6 +747,14 @@ class ChatGPTImageDriver:
         except Exception:
             return 0
 
+    async def _assistant_turn_count(self) -> int:
+        try:
+            return await self.page.locator(
+                "[data-message-author-role='assistant']"
+            ).count()
+        except Exception:
+            return 0
+
     async def _submission_already_started(self, before_user_turns: int) -> bool:
         """Detect the new UI state where Create image submits before our click.
 
@@ -772,6 +861,24 @@ class ChatGPTImageDriver:
             if src:
                 return src
 
+            # A current ChatGPT backend failure mode keeps the visible
+            # picture_v2/Create image pill but routes the turn as image editing.
+            # The assistant then asks for an original/source image and never
+            # emits an <img>. Inspect only the newest ASSISTANT turn (never the
+            # whole body, which also contains the user's prompt) and fail fast;
+            # the endpoint will recreate the page/chat once, then use its
+            # existing Gemini fallback if ChatGPT misroutes again.
+            assistant_text = await self._latest_assistant_text()
+            if _requires_source_image(assistant_text):
+                shot = await save_trace_screenshot(
+                    self.page, prefix="chatgpt-image-source-required"
+                )
+                raise ImageSourceRequiredError(
+                    "ChatGPT image generation was misrouted and requires a "
+                    "source image for editing.",
+                    screenshot_path=shot,
+                )
+
             # ChatGPT renders "Image generation failed" (with a "Try again"
             # button) as a NON-message error node, so it carries no assistant
             # <img> and no assistant text — the poll above would otherwise burn
@@ -822,6 +929,24 @@ class ChatGPTImageDriver:
             "ChatGPT image generation timed out.",
             screenshot_path=shot,
         )
+
+    async def _latest_assistant_text(self) -> str:
+        """Return only the newest assistant turn, excluding user prompt text."""
+        try:
+            return await self.page.evaluate(
+                """(assistantTurnFloor) => {
+                    const assistantMessages = document.querySelectorAll(
+                        "[data-message-author-role='assistant']"
+                    );
+                    if (assistantMessages.length <= assistantTurnFloor) return '';
+                    const latest = assistantMessages[assistantMessages.length - 1];
+                    return (latest?.innerText || latest?.textContent || '').trim();
+                }""",
+                self._assistant_turn_floor,
+            )
+        except Exception:
+            # Navigation races are transient; the next image poll checks again.
+            return ""
 
     async def _detect_generation_failure(self) -> bool:
         """True when ChatGPT shows an image-generation failure banner.
@@ -965,6 +1090,7 @@ class ChatGPTImageDriver:
         try:
             await self._ensure_image_session(project_name)
             before_user_turns = await self._user_turn_count()
+            self._assistant_turn_floor = await self._assistant_turn_count()
             if aspect_ratio != "16:9":
                 await self._select_create_image_mode_and_aspect_ratio(aspect_ratio=aspect_ratio)
             else:
@@ -1023,6 +1149,7 @@ class ChatGPTImageDriver:
                     raise BrowserDriverError(f"Empty prompt at index {i}")
 
                 before_user_turns = await self._user_turn_count()
+                self._assistant_turn_floor = await self._assistant_turn_count()
                 if aspect_ratio != "16:9":
                     await self._select_create_image_mode_and_aspect_ratio(aspect_ratio=aspect_ratio)
                 else:

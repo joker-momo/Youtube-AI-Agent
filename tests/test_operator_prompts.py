@@ -143,6 +143,36 @@ def test_seo_prompt_keeps_the_distinctive_topic_mechanism_in_every_thumbnail_var
     assert "REJECT" in prompt
 
 
+def test_long_form_seo_prompt_requires_three_distinct_title_devices():
+    prompt = _chatgpt_seo_prompt(SPAIN_CONFIG, VALID_SCRIPT, VALID_SCENES)
+    normalized = prompt.casefold()
+    assert "curiosity" in normalized or "question" in normalized
+    assert "contrast" in normalized or "contrarian" in normalized
+    assert "keyword-first" in normalized
+    assert "three distinct" in normalized
+
+
+def test_long_form_seo_prompt_requires_stake_and_payoff_not_description_only():
+    prompt = _chatgpt_seo_prompt(SPAIN_CONFIG, VALID_SCRIPT, VALID_SCENES).casefold()
+    assert "personal stake" in prompt
+    assert "concrete payoff" in prompt
+    assert "description-only" in prompt
+
+
+def test_long_form_seo_prompt_forbids_unsupported_scientific_boilerplate():
+    prompt = _chatgpt_seo_prompt(SPAIN_CONFIG, VALID_SCRIPT, VALID_SCENES).casefold()
+    assert "scientific" in prompt
+    assert "only when" in prompt
+    assert "supported" in prompt
+
+
+def test_long_form_seo_prompt_keeps_thumbnail_copy_short_and_complementary():
+    prompt = _chatgpt_seo_prompt(SPAIN_CONFIG, VALID_SCRIPT, VALID_SCENES).casefold()
+    assert "3-5 words" in prompt
+    assert "3-6 words" in prompt
+    assert "complement" in prompt
+
+
 def test_scene_prompts_cap_repeated_card_archetypes_and_require_premium_clarity():
     monolithic = _chatgpt_scenes_prompt(SPAIN_CONFIG, VALID_SCRIPT)
     batch = _chatgpt_scenes_batch_prompt(

@@ -15,6 +15,7 @@ import hashlib
 import math
 import re
 import unicodedata
+from collections.abc import Sequence
 from typing import Any
 
 from video_agent.style_dna import is_valid_hex
@@ -752,6 +753,126 @@ VISUAL_STRATEGIES: dict[int, str] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# §13.3 Structured concept signatures — one per candidate, materially
+# different across siblings so a downstream QA/selection step (which candidate
+# actually becomes the primary thumbnail) has real composition diversity to
+# choose from instead of three variations on one pose.
+# ---------------------------------------------------------------------------
+
+# Per-strategy composition defaults. Because exactly one candidate uses each
+# strategy when three variants exist, keying these by strategy guarantees the
+# camera/action/subject/text-zone dimensions differ across siblings without
+# needing any per-video randomness.
+_CAMERA_ANGLE_BY_STRATEGY: dict[str, str] = {
+    "face_driven": "eye_level_intimate",
+    "object_driven": "overhead_or_close",
+    "comparison_driven": "wide_balanced",
+}
+_SUBJECT_MODE_BY_STRATEGY: dict[str, str] = {
+    "face_driven": "full_presenter",
+    "object_driven": "hands_only",
+    "comparison_driven": "partial_presenter",
+}
+_TEXT_ZONE_BY_STRATEGY: dict[str, str] = {
+    "face_driven": "right",
+    "object_driven": "left",
+    "comparison_driven": "center",
+}
+# Purposeful, concrete actions only — "direct_address" is a valid archetype in
+# this vocabulary but intentionally unused by any default so the set-level
+# "at most one direct_address candidate" constraint holds structurally.
+_ACTION_ARCHETYPE_BY_STRATEGY: dict[str, str] = {
+    "face_driven": "candid_reaction",
+    "object_driven": "tactile_inspection",
+    "comparison_driven": "side_by_side_contrast",
+}
+_EMOTION_MODE_BY_RISK: dict[str, str] = {
+    "medical_sensitive": "measured_concern",
+    "soft_health": "quiet_determination",
+    "lifestyle": "warm_curiosity",
+}
+_SETTING_FAMILY_BY_CATEGORY: dict[str, str] = {
+    "surgery_medical_decision": "clinic",
+    "food_choice": "kitchen",
+    "functional_foods_superfoods": "kitchen",
+    "shopping_label_choice": "market",
+    "protein_muscle": "living",
+    "fiber_digestion": "kitchen",
+    "hydration": "kitchen",
+    "blood_sugar_diabetes": "kitchen",
+    "blood_pressure_circulation_heart": "outdoor",
+    "sleep_rest": "bedroom",
+    "energy_fatigue": "kitchen",
+    "movement_stiffness": "living",
+    "joint_pain_body_signal": "home",
+    "walking_cardio": "outdoor",
+    "stress_mind": "living",
+    "brain_memory_cognition": "home",
+    "weight_loss_metabolism": "home",
+    "aging_longevity_bad_habits": "home",
+    "daily_routine": "home",
+    "mistake_warning": "home",
+    "myth_truth": "home",
+    "general_45plus_lifestyle": "home",
+}
+# Fallback rotation used only to nudge a candidate away from a recently-used
+# setting; order is arbitrary but fixed for determinism.
+_SETTING_FAMILY_FALLBACK_CYCLE: tuple[str, ...] = (
+    "kitchen", "living", "home", "outdoor", "bedroom", "market", "clinic",
+)
+
+
+def _build_concept_signature(
+    plan: dict[str, Any], profile: dict[str, Any], setting_family: str
+) -> dict[str, Any]:
+    strategy = plan["visual_strategy"]
+    return {
+        "strategy": strategy,
+        "setting_family": setting_family,
+        "camera_angle": _CAMERA_ANGLE_BY_STRATEGY[strategy],
+        "action_archetype": _ACTION_ARCHETYPE_BY_STRATEGY[strategy],
+        "subject_mode": _SUBJECT_MODE_BY_STRATEGY[strategy],
+        "emotion_mode": _EMOTION_MODE_BY_RISK.get(profile["risk_level"], "warm_curiosity"),
+        "focal_object": plan["topic_props"][0] if plan["topic_props"] else profile["primary_category"],
+        "text_zone": _TEXT_ZONE_BY_STRATEGY[strategy],
+        "accent_color": plan["accent_color"],
+    }
+
+
+def _avoid_recent_repetition(
+    plans: list[dict[str, Any]], recent_signatures: Sequence[Any]
+) -> None:
+    """Nudge the face-driven candidate's setting away from recent history.
+
+    Only reads `recent_signatures` (never mutated) and only adjusts the
+    setting-family field — strategy/camera/subject/text-zone assignment,
+    which already guarantees sibling diversity, is left untouched.
+    """
+    if not recent_signatures:
+        return
+    most_recent = recent_signatures[0]
+    if not isinstance(most_recent, dict):
+        return
+    for plan in plans:
+        if plan["visual_strategy"] != "face_driven":
+            continue
+        sig = plan["concept_signature"]
+        if (
+            sig.get("setting_family") == most_recent.get("setting_family")
+            and sig.get("action_archetype") == most_recent.get("action_archetype")
+            and sig.get("text_zone") == most_recent.get("text_zone")
+        ):
+            current = sig.get("setting_family")
+            cycle = _SETTING_FAMILY_FALLBACK_CYCLE
+            start = cycle.index(current) + 1 if current in cycle else 0
+            for offset in range(len(cycle)):
+                candidate = cycle[(start + offset) % len(cycle)]
+                if candidate != current:
+                    sig["setting_family"] = candidate
+                    break
+
+
 ART_DIRECTION_BY_STRATEGY: dict[str, str] = {
     "face_driven": (
         "HUMAN STORY: intimate eye-level crop with one candid presenter on one side "
@@ -1078,8 +1199,18 @@ def build_thumbnail_prompt(plan: dict) -> str:
 # §13 Orchestrator
 # ---------------------------------------------------------------------------
 
-def plan_thumbnail_prompts(seo: dict, channel_config: dict) -> list[dict]:
-    """Build up to three deterministic prompt plans for a SEO record."""
+def plan_thumbnail_prompts(
+    seo: dict,
+    channel_config: dict,
+    *,
+    recent_signatures: Sequence[Any] = (),
+) -> list[dict]:
+    """Build up to three deterministic prompt plans for a SEO record.
+
+    `recent_signatures` is an optional, read-only sequence of previously
+    selected `concept_signature` dicts (most recent first) used only to
+    nudge the face-driven candidate away from an exact recent repeat.
+    """
     variants = normalize_thumbnail_variants(seo)
     plans: list[dict] = []
     # Per-video topic accent (ChatGPT-chosen in the seo stage, constrained to
@@ -1176,7 +1307,13 @@ def plan_thumbnail_prompts(seo: dict, channel_config: dict) -> list[dict]:
         plan["category_safety_rules"] = safety_rules_for_category(
             plan["primary_category"], plan["risk_level"], plan["avoid"]
         )
+        setting_family = (
+            topic_visuals[0][1] if topic_visuals
+            else _SETTING_FAMILY_BY_CATEGORY.get(profile["primary_category"], "home")
+        )
+        plan["concept_signature"] = _build_concept_signature(plan, profile, setting_family)
         plan["prompt"] = build_thumbnail_prompt(plan)
         plans.append(plan)
 
+    _avoid_recent_repetition(plans, recent_signatures)
     return plans

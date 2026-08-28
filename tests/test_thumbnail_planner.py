@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import itertools
+
 from video_agent import thumbnail_planner as tp
 from video_agent.style_dna import is_valid_hex
 
@@ -786,3 +788,120 @@ def test_derive_topic_props_pasos_process_steps_never_walking_shoes():
     joined = " ".join(props).lower()
     assert "salt" in joined
     assert "walking" not in joined
+
+
+# --- concept signatures: structured, materially different composition -----
+
+def test_three_plans_cover_three_visual_strategies_without_index_priority():
+    plans = tp.plan_thumbnail_prompts(_seo_three(), {})
+    assert {p["visual_strategy"] for p in plans} == {
+        "face_driven", "object_driven", "comparison_driven",
+    }
+
+
+def test_each_plan_has_complete_concept_signature():
+    plans = tp.plan_thumbnail_prompts(_seo_three(), {})
+    required = {
+        "strategy", "setting_family", "camera_angle", "action_archetype",
+        "subject_mode", "emotion_mode", "focal_object", "text_zone", "accent_color",
+    }
+    assert all(required <= set(plan["concept_signature"]) for plan in plans)
+
+
+def _differences(left, right):
+    return sum(left[key] != right[key] for key in left)
+
+
+def test_sibling_concepts_differ_in_at_least_five_dimensions():
+    signatures = [p["concept_signature"] for p in tp.plan_thumbnail_prompts(_seo_three(), {})]
+    assert all(_differences(a, b) >= 5 for a, b in itertools.combinations(signatures, 2))
+
+
+def test_at_most_one_candidate_uses_direct_address():
+    plans = tp.plan_thumbnail_prompts(_seo_three(), {})
+    assert sum(
+        p["concept_signature"]["action_archetype"] == "direct_address" for p in plans
+    ) <= 1
+
+
+def test_object_candidate_does_not_require_full_presenter():
+    plans = tp.plan_thumbnail_prompts(_seo_three(), {})
+    object_plan = next(p for p in plans if p["visual_strategy"] == "object_driven")
+    assert object_plan["concept_signature"]["subject_mode"] in {"hands_only", "no_person"}
+    assert not object_plan["persona_locked"]
+
+
+def test_medical_sensitive_emotion_still_pairs_with_a_purposeful_action():
+    """A negative/concerned emotion must not collapse into a passive archetype
+    — the candidate still needs a concrete action to depict."""
+    seo = {
+        "title": "Cirugía después de los 60: preguntas para decidir mejor",
+        "title_variants": [
+            {"title": "Cirugía después de los 60", "thumbnail_text": "CIRUGÍA: 3 PREGUNTAS"},
+            {"title": "No es solo la edad", "thumbnail_text": "DECIDE MEJOR"},
+            {"title": "El riesgo que falta", "thumbnail_text": "VALORA RIESGOS"},
+        ],
+    }
+    plans = tp.plan_thumbnail_prompts(seo, {})
+    for plan in plans:
+        sig = plan["concept_signature"]
+        if sig["emotion_mode"] == "measured_concern":
+            assert sig["action_archetype"] not in {"", "passive", "none"}
+
+
+def test_comparison_strategy_never_requests_fake_before_after_body_transformation():
+    plans = tp.plan_thumbnail_prompts(_seo_three(), {})
+    comparison = next(p for p in plans if p["visual_strategy"] == "comparison_driven")
+    text = comparison["prompt"].lower()
+    assert "before/after" not in text
+    assert "before and after body" not in text
+
+
+def test_plan_generation_with_recent_signatures_is_still_deterministic():
+    seo = _seo_three()
+    plans_a = tp.plan_thumbnail_prompts(seo, {}, recent_signatures=())
+    plans_b = tp.plan_thumbnail_prompts(seo, {}, recent_signatures=())
+    assert plans_a == plans_b
+
+
+_SEO_FOOD_FOR_HISTORY = {
+    "title": "El mejor pan después de los 60",
+    "title_variants": [
+        {"title": "El mejor pan", "thumbnail_text": "¿EL MEJOR PAN?"},
+        {"title": "Qué pan elegir", "thumbnail_text": "MIRA LA HARINA"},
+        {"title": "Pan bueno vs malo", "thumbnail_text": "NO ES EL PAN"},
+    ],
+}
+
+
+def test_recent_matching_signature_causes_nonmatching_primary_candidate():
+    baseline = tp.plan_thumbnail_prompts(_SEO_FOOD_FOR_HISTORY, {})
+    primary = next(p for p in baseline if p["visual_strategy"] == "face_driven")
+    recent = [dict(primary["concept_signature"])]
+
+    adjusted = tp.plan_thumbnail_prompts(_SEO_FOOD_FOR_HISTORY, {}, recent_signatures=recent)
+    adjusted_primary = next(p for p in adjusted if p["visual_strategy"] == "face_driven")
+
+    assert adjusted_primary["concept_signature"]["setting_family"] != primary["concept_signature"]["setting_family"]
+    # Only the recency-nudged field changes; strategy assignment is untouched.
+    assert {p["visual_strategy"] for p in adjusted} == {p["visual_strategy"] for p in baseline}
+
+
+def test_recent_signatures_are_never_mutated():
+    baseline = tp.plan_thumbnail_prompts(_SEO_FOOD_FOR_HISTORY, {})
+    primary = next(p for p in baseline if p["visual_strategy"] == "face_driven")
+    recent = [dict(primary["concept_signature"])]
+    snapshot = [dict(entry) for entry in recent]
+
+    tp.plan_thumbnail_prompts(_SEO_FOOD_FOR_HISTORY, {}, recent_signatures=recent)
+
+    assert recent == snapshot
+
+
+def test_malformed_recent_signatures_do_not_crash_and_are_not_a_pass():
+    plans = tp.plan_thumbnail_prompts(
+        _seo_three(), {}, recent_signatures=[{}, {"setting_family": "kitchen"}]
+    )
+    assert len(plans) == 3
+    for plan in plans:
+        assert "concept_signature" in plan

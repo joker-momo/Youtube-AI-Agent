@@ -351,6 +351,22 @@ def check_ocr_exact_copy(
     }
 
 
+def aggregate_ocr_status(candidate_statuses: Sequence[str]) -> str:
+    """Summarize per-candidate OCR check statuses into one report-level value.
+
+    Never reports "ran" unless OCR actually produced a usable result for at
+    least one candidate: a provider that is present but always raises or
+    returns nothing must report the same "not_run" a missing provider would
+    — presence of a callable is not evidence it did anything.
+    """
+    statuses = list(candidate_statuses)
+    if not statuses or all(s == STATUS_NOT_RUN for s in statuses):
+        return "not_run"
+    if all(s != STATUS_NOT_RUN for s in statuses):
+        return "ran"
+    return "mixed"
+
+
 # ---------------------------------------------------------------------------
 # §4.6 visual heuristics — contrast/clutter only, no demographic inference.
 # ---------------------------------------------------------------------------

@@ -950,10 +950,13 @@ async def auto_thumbnail_image_stage(
             for e in recent_history
         ],
         "ocr_provider": "injected" if thumbnail_ocr_fn is not None else "none",
-        # Aggregate OCR status (§5.2/§5.3): "not_run" whenever the caller
-        # didn't supply thumbnail_ocr_fn at all (compatibility mode) — never
-        # silently absent, never a false "pass" claim.
-        "ocr_status": "not_run" if thumbnail_ocr_fn is None else "ran",
+        # Aggregate OCR status (§5.2/§5.3): derived from what actually
+        # happened per candidate, not merely whether a provider callable was
+        # supplied — a provider that raises or returns nothing every time
+        # must report the same "not_run" a missing provider would.
+        "ocr_status": _thumb_qa.aggregate_ocr_status(
+            [r.ocr_check.get("status") for r in candidate_reports]
+        ),
         "thresholds": {
             "sibling_dhash_max": _thumb_qa.SIBLING_DHASH_MAX,
             "history_dhash_max": _thumb_qa.HISTORY_DHASH_MAX,

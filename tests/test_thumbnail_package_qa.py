@@ -284,6 +284,28 @@ def test_ocr_none_is_not_run_and_requires_manual_review_never_passes():
     assert result["status"] != qa.STATUS_PASS
 
 
+# ── §5.3 aggregate OCR status must reflect actual outcomes, never just
+# "a provider function was supplied" (Codex verification round 5) ──────────
+
+def test_aggregate_ocr_status_is_not_run_when_no_candidate_ocr_ran():
+    """A provider that is present but raises/returns nothing for every
+    candidate must report the same not_run a missing provider would —
+    never a false 'ran'."""
+    assert qa.aggregate_ocr_status([qa.STATUS_NOT_RUN, qa.STATUS_NOT_RUN, qa.STATUS_NOT_RUN]) == "not_run"
+
+
+def test_aggregate_ocr_status_is_not_run_for_empty_candidates():
+    assert qa.aggregate_ocr_status([]) == "not_run"
+
+
+def test_aggregate_ocr_status_is_ran_when_every_candidate_actually_ran():
+    assert qa.aggregate_ocr_status([qa.STATUS_PASS, qa.STATUS_WARN, qa.STATUS_FAIL]) == "ran"
+
+
+def test_aggregate_ocr_status_is_mixed_when_only_some_candidates_ran():
+    assert qa.aggregate_ocr_status([qa.STATUS_PASS, qa.STATUS_NOT_RUN, qa.STATUS_FAIL]) == "mixed"
+
+
 # ── §4.6 visual heuristics ───────────────────────────────────────────────────
 
 def test_flat_image_fails_or_warns_contrast():

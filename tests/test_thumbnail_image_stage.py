@@ -977,6 +977,89 @@ def test_no_ocr_fn_produces_not_run_aggregate_ocr_status(tmp_path, channel_path)
     assert report["ocr_provider"] == "none"
 
 
+# ── Codex verification round 5: aggregate ocr_status must reflect actual
+# candidate outcomes, not merely whether a provider callable was supplied ──
+
+def test_ocr_provider_that_always_raises_reports_aggregate_not_run(tmp_path, channel_path):
+    """A provider present but never actually producing a result must not be
+    reported as 'ran' — that would be as false as claiming an OCR pass."""
+    job_dir = tmp_path / "job-ocr-always-raises"
+    _seed_three_variants(
+        job_dir, [_STRONG_TITLE_VARIANT, _WEAK_TITLE_VARIANT, _WEAK_TITLE_VARIANT_2]
+    )
+
+    def broken_ocr(jpg_path, expected_text):
+        raise RuntimeError("OCR provider unavailable")
+
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        asyncio.run(
+            auto_thumbnail_image_stage(
+                job_dir, channel_path, _flat_color_image_fn(), throttle_sec=0,
+                thumbnail_ocr_fn=broken_ocr,
+            )
+        )
+
+    report = json.loads((job_dir / "json" / "thumbnail_quality_report.json").read_text())
+    assert report["ocr_provider"] == "injected"
+    assert report["ocr_status"] == "not_run"
+    for candidate in report["candidates"]:
+        assert candidate["ocr_check"]["status"] == "not_run"
+    assert report["requires_manual_review"] is True
+
+
+def test_ocr_provider_that_always_returns_none_reports_aggregate_not_run(tmp_path, channel_path):
+    job_dir = tmp_path / "job-ocr-returns-none"
+    _seed_three_variants(
+        job_dir, [_STRONG_TITLE_VARIANT, _WEAK_TITLE_VARIANT, _WEAK_TITLE_VARIANT_2]
+    )
+
+    def empty_ocr(jpg_path, expected_text):
+        return None
+
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        asyncio.run(
+            auto_thumbnail_image_stage(
+                job_dir, channel_path, _flat_color_image_fn(), throttle_sec=0,
+                thumbnail_ocr_fn=empty_ocr,
+            )
+        )
+
+    report = json.loads((job_dir / "json" / "thumbnail_quality_report.json").read_text())
+    assert report["ocr_status"] == "not_run"
+
+
+def test_ocr_provider_with_mixed_outcomes_reports_aggregate_mixed(tmp_path, channel_path):
+    """Variant 1 gets a real OCR result; the rest raise — the aggregate must
+    show the partial truth, not collapse to either extreme."""
+    job_dir = tmp_path / "job-ocr-mixed"
+    _seed_three_variants(
+        job_dir, [_STRONG_TITLE_VARIANT, _WEAK_TITLE_VARIANT, _WEAK_TITLE_VARIANT_2]
+    )
+
+    def mixed_ocr(jpg_path, expected_text):
+        from video_agent.qa.thumbnail_package_qa import OcrBox, ThumbnailOcrResult
+        if str(jpg_path).endswith("thumbnail_1.jpg"):
+            return ThumbnailOcrResult(
+                boxes=(OcrBox(text=expected_text, left=0, top=0, width=10, height=10),)
+            )
+        raise RuntimeError("provider timed out")
+
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        asyncio.run(
+            auto_thumbnail_image_stage(
+                job_dir, channel_path, _flat_color_image_fn(), throttle_sec=0,
+                thumbnail_ocr_fn=mixed_ocr,
+            )
+        )
+
+    report = json.loads((job_dir / "json" / "thumbnail_quality_report.json").read_text())
+    assert report["ocr_status"] == "mixed"
+    statuses = {c["variant_index"]: c["ocr_check"]["status"] for c in report["candidates"]}
+    assert statuses[1] == "pass"
+    assert statuses[2] == "not_run"
+    assert statuses[3] == "not_run"
+
+
 def test_no_ocr_fn_emits_a_warning_event_with_actionable_reason(tmp_path, channel_path):
     """§5.2: OCR-unavailable compatibility mode must produce a warning event,
     not silence — even when nothing else about the candidate is questionable."""

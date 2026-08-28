@@ -664,6 +664,111 @@ def test_batch_generation_path_also_uses_qa_selection(tmp_path, channel_path):
     assert seo["thumbnail_path"].endswith("thumbnail_2.jpg")
 
 
+# ── provenance and no-false-pass regression (Task 7) ────────────────────────
+
+def test_prompt_markdown_log_contains_the_exact_prompt_that_was_sent(tmp_path, channel_path):
+    job_dir = tmp_path / "job-prompt-provenance"
+    _seed_three_variants(
+        job_dir, [_STRONG_TITLE_VARIANT, _WEAK_TITLE_VARIANT, _WEAK_TITLE_VARIANT_2]
+    )
+    sent_prompts: dict[int, str] = {}
+    calls = {"n": 0}
+
+    async def fake_image_fn(*, prompt, project_name, out_path, **kwargs):
+        calls["n"] += 1
+        sent_prompts[calls["n"]] = prompt
+        _pattern_image(calls["n"]).save(out_path, format="PNG")
+        return {"src": "x", "bytes": 9}
+
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        asyncio.run(auto_thumbnail_image_stage(job_dir, channel_path, fake_image_fn, throttle_sec=0))
+
+    assert sent_prompts
+    for index, prompt_text in sent_prompts.items():
+        md_path = job_dir / "operator" / "chatgpt" / f"thumbnail_prompt_{index}.md"
+        body = md_path.read_text(encoding="utf-8")
+        assert prompt_text in body
+
+
+def test_unified_image_prompt_audit_trail_matches_the_exact_sent_prompt(tmp_path, channel_path):
+    import hashlib
+
+    from video_agent.orchestrator.image_prompt_log import IMAGE_PROMPT_LOG_DIR, INDEX_NAME
+
+    job_dir = tmp_path / "job-audit-provenance"
+    _seed_three_variants(
+        job_dir, [_STRONG_TITLE_VARIANT, _WEAK_TITLE_VARIANT, _WEAK_TITLE_VARIANT_2]
+    )
+    sent_prompts: list[str] = []
+
+    async def fake_image_fn(*, prompt, project_name, out_path, **kwargs):
+        sent_prompts.append(prompt)
+        _pattern_image(len(sent_prompts)).save(out_path, format="PNG")
+        return {"src": "x", "bytes": 9}
+
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        asyncio.run(auto_thumbnail_image_stage(job_dir, channel_path, fake_image_fn, throttle_sec=0))
+
+    index_path = job_dir / IMAGE_PROMPT_LOG_DIR / INDEX_NAME
+    records = [json.loads(line) for line in index_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    thumbnail_records = [r for r in records if r["kind"] == "thumbnail"]
+    assert len(thumbnail_records) == len(sent_prompts)
+    for record in thumbnail_records:
+        matching = sent_prompts[record["index"] - 1]
+        assert record["prompt"] == matching
+        assert record["prompt_sha256"] == hashlib.sha256(matching.encode("utf-8")).hexdigest()
+
+
+def test_concept_signature_is_metadata_only_and_does_not_alter_the_sent_prompt(tmp_path, channel_path):
+    """Removing concept_signature from a plan must not change the prompt text
+    build_thumbnail_prompt() produces — it's selection metadata, not prompt
+    content."""
+    from video_agent.thumbnail_planner import build_thumbnail_prompt, plan_thumbnail_prompts
+
+    seo = {
+        "title": "Dormir mejor después de los 60",
+        "title_variants": [{"title": "Dormir mejor", "thumbnail_text": "DUERME MEJOR"}],
+    }
+    plans = plan_thumbnail_prompts(seo, {})
+    plan = plans[0]
+    assert "concept_signature" in plan
+
+    with_signature = build_thumbnail_prompt(plan)
+    stripped_plan = {k: v for k, v in plan.items() if k != "concept_signature"}
+    without_signature = build_thumbnail_prompt(stripped_plan)
+    assert with_signature == without_signature
+
+
+def test_selected_variant_index_matches_filename_public_path_bytes_and_event_log(tmp_path, channel_path):
+    job_dir = tmp_path / "job-index-consistency"
+    _seed_three_variants(
+        job_dir, [_WEAK_TITLE_VARIANT, _STRONG_TITLE_VARIANT, _WEAK_TITLE_VARIANT_2]
+    )
+    fake_image_fn = _flat_color_image_fn({1: (10, 10, 10), 2: (200, 30, 30), 3: (10, 200, 10)})
+
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        asyncio.run(auto_thumbnail_image_stage(job_dir, channel_path, fake_image_fn, throttle_sec=0))
+
+    report = json.loads((job_dir / "json" / "thumbnail_quality_report.json").read_text())
+    selected_index = report["selected_variant_index"]
+
+    seo = json.loads((job_dir / "seo.json").read_text())
+    assert seo["thumbnail_path"].endswith(f"thumbnail_{selected_index}.jpg")
+
+    variant_jpg = job_dir / "outputs" / f"thumbnail_{selected_index}.jpg"
+    alias_jpg = job_dir / "outputs" / "thumbnail.jpg"
+    assert alias_jpg.read_bytes() == variant_jpg.read_bytes()
+
+    events = [
+        json.loads(line)
+        for line in (job_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    selected_events = [e for e in events if e.get("event") == "THUMBNAIL_QA_SELECTED"]
+    assert selected_events
+    assert selected_events[-1]["data"]["variant"] == selected_index
+
+
 def test_auto_thumbnail_image_stage_wrong_stage_raises(tmp_path, channel_path):
     job_dir = tmp_path / "job-wrong"
     _seed_at_thumbnail_image(job_dir)

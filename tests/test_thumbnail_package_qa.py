@@ -10,6 +10,7 @@ heuristics, and final deterministic candidate selection.
 from __future__ import annotations
 
 import io
+import json
 
 import pytest
 from PIL import Image
@@ -146,6 +147,33 @@ def test_missing_signature_metadata_is_not_available_not_a_pass():
     result = qa.signature_difference_status(None, {"a": 1}, min_differences=qa.SIBLING_SIGNATURE_MIN_DIFFERENCES)
     assert result["status"] == qa.STATUS_NOT_AVAILABLE
     assert result["status"] != qa.STATUS_PASS
+
+
+# ── §7 provenance / no-false-pass regression (Task 7) ───────────────────────
+
+def test_ocr_not_run_survives_json_round_trip_still_not_a_pass():
+    """A serialized-then-deserialized not_run OCR result must never resolve
+    to a pass — no downstream reader can be tricked by a JSON round trip."""
+    result = qa.check_ocr_exact_copy("HOLA", None, 1920, 1080)
+    round_tripped = json.loads(json.dumps(result, ensure_ascii=False))
+    assert round_tripped["status"] == qa.STATUS_NOT_RUN
+    assert round_tripped["status"] != qa.STATUS_PASS
+    assert round_tripped["requires_manual_review"] is True
+
+
+def test_missing_signature_survives_json_round_trip_still_not_a_pass():
+    result = qa.signature_difference_status(None, {"a": 1}, min_differences=qa.SIBLING_SIGNATURE_MIN_DIFFERENCES)
+    round_tripped = json.loads(json.dumps(result))
+    assert round_tripped["status"] == qa.STATUS_NOT_AVAILABLE
+    assert round_tripped["status"] != qa.STATUS_PASS
+
+
+def test_candidate_report_serializes_with_dataclasses_asdict_and_stable_schema():
+    import dataclasses
+    report = _report(1)
+    payload = json.loads(json.dumps(dataclasses.asdict(report), ensure_ascii=False))
+    assert payload["schema_version"] == qa.SCHEMA_VERSION
+    assert payload["variant_index"] == 1
 
 
 # ── §4.5 OCR exact-copy behavior ─────────────────────────────────────────────

@@ -950,6 +950,10 @@ async def auto_thumbnail_image_stage(
             for e in recent_history
         ],
         "ocr_provider": "injected" if thumbnail_ocr_fn is not None else "none",
+        # Aggregate OCR status (§5.2/§5.3): "not_run" whenever the caller
+        # didn't supply thumbnail_ocr_fn at all (compatibility mode) — never
+        # silently absent, never a false "pass" claim.
+        "ocr_status": "not_run" if thumbnail_ocr_fn is None else "ran",
         "thresholds": {
             "sibling_dhash_max": _thumb_qa.SIBLING_DHASH_MAX,
             "history_dhash_max": _thumb_qa.HISTORY_DHASH_MAX,
@@ -1001,6 +1005,7 @@ async def auto_thumbnail_image_stage(
             "ocr_status": winner_report.ocr_check.get("status"),
             "warning_count": winner_report.warning_count,
             "reason_codes": winner_report.reason_codes(),
+            "requires_manual_review": selection["requires_manual_review"],
         },
     )
 

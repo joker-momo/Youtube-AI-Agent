@@ -123,7 +123,15 @@ class ThumbnailCandidateReport:
             *self.sibling_checks, *self.sibling_signature_checks,
             *self.history_combined_checks,
         ]
-        return sum(1 for c in checks if c.get("status") == STATUS_WARN)
+        count = sum(1 for c in checks if c.get("status") == STATUS_WARN)
+        # OCR-unavailable compatibility mode (§5.2/§11) is itself a warning
+        # condition even when nothing else is questionable: `not_run` is
+        # neither STATUS_WARN nor STATUS_FAIL, so it would otherwise never
+        # surface as a warning at all and the required warning event
+        # (THUMBNAIL_QA_WARNING) would silently never fire.
+        if self.requires_manual_review:
+            count += 1
+        return count
 
     @property
     def requires_manual_review(self) -> bool:
@@ -148,6 +156,8 @@ class ThumbnailCandidateReport:
         for check in self.history_combined_checks:
             if check.get("status") == STATUS_FAIL:
                 codes.append(f"history_duplicate_and_low_diversity:{check.get('path', '')}")
+            elif check.get("status") == STATUS_WARN:
+                codes.append(f"history_partial_match:{check.get('path', '')}")
         return codes
 
 

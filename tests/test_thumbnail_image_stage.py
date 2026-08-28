@@ -959,6 +959,138 @@ def test_warning_event_is_emitted_for_a_candidate_with_warnings(tmp_path, channe
     assert all(e["data"]["warning_count"] > 0 for e in warning_events)
 
 
+# ── Codex verification round 4: OCR compatibility mode report/event contract
+# (design §5.2, §5.3, §11, §13) ─────────────────────────────────────────────
+
+def test_no_ocr_fn_produces_not_run_aggregate_ocr_status(tmp_path, channel_path):
+    job_dir = tmp_path / "job-ocr-status-aggregate"
+    _seed_three_variants(
+        job_dir, [_STRONG_TITLE_VARIANT, _WEAK_TITLE_VARIANT, _WEAK_TITLE_VARIANT_2]
+    )
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        asyncio.run(
+            auto_thumbnail_image_stage(job_dir, channel_path, _flat_color_image_fn(), throttle_sec=0)
+        )
+
+    report = json.loads((job_dir / "json" / "thumbnail_quality_report.json").read_text())
+    assert report["ocr_status"] == "not_run"
+    assert report["ocr_provider"] == "none"
+
+
+def test_no_ocr_fn_emits_a_warning_event_with_actionable_reason(tmp_path, channel_path):
+    """§5.2: OCR-unavailable compatibility mode must produce a warning event,
+    not silence — even when nothing else about the candidate is questionable."""
+    job_dir = tmp_path / "job-ocr-warning-event"
+    _seed_three_variants(
+        job_dir, [_STRONG_TITLE_VARIANT, _WEAK_TITLE_VARIANT, _WEAK_TITLE_VARIANT_2]
+    )
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        asyncio.run(
+            auto_thumbnail_image_stage(job_dir, channel_path, _flat_color_image_fn(), throttle_sec=0)
+        )
+
+    events = [
+        json.loads(line)
+        for line in (job_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    warning_events = [e for e in events if e.get("event") == "THUMBNAIL_QA_WARNING"]
+    assert warning_events, "OCR-unavailable compatibility mode must still warn"
+    for event in warning_events:
+        assert event["data"]["reason_codes"], "warning event must carry an actionable reason"
+        assert "ocr_not_run" in event["data"]["reason_codes"]
+
+
+def test_no_ocr_fn_primary_selected_event_states_requires_manual_review(tmp_path, channel_path):
+    job_dir = tmp_path / "job-ocr-manual-review-event"
+    _seed_three_variants(
+        job_dir, [_STRONG_TITLE_VARIANT, _WEAK_TITLE_VARIANT, _WEAK_TITLE_VARIANT_2]
+    )
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        asyncio.run(
+            auto_thumbnail_image_stage(job_dir, channel_path, _flat_color_image_fn(), throttle_sec=0)
+        )
+
+    events = [
+        json.loads(line)
+        for line in (job_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    selected = next(e for e in events if e.get("event") == "THUMBNAIL_PRIMARY_SELECTED")
+    assert selected["data"]["requires_manual_review"] is True
+
+
+def test_history_only_partial_match_warning_has_non_empty_reason_codes(tmp_path, channel_path):
+    """A history WARN (only image OR only signature insufficient, not both)
+    must still surface an actionable reason — not silently pad warning_count."""
+    baseline_job = tmp_path / "job-partial-baseline"
+    _seed_three_variants(
+        baseline_job, [_STRONG_TITLE_VARIANT, _WEAK_TITLE_VARIANT, _WEAK_TITLE_VARIANT_2]
+    )
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        asyncio.run(
+            auto_thumbnail_image_stage(baseline_job, channel_path, _flat_color_image_fn(), throttle_sec=0)
+        )
+    baseline_plans = json.loads((baseline_job / "json" / "thumbnail_prompt_plans.json").read_text())
+    baseline_face_plan = next(p for p in baseline_plans if p["visual_strategy"] == "face_driven")
+    face_index = baseline_face_plan["variant_index"]
+    baseline_face_bytes = (baseline_job / "outputs" / f"thumbnail_{face_index}.jpg").read_bytes()
+
+    # Sibling with an IMAGE-identical primary but a signature that already
+    # differs enough (>=3 dims) — image-only insufficiency, a WARN not a FAIL.
+    sibling = tmp_path / "sibling-partial"
+    (sibling / "json").mkdir(parents=True)
+    (sibling / "json" / "seo.json").write_text(json.dumps({"job_id": "sibling-partial"}), encoding="utf-8")
+    (sibling / "outputs").mkdir(parents=True)
+    (sibling / "outputs" / "thumbnail.jpg").write_bytes(baseline_face_bytes)
+    diverse_signature = dict(baseline_face_plan["concept_signature"])
+    diverse_signature.update(
+        setting_family="bedroom", action_archetype="side_by_side_contrast", emotion_mode="quiet_determination"
+    )
+    (sibling / "json" / "thumbnail_quality_report.json").write_text(
+        json.dumps({"selected_signature": diverse_signature}), encoding="utf-8"
+    )
+
+    adjusted_job = tmp_path / "job-partial-adjusted"
+    _seed_three_variants(
+        adjusted_job, [_STRONG_TITLE_VARIANT, _WEAK_TITLE_VARIANT, _WEAK_TITLE_VARIANT_2]
+    )
+
+    def passing_ocr(jpg_path, expected_text):
+        from video_agent.qa.thumbnail_package_qa import OcrBox, ThumbnailOcrResult
+        return ThumbnailOcrResult(boxes=(OcrBox(text=expected_text, left=0, top=0, width=10, height=10),))
+
+    # Isolate the history-only warning: with OCR passing, "ocr_not_run" can't
+    # piggyback a non-empty reason_codes onto an otherwise-silent warning.
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        asyncio.run(
+            auto_thumbnail_image_stage(
+                adjusted_job, channel_path, _flat_color_image_fn(), throttle_sec=0,
+                thumbnail_ocr_fn=passing_ocr,
+            )
+        )
+
+    report = json.loads((adjusted_job / "json" / "thumbnail_quality_report.json").read_text())
+    face_candidate = next(c for c in report["candidates"] if c["variant_index"] == face_index)
+    combined = next(
+        c for c in face_candidate["history_combined_checks"] if c["path"].endswith("thumbnail.jpg")
+    )
+    assert combined["status"] == "warning"
+
+    events = [
+        json.loads(line)
+        for line in (adjusted_job / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    face_warning = next(
+        e for e in events
+        if e.get("event") == "THUMBNAIL_QA_WARNING" and e["data"]["variant"] == face_index
+    )
+    assert face_warning["data"]["reason_codes"]
+    assert "ocr_not_run" not in face_warning["data"]["reason_codes"]
+    assert any(code.startswith("history_partial_match:") for code in face_warning["data"]["reason_codes"])
+
+
 def test_primary_selected_event_carries_the_full_required_payload(tmp_path, channel_path):
     job_dir = tmp_path / "job-primary-selected-payload"
     _seed_three_variants(

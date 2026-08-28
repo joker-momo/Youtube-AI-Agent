@@ -85,6 +85,13 @@ class ThumbnailCandidateReport:
     package_score: float
     sibling_checks: list[dict] = field(default_factory=list)
     history_checks: list[dict] = field(default_factory=list)
+    # Structured concept_signature diversity gates (distinct from the pixel
+    # dHash checks above): sibling_checks/history_checks catch two candidates
+    # that render as visually near-identical; these catch two candidates that
+    # share too much of the same COMPOSITION (setting/camera/action/subject/
+    # emotion/text-zone) even if the pixels differ, per signature_difference_status().
+    sibling_signature_checks: list[dict] = field(default_factory=list)
+    history_signature_checks: list[dict] = field(default_factory=list)
     ocr_check: dict = field(default_factory=dict)
     visual_check: dict = field(default_factory=dict)
     schema_version: str = SCHEMA_VERSION
@@ -99,11 +106,19 @@ class ThumbnailCandidateReport:
             return True
         if any(c.get("status") == STATUS_FAIL for c in self.sibling_checks):
             return True
-        return any(c.get("status") == STATUS_FAIL for c in self.history_checks)
+        if any(c.get("status") == STATUS_FAIL for c in self.history_checks):
+            return True
+        if any(c.get("status") == STATUS_FAIL for c in self.sibling_signature_checks):
+            return True
+        return any(c.get("status") == STATUS_FAIL for c in self.history_signature_checks)
 
     @property
     def warning_count(self) -> int:
-        checks = [self.ocr_check, self.visual_check, *self.sibling_checks, *self.history_checks]
+        checks = [
+            self.ocr_check, self.visual_check,
+            *self.sibling_checks, *self.history_checks,
+            *self.sibling_signature_checks, *self.history_signature_checks,
+        ]
         return sum(1 for c in checks if c.get("status") == STATUS_WARN)
 
     @property
@@ -123,6 +138,9 @@ class ThumbnailCandidateReport:
         for check in (*self.sibling_checks, *self.history_checks):
             if check.get("status") == STATUS_FAIL:
                 codes.append(f"similarity_fail:{check.get('path')}")
+        for check in (*self.sibling_signature_checks, *self.history_signature_checks):
+            if check.get("status") == STATUS_FAIL:
+                codes.append(f"signature_diversity_fail:{check.get('compared_to', '')}")
         return codes
 
 

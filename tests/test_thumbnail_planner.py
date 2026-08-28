@@ -885,6 +885,11 @@ def test_recent_matching_signature_causes_nonmatching_primary_candidate():
     assert adjusted_primary["concept_signature"]["setting_family"] != primary["concept_signature"]["setting_family"]
     # Only the recency-nudged field changes; strategy assignment is untouched.
     assert {p["visual_strategy"] for p in adjusted} == {p["visual_strategy"] for p in baseline}
+    # A signature-only change with no effect on the actual generated artifact
+    # would be a no-op: the SENT prompt and its scene must also differ, since
+    # that (not the signature) is what ChatGPT actually receives.
+    assert adjusted_primary["scene"] != primary["scene"]
+    assert adjusted_primary["prompt"] != primary["prompt"]
 
 
 def test_recent_signatures_are_never_mutated():

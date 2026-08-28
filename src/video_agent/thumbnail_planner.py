@@ -845,9 +845,13 @@ def _avoid_recent_repetition(
 ) -> None:
     """Nudge the face-driven candidate's setting away from recent history.
 
-    Only reads `recent_signatures` (never mutated) and only adjusts the
-    setting-family field — strategy/camera/subject/text-zone assignment,
-    which already guarantees sibling diversity, is left untouched.
+    Only reads `recent_signatures` (never mutated). Must run BEFORE
+    `build_thumbnail_prompt()`: this changes `plan["scene"]` itself (not
+    just the `concept_signature` metadata that describes it), because a
+    signature that says "living" while the actual sent prompt still
+    describes a kitchen would be a metadata-only no-op — strategy/camera/
+    subject/text-zone assignment, which already guarantees sibling
+    diversity, is left untouched.
     """
     if not recent_signatures:
         return
@@ -870,6 +874,7 @@ def _avoid_recent_repetition(
                 candidate = cycle[(start + offset) % len(cycle)]
                 if candidate != current:
                     sig["setting_family"] = candidate
+                    plan["scene"] = _TOPIC_SCENES.get(candidate, plan["scene"])
                     break
 
 
@@ -1312,8 +1317,14 @@ def plan_thumbnail_prompts(
             else _SETTING_FAMILY_BY_CATEGORY.get(profile["primary_category"], "home")
         )
         plan["concept_signature"] = _build_concept_signature(plan, profile, setting_family)
-        plan["prompt"] = build_thumbnail_prompt(plan)
         plans.append(plan)
 
+    # Repetition avoidance MUST run before the prompt is built: it can change
+    # a plan's setting/scene, and a prompt built beforehand would still
+    # describe the old scene no matter what the signature says afterward.
     _avoid_recent_repetition(plans, recent_signatures)
+
+    for plan in plans:
+        plan["prompt"] = build_thumbnail_prompt(plan)
+
     return plans

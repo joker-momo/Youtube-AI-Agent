@@ -587,7 +587,19 @@ async def auto_thumbnail_image_stage(
     )
     planner_thumbnail_config.setdefault("accent_color", accent_color)
     planner_channel_config["thumbnail"] = planner_thumbnail_config
-    plans = plan_thumbnail_prompts(seo, planner_channel_config)
+
+    # Discovered BEFORE planning (not just before QA): the planner needs the
+    # recent structured signatures to actually nudge the face-driven variant's
+    # scene away from a repeat. Discovering this only for post-hoc QA, after
+    # plans (and their prompts) are already built, would make the diversity
+    # check pure metadata with no effect on what gets generated.
+    recent_history = _discover_recent_thumbnail_history(job_dir)
+    recent_signatures = [
+        entry["signature"] for entry in recent_history if entry.get("signature")
+    ]
+    plans = plan_thumbnail_prompts(
+        seo, planner_channel_config, recent_signatures=recent_signatures
+    )
 
     variants: list[dict[str, str]] = [
         {
@@ -787,8 +799,9 @@ async def auto_thumbnail_image_stage(
 
     # Score and QA every generated candidate, then select the best VALID one
     # (package score + image QA) as primary — not simply the first candidate
-    # that happened to generate successfully.
-    recent_history = _discover_recent_thumbnail_history(job_dir)
+    # that happened to generate successfully. `recent_history` was already
+    # discovered above (before planning) so its signatures could inform the
+    # planner too; reused here for the per-image dHash history comparison.
     history_dhashes: list[tuple[str, int]] = []
     for entry in recent_history:
         try:
@@ -848,6 +861,35 @@ async def auto_thumbnail_image_stage(
             for h_path, h_dhash in history_dhashes
         ]
 
+        # Structured concept_signature diversity gates: two candidates can
+        # hash as pixel-different (above) yet still share the same setting/
+        # camera/action/subject/emotion/text-zone composition. Enforce the
+        # same >=5 sibling / >=3 history dimension floors used elsewhere.
+        candidate_signature = plan.get("concept_signature")
+        sibling_signature_checks = []
+        for other, other_path in sorted(generated_by_index.items()):
+            if other == index:
+                continue
+            check = _thumb_qa.signature_difference_status(
+                candidate_signature,
+                plans[other - 1].get("concept_signature"),
+                min_differences=_thumb_qa.SIBLING_SIGNATURE_MIN_DIFFERENCES,
+            )
+            check["compared_to"] = str(other_path)
+            sibling_signature_checks.append(check)
+        history_signature_checks = []
+        for entry in recent_history:
+            entry_signature = entry.get("signature")
+            if not entry_signature:
+                continue
+            check = _thumb_qa.signature_difference_status(
+                candidate_signature,
+                entry_signature,
+                min_differences=_thumb_qa.HISTORY_SIGNATURE_MIN_DIFFERENCES,
+            )
+            check["compared_to"] = str(entry.get("path", ""))
+            history_signature_checks.append(check)
+
         candidate_reports.append(
             _thumb_qa.ThumbnailCandidateReport(
                 variant_index=index,
@@ -856,6 +898,8 @@ async def auto_thumbnail_image_stage(
                 package_score=package_score,
                 sibling_checks=sibling_checks,
                 history_checks=history_checks,
+                sibling_signature_checks=sibling_signature_checks,
+                history_signature_checks=history_signature_checks,
                 ocr_check=ocr_check,
                 visual_check=visual_check,
             )

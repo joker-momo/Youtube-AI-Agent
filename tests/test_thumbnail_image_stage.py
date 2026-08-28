@@ -769,6 +769,88 @@ def test_selected_variant_index_matches_filename_public_path_bytes_and_event_log
     assert selected_events[-1]["data"]["variant"] == selected_index
 
 
+# ── recent-signature history actually reaches the generated prompt ─────────
+# Codex verification catch: `plan_thumbnail_prompts(..., recent_signatures=)`
+# was never called with real history, and the repetition-avoidance mutation
+# only touched `concept_signature` metadata after the prompt was already
+# built — a signature-only "fix" with zero effect on what ChatGPT receives.
+
+def test_prior_job_signature_history_changes_the_generated_face_driven_prompt(tmp_path, channel_path):
+    baseline_job = tmp_path / "job-baseline"
+    _seed_three_variants(
+        baseline_job, [_STRONG_TITLE_VARIANT, _WEAK_TITLE_VARIANT, _WEAK_TITLE_VARIANT_2]
+    )
+    baseline_prompts: list[str] = []
+
+    async def capture_image_fn(*, prompt, project_name, out_path, **kwargs):
+        baseline_prompts.append(prompt)
+        _pattern_image(len(baseline_prompts)).save(out_path, format="PNG")
+        return {"src": "x", "bytes": 9}
+
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        asyncio.run(
+            auto_thumbnail_image_stage(baseline_job, channel_path, capture_image_fn, throttle_sec=0)
+        )
+
+    baseline_plans = json.loads((baseline_job / "json" / "thumbnail_prompt_plans.json").read_text())
+    baseline_face_plan = next(p for p in baseline_plans if p["visual_strategy"] == "face_driven")
+    baseline_face_signature = baseline_face_plan["concept_signature"]
+    baseline_face_prompt = baseline_prompts[baseline_face_plan["variant_index"] - 1]
+
+    # A sibling job whose selected primary shares the exact same face-driven
+    # signature (setting/action/text-zone) that this job would otherwise
+    # default to — this is the repetition the history mechanism must break.
+    _make_long_form_job(
+        tmp_path, "sibling-job", signature=baseline_face_signature, mtime_offset=-5
+    )
+
+    adjusted_job = tmp_path / "job-adjusted"
+    _seed_three_variants(
+        adjusted_job, [_STRONG_TITLE_VARIANT, _WEAK_TITLE_VARIANT, _WEAK_TITLE_VARIANT_2]
+    )
+    adjusted_prompts: list[str] = []
+
+    async def capture_image_fn_2(*, prompt, project_name, out_path, **kwargs):
+        adjusted_prompts.append(prompt)
+        _pattern_image(len(adjusted_prompts)).save(out_path, format="PNG")
+        return {"src": "x", "bytes": 9}
+
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        asyncio.run(
+            auto_thumbnail_image_stage(adjusted_job, channel_path, capture_image_fn_2, throttle_sec=0)
+        )
+
+    adjusted_plans = json.loads((adjusted_job / "json" / "thumbnail_prompt_plans.json").read_text())
+    adjusted_face_plan = next(p for p in adjusted_plans if p["visual_strategy"] == "face_driven")
+    adjusted_face_prompt = adjusted_prompts[adjusted_face_plan["variant_index"] - 1]
+
+    # The real point: the SENT prompt differs, not just the signature label.
+    assert adjusted_face_prompt != baseline_face_prompt
+    assert adjusted_face_plan["scene"] != baseline_face_plan["scene"]
+    assert adjusted_face_plan["concept_signature"]["setting_family"] != baseline_face_signature["setting_family"]
+
+
+def test_production_candidate_reports_include_structured_signature_gates(tmp_path, channel_path):
+    """signature_difference_status() must actually be called for real
+    candidates, not just exist as unit-tested dead code."""
+    job_dir = tmp_path / "job-signature-gates"
+    _seed_three_variants(
+        job_dir, [_STRONG_TITLE_VARIANT, _WEAK_TITLE_VARIANT, _WEAK_TITLE_VARIANT_2]
+    )
+    fake_image_fn = _flat_color_image_fn({1: (10, 10, 10), 2: (200, 30, 30), 3: (10, 200, 10)})
+
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        asyncio.run(auto_thumbnail_image_stage(job_dir, channel_path, fake_image_fn, throttle_sec=0))
+
+    report = json.loads((job_dir / "json" / "thumbnail_quality_report.json").read_text())
+    for candidate in report["candidates"]:
+        assert "sibling_signature_checks" in candidate
+        assert len(candidate["sibling_signature_checks"]) == 2  # vs. the other 2 variants
+        for check in candidate["sibling_signature_checks"]:
+            assert check["status"] == "pass"  # siblings guarantee >=5 differences (Task 3)
+            assert check["differences"] >= 5
+
+
 def test_auto_thumbnail_image_stage_wrong_stage_raises(tmp_path, channel_path):
     job_dir = tmp_path / "job-wrong"
     _seed_at_thumbnail_image(job_dir)

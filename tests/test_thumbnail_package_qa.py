@@ -131,6 +131,46 @@ def test_named_similarity_constants_match_spec():
     assert qa.HISTORY_SIGNATURE_MIN_DIFFERENCES == 3
 
 
+# ── §10 combined history hard-fail: design requires image-near-duplicate
+# AND signature-insufficient-diversity BOTH true, not either alone ──────────
+
+def _status(s):
+    return {"status": s}
+
+
+def test_combined_history_hard_fails_only_when_image_and_signature_both_fail():
+    combined = qa.combine_history_signals(_status(qa.STATUS_FAIL), _status(qa.STATUS_FAIL))
+    assert combined["status"] == qa.STATUS_FAIL
+
+
+def test_combined_history_warns_when_only_image_is_a_near_duplicate():
+    combined = qa.combine_history_signals(_status(qa.STATUS_FAIL), _status(qa.STATUS_PASS))
+    assert combined["status"] == qa.STATUS_WARN
+
+
+def test_combined_history_warns_when_only_signature_is_insufficiently_diverse():
+    combined = qa.combine_history_signals(_status(qa.STATUS_PASS), _status(qa.STATUS_FAIL))
+    assert combined["status"] == qa.STATUS_WARN
+
+
+def test_combined_history_passes_when_both_checks_pass():
+    combined = qa.combine_history_signals(_status(qa.STATUS_PASS), _status(qa.STATUS_PASS))
+    assert combined["status"] == qa.STATUS_PASS
+
+
+def test_combined_history_missing_signature_is_not_available_and_does_not_hard_fail():
+    """A missing structured comparison must never silently pass, but it also
+    must not gate a hard failure it cannot actually confirm."""
+    combined = qa.combine_history_signals(_status(qa.STATUS_PASS), _status(qa.STATUS_NOT_AVAILABLE))
+    assert combined["status"] != qa.STATUS_FAIL
+    assert combined["signature_check"]["status"] == qa.STATUS_NOT_AVAILABLE
+
+
+def test_combined_history_image_duplicate_with_missing_signature_only_warns():
+    combined = qa.combine_history_signals(_status(qa.STATUS_FAIL), _status(qa.STATUS_NOT_AVAILABLE))
+    assert combined["status"] == qa.STATUS_WARN
+
+
 # ── §4.4 signature difference count ─────────────────────────────────────────
 
 @pytest.mark.parametrize("differences", [0, 2, 3, 5, 8])
@@ -299,6 +339,7 @@ def _report(
 ) -> qa.ThumbnailCandidateReport:
     sibling_checks = []
     history_checks = [{"path": "h.jpg", "distance": min_history_distance, "status": qa.STATUS_PASS}]
+    history_combined_checks = [{"path": "h.jpg", "status": qa.STATUS_PASS}]
     ocr_check = {
         "status": ocr_status,
         "requires_manual_review": requires_manual_review,
@@ -310,7 +351,7 @@ def _report(
         "reason_codes": [] if visual_status == qa.STATUS_PASS else ["fixture_visual_reason"],
     }
     for _ in range(warning_count):
-        history_checks.append({"path": "w.jpg", "distance": 50.0, "status": qa.STATUS_WARN})
+        history_combined_checks.append({"path": "w.jpg", "status": qa.STATUS_WARN})
     return qa.ThumbnailCandidateReport(
         variant_index=variant_index,
         path=f"variant_{variant_index}.jpg",
@@ -321,6 +362,7 @@ def _report(
         package_score=package_score,
         sibling_checks=sibling_checks,
         history_checks=history_checks,
+        history_combined_checks=history_combined_checks,
         ocr_check=ocr_check,
         visual_check=visual_check,
     )

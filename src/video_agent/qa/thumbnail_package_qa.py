@@ -92,6 +92,12 @@ class ThumbnailCandidateReport:
     # emotion/text-zone) even if the pixels differ, per signature_difference_status().
     sibling_signature_checks: list[dict] = field(default_factory=list)
     history_signature_checks: list[dict] = field(default_factory=list)
+    # Drives the actual history hard-fail decision (§10): each entry is
+    # combine_history_signals(image_check, signature_check) for one recent
+    # item — hard fail only when BOTH signals fail together. history_checks/
+    # history_signature_checks above stay as raw, independent data for the
+    # report; they no longer gate hard_failed on their own.
+    history_combined_checks: list[dict] = field(default_factory=list)
     ocr_check: dict = field(default_factory=dict)
     visual_check: dict = field(default_factory=dict)
     schema_version: str = SCHEMA_VERSION
@@ -106,18 +112,16 @@ class ThumbnailCandidateReport:
             return True
         if any(c.get("status") == STATUS_FAIL for c in self.sibling_checks):
             return True
-        if any(c.get("status") == STATUS_FAIL for c in self.history_checks):
-            return True
         if any(c.get("status") == STATUS_FAIL for c in self.sibling_signature_checks):
             return True
-        return any(c.get("status") == STATUS_FAIL for c in self.history_signature_checks)
+        return any(c.get("status") == STATUS_FAIL for c in self.history_combined_checks)
 
     @property
     def warning_count(self) -> int:
         checks = [
             self.ocr_check, self.visual_check,
-            *self.sibling_checks, *self.history_checks,
-            *self.sibling_signature_checks, *self.history_signature_checks,
+            *self.sibling_checks, *self.sibling_signature_checks,
+            *self.history_combined_checks,
         ]
         return sum(1 for c in checks if c.get("status") == STATUS_WARN)
 
@@ -135,12 +139,15 @@ class ThumbnailCandidateReport:
         codes.extend(self.decode.get("reason_codes") or [])
         codes.extend(self.ocr_check.get("reason_codes") or [])
         codes.extend(self.visual_check.get("reason_codes") or [])
-        for check in (*self.sibling_checks, *self.history_checks):
+        for check in self.sibling_checks:
             if check.get("status") == STATUS_FAIL:
                 codes.append(f"similarity_fail:{check.get('path')}")
-        for check in (*self.sibling_signature_checks, *self.history_signature_checks):
+        for check in self.sibling_signature_checks:
             if check.get("status") == STATUS_FAIL:
                 codes.append(f"signature_diversity_fail:{check.get('compared_to', '')}")
+        for check in self.history_combined_checks:
+            if check.get("status") == STATUS_FAIL:
+                codes.append(f"history_duplicate_and_low_diversity:{check.get('path', '')}")
         return codes
 
 
@@ -217,6 +224,31 @@ def compare_history_similarity(dhash_a: int, dhash_b: int, path_b: str) -> dict:
         "path": path_b,
         "distance": distance,
         "status": STATUS_FAIL if distance <= HISTORY_DHASH_MAX else STATUS_PASS,
+    }
+
+
+def combine_history_signals(image_check: dict, signature_check: dict) -> dict:
+    """Combine one recent-history image-similarity check with its paired
+    structured-signature check into the single design-required hard-fail
+    decision (§10): hard fail ONLY when the image is a near-duplicate AND
+    fewer than the required signature dimensions differ. Either signal
+    alone is a warning — never an independent hard fail, and a missing
+    signature comparison (`not_available`) never counts as "insufficient"
+    on its own, so it cannot manufacture a hard fail out of missing data.
+    """
+    image_is_duplicate = image_check.get("status") == STATUS_FAIL
+    signature_is_insufficient = signature_check.get("status") == STATUS_FAIL
+    if image_is_duplicate and signature_is_insufficient:
+        status = STATUS_FAIL
+    elif image_is_duplicate or signature_is_insufficient:
+        status = STATUS_WARN
+    else:
+        status = STATUS_PASS
+    return {
+        "path": image_check.get("path"),
+        "status": status,
+        "image_check": image_check,
+        "signature_check": signature_check,
     }
 
 

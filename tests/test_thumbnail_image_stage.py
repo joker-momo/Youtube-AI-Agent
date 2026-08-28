@@ -764,7 +764,7 @@ def test_selected_variant_index_matches_filename_public_path_bytes_and_event_log
         for line in (job_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    selected_events = [e for e in events if e.get("event") == "THUMBNAIL_QA_SELECTED"]
+    selected_events = [e for e in events if e.get("event") == "THUMBNAIL_PRIMARY_SELECTED"]
     assert selected_events
     assert selected_events[-1]["data"]["variant"] == selected_index
 
@@ -849,6 +849,158 @@ def test_production_candidate_reports_include_structured_signature_gates(tmp_pat
         for check in candidate["sibling_signature_checks"]:
             assert check["status"] == "pass"  # siblings guarantee >=5 differences (Task 3)
             assert check["differences"] >= 5
+
+
+# ── Codex verification round 3: design §10 combined history hard-fail,
+# §5.1 not_available serialization, §13 events and aggregate report fields ──
+
+def test_history_hard_fails_only_when_image_and_signature_both_insufficient(tmp_path, channel_path):
+    """Design §10: hard fail requires a near-duplicate recent IMAGE *and*
+    fewer than 3 signature dimensions differing — never either alone."""
+    baseline_job = tmp_path / "job-combined-baseline"
+    _seed_three_variants(
+        baseline_job, [_STRONG_TITLE_VARIANT, _WEAK_TITLE_VARIANT, _WEAK_TITLE_VARIANT_2]
+    )
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        asyncio.run(
+            auto_thumbnail_image_stage(baseline_job, channel_path, _flat_color_image_fn(), throttle_sec=0)
+        )
+    baseline_plans = json.loads((baseline_job / "json" / "thumbnail_prompt_plans.json").read_text())
+    baseline_face_plan = next(p for p in baseline_plans if p["visual_strategy"] == "face_driven")
+    face_index = baseline_face_plan["variant_index"]
+    baseline_face_bytes = (baseline_job / "outputs" / f"thumbnail_{face_index}.jpg").read_bytes()
+
+    # Sibling whose selected primary is BYTE-IDENTICAL (dHash distance 0) and
+    # whose signature exactly matches the baseline's face-driven candidate —
+    # both the image and the (pre-nudge) signature are maximally similar.
+    sibling = tmp_path / "sibling-combined"
+    (sibling / "json").mkdir(parents=True)
+    (sibling / "json" / "seo.json").write_text(json.dumps({"job_id": "sibling-combined"}), encoding="utf-8")
+    (sibling / "outputs").mkdir(parents=True)
+    (sibling / "outputs" / "thumbnail.jpg").write_bytes(baseline_face_bytes)
+    (sibling / "json" / "thumbnail_quality_report.json").write_text(
+        json.dumps({"selected_signature": baseline_face_plan["concept_signature"]}), encoding="utf-8"
+    )
+
+    adjusted_job = tmp_path / "job-combined-adjusted"
+    _seed_three_variants(
+        adjusted_job, [_STRONG_TITLE_VARIANT, _WEAK_TITLE_VARIANT, _WEAK_TITLE_VARIANT_2]
+    )
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        asyncio.run(
+            auto_thumbnail_image_stage(adjusted_job, channel_path, _flat_color_image_fn(), throttle_sec=0)
+        )
+
+    report = json.loads((adjusted_job / "json" / "thumbnail_quality_report.json").read_text())
+    face_candidate = next(c for c in report["candidates"] if c["variant_index"] == face_index)
+    combined = next(
+        c for c in face_candidate["history_combined_checks"] if c["path"].endswith("thumbnail.jpg")
+    )
+    # The historical entry is a genuine repeat on BOTH axes, so it must be
+    # the hard-failing kind, not a mere warning — and the still-valid
+    # sibling variants must be the ones actually selected.
+    assert combined["image_check"]["status"] == "fail"
+    assert combined["signature_check"]["status"] == "fail"
+    assert combined["status"] == "fail"
+    assert report["selected_variant_index"] != face_index
+
+
+def test_missing_history_signature_is_recorded_not_available_not_skipped(tmp_path, channel_path):
+    """Design §5.1: a prior job with no signature metadata must still be
+    compared (image-only) and recorded as not_available — never silently
+    dropped from the report and never mislabeled as a pass."""
+    job_dir = tmp_path / "job-missing-sig"
+    _seed_three_variants(
+        job_dir, [_STRONG_TITLE_VARIANT, _WEAK_TITLE_VARIANT, _WEAK_TITLE_VARIANT_2]
+    )
+    _make_long_form_job(tmp_path, "no-signature-sibling", signature=None, mtime_offset=-5)
+
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        asyncio.run(
+            auto_thumbnail_image_stage(job_dir, channel_path, _flat_color_image_fn(), throttle_sec=0)
+        )
+
+    report = json.loads((job_dir / "json" / "thumbnail_quality_report.json").read_text())
+    for candidate in report["candidates"]:
+        assert candidate["history_signature_checks"], "must not be skipped"
+        for check in candidate["history_signature_checks"]:
+            assert check["status"] == "not_available"
+            assert check["status"] != "pass"
+
+
+def test_warning_event_is_emitted_for_a_candidate_with_warnings(tmp_path, channel_path):
+    job_dir = tmp_path / "job-warning-event"
+    _seed_three_variants(
+        job_dir, [_STRONG_TITLE_VARIANT, _WEAK_TITLE_VARIANT, _WEAK_TITLE_VARIANT_2]
+    )
+    calls = {"n": 0}
+
+    async def fake_image_fn(*, prompt, project_name, out_path, **kwargs):
+        from PIL import Image
+        calls["n"] += 1
+        # Variant 1 gets a flat, low-contrast image (a real WARN), the rest
+        # get distinguishable patterns.
+        if calls["n"] == 1:
+            Image.new("RGB", (1920, 1080), (120, 120, 120)).save(out_path, format="PNG")
+        else:
+            _pattern_image(calls["n"]).save(out_path, format="PNG")
+        return {"src": "x", "bytes": 9}
+
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        asyncio.run(auto_thumbnail_image_stage(job_dir, channel_path, fake_image_fn, throttle_sec=0))
+
+    events = [
+        json.loads(line)
+        for line in (job_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    warning_events = [e for e in events if e.get("event") == "THUMBNAIL_QA_WARNING"]
+    assert any(e["data"]["variant"] == 1 for e in warning_events)
+    assert all(e["data"]["warning_count"] > 0 for e in warning_events)
+
+
+def test_primary_selected_event_carries_the_full_required_payload(tmp_path, channel_path):
+    job_dir = tmp_path / "job-primary-selected-payload"
+    _seed_three_variants(
+        job_dir, [_STRONG_TITLE_VARIANT, _WEAK_TITLE_VARIANT, _WEAK_TITLE_VARIANT_2]
+    )
+    fake_image_fn = _flat_color_image_fn({1: (10, 10, 10), 2: (200, 30, 30), 3: (10, 200, 10)})
+
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        asyncio.run(auto_thumbnail_image_stage(job_dir, channel_path, fake_image_fn, throttle_sec=0))
+
+    events = [
+        json.loads(line)
+        for line in (job_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    selected = next(e for e in events if e.get("event") == "THUMBNAIL_PRIMARY_SELECTED")
+    data = selected["data"]
+    for key in (
+        "variant", "package_score", "visual_score", "final_score",
+        "history_item_count", "ocr_status", "warning_count", "reason_codes",
+    ):
+        assert key in data, key
+
+
+def test_quality_report_includes_required_aggregate_fields(tmp_path, channel_path):
+    job_dir = tmp_path / "job-aggregate-fields"
+    _seed_three_variants(
+        job_dir, [_STRONG_TITLE_VARIANT, _WEAK_TITLE_VARIANT, _WEAK_TITLE_VARIANT_2]
+    )
+    fake_image_fn = _flat_color_image_fn({1: (10, 10, 10), 2: (200, 30, 30), 3: (10, 200, 10)})
+
+    with patch("video_agent.contracts.repo_root", return_value=tmp_path):
+        asyncio.run(auto_thumbnail_image_stage(job_dir, channel_path, fake_image_fn, throttle_sec=0))
+
+    report = json.loads((job_dir / "json" / "thumbnail_quality_report.json").read_text())
+    for key in ("history_items", "selected_path", "selection_reason", "ocr_provider", "thresholds"):
+        assert key in report, key
+    assert report["ocr_provider"] == "none"
+    assert set(report["thresholds"]) == {
+        "sibling_dhash_max", "history_dhash_max",
+        "sibling_signature_min_differences", "history_signature_min_differences",
+    }
 
 
 def test_auto_thumbnail_image_stage_wrong_stage_raises(tmp_path, channel_path):

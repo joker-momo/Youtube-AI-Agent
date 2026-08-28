@@ -856,16 +856,43 @@ async def auto_thumbnail_image_stage(
             for other, other_path in sorted(generated_by_index.items())
             if other != index
         ]
-        history_checks = [
-            _thumb_qa.compare_history_similarity(decode.get("dhash", 0), h_dhash, h_path)
-            for h_path, h_dhash in history_dhashes
-        ]
-
-        # Structured concept_signature diversity gates: two candidates can
-        # hash as pixel-different (above) yet still share the same setting/
-        # camera/action/subject/emotion/text-zone composition. Enforce the
-        # same >=5 sibling / >=3 history dimension floors used elsewhere.
+        history_dhash_by_path = dict(history_dhashes)
+        history_checks = []
+        history_signature_checks = []
+        history_combined_checks = []
         candidate_signature = plan.get("concept_signature")
+        for entry in recent_history:
+            entry_path = str(entry.get("path", ""))
+            if entry_path in history_dhash_by_path:
+                image_check = _thumb_qa.compare_history_similarity(
+                    decode.get("dhash", 0), history_dhash_by_path[entry_path], entry_path
+                )
+            else:
+                # Image failed to decode/open — tolerate per §12: no image
+                # evidence available, so it cannot count as a duplicate.
+                image_check = {"path": entry_path, "status": _thumb_qa.STATUS_NOT_AVAILABLE}
+            history_checks.append(image_check)
+
+            # Always compare, even when the entry has no signature (older
+            # job, malformed report): signature_difference_status(None, ...)
+            # correctly records not_available rather than skipping the
+            # comparison outright, per §5.1 ("not silently reported as passing").
+            signature_check = _thumb_qa.signature_difference_status(
+                candidate_signature,
+                entry.get("signature"),
+                min_differences=_thumb_qa.HISTORY_SIGNATURE_MIN_DIFFERENCES,
+            )
+            signature_check["compared_to"] = entry_path
+            history_signature_checks.append(signature_check)
+
+            history_combined_checks.append(
+                _thumb_qa.combine_history_signals(image_check, signature_check)
+            )
+
+        # Structured concept_signature diversity gates against SIBLINGS: two
+        # candidates can hash as pixel-different (above) yet still share the
+        # same setting/camera/action/subject/emotion/text-zone composition.
+        # Enforce the same >=5 dimension floor used by the planner guarantee.
         sibling_signature_checks = []
         for other, other_path in sorted(generated_by_index.items()):
             if other == index:
@@ -877,18 +904,6 @@ async def auto_thumbnail_image_stage(
             )
             check["compared_to"] = str(other_path)
             sibling_signature_checks.append(check)
-        history_signature_checks = []
-        for entry in recent_history:
-            entry_signature = entry.get("signature")
-            if not entry_signature:
-                continue
-            check = _thumb_qa.signature_difference_status(
-                candidate_signature,
-                entry_signature,
-                min_differences=_thumb_qa.HISTORY_SIGNATURE_MIN_DIFFERENCES,
-            )
-            check["compared_to"] = str(entry.get("path", ""))
-            history_signature_checks.append(check)
 
         candidate_reports.append(
             _thumb_qa.ThumbnailCandidateReport(
@@ -900,6 +915,7 @@ async def auto_thumbnail_image_stage(
                 history_checks=history_checks,
                 sibling_signature_checks=sibling_signature_checks,
                 history_signature_checks=history_signature_checks,
+                history_combined_checks=history_combined_checks,
                 ocr_check=ocr_check,
                 visual_check=visual_check,
             )
@@ -913,11 +929,33 @@ async def auto_thumbnail_image_stage(
                 "package_score": package_score,
             },
         )
+        if candidate_reports[-1].warning_count:
+            logger.log(
+                "THUMBNAIL_QA_WARNING",
+                {
+                    "job_id": state.job_id,
+                    "variant": index,
+                    "warning_count": candidate_reports[-1].warning_count,
+                    "reason_codes": candidate_reports[-1].reason_codes(),
+                },
+            )
 
     quality_report_path = job_dir / "json" / "thumbnail_quality_report.json"
     report_payload: dict = {
         "schema_version": _thumb_qa.SCHEMA_VERSION,
         "candidates": [dataclasses.asdict(r) for r in candidate_reports],
+        # §12: the recent items actually compared, for auditability.
+        "history_items": [
+            {"path": e.get("path"), "job_id": e.get("job_id"), "has_signature": bool(e.get("signature"))}
+            for e in recent_history
+        ],
+        "ocr_provider": "injected" if thumbnail_ocr_fn is not None else "none",
+        "thresholds": {
+            "sibling_dhash_max": _thumb_qa.SIBLING_DHASH_MAX,
+            "history_dhash_max": _thumb_qa.HISTORY_DHASH_MAX,
+            "sibling_signature_min_differences": _thumb_qa.SIBLING_SIGNATURE_MIN_DIFFERENCES,
+            "history_signature_min_differences": _thumb_qa.HISTORY_SIGNATURE_MIN_DIFFERENCES,
+        },
     }
     try:
         selection = _thumb_qa.select_primary_candidate(candidate_reports)
@@ -934,8 +972,17 @@ async def auto_thumbnail_image_stage(
         raise
 
     selected_index = selection["selected_variant_index"]
+    winner_report = next(r for r in candidate_reports if r.variant_index == selected_index)
+    visual_score = winner_report.visual_check.get("quality_score", 0.0)
+    final_score = 0.55 * winner_report.package_score + 0.45 * visual_score
     report_payload["selected_variant_index"] = selected_index
+    report_payload["selected_path"] = selection["selected_path"]
     report_payload["selected_signature"] = plans[selected_index - 1].get("concept_signature")
+    report_payload["selection_reason"] = (
+        f"highest selection_score={final_score:.2f} "
+        f"(package_score={winner_report.package_score:.2f}, visual_score={visual_score:.2f}); "
+        f"tie-break order: warning_count, history distance, variant_index"
+    )
     report_payload["requires_manual_review"] = selection["requires_manual_review"]
     # Written BEFORE the primary alias/copy/seo-persistence below so a reader
     # can always find the report explaining whatever thumbnail.jpg contains.
@@ -943,11 +990,17 @@ async def auto_thumbnail_image_stage(
         json.dumps(report_payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     logger.log(
-        "THUMBNAIL_QA_SELECTED",
+        "THUMBNAIL_PRIMARY_SELECTED",
         {
             "job_id": state.job_id,
             "variant": selected_index,
-            "requires_manual_review": selection["requires_manual_review"],
+            "package_score": winner_report.package_score,
+            "visual_score": visual_score,
+            "final_score": final_score,
+            "history_item_count": len(recent_history),
+            "ocr_status": winner_report.ocr_check.get("status"),
+            "warning_count": winner_report.warning_count,
+            "reason_codes": winner_report.reason_codes(),
         },
     )
 

@@ -122,3 +122,50 @@ def test_seo_qa_keeps_pass_when_all_thumbnail_variants_are_valid(tmp_path):
     assert updated["verdict"] == "PASS"
     assert updated["issues"] == []
 
+
+def test_seo_qa_accepts_food_plus_hunger_production_copy(tmp_path):
+    """bug-547 recurrence: preserve Gemini PASS for a true two-signal copy."""
+    variants = [
+        GOOD_VARIANTS[0],
+        GOOD_VARIANTS[1],
+        {
+            "title": "El error de la tarde: merienda proteica y hambre tras los 60",
+            "thumbnail_text": "YOGUR Y FRUTA CONTRA EL HAMBRE",
+        },
+    ]
+    job_dir, channel_path, qa_path, qa_payload = _write_job(tmp_path, variants)
+
+    _enforce_seo_language_qa(
+        job_dir,
+        qa_path,
+        qa_payload,
+        channel_path=channel_path,
+    )
+
+    updated = json.loads(qa_path.read_text(encoding="utf-8"))
+    assert updated["verdict"] == "PASS"
+    assert updated["issues"] == []
+
+
+def test_seo_qa_preserves_pass_for_appetite_outcome_production_copy(tmp_path):
+    """bug-547 recurrence: local semantics must not override Gemini's PASS."""
+    variants = [
+        GOOD_VARIANTS[0],
+        GOOD_VARIANTS[1],
+        {
+            "title": "Pérdida muscular después de los 60: meriendas ricas en proteína",
+            "thumbnail_text": "YOGUR GRIEGO: PROTEÍNA PARA SACIAR",
+        },
+    ]
+    job_dir, channel_path, qa_path, qa_payload = _write_job(tmp_path, variants)
+
+    _enforce_seo_language_qa(
+        job_dir,
+        qa_path,
+        qa_payload,
+        channel_path=channel_path,
+    )
+
+    updated = json.loads(qa_path.read_text(encoding="utf-8"))
+    assert updated["verdict"] == "PASS"
+    assert updated["issues"] == []

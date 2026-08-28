@@ -455,6 +455,57 @@ async def auto_assets_chatgpt_stage(
 # ---------------------------------------------------------------------------
 
 
+def _discover_recent_thumbnail_history(job_dir: Path, *, limit: int = 5) -> list[dict]:
+    """Read-only scan of sibling long-form jobs for recently selected primary
+    thumbnails, newest first, capped at `limit`.
+
+    A sibling counts only if it has the long-form `json/seo.json` artifact —
+    Shorts-shaped job directories are excluded by that contract, not by
+    guessing at directory names. Never writes anything; a malformed quality
+    report is skipped (signature=None, path/job_id still returned) rather
+    than raising.
+    """
+    jobs_root = job_dir.parent
+    if not jobs_root.exists():
+        return []
+
+    entries: list[tuple[float, dict]] = []
+    for candidate_dir in jobs_root.iterdir():
+        if candidate_dir == job_dir or not candidate_dir.is_dir():
+            continue
+        if not (candidate_dir / "json" / "seo.json").exists():
+            continue  # not a long-form job (e.g. Shorts-shaped) — skip
+        selected_path = candidate_dir / "outputs" / "thumbnail.jpg"
+        if not selected_path.exists():
+            continue
+        try:
+            mtime = selected_path.stat().st_mtime
+        except OSError:
+            continue
+
+        signature = None
+        report_path = candidate_dir / "json" / "thumbnail_quality_report.json"
+        if report_path.exists():
+            try:
+                report = json.loads(report_path.read_text(encoding="utf-8"))
+                signature = report.get("selected_signature") if isinstance(report, dict) else None
+            except (json.JSONDecodeError, OSError):
+                signature = None
+
+        entries.append((
+            mtime,
+            {
+                "path": str(selected_path),
+                "job_id": candidate_dir.name,
+                "selected_at": mtime,
+                "signature": signature,
+            },
+        ))
+
+    entries.sort(key=lambda item: item[0], reverse=True)
+    return [entry for _, entry in entries[:limit]]
+
+
 async def auto_thumbnail_image_stage(
     job_dir: Path,
     channel_path: Path,

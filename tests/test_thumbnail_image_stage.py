@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -9,6 +10,7 @@ import yaml
 from video_agent.orchestrator.stages import _build_thumbnail_prompt, auto_thumbnail_image_stage
 from video_agent.orchestrator.stages import StageInputMissingError
 from video_agent.orchestrator.job_state import DEFAULT_STAGES
+from video_agent.orchestrator.stages.assets_thumbnail import _discover_recent_thumbnail_history
 
 
 # ── _build_thumbnail_prompt ───────────────────────────────────────────────────
@@ -269,6 +271,136 @@ def test_auto_thumbnail_image_stage_enforces_1920x1080(tmp_path, channel_path):
     jpg = next((job_dir / "outputs").glob("thumbnail_*.jpg"))
     with _PilImage.open(jpg) as img:
         assert img.size == (1920, 1080)
+
+
+# ── read-only recent-thumbnail history discovery ────────────────────────────
+
+def _make_long_form_job(
+    jobs_root: Path,
+    name: str,
+    *,
+    has_thumbnail: bool = True,
+    signature: dict | None = "OMIT",
+    mtime_offset: float = 0.0,
+) -> Path:
+    job_dir = jobs_root / name
+    (job_dir / "json").mkdir(parents=True, exist_ok=True)
+    (job_dir / "json" / "seo.json").write_text(json.dumps({"job_id": name}), encoding="utf-8")
+    if has_thumbnail:
+        (job_dir / "outputs").mkdir(parents=True, exist_ok=True)
+        thumb = job_dir / "outputs" / "thumbnail.jpg"
+        from PIL import Image
+        Image.new("RGB", (1920, 1080), (10, 20, 30)).save(thumb, format="JPEG")
+        if mtime_offset:
+            new_time = time.time() + mtime_offset
+            import os
+            os.utime(thumb, (new_time, new_time))
+    if signature != "OMIT":
+        report = {"selected_signature": signature} if signature is not None else {}
+        (job_dir / "json" / "thumbnail_quality_report.json").write_text(
+            json.dumps(report), encoding="utf-8"
+        )
+    return job_dir
+
+
+def test_history_excludes_current_job(tmp_path):
+    jobs_root = tmp_path / "jobs"
+    current = _make_long_form_job(jobs_root, "current-job")
+    _make_long_form_job(jobs_root, "other-job", mtime_offset=-10)
+
+    history = _discover_recent_thumbnail_history(current)
+    assert all(entry["job_id"] != "current-job" for entry in history)
+
+
+def test_history_only_includes_jobs_with_a_selected_image(tmp_path):
+    jobs_root = tmp_path / "jobs"
+    current = _make_long_form_job(jobs_root, "current-job")
+    _make_long_form_job(jobs_root, "no-thumbnail-yet", has_thumbnail=False, mtime_offset=-5)
+    with_thumb = _make_long_form_job(jobs_root, "has-thumbnail", mtime_offset=-5)
+
+    history = _discover_recent_thumbnail_history(current)
+    job_ids = {entry["job_id"] for entry in history}
+    assert "has-thumbnail" in job_ids
+    assert "no-thumbnail-yet" not in job_ids
+    assert with_thumb.exists()
+
+
+def test_history_sorts_by_selected_image_mtime_descending(tmp_path):
+    jobs_root = tmp_path / "jobs"
+    current = _make_long_form_job(jobs_root, "current-job")
+    _make_long_form_job(jobs_root, "oldest", mtime_offset=-300)
+    _make_long_form_job(jobs_root, "newest", mtime_offset=-10)
+    _make_long_form_job(jobs_root, "middle", mtime_offset=-150)
+
+    history = _discover_recent_thumbnail_history(current)
+    assert [entry["job_id"] for entry in history] == ["newest", "middle", "oldest"]
+
+
+def test_history_caps_at_five_entries(tmp_path):
+    jobs_root = tmp_path / "jobs"
+    current = _make_long_form_job(jobs_root, "current-job")
+    for i in range(8):
+        _make_long_form_job(jobs_root, f"job-{i}", mtime_offset=-(i + 1) * 10)
+
+    history = _discover_recent_thumbnail_history(current)
+    assert len(history) == 5
+
+
+def test_history_supplies_selected_signature_when_present(tmp_path):
+    jobs_root = tmp_path / "jobs"
+    current = _make_long_form_job(jobs_root, "current-job")
+    sig = {"strategy": "face_driven", "setting_family": "kitchen"}
+    _make_long_form_job(jobs_root, "with-sig", signature=sig, mtime_offset=-5)
+
+    history = _discover_recent_thumbnail_history(current)
+    entry = next(e for e in history if e["job_id"] == "with-sig")
+    assert entry["signature"] == sig
+
+
+def test_history_older_job_without_report_supplies_path_and_none_signature(tmp_path):
+    jobs_root = tmp_path / "jobs"
+    current = _make_long_form_job(jobs_root, "current-job")
+    _make_long_form_job(jobs_root, "no-report", signature="OMIT", mtime_offset=-5)
+
+    history = _discover_recent_thumbnail_history(current)
+    entry = next(e for e in history if e["job_id"] == "no-report")
+    assert entry["signature"] is None
+    assert entry["path"]
+
+
+def test_history_malformed_report_is_skipped_with_no_exception(tmp_path):
+    jobs_root = tmp_path / "jobs"
+    current = _make_long_form_job(jobs_root, "current-job")
+    job_dir = _make_long_form_job(jobs_root, "malformed", signature="OMIT", mtime_offset=-5)
+    (job_dir / "json" / "thumbnail_quality_report.json").write_text("{not json", encoding="utf-8")
+
+    history = _discover_recent_thumbnail_history(current)
+    entry = next(e for e in history if e["job_id"] == "malformed")
+    assert entry["signature"] is None
+
+
+def test_history_discovery_never_writes_to_prior_directories(tmp_path):
+    jobs_root = tmp_path / "jobs"
+    current = _make_long_form_job(jobs_root, "current-job")
+    other = _make_long_form_job(jobs_root, "other-job", mtime_offset=-5)
+    before = {p: p.stat().st_mtime for p in other.rglob("*") if p.is_file()}
+
+    _discover_recent_thumbnail_history(current)
+
+    after = {p: p.stat().st_mtime for p in other.rglob("*") if p.is_file()}
+    assert before == after
+
+
+def test_history_excludes_shorts_shaped_jobs_without_seo_artifact(tmp_path):
+    jobs_root = tmp_path / "jobs"
+    current = _make_long_form_job(jobs_root, "current-job")
+    shorts_job = jobs_root / "shorts-job-20260101-000000"
+    (shorts_job / "outputs").mkdir(parents=True, exist_ok=True)
+    from PIL import Image
+    Image.new("RGB", (1080, 1920), (5, 5, 5)).save(shorts_job / "outputs" / "thumbnail.jpg", format="JPEG")
+
+    history = _discover_recent_thumbnail_history(current)
+    assert all(entry["job_id"] != "shorts-job-20260101-000000" for entry in history)
 
 
 def test_auto_thumbnail_image_stage_wrong_stage_raises(tmp_path, channel_path):

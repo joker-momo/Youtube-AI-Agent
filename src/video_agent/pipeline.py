@@ -927,6 +927,9 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
         visual_config=channel_config.get("visuals"),
         tts_config=(channel_config.get("tts") or {}) | {"music": channel_config.get("music") or {}},
         channel_id=channel_config["channel"]["id"],
+        **_long_source_window_kwargs(
+            channel_config, is_short_job=_is_short_job_dir(job_dir, channel_config)
+        ),
     )
     seo = create_thumbnail_and_seo(provider, channel_config, style, idea, job_dir)
     validate_json(seo, root / "schemas/seo.schema.json")
@@ -1139,6 +1142,21 @@ def _sync_scene_durations_from_audio(job_dir: Path, scene_doc: dict) -> None:
     )
 
 
+def _long_source_window_kwargs(channel_config: dict, *, is_short_job: bool) -> dict:
+    """Long-form only: ``visual.source_window_selection`` plus the final render
+    timebase for :func:`prepare_assets`. Shorts never receive the selector."""
+    if is_short_job:
+        return {}
+    render = channel_config.get("render") or {}
+    return {
+        "source_window_selection": (channel_config.get("visual") or {}).get(
+            "source_window_selection"
+        ),
+        "render_fps": int(render.get("fps") or 30),
+        "render_resolution": str(render.get("resolution") or "1920x1080"),
+    }
+
+
 def _run_prepare_assets_audio_subprocess(job_dir: Path, channel_path: Path) -> None:
     SubprocessAudioTaskProvider().prepare_assets(job_dir, channel_path)
 
@@ -1348,6 +1366,7 @@ def render_operator_job(options: OperatorRenderOptions) -> PipelineResult:
         visual_config=visual_config,
         tts_config=(channel_config.get("tts") or {}) | {"music": channel_config.get("music") or {}},
         channel_id=channel_config["channel"]["id"],
+        **_long_source_window_kwargs(channel_config, is_short_job=is_short_job),
     )
     branding = _prepare_branding(channel_config)
     if is_short_job:

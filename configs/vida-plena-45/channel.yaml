@@ -258,6 +258,28 @@ visual:
     max_scenes_per_span: 3
     max_span_sec: 40
     groupable_layouts: [subtitle]
+  # Long-form only: pick a scored, on-topic interval of each native-video source
+  # instead of always rendering from frame 0. Bounded (12 windows, top-3 x 3
+  # frames of local SigLIP); an eligible clip with no passing window fails the
+  # render before it starts. Read by stages/assets.py via pipeline.
+  source_window_selection:
+    enabled: true
+    min_surplus_sec: 6.0
+    max_candidate_windows: 12
+    technical_samples_per_window: 3
+    semantic_top_k: 3
+    semantic_samples_per_window: 3
+    min_score: 70.0
+    weights:
+      semantic: 0.60
+      technical: 0.20
+      motion: 0.10
+      continuity: 0.10
+    semantic:
+      adapter: clip
+      device: auto
+      model: google/siglip2-base-patch16-224
+      enforce_age_band_45_plus: true
   # Hybrid graphic cards: render graphic-layout scenes as the generated card
   # shrunk & centered over a fixed brand-gradient bg video instead of full-bleed.
   # Kills the static "slideshow" feel of consecutive graphic scenes. Read by

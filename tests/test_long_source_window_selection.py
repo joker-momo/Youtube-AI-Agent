@@ -434,3 +434,52 @@ def test_selected_bounds_are_mirrored_exactly_into_scene_asset_refs() -> None:
     assert refs["source_trim_before_in_frames"] == item["selected_window_start_in_frames"]
     assert refs["source_trim_end_in_frames"] == item["selected_window_end_in_frames"]
     assert refs["source_trim_timebase_fps"] == FPS
+
+
+# --------------------------------------------------------------------------- #
+# Production wiring (long-form render path only)
+# --------------------------------------------------------------------------- #
+def test_pipeline_passes_policy_and_render_timebase_only_for_long_form() -> None:
+    from video_agent.pipeline import _long_source_window_kwargs
+
+    config = {"visual": {"source_window_selection": SPEC_POLICY},
+              "render": {"fps": 30, "resolution": "1920x1080"}}
+    assert _long_source_window_kwargs(config, is_short_job=False) == {
+        "source_window_selection": SPEC_POLICY,
+        "render_fps": 30,
+        "render_resolution": "1920x1080",
+    }
+    assert _long_source_window_kwargs(config, is_short_job=True) == {}
+
+
+def test_every_long_form_prepare_assets_call_is_wired_to_the_selector() -> None:
+    import ast
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "src/video_agent/pipeline.py").read_text()
+    tree = ast.parse(source)
+    wired: dict[str, bool] = {}
+    for fn in ast.walk(tree):
+        if not isinstance(fn, ast.FunctionDef) or fn.name not in {"run_pipeline", "render_operator_job"}:
+            continue
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "prepare_assets":
+                wired[fn.name] = any(
+                    kw.arg is None
+                    and isinstance(kw.value, ast.Call)
+                    and getattr(kw.value.func, "id", None) == "_long_source_window_kwargs"
+                    for kw in node.keywords
+                )
+    assert wired == {"run_pipeline": True, "render_operator_job": True}
+
+
+def test_channel_config_declares_the_exact_spec_policy() -> None:
+    from pathlib import Path
+
+    from video_agent.utils.json_io import read_yaml
+
+    config = read_yaml(Path(__file__).resolve().parents[1] / "configs/vida-plena-45/channel.yaml")
+    assert config["visual"]["source_window_selection"] == SPEC_POLICY
+    assert parse_source_window_policy(config["visual"]["source_window_selection"]) == policy()
+    assert config["visual"]["span_planning"]["mode"] == "report_only"
+    assert config["render"]["concurrency"] == "auto"

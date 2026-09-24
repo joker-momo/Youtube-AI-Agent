@@ -29,9 +29,34 @@ from video_agent.assets.visual_diversity.integration import (
     prepare_visual_diversity,
     record_scene_selection,
 )
-from video_agent.contracts import ARTIFACT_ASSETS, ARTIFACT_SCENES, repo_root
+from video_agent.contracts import ARTIFACT_ASSETS, ARTIFACT_SCENES, EVENT_LOG, repo_root
+from video_agent.shorts.visual_semantic import build_semantic_analyzer
 from video_agent.storage.public_jobs import prepare_public_job_dir
 from video_agent.utils.json_io import write_json
+from video_agent.utils.logging import EventLogger
+from video_agent.visual.source_window_selection import (
+    FfmpegWindowSampler,
+    SourceWindowPolicy,
+    apply_selection_to_scene,
+    build_selection_report,
+    center_cover_retained_fraction,
+    parse_source_window_policy,
+    probe_source_video,
+    raise_for_rejections,
+    required_window_frames,
+    select_source_window,
+    skipped_item,
+)
+
+SOURCE_WINDOW_REPORT = "source_window_selection.json"
+# SigLIP ranks intent and required subjects only; it cannot ground these, so
+# they stay UNKNOWN (fail closed) rather than silently passing.
+_UNGROUNDED_REQUIRED_FIELDS = (
+    "required_action_tags",
+    "required_environment_tags",
+    "required_evidence_tags",
+)
+_FORBIDDEN_FIELDS = ("forbidden_subject_tags", "forbidden_action_tags", "forbidden_evidence_tags")
 
 
 class _AssetWriteStage:
@@ -94,7 +119,12 @@ def prepare_assets(
     on_scene_resolved: Callable[[dict[str, Any]], None] | None = None,
     vision_qa_fn: Callable[[dict[str, Any], str], dict[str, Any]] | None = None,
     only_scene_ids: set[str] | None = None,
+    source_window_selection: dict[str, Any] | None = None,
+    render_fps: int = 30,
+    render_resolution: str = "1920x1080",
 ) -> dict[str, Any]:
+    # Validate before any media or model work (spec: field-specific, fail early).
+    source_window_policy = parse_source_window_policy(source_window_selection)
     assets_dir = job_dir / "assets"
     assets_dir.mkdir(parents=True, exist_ok=True)
     workspace_root = job_dir.parent
@@ -383,6 +413,19 @@ def prepare_assets(
         manifest_scenes = prev.get("scenes", [])
         thumbnail_source = prev.get("thumbnail_source")
 
+    if source_window_policy is not None and render_backgrounds:
+        # Post-TTS durations are final here; the report precedes render_props.json.
+        report = _select_long_source_windows(
+            job_dir,
+            scene_doc,
+            manifest_scenes,
+            source_window_policy,
+            fps=render_fps,
+            target_aspect=_aspect_ratio(render_resolution),
+        )
+        write_json(job_dir / ARTIFACT_SCENES, scene_doc)
+        raise_for_rejections(report)
+
     if render_tts:
         audio_block: dict[str, Any] = {
             "narration": public_narration_ref, "music": public_music_ref, **audio_metadata
@@ -407,3 +450,168 @@ def prepare_assets(
     write_json(job_dir / ARTIFACT_ASSETS, manifest)
     _write_audio_progress(job_dir, 100.0, "completed")
     return manifest
+
+
+def _aspect_ratio(resolution: str) -> float:
+    try:
+        width, height = (int(v) for v in str(resolution).lower().split("x", 1))
+        return width / height if width > 0 and height > 0 else 16 / 9
+    except (TypeError, ValueError):
+        return 16 / 9
+
+
+def _scene_tags(scene: dict[str, Any], fields: tuple[str, ...]) -> dict[str, list[str]]:
+    return {f: [str(t) for t in (scene.get(f) or []) if str(t).strip()] for f in fields}
+
+
+class _LocalSemanticWindowEvaluator:
+    """Per-frame evidence from the local SigLIP adapter for one scene.
+
+    Each frame is evaluated on its own (the adapter averages over the images it
+    receives), so a single on-topic frame cannot hide off-topic ones. A missing
+    analyzer yields CAPABILITY_UNAVAILABLE, which the selector rejects.
+    """
+
+    def __init__(self, analyzer_factory: Callable[[], Any], scene: dict[str, Any], asset_id: str | None) -> None:
+        self._analyzer_factory = analyzer_factory
+        self._intent = str(scene.get("visual_prompt") or "").strip() or str(
+            scene.get("on_screen_text") or ""
+        ).strip()
+        self._required = _scene_tags(scene, ("required_subject_tags",))
+        forbidden = _scene_tags(scene, _FORBIDDEN_FIELDS)
+        self._forbidden = forbidden
+        self._asset_id = asset_id
+        ungrounded = _scene_tags(scene, _UNGROUNDED_REQUIRED_FIELDS)
+        self._unverifiable = [
+            {"requirement": f"forbidden_evidence:{tag}", "status": "UNKNOWN", "confidence": None,
+             "reason": "local SigLIP cannot ground forbidden evidence"}
+            for tags in forbidden.values() for tag in tags
+        ] + [
+            {"requirement": f"{field_name}:{tag}", "status": "UNKNOWN", "confidence": None,
+             "reason": "local SigLIP cannot verify this requirement"}
+            for field_name, tags in ungrounded.items() for tag in tags
+        ]
+
+    def __call__(self, images: list[Any]) -> list[list[dict[str, Any]]]:
+        analyzer = self._analyzer_factory()
+        adapters = list(getattr(analyzer, "adapters", None) or [])
+        if not adapters or not self._intent:
+            reason = "local semantic analyzer unavailable" if not adapters else "scene has no visual intent"
+            return [[{"requirement": "topic:visual_intent", "status": "CAPABILITY_UNAVAILABLE",
+                      "confidence": None, "reason": reason}] for _ in images]
+        per_frame: list[list[dict[str, Any]]] = []
+        for image in images:
+            records: list[dict[str, Any]] = []
+            for adapter in adapters:
+                records.extend(adapter.evaluate(
+                    [image],
+                    required_tags=self._required,
+                    forbidden_tags=self._forbidden,
+                    visual_intent=self._intent,
+                    asset_id=self._asset_id,
+                ))
+            per_frame.append(records + list(self._unverifiable))
+        return per_frame
+
+
+def _source_window_skip_reason(scene: dict[str, Any], scene_asset: dict[str, Any] | None) -> str | None:
+    """Only a background the legacy renderer plays as native video is eligible."""
+    if scene_asset is None or not scene_asset.get("background"):
+        return "decode_unavailable"
+    graphic = scene.get("graphic")
+    if isinstance(graphic, dict) and graphic.get("image_ref"):
+        return "non_native_video"
+    if scene_asset.get("media_kind") != "video" or scene_asset.get("source") == "generated_placeholder":
+        return "non_native_video"
+    refs = scene.get("asset_refs") if isinstance(scene.get("asset_refs"), dict) else {}
+    if not str(refs.get("background") or "").endswith(".mp4"):
+        return "non_native_video"
+    return None
+
+
+def _select_long_source_windows(
+    job_dir: Path,
+    scene_doc: dict[str, Any],
+    manifest_scenes: list[dict[str, Any]],
+    policy: SourceWindowPolicy,
+    *,
+    fps: int,
+    target_aspect: float,
+) -> dict[str, Any]:
+    logger = EventLogger(job_dir / EVENT_LOG)
+    by_scene = {s.get("scene_id"): s for s in manifest_scenes if isinstance(s, dict)}
+    analyzer_cache: list[Any] = []
+
+    def analyzer() -> Any:
+        if not analyzer_cache:
+            analyzer_cache.append(build_semantic_analyzer(policy.semantic.as_local_qa_config()))
+        return analyzer_cache[0]
+
+    items: list[dict[str, Any]] = []
+    for scene in scene_doc["scenes"]:
+        if not isinstance(scene.get("asset_refs"), dict):
+            scene["asset_refs"] = {}
+        refs = scene["asset_refs"]
+        scene_id = str(scene["id"])
+        asset_ref = refs.get("background")
+        scene_duration = float(scene.get("duration_sec") or 0.0)
+        required = required_window_frames(scene_duration, fps)
+        scene_asset = by_scene.get(scene_id)
+        reason = "disabled" if not policy.enabled else _source_window_skip_reason(scene, scene_asset)
+        probe = None
+        if reason is None:
+            probe = probe_source_video(Path(scene_asset["background"]))
+            if probe is None:
+                reason = "decode_unavailable"
+        if reason is not None or probe is None:
+            item = skipped_item(
+                scene_id=scene_id,
+                asset_ref=asset_ref,
+                reason=reason or "decode_unavailable",
+                source_duration_sec=probe.duration_sec if probe else None,
+                required_duration_in_frames=required,
+            )
+        else:
+            item = select_source_window(
+                scene_id=scene_id,
+                asset_ref=str(asset_ref),
+                source_duration_sec=probe.duration_sec,
+                scene_duration_sec=scene_duration,
+                fps=fps,
+                crop_retained_fraction=center_cover_retained_fraction(probe.width, probe.height, target_aspect),
+                policy=policy,
+                sampler=FfmpegWindowSampler(Path(scene_asset["background"]), fps),
+                semantic_evaluator=_LocalSemanticWindowEvaluator(
+                    analyzer, scene, scene_asset.get("asset_id") or scene_id
+                ),
+            )
+        apply_selection_to_scene(refs, item)
+        items.append(item)
+        _log_source_window_item(logger, job_dir.name, item)
+
+    report = build_selection_report(items, fps=fps)
+    write_json((job_dir / ARTIFACT_SCENES).parent / SOURCE_WINDOW_REPORT, report)
+    return report
+
+
+_SOURCE_WINDOW_EVENTS = {
+    "selected": "LONG_SOURCE_WINDOW_SELECTED",
+    "skipped": "LONG_SOURCE_WINDOW_SKIPPED",
+    "rejected": "LONG_SOURCE_WINDOW_REJECTED",
+}
+
+
+def _log_source_window_item(logger: EventLogger, job_id: str, item: dict[str, Any]) -> None:
+    logger.log(_SOURCE_WINDOW_EVENTS[item["status"]], {
+        "job_id": job_id,
+        "scene_id": item["scene_id"],
+        "status": item["status"],
+        "reason": item.get("reason"),
+        "asset_ref": item.get("asset_ref"),
+        "source_duration_sec": item.get("source_duration_sec"),
+        "selected_window_start_in_frames": item.get("selected_window_start_in_frames"),
+        "selected_window_end_in_frames": item.get("selected_window_end_in_frames"),
+        "score": item.get("score"),
+        "rejected_window_counts": item.get("rejected_window_counts"),
+        "analysis_runtime_ms": item.get("analysis_runtime_ms", 0),
+    })

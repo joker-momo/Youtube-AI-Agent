@@ -11,6 +11,19 @@ const FADE_OUT = 18;         // 0.6 s fade-out per scene (final scene → black)
 const SCENE_XFADE = 15;      // 0.5 s cross-dissolve overlap between consecutive scenes
 const BRIDGE_FRAMES = 18;    // 0.6 s bridge between intro/main/outro
 
+// Convert a scene source-window trim (source_trim_timebase_fps frames) into
+// composition frames; same rounding as ChannelVisualTimeline's schedule trims.
+function legacyTrimFrame(
+  value: number | null | undefined,
+  trimTimebaseFps: number | undefined,
+  compositionFps: number,
+): number | undefined {
+  if (!value) return undefined;
+  const timebase = trimTimebaseFps && trimTimebaseFps > 0 ? trimTimebaseFps : compositionFps;
+  if (!timebase) return value;
+  return Math.round((value * compositionFps) / timebase);
+}
+
 // Subtle film grain (data-uri feTurbulence) — cinematic texture over the living bg.
 const GRAIN =
   "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E\")";
@@ -507,6 +520,18 @@ const SceneView: React.FC<{
     scene.asset_refs.background.endsWith('.mp4') &&
     scene.asset_refs.background_media_kind !== 'image';
   const livingBgSrc = bgIsRealVideo ? scene.asset_refs.background : hybridCardBg;
+  // Selected long-form source window: only a native-video background trims; a
+  // photo-backed encode keeps its full Ken Burns clip.
+  const legacyTrimBefore =
+    scene.asset_refs.background_media_kind !== 'image'
+      ? legacyTrimFrame(scene.asset_refs.source_trim_before_in_frames, scene.asset_refs.source_trim_timebase_fps, fps)
+      : undefined;
+  const legacyTrimEnd =
+    scene.asset_refs.background_media_kind !== 'image'
+      ? legacyTrimFrame(scene.asset_refs.source_trim_end_in_frames, scene.asset_refs.source_trim_timebase_fps, fps)
+      : undefined;
+  const legacyTrimAfter =
+    legacyTrimEnd && (!legacyTrimBefore || legacyTrimEnd > legacyTrimBefore) ? legacyTrimEnd : undefined;
   const layoutVariant = sceneIndex % 3;
   const headlineLeft = layoutVariant === 2 ? undefined : 56;
   const headlineRight = layoutVariant === 2 ? 56 : undefined;
@@ -570,6 +595,8 @@ const SceneView: React.FC<{
         <MediaVideo
           src={mediaSrc(scene.asset_refs.background)}
           muted
+          trimBefore={legacyTrimBefore}
+          trimAfter={legacyTrimAfter}
           style={{
             position: 'absolute', width: '100%', height: '100%',
             objectFit: 'cover',

@@ -108,7 +108,9 @@ export type Scene = {
   // background_media_kind: 'video' = real footage; 'image' = a photo-backed
   // encode (still wrapped in an .mp4 container). The renderer uses this to
   // avoid treating static photos as living video backgrounds (bug-455).
-  asset_refs: {background: string; background_media_kind?: 'video' | 'image'};
+  // source_trim_*: long-form selected source window (json/source_window_selection.json),
+  // in source_trim_timebase_fps frames. Absent = play the clip from its first frame.
+  asset_refs: {background: string; background_media_kind?: 'video' | 'image'; source_trim_before_in_frames?: number; source_trim_end_in_frames?: number; source_trim_timebase_fps?: number};
   audio_offset_sec?: number;
   word_segments?: WordSegment[];
   layout?: SceneLayout;

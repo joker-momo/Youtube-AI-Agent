@@ -441,10 +441,12 @@ def test_selected_bounds_are_mirrored_exactly_into_scene_asset_refs() -> None:
 # --------------------------------------------------------------------------- #
 def test_pipeline_passes_policy_and_render_timebase_only_for_long_form() -> None:
     from video_agent.pipeline import _long_source_window_kwargs
+    from video_agent.shorts.visual_semantic import build_semantic_analyzer
 
     config = {"visual": {"source_window_selection": SPEC_POLICY},
               "render": {"fps": 30, "resolution": "1920x1080"}}
     assert _long_source_window_kwargs(config, is_short_job=False) == {
+        "semantic_analyzer_factory": build_semantic_analyzer,
         "source_window_selection": SPEC_POLICY,
         "render_fps": 30,
         "render_resolution": "1920x1080",

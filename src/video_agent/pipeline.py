@@ -1143,12 +1143,16 @@ def _sync_scene_durations_from_audio(job_dir: Path, scene_doc: dict) -> None:
 
 
 def _long_source_window_kwargs(channel_config: dict, *, is_short_job: bool) -> dict:
-    """Long-form only: ``visual.source_window_selection`` plus the final render
-    timebase for :func:`prepare_assets`. Shorts never receive the selector."""
+    """Long-form only: ``visual.source_window_selection``, the final render
+    timebase and the local SigLIP analyzer factory for :func:`prepare_assets`.
+    Shorts never receive the selector."""
     if is_short_job:
         return {}
+    from video_agent.shorts.visual_semantic import build_semantic_analyzer
+
     render = channel_config.get("render") or {}
     return {
+        "semantic_analyzer_factory": build_semantic_analyzer,
         "source_window_selection": (channel_config.get("visual") or {}).get(
             "source_window_selection"
         ),

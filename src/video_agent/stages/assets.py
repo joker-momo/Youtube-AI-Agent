@@ -30,7 +30,6 @@ from video_agent.assets.visual_diversity.integration import (
     record_scene_selection,
 )
 from video_agent.contracts import ARTIFACT_ASSETS, ARTIFACT_SCENES, EVENT_LOG, repo_root
-from video_agent.shorts.visual_semantic import build_semantic_analyzer
 from video_agent.storage.public_jobs import prepare_public_job_dir
 from video_agent.utils.json_io import write_json
 from video_agent.utils.logging import EventLogger
@@ -122,6 +121,7 @@ def prepare_assets(
     source_window_selection: dict[str, Any] | None = None,
     render_fps: int = 30,
     render_resolution: str = "1920x1080",
+    semantic_analyzer_factory: Callable[[dict[str, Any]], Any] | None = None,
 ) -> dict[str, Any]:
     # Validate before any media or model work (spec: field-specific, fail early).
     source_window_policy = parse_source_window_policy(source_window_selection)
@@ -422,6 +422,7 @@ def prepare_assets(
             source_window_policy,
             fps=render_fps,
             target_aspect=_aspect_ratio(render_resolution),
+            analyzer_factory=semantic_analyzer_factory,
         )
         write_json(job_dir / ARTIFACT_SCENES, scene_doc)
         raise_for_rejections(report)
@@ -537,14 +538,19 @@ def _select_long_source_windows(
     *,
     fps: int,
     target_aspect: float,
+    analyzer_factory: Callable[[dict[str, Any]], Any] | None,
 ) -> dict[str, Any]:
+    """The local semantic analyzer is injected (the long asset layer must not
+    import ``video_agent.shorts``); without one, eligible sources fail closed."""
     logger = EventLogger(job_dir / EVENT_LOG)
     by_scene = {s.get("scene_id"): s for s in manifest_scenes if isinstance(s, dict)}
     analyzer_cache: list[Any] = []
 
     def analyzer() -> Any:
         if not analyzer_cache:
-            analyzer_cache.append(build_semantic_analyzer(policy.semantic.as_local_qa_config()))
+            analyzer_cache.append(
+                analyzer_factory(policy.semantic.as_local_qa_config()) if analyzer_factory else None
+            )
         return analyzer_cache[0]
 
     items: list[dict[str, Any]] = []

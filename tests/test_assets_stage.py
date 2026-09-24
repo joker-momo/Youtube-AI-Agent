@@ -1082,15 +1082,18 @@ class _FakeSiglip:
                  "confidence": self.confidence}]
 
 
-def _install_fake_semantics(monkeypatch, adapter: _FakeSiglip | None) -> list[dict]:
+def _fake_semantics(adapter: _FakeSiglip | None) -> tuple[list[dict], object]:
     built: list[dict] = []
 
     def fake_build(local_qa_cfg):
         built.append(dict(local_qa_cfg))
         return None if adapter is None else _NS(adapters=[adapter])
 
-    monkeypatch.setattr(assets_stage, "build_semantic_analyzer", fake_build)
-    return built
+    return built, fake_build
+
+
+def _exploding_factory(_cfg):
+    raise AssertionError("semantic model must not load here")
 
 
 def _long_job(tmp_path: Path, *, black_sec: float = 3.0, content_sec: float = 14.0,
@@ -1135,10 +1138,11 @@ def _events(job_dir: Path) -> list[dict]:
 
 def test_prepare_assets_writes_nonzero_trim_and_provenance(tmp_path, monkeypatch):
     adapter = _FakeSiglip()
-    built = _install_fake_semantics(monkeypatch, adapter)
+    built, factory = _fake_semantics(adapter)
     job_dir, doc = _long_job(tmp_path)
 
-    _prepare_long(job_dir, doc, source_window_selection=SOURCE_WINDOW_POLICY)
+    _prepare_long(job_dir, doc, source_window_selection=SOURCE_WINDOW_POLICY,
+                  semantic_analyzer_factory=factory)
 
     scene = _json.loads((job_dir / "json" / "scenes.json").read_text())["scenes"][0]
     refs = scene["asset_refs"]
@@ -1173,11 +1177,12 @@ def test_prepare_assets_writes_nonzero_trim_and_provenance(tmp_path, monkeypatch
 
 
 def test_unavailable_semantic_adapter_fails_closed_for_eligible_source(tmp_path, monkeypatch):
-    _install_fake_semantics(monkeypatch, None)
+    _built, factory = _fake_semantics(None)
     job_dir, doc = _long_job(tmp_path)
 
     with pytest.raises(LongSourceWindowSelectionError, match="scene-01") as excinfo:
-        _prepare_long(job_dir, doc, source_window_selection=SOURCE_WINDOW_POLICY)
+        _prepare_long(job_dir, doc, source_window_selection=SOURCE_WINDOW_POLICY,
+                      semantic_analyzer_factory=factory)
 
     assert excinfo.value.asset_ref == "jobs/long-job/assets/scene-01.mp4"
     assert excinfo.value.rejected_window_counts.get("semantic_capability_unavailable", 0) >= 1
@@ -1191,23 +1196,21 @@ def test_unavailable_semantic_adapter_fails_closed_for_eligible_source(tmp_path,
 
 
 def test_contradicted_semantics_fail_closed_instead_of_rendering_frame_zero(tmp_path, monkeypatch):
-    _install_fake_semantics(monkeypatch, _FakeSiglip(status="CONTRADICTED", confidence=-2.0))
+    _built, factory = _fake_semantics(_FakeSiglip(status="CONTRADICTED", confidence=-2.0))
     job_dir, doc = _long_job(tmp_path)
 
     with pytest.raises(LongSourceWindowSelectionError, match="scene-01"):
-        _prepare_long(job_dir, doc, source_window_selection=SOURCE_WINDOW_POLICY)
+        _prepare_long(job_dir, doc, source_window_selection=SOURCE_WINDOW_POLICY,
+                      semantic_analyzer_factory=factory)
     assert _report(job_dir)["items"][0]["rejected_window_counts"]["semantic_contradicted"] >= 1
 
 
 def test_insufficient_headroom_is_explicit_skip_without_model_or_trim(tmp_path, monkeypatch):
-    def explode(_cfg):
-        raise AssertionError("semantic model must not load without an eligible source")
-
-    monkeypatch.setattr(assets_stage, "build_semantic_analyzer", explode)
     job_dir, doc = _long_job(tmp_path, black_sec=0.0, content_sec=8.0, scene_sec=4.0)
     doc["scenes"][0]["asset_refs"]["source_trim_before_in_frames"] = 300  # stale
 
-    _prepare_long(job_dir, doc, source_window_selection=SOURCE_WINDOW_POLICY)
+    _prepare_long(job_dir, doc, source_window_selection=SOURCE_WINDOW_POLICY,
+                  semantic_analyzer_factory=_exploding_factory)
 
     item = _report(job_dir)["items"][0]
     assert item["status"] == "skipped" and item["reason"] == "insufficient_headroom"
@@ -1219,7 +1222,7 @@ def test_insufficient_headroom_is_explicit_skip_without_model_or_trim(tmp_path, 
 
 
 def test_non_native_scenes_are_skipped_with_single_reason(tmp_path, monkeypatch):
-    _install_fake_semantics(monkeypatch, _FakeSiglip())
+    _built, factory = _fake_semantics(_FakeSiglip())
     image = tmp_path / "photo.jpg"
     Image.new("RGB", (640, 360), (120, 90, 60)).save(image)
     job_dir, doc = _long_job(tmp_path)
@@ -1236,7 +1239,8 @@ def test_non_native_scenes_are_skipped_with_single_reason(tmp_path, monkeypatch)
     doc["scenes"].append({"id": "scene-04", "duration_sec": 4.0, "on_screen_text": "Nada",
                           "asset_refs": {}})
 
-    _prepare_long(job_dir, doc, source_window_selection=SOURCE_WINDOW_POLICY)
+    _prepare_long(job_dir, doc, source_window_selection=SOURCE_WINDOW_POLICY,
+                  semantic_analyzer_factory=factory)
 
     items = {i["scene_id"]: i for i in _report(job_dir)["items"]}
     assert list(items) == ["scene-01", "scene-02", "scene-03", "scene-04"]
@@ -1254,23 +1258,18 @@ def test_invalid_source_window_policy_fails_before_media_or_model_work(tmp_path,
         raise AssertionError("no media/model work before policy validation")
 
     monkeypatch.setattr(assets_stage, "materialize_media", explode)
-    monkeypatch.setattr(assets_stage, "build_semantic_analyzer", explode)
     monkeypatch.setattr(assets_stage, "FfmpegWindowSampler", explode)
     job_dir, doc = _long_job(tmp_path)
     bad = {**SOURCE_WINDOW_POLICY, "semantic_top_k": 20}
 
     with pytest.raises(SourceWindowPolicyError, match=r"visual\.source_window_selection\.semantic_top_k"):
-        _prepare_long(job_dir, doc, source_window_selection=bad)
+        _prepare_long(job_dir, doc, source_window_selection=bad, semantic_analyzer_factory=explode)
 
 
 def test_channel_without_source_window_block_keeps_legacy_contract(tmp_path, monkeypatch):
-    def explode(_cfg):
-        raise AssertionError("selection must not run without the channel block")
-
-    monkeypatch.setattr(assets_stage, "build_semantic_analyzer", explode)
     job_dir, doc = _long_job(tmp_path)
 
-    _prepare_long(job_dir, doc)
+    _prepare_long(job_dir, doc, semantic_analyzer_factory=_exploding_factory)
 
     assert not (job_dir / "json" / "source_window_selection.json").exists()
     assert not any(k in doc["scenes"][0]["asset_refs"] for k in SCENE_TRIM_KEYS)

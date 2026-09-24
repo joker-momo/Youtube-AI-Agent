@@ -499,7 +499,8 @@ def select_source_window(
         try:
             per_frame = semantic_evaluator([s.image for s in samples])
         except Exception as exc:  # noqa: BLE001 - analyzer failure must fail closed
-            candidate["semantic_error"] = f"{exc.__class__.__name__}: {exc}"[:200]
+            # Class name only: exception text can carry absolute model/media paths.
+            candidate["semantic_error"] = exc.__class__.__name__
             per_frame = []
         semantics = _window_semantics(list(per_frame or []), len(samples))
         candidate["semantic_status"] = semantics["status"]

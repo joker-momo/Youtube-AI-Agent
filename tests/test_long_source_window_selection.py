@@ -483,3 +483,18 @@ def test_channel_config_declares_the_exact_spec_policy() -> None:
     assert parse_source_window_policy(config["visual"]["source_window_selection"]) == policy()
     assert config["visual"]["span_planning"]["mode"] == "report_only"
     assert config["render"]["concurrency"] == "auto"
+
+
+def test_semantic_analyzer_crash_fails_closed_without_leaking_paths() -> None:
+    def crash(images):
+        raise FileNotFoundError("/Users/someone/.cache/huggingface/siglip/model.safetensors")
+
+    item = select_source_window(
+        scene_id="scene-07", asset_ref="jobs/example/assets/scene-07.mp4",
+        source_duration_sec=60.0, scene_duration_sec=10.0, fps=FPS, crop_retained_fraction=1.0,
+        policy=policy(), sampler=FakeSampler(), semantic_evaluator=crash, clock=fake_clock(),
+    )
+    assert item["status"] == "rejected"
+    assert item["rejected_window_counts"]["semantic_capability_unavailable"] == 3
+    text = json.dumps(build_selection_report([item], fps=FPS))
+    assert "FileNotFoundError" in text and "/Users" not in text

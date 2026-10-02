@@ -827,13 +827,23 @@ async def _generate_image_via_gemini(
     try:
         await human_pause(page, min_ms=400, max_ms=900)
         driver = GeminiImageDriver(page)
-        return await driver.generate_image(
+        result = await driver.generate_image(
             prompt,
             project_name=project_name,
             out_path=out_path,
             response_timeout_ms=response_timeout_ms,
             aspect_ratio=aspect_ratio,
         )
+        result.setdefault(
+            "cleanup",
+            {
+                "kind": "conversation",
+                "status": "not_applicable",
+                "verified": True,
+                "provider": "gemini_temporary_chat",
+            },
+        )
+        return result
     finally:
         # BOUNDED cleanup (bridge 20260722 r2): if the client disconnected and the
         # page/CDP target is wedged, page.close() can hang indefinitely and leak the
@@ -993,15 +1003,23 @@ async def _generate_images_via_gemini(
         driver = GeminiImageDriver(page)
         results = []
         for prompt, out_path in zip(prompts, out_paths, strict=True):
-            results.append(
-                await driver.generate_image(
-                    prompt,
-                    project_name=project_name,
-                    out_path=out_path,
-                    response_timeout_ms=response_timeout_ms,
-                    aspect_ratio=aspect_ratio,
-                )
+            result = await driver.generate_image(
+                prompt,
+                project_name=project_name,
+                out_path=out_path,
+                response_timeout_ms=response_timeout_ms,
+                aspect_ratio=aspect_ratio,
             )
+            result.setdefault(
+                "cleanup",
+                {
+                    "kind": "conversation",
+                    "status": "not_applicable",
+                    "verified": True,
+                    "provider": "gemini_temporary_chat",
+                },
+            )
+            results.append(result)
         return results
     finally:
         await _bounded_close(page)
@@ -1011,6 +1029,12 @@ async def _generate_images_via_gemini(
 async def chatgpt_image_batch(payload: BatchImagePromptRequest, request: Request) -> dict:
     """Sequential ChatGPT image generation, cancelled if the client disconnects."""
     return await _run_with_disconnect_guard(request, _chatgpt_image_batch_impl(payload))
+
+
+def _batch_image_response(results: list[dict]) -> dict:
+    """Expose the shared chat-cleanup outcome beside every batch result."""
+    cleanup = results[-1].get("cleanup") if results else None
+    return {"ok": True, "results": results, "cleanup": cleanup}
 
 
 async def _chatgpt_image_batch_impl(payload: BatchImagePromptRequest) -> dict:
@@ -1045,7 +1069,7 @@ async def _chatgpt_image_batch_impl(payload: BatchImagePromptRequest) -> dict:
                     aspect_ratio=payload.aspect_ratio,
                     attachment_path=_safe_attachment_path(payload.attachment_path),
                 )
-                return {"ok": True, "results": results}
+                return _batch_image_response(results)
             except LoginRequiredError as exc:
                 raise HTTPException(
                     status_code=409,
@@ -1068,7 +1092,7 @@ async def _chatgpt_image_batch_impl(payload: BatchImagePromptRequest) -> dict:
                         response_timeout_ms=payload.response_timeout_ms,
                         aspect_ratio=payload.aspect_ratio,
                     )
-                    return {"ok": True, "results": results}
+                    return _batch_image_response(results)
                 except Exception as retry_exc:
                     if isinstance(retry_exc, LoginRequiredError):
                         raise HTTPException(
@@ -1091,7 +1115,7 @@ async def _chatgpt_image_batch_impl(payload: BatchImagePromptRequest) -> dict:
                             response_timeout_ms=payload.response_timeout_ms,
                             aspect_ratio=payload.aspect_ratio,
                         )
-                        return {"ok": True, "results": results}
+                        return _batch_image_response(results)
                     except Exception as gemini_exc:
                         if isinstance(gemini_exc, LoginRequiredError):
                             raise HTTPException(

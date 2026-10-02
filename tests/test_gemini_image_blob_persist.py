@@ -346,6 +346,26 @@ def test_route_batch_returns_impl_result_via_asgi(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_batch_image_response_surfaces_shared_cleanup_status():
+    cleanup = {
+        "kind": "conversation",
+        "status": "failed",
+        "conversation_id": "conversation-123",
+        "attempts": 3,
+        "verified": False,
+        "reason": "sidebar_entry_still_present",
+    }
+
+    response = app._batch_image_response([
+        {"src": "first", "cleanup": cleanup},
+        {"src": "second", "cleanup": cleanup},
+    ])
+
+    assert response["ok"] is True
+    assert response["cleanup"] == cleanup
+    assert response["results"][0]["cleanup"]["status"] == "failed"
+
+
 def test_route_one_shot_cancels_on_disconnect(monkeypatch):
     """Route-level disconnect: a slow impl is cancelled and returns 499, running
     its cleanup finally. ASGI TestClient cannot drop mid-request, so drive the

@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import base64
+import binascii
+import io
+import json
 import re
 import time
 import unicodedata
@@ -279,6 +284,11 @@ class ChatGPTImageDriver:
         # Kept for back-compat with the old Project cleanup path. The current
         # image flow always uses normal chats and deletes the conversation.
         self._used_project = False
+
+    _CLEANUP_MAX_ATTEMPTS = 3
+    _CLEANUP_URL_STABILITY_POLLS = 4
+    _CLEANUP_VERIFY_POLLS = 3
+    _CLEANUP_POLL_MS = 350
 
     async def open(self) -> None:
         if self._opened:
@@ -804,6 +814,67 @@ class ChatGPTImageDriver:
         shot = await save_trace_screenshot(self.page, prefix="chatgpt-image-no-send")
         raise BrowserDriverError("ChatGPT send button not found.", screenshot_path=shot)
 
+    # ChatGPT's current image conversation renders its response as
+    # ``<img alt="Generated image 1" src="blob:...">`` without the legacy
+    # ``data-message-author-role`` wrappers. Walk open shadow roots and return
+    # structured candidates so we can accept that real response while still
+    # rejecting a user attachment from the same page.
+    _FIND_RESPONSE_IMAGE_JS = """() => {
+        function walk(root, out) {
+            const all = root.querySelectorAll('*');
+            for (const el of all) {
+                if (el.tagName === 'IMG' && el.src) {
+                    const rect = el.getBoundingClientRect();
+                    const roleEl = el.closest('[data-message-author-role]');
+                    out.push({
+                        src: el.src,
+                        alt: el.alt || '',
+                        role: roleEl ? roleEl.getAttribute('data-message-author-role') : '',
+                        width: rect.width,
+                        height: rect.height,
+                    });
+                }
+                if (el.shadowRoot) walk(el.shadowRoot, out);
+            }
+        }
+        const out = [];
+        walk(document, out);
+        return out;
+    }"""
+
+    async def _find_response_image_src(self, exclude_urls: list[str]) -> str:
+        """Return the latest safe generated-image source from the live ChatGPT DOM."""
+        candidates = await self.page.evaluate(self._FIND_RESPONSE_IMAGE_JS)
+        if not isinstance(candidates, list):
+            return ""
+        exclude = set(exclude_urls)
+        for item in reversed(candidates):
+            if not isinstance(item, dict):
+                continue
+            src = str(item.get("src") or "")
+            if src in exclude or not src.startswith(("http", "blob:", "data:")):
+                continue
+            low_src = src.lower()
+            if "avatar" in low_src or "favicon" in low_src or "/icon" in low_src:
+                continue
+            if float(item.get("width") or 0) < 200 or float(item.get("height") or 0) < 200:
+                continue
+            role = str(item.get("role") or "").lower()
+            if role == "user":
+                continue
+            alt = str(item.get("alt") or "").lower()
+            # The current response surface has no role wrapper, but marks the
+            # result explicitly as "Generated image N". Older surfaces keep
+            # the assistant role and may omit that alt text.
+            if "generated image" in alt or role == "assistant":
+                return src
+            # Preserve the old HTTP-only fallback for legacy ChatGPT markup;
+            # never promote an unlabelled blob/data URL because it can be an
+            # uploaded reference image.
+            if src.startswith("http"):
+                return src
+        return ""
+
     async def _wait_for_image(self, response_timeout_ms: int, exclude_urls: list[str] | None = None) -> str:
         """Poll the assistant turn until an <img> with a real src appears.
 
@@ -815,39 +886,7 @@ class ChatGPTImageDriver:
         retried_failure = False
         while time.monotonic() < deadline:
             try:
-                src = await self.page.evaluate(
-                    """(excludeList) => {
-                    const exclude = new Set(excludeList || []);
-                    const containers = [
-                        "[data-message-author-role='assistant'] img",
-                        "main img",
-                        "article img",
-                    ];
-                    for (const sel of containers) {
-                        const imgs = document.querySelectorAll(sel);
-                        for (let i = imgs.length - 1; i >= 0; i--) {
-                            const img = imgs[i];
-                            const s = img.src || '';
-                            if (!s.startsWith('http')) continue;
-                            if (exclude.has(s)) continue;
-                            if (s.includes('avatar') || s.includes('icon')) continue;
-                            if (img.naturalWidth < 256) continue;
-                            // Skip images inside a USER turn: when a persona
-                            // reference photo is attached it renders as an
-                            // https-hosted <img> in the user bubble BEFORE the
-                            // assistant finishes generating. The broad
-                            // main/article fallbacks would otherwise return that
-                            // reference photo verbatim (byte-identical), silently
-                            // replacing every AI image with the raw reference.
-                            const roleEl = img.closest('[data-message-author-role]');
-                            if (roleEl && roleEl.getAttribute('data-message-author-role') === 'user') continue;
-                            return s;
-                        }
-                    }
-                    return '';
-                }""",
-                    exclude_list
-                )
+                src = await self._find_response_image_src(exclude_list)
             except Exception as exc:
                 # ChatGPT is a SPA: posting the prompt navigates / to /c/<id>,
                 # and it re-renders mid-stream. A poll that races a navigation
@@ -966,18 +1005,120 @@ class ChatGPTImageDriver:
         except Exception:
             return False
 
+    # Blob/data responses must be read in the page context. The browser request
+    # client cannot resolve a blob URL, and screenshotting would persist only
+    # the scaled preview rather than the generated source bytes.
+    _READ_BLOB_JS = """async ([src, maxBytes]) => {
+        const resp = await fetch(src);
+        const contentType = resp.headers.get('content-type') || '';
+        if (!resp.ok) return {ok: false, status: resp.status, contentType, size: 0};
+        const declared = parseInt(resp.headers.get('content-length') || '', 10);
+        if (Number.isFinite(declared) && declared > maxBytes) {
+            return {ok: true, status: resp.status, contentType, size: declared, oversize: true};
+        }
+        const reader = resp.body && typeof resp.body.getReader === 'function'
+            ? resp.body.getReader() : null;
+        let bytes;
+        if (reader) {
+            const chunks = [];
+            let total = 0;
+            while (true) {
+                const {done, value} = await reader.read();
+                if (done) break;
+                total += value.length;
+                if (total > maxBytes) {
+                    try { await reader.cancel(); } catch (_) {}
+                    return {ok: true, status: resp.status, contentType, size: total, oversize: true};
+                }
+                chunks.push(value);
+            }
+            bytes = new Uint8Array(total);
+            let offset = 0;
+            for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+        } else {
+            bytes = new Uint8Array(await resp.arrayBuffer());
+            if (bytes.length > maxBytes) {
+                return {ok: true, status: resp.status, contentType, size: bytes.length, oversize: true};
+            }
+        }
+        let binary = '';
+        for (let index = 0; index < bytes.length; index += 0x8000) {
+            binary += String.fromCharCode.apply(null, bytes.subarray(index, index + 0x8000));
+        }
+        return {ok: true, status: resp.status, contentType, size: bytes.length, b64: btoa(binary)};
+    }"""
+    _MAX_IMAGE_BYTES = 40 * 1024 * 1024
+    _MIN_IMAGE_BYTES = 100
+
+    @staticmethod
+    def _parse_data_uri(src: str) -> tuple[str, bytes]:
+        if not src.startswith("data:") or "," not in src:
+            raise BrowserDriverError("Malformed data URI.")
+        header, _, payload = src[len("data:"):].partition(",")
+        mime = header.split(";")[0].strip().lower()
+        if not header.endswith(";base64"):
+            raise BrowserDriverError("ChatGPT image data URI is not base64 encoded.")
+        if (len(payload) * 3) // 4 > ChatGPTImageDriver._MAX_IMAGE_BYTES:
+            raise BrowserDriverError("ChatGPT image data URI exceeds the size cap.")
+        try:
+            return mime, base64.b64decode(payload, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise BrowserDriverError(f"Malformed base64 in data URI: {exc}") from exc
+
+    @staticmethod
+    def _validate_image_bytes(body: bytes, *, declared_mime: str | None = None) -> None:
+        if len(body) < ChatGPTImageDriver._MIN_IMAGE_BYTES:
+            raise BrowserDriverError(f"ChatGPT image too small to be valid ({len(body)} bytes).")
+        if len(body) > ChatGPTImageDriver._MAX_IMAGE_BYTES:
+            raise BrowserDriverError(f"ChatGPT image exceeds the size cap ({len(body)} bytes).")
+        declared = (declared_mime or "").split(";", 1)[0].strip().lower()
+        if declared and not declared.startswith("image/"):
+            raise BrowserDriverError(f"ChatGPT response declared a non-image type: {declared!r}.")
+        try:
+            from PIL import Image
+
+            Image.open(io.BytesIO(body)).verify()
+        except Exception as exc:
+            raise BrowserDriverError(f"ChatGPT image failed to decode: {exc}") from exc
+
     async def _download_image(self, src: str, dest: Path) -> Path:
-        """Download the image bytes via the page's APIRequest (carries auth)."""
-        ctx = self.page.context
+        """Persist valid source image bytes from http, blob, or data URLs."""
         max_attempts = 3
         for attempt in range(1, max_attempts + 1):
             try:
-                response = await ctx.request.get(src)
-                if response.status != 200:
-                    raise BrowserDriverError(
-                        f"Image download failed: HTTP {response.status}"
+                declared_mime: str | None = None
+                if src.startswith("data:"):
+                    declared_mime, body = self._parse_data_uri(src)
+                elif src.startswith("blob:"):
+                    meta = await asyncio.wait_for(
+                        self.page.evaluate(self._READ_BLOB_JS, [src, self._MAX_IMAGE_BYTES]),
+                        timeout=30.0,
                     )
-                body = await response.body()
+                    if not isinstance(meta, dict) or not meta.get("ok"):
+                        raise BrowserDriverError("ChatGPT blob fetch did not return a usable response.")
+                    if meta.get("oversize") or int(meta.get("size") or 0) > self._MAX_IMAGE_BYTES:
+                        raise BrowserDriverError("ChatGPT blob exceeds the size cap.")
+                    declared_mime = str(meta.get("contentType") or "") or None
+                    try:
+                        body = base64.b64decode(str(meta.get("b64") or ""), validate=True)
+                    except (binascii.Error, ValueError) as exc:
+                        raise BrowserDriverError(f"Malformed base64 from ChatGPT blob: {exc}") from exc
+                else:
+                    response = await self.page.context.request.get(src)
+                    if response.status != 200:
+                        raise BrowserDriverError(f"Image download failed: HTTP {response.status}")
+                    declared_mime = response.headers.get("content-type")
+                    content_length = response.headers.get("content-length")
+                    try:
+                        declared_size = int(content_length) if content_length else None
+                    except ValueError:
+                        declared_size = None
+                    if declared_size is not None and declared_size > self._MAX_IMAGE_BYTES:
+                        raise BrowserDriverError(
+                            "ChatGPT HTTP image exceeds the size cap before download."
+                        )
+                    body = await response.body()
+                self._validate_image_bytes(body, declared_mime=declared_mime)
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 atomic_write_bytes(dest, body)
                 return dest
@@ -1087,6 +1228,7 @@ class ChatGPTImageDriver:
         if not prompt.strip():
             raise BrowserDriverError("Empty image prompt")
 
+        result: dict | None = None
         try:
             await self._ensure_image_session(project_name)
             before_user_turns = await self._user_turn_count()
@@ -1109,14 +1251,19 @@ class ChatGPTImageDriver:
             # We just wait directly for the image to appear.
             src = await self._wait_for_image(response_timeout_ms)
             await self._download_image(src, out_path)
-            return {
+            result = {
                 "src": src,
                 "local_path": str(out_path),
                 "project_name": project_name,
                 "bytes": out_path.stat().st_size,
             }
         finally:
-            await self._teardown_image_session(project_name)
+            cleanup = await self._teardown_image_session(project_name)
+
+        if result is None:  # pragma: no cover - exceptions leave the try directly
+            raise BrowserDriverError("Image generation did not produce a result.")
+        result["cleanup"] = cleanup
+        return result
 
     async def generate_images(
         self,
@@ -1139,6 +1286,7 @@ class ChatGPTImageDriver:
         if len(prompts) != len(out_paths):
             raise BrowserDriverError("Prompts and out_paths length mismatch")
 
+        results: list[dict] | None = None
         try:
             await self._ensure_image_session(project_name)
 
@@ -1178,111 +1326,263 @@ class ChatGPTImageDriver:
                 })
                 await human_pause(self.page, min_ms=1500, max_ms=3000)
 
-            return results
         finally:
-            await self._teardown_image_session(project_name)
+            cleanup = await self._teardown_image_session(project_name)
 
-    async def delete_current_chat(self) -> None:
-        """Delete the active (just-used) normal chat to prevent clutter.
+        if results is None:  # pragma: no cover - exceptions leave the try directly
+            raise BrowserDriverError("Image batch generation did not produce results.")
+        for result in results:
+            result["cleanup"] = dict(cleanup)
+        return results
 
-        Verified against the 2026 ChatGPT sidebar: the per-conversation options
-        button and its menu items are hover-gated, so Playwright's actionable
-        ``.click()`` times out on them. We dispatch DOM ``.click()`` via
-        ``page.evaluate`` instead — it fires the handler regardless of hover
-        state. Selectors (confirmed live):
-          * options button — ``button[aria-label^='Open conversation options']``
-          * delete item   — ``[data-testid='delete-chat-menu-item']``
-          * confirm button — ``[data-testid='delete-conversation-confirm-button']``
-        Best-effort: never raises.
-        """
+    async def _stable_conversation_id(self) -> str | None:
+        """Wait until the SPA has settled on the chat URL created by this request."""
+        previous: str | None = None
+        for _ in range(self._CLEANUP_URL_STABILITY_POLLS):
+            match = re.search(r"/c/([a-zA-Z0-9-]+)", str(getattr(self.page, "url", "")))
+            conversation_id = match.group(1) if match else None
+            if conversation_id and conversation_id == previous:
+                return conversation_id
+            previous = conversation_id
+            await self.page.wait_for_timeout(self._CLEANUP_POLL_MS)
+        return None
+
+    async def _delete_chat_once(self, conversation_id: str) -> dict:
+        """Attempt the sidebar deletion once, never targeting a global row."""
+        link = self.page.locator(f"a[href*='/c/{conversation_id}']").first
+        row = link.locator("xpath=ancestor::*[@role='group' or self::li][1]").first
+        button = row.locator(
+            "button[aria-label^='Open conversation options'], "
+            "button[aria-label='Chat actions'], button[data-testid$='-options']"
+        ).first
         try:
-            match = re.search(r"/c/([a-zA-Z0-9-]+)", self.page.url)
-            if not match:
-                print("Not on a conversation URL. Skipping chat deletion.")
-                return
-            chat_id = match.group(1)
-            print(f"Attempting to delete fallback chat conversation: {chat_id}")
-
-            # 1. Open the conversation's options menu (hover-gated -> DOM click).
-            opened = await self.page.evaluate(
-                """(chatId) => {
-                    const a = document.querySelector(`a[href*='${chatId}']`);
-                    const row = a ? (a.closest('li') || a.parentElement) : null;
-                    let btn = row ? row.querySelector(
-                        "button[aria-label^='Open conversation options'], button[data-testid$='-options']"
-                    ) : null;
-                    if (!btn) {
-                        btn = document.querySelector("button[aria-label^='Open conversation options']");
-                    }
-                    if (!btn) return 'no-options-button';
-                    btn.click();
-                    return 'opened';
-                }""",
-                chat_id,
-            )
-            if opened != "opened":
-                print(f"Could not open options for chat {chat_id}: {opened}")
-                return
-            await human_pause(self.page, min_ms=300, max_ms=650)
-
-            # 2. Click the Delete menu item.
-            clicked = await self.page.evaluate(
-                """() => {
-                    let d = document.querySelector("[data-testid='delete-chat-menu-item']");
-                    if (!d) {
-                        d = [...document.querySelectorAll("[role='menuitem']")].find(
-                            m => /^(delete|eliminar|xo)/i.test((m.innerText || '').trim()));
-                    }
-                    if (!d) return 'no-delete-item';
-                    d.click();
-                    return 'clicked';
-                }"""
-            )
-            if clicked != "clicked":
-                print(f"Delete menu item not found: {clicked}")
-                try:
-                    await self.page.keyboard.press("Escape")
-                except Exception:
-                    pass
-                return
-            await human_pause(self.page, min_ms=300, max_ms=650)
-
-            # 3. Confirm deletion in the dialog.
-            confirmed = await self.page.evaluate(
-                """() => {
-                    let b = document.querySelector("[data-testid='delete-conversation-confirm-button']");
-                    if (!b) {
-                        b = [...document.querySelectorAll(
-                            "div[role='dialog'] button, div[role='alertdialog'] button")].find(
-                            x => /^(delete|eliminar|xo)/i.test((x.innerText || '').trim()));
-                    }
-                    if (!b) return 'no-confirm';
-                    b.click();
-                    return 'confirmed';
-                }"""
-            )
-            await human_pause(self.page, min_ms=500, max_ms=900)
-            if confirmed == "confirmed":
-                print(f"Successfully deleted chat conversation: {chat_id}")
-            else:
-                print(f"Delete confirmation not found for chat {chat_id}: {confirmed}")
+            if not await button.is_visible(timeout=2_000):
+                return {"status": "retry", "reason": "conversation-row-or-options-missing"}
+            # ChatGPT ignores JavaScript element.click() for this menu; this
+            # Playwright click produces the trusted pointer interaction it requires.
+            await button.click(timeout=3_000)
         except Exception as exc:
-            print(f"Error while deleting chat conversation: {exc}")
+            return {
+                "status": "retry",
+                "reason": f"chat-actions-click-failed:{type(exc).__name__}",
+            }
+        clicked = "delete-menu-item-missing"
+        for _ in range(self._CLEANUP_URL_STABILITY_POLLS):
+            item = self.page.get_by_role(
+                "menuitem", name=re.compile(r"^(delete|eliminar|xo)", re.IGNORECASE)
+            ).first
+            try:
+                if await item.is_visible(timeout=self._CLEANUP_POLL_MS):
+                    await item.click(timeout=3_000)
+                    clicked = "clicked"
+                    break
+            except Exception:
+                pass
+            await self.page.wait_for_timeout(self._CLEANUP_POLL_MS)
+        if clicked != "clicked":
+            return {"status": "retry", "reason": str(clicked)}
 
-    async def _teardown_image_session(self, project_name: str) -> None:
-        """Clean up after an image session (best-effort, never raises).
+        confirmed = "delete-confirmation-missing"
+        for _ in range(self._CLEANUP_URL_STABILITY_POLLS):
+            dialog = self.page.locator("div[role='dialog'], div[role='alertdialog']").last
+            button = dialog.get_by_role(
+                "button", name=re.compile(r"^(delete|eliminar|xo)", re.IGNORECASE)
+            ).first
+            try:
+                if await button.is_visible(timeout=self._CLEANUP_POLL_MS):
+                    await button.click(timeout=3_000)
+                    confirmed = "confirmed"
+                    break
+            except Exception:
+                pass
+            await self.page.wait_for_timeout(self._CLEANUP_POLL_MS)
+        return {
+            "status": "confirmed" if confirmed == "confirmed" else "retry",
+            "reason": None if confirmed == "confirmed" else str(confirmed),
+        }
 
-        Deletes the normal chat used for image generation so it does not leave
-        history clutter that bloats request headers and eventually triggers
-        HTTP 431.
+    async def _conversation_is_present(self, conversation_id: str) -> bool:
+        """Return whether the conversation remains represented in the sidebar."""
+        return bool(
+            await self.page.evaluate(
+                """(conversationId) => [...document.querySelectorAll('a[href]')].some(
+                    candidate => candidate.getAttribute('href').includes(`/c/${conversationId}`)
+                )""",
+                conversation_id,
+            )
+        )
+
+    async def _conversation_is_deleted_server_side(self, conversation_id: str) -> bool:
+        """Confirm deletion through ChatGPT's authenticated conversation endpoint."""
+        try:
+            result = await self.page.evaluate(
+                """async (conversationId) => {
+                    const response = await fetch(
+                        `/backend-api/conversation/${encodeURIComponent(conversationId)}`,
+                        {credentials: 'include'}
+                    );
+                    return {status: response.status};
+                }""",
+                conversation_id,
+            )
+        except Exception:
+            return False
+        return isinstance(result, dict) and result.get("status") == 404
+
+    async def _remove_conversation_from_sidebar(self, conversation_id: str) -> bool:
+        """Remove only a server-deleted conversation's stale sidebar row."""
+        return bool(
+            await self.page.evaluate(
+                """(conversationId) => {
+                    const link = [...document.querySelectorAll('a[href]')].find(
+                        candidate => candidate.getAttribute('href').includes(`/c/${conversationId}`)
+                    );
+                    const row = link && link.closest("[role='group'], li");
+                    if (!row) return false;
+                    row.remove();
+                    return true;
+                }""",
+                conversation_id,
+            )
+        )
+
+    @staticmethod
+    def _log_cleanup_status(status: dict) -> None:
+        print(
+            "[chatgpt-image] cleanup_status="
+            + json.dumps(status, ensure_ascii=False, sort_keys=True),
+            flush=True,
+        )
+
+    async def delete_current_chat(self) -> dict:
+        """Delete the active normal chat and verify that it leaves the sidebar.
+
+        A click is only an attempt. A ``deleted`` result is emitted solely after
+        the matching sidebar entry disappears; any other outcome is returned to
+        the caller and logged, never silently treated as successful cleanup.
         """
+        conversation_id = await self._stable_conversation_id()
+        if not conversation_id:
+            status = {
+                "kind": "conversation",
+                "status": "failed",
+                "conversation_id": None,
+                "attempts": 0,
+                "verified": False,
+                "reason": "conversation_id_unavailable",
+            }
+            self._log_cleanup_status(status)
+            return status
+
+        last_reason = "sidebar_entry_still_present"
+        initial_sidebar_refreshed = False
+        server_verified = False
+        final_sidebar_refreshed = False
+        sidebar_stale_pruned = False
+        for attempt in range(1, self._CLEANUP_MAX_ATTEMPTS + 1):
+            try:
+                action = await self._delete_chat_once(conversation_id)
+                if action.get("status") != "confirmed":
+                    last_reason = str(action.get("reason") or "delete_action_unconfirmed")
+                else:
+                    if not initial_sidebar_refreshed:
+                        try:
+                            # ChatGPT removes the row optimistically, then may
+                            # re-hydrate stale sidebar data. Reload once so a
+                            # ``deleted`` result reflects server-backed state.
+                            await self.page.wait_for_timeout(self._CLEANUP_POLL_MS * 3)
+                            await self.page.reload(
+                                wait_until="domcontentloaded", timeout=30_000
+                            )
+                            initial_sidebar_refreshed = True
+                        except Exception as exc:
+                            last_reason = f"sidebar_refresh_failed:{type(exc).__name__}"
+                            continue
+                    if not server_verified:
+                        for _ in range(self._CLEANUP_VERIFY_POLLS):
+                            if await self._conversation_is_deleted_server_side(conversation_id):
+                                server_verified = True
+                                break
+                            await self.page.wait_for_timeout(self._CLEANUP_POLL_MS)
+                        if not server_verified:
+                            last_reason = "conversation_api_still_accessible"
+                            continue
+                    if not final_sidebar_refreshed:
+                        try:
+                            # A second reload happens after the API confirms
+                            # deletion, bypassing the first page's stale list.
+                            await self.page.reload(
+                                wait_until="domcontentloaded", timeout=30_000
+                            )
+                            final_sidebar_refreshed = True
+                        except Exception as exc:
+                            last_reason = f"final_sidebar_refresh_failed:{type(exc).__name__}"
+                            continue
+                    # The authenticated endpoint above is authoritative. If
+                    # the current React tree still has its old row, remove
+                    # only that stale representation before UI verification.
+                    if not sidebar_stale_pruned:
+                        await self._remove_conversation_from_sidebar(conversation_id)
+                        sidebar_stale_pruned = True
+                    absent_polls = 0
+                    for _ in range(self._CLEANUP_VERIFY_POLLS):
+                        if not await self._conversation_is_present(conversation_id):
+                            absent_polls += 1
+                            if absent_polls == self._CLEANUP_VERIFY_POLLS:
+                                status = {
+                                    "kind": "conversation",
+                                    "status": "deleted",
+                                    "conversation_id": conversation_id,
+                                    "attempts": attempt,
+                                    "verified": True,
+                                }
+                                self._log_cleanup_status(status)
+                                return status
+                        else:
+                            absent_polls = 0
+                        await self.page.wait_for_timeout(self._CLEANUP_POLL_MS)
+                    last_reason = "sidebar_entry_still_present"
+            except Exception as exc:
+                last_reason = f"cleanup_exception:{type(exc).__name__}"
+            await self.page.wait_for_timeout(self._CLEANUP_POLL_MS)
+
+        status = {
+            "kind": "conversation",
+            "status": "failed",
+            "conversation_id": conversation_id,
+            "attempts": self._CLEANUP_MAX_ATTEMPTS,
+            "verified": False,
+            "reason": last_reason,
+        }
+        self._log_cleanup_status(status)
+        return status
+
+    async def _teardown_image_session(self, project_name: str) -> dict:
+        """Return an observable cleanup outcome without masking image generation."""
         try:
             if self._used_project:
                 await self.delete_project(project_name)
-            else:
-                await self.delete_current_chat()
-        except Exception as exc:  # pragma: no cover - cleanup must never break gen
-            print(f"[chatgpt-image] session teardown best-effort failed: {exc}", flush=True)
+                status = {
+                    "kind": "project",
+                    "status": "not_verified",
+                    "project_name": project_name,
+                    "verified": False,
+                    "reason": "legacy_project_cleanup_not_verified",
+                }
+                self._log_cleanup_status(status)
+                return status
+            return await self.delete_current_chat()
+        except Exception as exc:  # defensive boundary: generation errors stay primary
+            status = {
+                "kind": "conversation",
+                "status": "failed",
+                "conversation_id": None,
+                "attempts": 0,
+                "verified": False,
+                "reason": f"teardown_exception:{type(exc).__name__}",
+            }
+            self._log_cleanup_status(status)
+            return status
 
     async def delete_project(self, project_name: str) -> None:
         """Deletes the project with the specified name from ChatGPT to prevent clutter."""
